@@ -256,6 +256,13 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         decode: (body) => decodeInviteDelete(body),
         project: (invite, sinks) => sinks.emit("inviteDelete", invite),
     }),
+    // Threads have no typed events yet. These two only drop cached observations of the changed or deleted thread
+    ...Object.fromEntries(
+        ["THREAD_UPDATE", "THREAD_DELETE"].map((type) => [
+            type,
+            entry({ rawCache: guildCache, decode: () => ignored, project: () => undefined }),
+        ]),
+    ),
     GUILD_AUDIT_LOG_ENTRY_CREATE: entry({
         decode: decodeAuditLogEntryCreate,
         project: (audit, sinks) => sinks.emit("guildAuditLogEntryCreate", audit),

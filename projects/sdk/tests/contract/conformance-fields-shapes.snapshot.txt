@@ -661,7 +661,7 @@ field|shared|AuditLogChange.newValue|AuditLogChangeValue | undefined|optional=tr
 field|shared|AuditLogChange.oldValue|AuditLogChangeValue | undefined|optional=true|nullable=false
 field|shared|AuditLogChangeValue.added|readonly string[] | undefined|optional=true|nullable=false
 field|shared|AuditLogChangeValue.removed|readonly string[] | undefined|optional=true|nullable=false
-field|shared|AuditLogEntry.actionType|AuditLogActionType|optional=false|nullable=false
+field|shared|AuditLogEntry.actionType|number|optional=false|nullable=false
 field|shared|AuditLogEntry.changes|readonly AuditLogChange[] | undefined|optional=true|nullable=false
 field|shared|AuditLogEntry.id|string|optional=false|nullable=false
 field|shared|AuditLogEntry.options|AuditLogOptions | undefined|optional=true|nullable=false
@@ -698,7 +698,7 @@ field|shared|AuditLogPage.users|readonly User[]|optional=false|nullable=false
 field|shared|AuditLogPage.webhooks|readonly AuditLogWebhook[]|optional=false|nullable=false
 field|shared|AuditLogPermissionsDiff.added|readonly string[]|optional=false|nullable=false
 field|shared|AuditLogPermissionsDiff.removed|readonly string[]|optional=false|nullable=false
-field|shared|AuditLogQuery.actionType|1 | 10 | 11 | 12 | 13 | 14 | 15 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 30 | 31 | 32 | 40 | 41 | 42 | 50 | 51 | 52 | 60 | 61 | 62 | 72 | 73 | 74 | 75 | 90 | 91 | 92 | AuditLogActionType | undefined|optional=true|nullable=false
+field|shared|AuditLogQuery.actionType|1 | 10 | 11 | 110 | 111 | 112 | 12 | 13 | 14 | 15 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 30 | 31 | 32 | 40 | 41 | 42 | 50 | 51 | 52 | 60 | 61 | 62 | 72 | 73 | 74 | 75 | 90 | 91 | 92 | AuditLogActionType | undefined|optional=true|nullable=false
 field|shared|AuditLogQuery.after|string | undefined|optional=true|nullable=false
 field|shared|AuditLogQuery.before|string | undefined|optional=true|nullable=false
 field|shared|AuditLogQuery.limit|number | undefined|optional=true|nullable=false
@@ -1528,7 +1528,7 @@ field|shared|GuildAnnouncementChannel.position|number | undefined|optional=true|
 field|shared|GuildAnnouncementChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
 field|shared|GuildAnnouncementChannel.topic|null | string | undefined|optional=true|nullable=true
 field|shared|GuildAnnouncementChannel.type|5|optional=false|nullable=false
-field|shared|GuildAuditLogEntryCreate.actionType|AuditLogActionType|optional=false|nullable=false
+field|shared|GuildAuditLogEntryCreate.actionType|number|optional=false|nullable=false
 field|shared|GuildAuditLogEntryCreate.changes|readonly AuditLogChange[] | undefined|optional=true|nullable=false
 field|shared|GuildAuditLogEntryCreate.guildId|string|optional=false|nullable=false
 field|shared|GuildAuditLogEntryCreate.id|string|optional=false|nullable=false

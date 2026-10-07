@@ -77,6 +77,12 @@ export const AuditLogActions: Readonly<{
     readonly StickerUpdate: 91
     /** A custom community sticker was deleted */
     readonly StickerDelete: 92
+    /** A thread was created */
+    readonly ThreadCreate: 110
+    /** A thread's settings changed */
+    readonly ThreadUpdate: 111
+    /** A thread was deleted */
+    readonly ThreadDelete: 112
 }> = Object.freeze({
     GuildUpdate: 1,
     ChannelCreate: 10,
@@ -113,6 +119,9 @@ export const AuditLogActions: Readonly<{
     StickerCreate: 90,
     StickerUpdate: 91,
     StickerDelete: 92,
+    ThreadCreate: 110,
+    ThreadUpdate: 111,
+    ThreadDelete: 112,
 } as const)
 
 /**
@@ -209,8 +218,8 @@ export interface AuditLogOptions {
 export interface AuditLogEntry {
     /** Decimal audit-entry ID */
     readonly id: string
-    /** Recorded Fluxer action */
-    readonly actionType: AuditLogActionType
+    /** Recorded Fluxer action, compared with AuditLogActions values. An action Fluxer adds later keeps its number here */
+    readonly actionType: number
     /** Acting user ID when Fluxer supplied one */
     readonly userId?: string | null
     /** Affected entity ID or invite code when Fluxer supplied one, not necessarily a decimal ID */

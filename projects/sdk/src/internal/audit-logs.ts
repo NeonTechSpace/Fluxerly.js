@@ -17,8 +17,9 @@ import { AuditLogActions } from "#sdk/audit-logs"
 import { decodeUser } from "./users.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./decode/primitives.js"
+import { count as nonNegativeInt32, identifier, record } from "./decode/primitives.js"
 
+/** Filters accept only known actions, while entries keep any action number, including one Fluxer adds later */
 const actionTypes = new Set<number>(Object.values(AuditLogActions))
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value)
 const actionType = (value: unknown): value is AuditLogActionType => typeof value === "number" && actionTypes.has(value)
@@ -117,7 +118,7 @@ function entry(value: unknown): AuditLogEntry | undefined {
     if (
         !record(value) ||
         !identifier(value.id) ||
-        !actionType(value.action_type) ||
+        !nonNegativeInt32(value.action_type) ||
         (value.user_id !== undefined && !nullableIdentifier(value.user_id)) ||
         (value.target_id !== undefined && !nullableText(value.target_id)) ||
         (value.reason !== undefined && typeof value.reason !== "string")

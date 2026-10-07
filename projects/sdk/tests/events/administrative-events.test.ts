@@ -57,6 +57,18 @@ function defaultApi() {
     return fixtureClient({ gateway: { onMalformedDispatch: "terminate" } })
 }
 
+test("gateway audit entries with thread or later-added actions arrive with their action number", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const audits = client.subscribe("guildAuditLogEntryCreate")
+    await settle(client.connect())
+    server.dispatch("GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ action_type: AuditLogActions.ThreadCreate }))
+    server.dispatch("GUILD_AUDIT_LOG_ENTRY_CREATE", audit({ id: "71", action_type: 999 }))
+    expect((await settle(audits.next()))!.actionType).toBe(AuditLogActions.ThreadCreate)
+    expect((await settle(audits.next()))!).toMatchObject({ id: "71", actionType: 999 })
+    await settle(client.shutdown())
+})
+
 test("default administrative subscriptions project full provider results without cache work", async () => {
     const server = await fixture()
     const client = defaultApi()

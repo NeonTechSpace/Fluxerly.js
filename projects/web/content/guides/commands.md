@@ -148,7 +148,7 @@ A guard returns `true` to allow the command, `false` to deny it without an autom
 <details>
 <summary>How the built-in guards read data</summary>
 
-The `requirePermissions` guard reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. A failed read fails the command, which is reported with the command name. Its decision does not guarantee that Fluxer allows a later action.
+The `requirePermissions` guard reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. A failed read fails the command, which is reported with the command name. In a channel of a type this SDK version does not know, such as a thread, the guard denies the command when it cannot confirm the channel's permissions. Its decision does not guarantee that Fluxer allows a later action.
 The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name. Enable `cache.directMessages` to avoid a read for each command in the same conversation.
 The `ownerOnly()` guard reads the application's owner from Fluxer on the first command and keeps it for the client's lifetime. A failed read fails the command, and the next command reads again
 

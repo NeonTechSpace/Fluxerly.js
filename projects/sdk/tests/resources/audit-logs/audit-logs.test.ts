@@ -123,6 +123,23 @@ test("accepts sticker lifecycle actions in user-filtered pages and action filter
     }
 })
 
+test("keeps thread and later-added action numbers in user-filtered pages, and filters by thread actions", () => {
+    const actions = [AuditLogActions.ThreadCreate, AuditLogActions.ThreadUpdate, AuditLogActions.ThreadDelete]
+    expect(actions).toEqual([110, 111, 112])
+    const recorded = [...actions, 999]
+    const entries = recorded.map((action_type, index) => entry({ id: String(100 - index), action_type }))
+    expect(
+        validRequest(auditLogPage("20", { userId: "30" }))
+            .decode(page(entries))!
+            .entries.map((item) => item.actionType),
+    ).toEqual(recorded)
+    for (const actionType of actions) {
+        const request = validRequest(auditLogPage("20", { actionType }))
+        expect(request.path).toContain(`action_type=${actionType}`)
+        expect(request.decode(page([entry({ action_type: actionType })]))!.entries[0]!.actionType).toBe(actionType)
+    }
+})
+
 test("projects complete frozen, token-free audit-log pages and preserves a non-snowflake target", () => {
     const request = validRequest(auditLogPage("20", { userId: "30" }))
     const result = request.decode(page())!
@@ -242,6 +259,6 @@ test("rejects unfiltered, malformed, ambiguous, and non-descending audit-log pag
     expect(
         before.decode(page([entry({ changes: [{ key: "permissions", new_value: { untrusted: true } }] })])),
     ).toBeUndefined()
-    expect(before.decode(page([entry({ action_type: 999 })]))).toBeUndefined()
+    for (const action_type of [-1, 1.5, "31"]) expect(before.decode(page([entry({ action_type })]))).toBeUndefined()
     expect(before.decode({ ...page(), webhooks: [{ id: "50", type: 3, name: "unknown" }] })).toBeUndefined()
 })

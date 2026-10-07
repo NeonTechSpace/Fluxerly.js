@@ -81,7 +81,8 @@ export interface DefaultGuards {
      * what is missing, at most once each per invocation, then applies permissions.calculate.
      * A cached channel without its overwrite list is read again instead of being treated as having no overwrites.
      * A channel read that Fluxer answers without an overwrite list has no channel overwrites, so the member's role
-     * permissions decide.
+     * permissions decide. A channel of a type this SDK version does not know, such as a thread, can take its permissions
+     * from elsewhere, so a read of one without an overwrite list denies the command rather than guessing.
      * A failed read fails the command, which is reported with the command name.
      * The decision does not guarantee that Fluxer allows a later action
      */
@@ -131,14 +132,21 @@ export const guards: DefaultGuards = Object.freeze({
         const required = permissionNames(names)
         return async (context) => {
             if (!inGuild(context.message)) return { deny: guardDenials.guildOnly }
-            const missing = missingPermissions(await memberPermissions(context), required)
+            const bits = await memberPermissions(context)
+            if (bits === undefined) return { deny: guardDenials.unconfirmedChannel }
+            const missing = missingPermissions(bits, required)
             return missing.length === 0 || { deny: guardDenials.missing(missing) }
         }
     },
 })
 
-/** Calculate the invoking member's channel permissions, reading each resource from the cache before fetching it */
-async function memberPermissions<M extends MessageCore>(context: DefaultPrefixCommandContext<M>): Promise<bigint> {
+/**
+ * Calculate the invoking member's channel permissions, reading each resource from the cache before fetching it.
+ * Undefined means the channel's permissions cannot be confirmed
+ */
+async function memberPermissions<M extends MessageCore>(
+    context: DefaultPrefixCommandContext<M>,
+): Promise<bigint | undefined> {
     const { client, message, signal } = context
     const guildId = message.guildId!
     const target = { guildId, userId: message.author.id }
@@ -152,5 +160,5 @@ async function memberPermissions<M extends MessageCore>(context: DefaultPrefixCo
     const channel =
         withKnownOverwrites(client.channels.get(message.channelId)) ??
         readChannelOverwrites(orThrow(await client.channels.fetch(message.channelId, options)))
-    return client.permissions.calculate({ guild, member, roles, channel })
+    return channel && client.permissions.calculate({ guild, member, roles, channel })
 }

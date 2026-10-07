@@ -71,13 +71,24 @@ export function applyEvent<M extends MessageCore, K extends EventName>(
     } else if (event === "messageDelete" && "id" in message && "channelId" in message) cache?.delete(message)
 }
 
-/** Raw guild lifecycle and expression intake, or undefined when no cache can use it */
+/** Raw guild lifecycle, expression and thread intake, or undefined when no cache can use it */
 export function guildIntake<M extends MessageCore>(
     caches: ClientCaches<M>,
 ): ((event: string, value: unknown) => void) | undefined {
     const { cache, resources, channelCache } = caches
     if (!resources && !channelCache && !cache) return undefined
     return (event, value) => {
+        if (event === "THREAD_UPDATE" || event === "THREAD_DELETE") {
+            // Without typed threads, a changed thread is evicted rather than updated, and a deleted one takes its messages
+            const id = record(value) && identifier(value.id) ? value.id : undefined
+            if (id === undefined) channelCache?.gap()
+            else channelCache?.delete(id)
+            if (event === "THREAD_DELETE") {
+                if (id === undefined) cache?.gap()
+                else cache?.deleteChannel(id)
+            }
+            return
+        }
         resources?.guildEvent(event, value)
         if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE") channelCache?.guildEvent(event, value)
         if (event === "GUILD_DELETE")

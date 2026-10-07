@@ -408,6 +408,35 @@ describe.each(modes)("%s built-in guards", (mode) => {
         expect(reports).toEqual([])
     })
 
+    test("requirePermissions denies in an unknown channel type without overwrites, and decides one that has them", async () => {
+        // Fluxer reads a thread (type 11) without overwrites, because a thread takes its parent channel's permissions
+        const thread = { ...channelWithoutOverwrites, id: "25", type: 11, parent_id: "20" }
+        const forum = { ...channelWire, id: "26", type: 15 }
+        const remote = await commandFixture((call) => {
+            if (call.method === "GET" && call.path === "/v1/channels/25") return Response.json(thread)
+            if (call.method === "GET" && call.path === "/v1/channels/26") return Response.json(forum)
+            return permissionRoutes(call)
+        })
+        const connected = await connect(mode)
+        const executed: string[] = []
+        const rejected: PrefixCommandRejection[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "purge",
+            guard: guardSet.requirePermissions(["ManageMessages"]),
+            onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
+                act(mode, () => void rejected.push(rejection)),
+            execute: ({ message }: { message: { channelId: string } }) =>
+                act(mode, () => void executed.push(message.channelId)),
+        })
+        const reports = await attach(connected, router, { concurrency: 1 })
+        remote.deliver("!purge", { guildId, channelId: "25" })
+        remote.deliver("!purge", { guildId, channelId: "26" })
+        await vi.waitFor(() => expect(executed.length + rejected.length).toBe(2))
+        expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.unconfirmedChannel }])
+        expect(executed).toEqual(["26"])
+        expect(reports).toEqual([])
+    })
+
     test("requirePermissions reads a cached channel without overwrites again instead of ignoring its overwrites", async () => {
         const denyingChannel = {
             ...channelWire,

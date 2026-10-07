@@ -768,6 +768,34 @@ test.each(modes)("%s rejects malformed channel gateway payloads without partial 
     expect(handler).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s evicts a cached thread when it changes, and its messages when it is deleted", async (mode) => {
+    const dispatch = await gateway()
+    // A thread has a channel type this SDK version does not know, and Fluxer reads it without overwrites
+    const thread = (name = "thread") => ({ id: "30", guild_id: "20", type: 11, name, parent_id: "10" })
+    let name = "thread"
+    rest(async (url) => {
+        const path = new URL(url).pathname
+        if (path === "/v1/channels/30/messages/40") return Response.json(message("40", "30"))
+        return Response.json(thread(name))
+    })
+    const api = await setup(mode, { messages: true, channels: true })
+    await api.connect()
+    const inThread = { id: "40", channelId: "30" }
+    await api.fetch("30")
+    await api.fetchMessage(inThread)
+
+    name = "renamed"
+    dispatch("THREAD_UPDATE", thread(name))
+    await vi.waitFor(async () => expect(await api.get("30")).toBeUndefined())
+    expect(await api.getMessage(inThread)).toBeDefined()
+    expect(await api.fetch("30")).toMatchObject({ type: "unknown", rawType: 11, name: "renamed" })
+
+    dispatch("THREAD_DELETE", { id: "30", guild_id: "20", parent_id: "10", type: 11 })
+    await vi.waitFor(async () => expect(await api.getMessage(inThread)).toBeUndefined())
+    expect(await api.get("30")).toBeUndefined()
+    expect(api.state()).toBe("Connected")
+})
+
 test.each(modes)(
     "%s evicts channel messages for gateway visibility loss and successful or uncertain channel deletion",
     async (mode) => {

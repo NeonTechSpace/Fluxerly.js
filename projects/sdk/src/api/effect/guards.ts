@@ -68,7 +68,8 @@ export interface NativeGuards {
      * what is missing, at most once each per invocation, then applies permissions.calculate.
      * A cached channel without its overwrite list is read again instead of being treated as having no overwrites.
      * A channel read that Fluxer answers without an overwrite list has no channel overwrites, so the member's role
-     * permissions decide.
+     * permissions decide. A channel of a type this SDK version does not know, such as a thread, can take its permissions
+     * from elsewhere, so a read of one without an overwrite list denies the command rather than guessing.
      * A failed read fails the command, which is reported with the command name.
      * The decision does not guarantee that Fluxer allows a later action
      */
@@ -148,6 +149,7 @@ export const guards: NativeGuards = Object.freeze({
             inGuild(context.message)
                 ? memberPermissions(context).pipe(
                       Effect.map((bits) => {
+                          if (bits === undefined) return { deny: guardDenials.unconfirmedChannel }
                           const missing = missingPermissions(bits, required)
                           return missing.length === 0 || { deny: guardDenials.missing(missing) }
                       }),
@@ -156,10 +158,13 @@ export const guards: NativeGuards = Object.freeze({
     },
 })
 
-/** Calculate the invoking member's channel permissions, reading each resource from the cache before fetching it */
+/**
+ * Calculate the invoking member's channel permissions, reading each resource from the cache before fetching it.
+ * Undefined means the channel's permissions cannot be confirmed
+ */
 function memberPermissions<M extends MessageCore>(
     context: NativePrefixCommandContext<M>,
-): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure> {
+): Effect.Effect<bigint | undefined, GuildOperationFailure | ChannelOperationFailure> {
     const { client, message } = context
     const guildId = message.guildId!
     const target = { guildId, userId: message.author.id }
@@ -176,6 +181,6 @@ function memberPermissions<M extends MessageCore>(
         const channel = yield* cachedOr(cachedChannel, () =>
             client.channels.fetch(message.channelId).pipe(Effect.map(readChannelOverwrites)),
         )
-        return client.permissions.calculate({ guild, member, roles, channel })
+        return channel && client.permissions.calculate({ guild, member, roles, channel })
     })
 }

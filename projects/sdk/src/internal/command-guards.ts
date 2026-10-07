@@ -20,6 +20,7 @@ export const guardDenials = Object.freeze({
     dmOnly: "This command works only in direct messages",
     ownerOnly: "This command is restricted to the bot owner",
     missing: (names: readonly string[]) => `Using this command requires these permissions: ${names.join(", ")}`,
+    unconfirmedChannel: "This command cannot check permissions in this kind of channel",
 })
 
 /** Validate owner IDs when the guard is created, so a misconfigured guard fails at startup rather than per message */
@@ -81,10 +82,13 @@ export const withKnownOverwrites = (channel: GuildChannel | undefined): GuildCha
     channel?.permissionOverwrites === undefined ? undefined : channel
 
 /**
- * A freshly read channel prepared for permission calculation. Fluxer's own response is authoritative, so a read
- * without an overwrite list has no channel overwrites and the member's role permissions apply unchanged
+ * A freshly read channel prepared for permission calculation, or undefined when its permissions cannot be confirmed.
+ * Fluxer's own response is authoritative for a known channel type, so a read without an overwrite list has no channel
+ * overwrites and the member's role permissions apply unchanged. A channel of a type this SDK version does not know may
+ * take its permissions from elsewhere, as a thread takes its parent's, so a missing list there leaves them unknown
  */
-export const readChannelOverwrites = (channel: GuildChannel): GuildChannel =>
-    channel.permissionOverwrites === undefined
-        ? (Object.freeze({ ...channel, permissionOverwrites: Object.freeze([]) }) as GuildChannel)
-        : channel
+export const readChannelOverwrites = (channel: GuildChannel): GuildChannel | undefined => {
+    if (channel.permissionOverwrites !== undefined) return channel
+    if (channel.type === "unknown") return undefined
+    return Object.freeze({ ...channel, permissionOverwrites: Object.freeze([]) }) as GuildChannel
+}
