@@ -18,9 +18,13 @@ const methods = ["get", "put", "post", "patch", "delete", "options", "head", "tr
 const schemaPrefix = "#/components/schemas/"
 // Security schemes a bot or OAuth2 application can hold. An operation without a requirement needs no token
 const applicationSchemes = new Set(["botToken", "oauth2Token", "bearerToken"])
-const wordingKeys = new Set(["description", "summary", "example", "examples", "title"])
+const wordingKeys = new Set(["description", "summary", "example", "examples", "title", "x-enumDescriptions"])
+// Fluxer lists enum names and descriptions in step with enum values, so these lists are keyed by the value they describe
+const enumLists = ["x-enumNames", "x-enumDescriptions"]
+const experimentKey = "x-fluxer-experiment"
+const documentSuffixes = [".md", ".mdx"]
 // Keys under these maps are field names, so a field named description is structure, not wording
-const nameMaps = new Set(["properties", "patternProperties", "$defs", "definitions"])
+const nameMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "parameters", "x-enumNames", "x-bitflagValues"])
 // Values under these keys are data, so a title inside a default value is structure, not wording
 const literalKeys = new Set(["default", "const", "enum"])
 // Order carries no meaning in these lists, so they compare as sets. Other lists, such as a default value, compare by position
@@ -28,7 +32,7 @@ const setKeys = new Set(["enum", "required", "type", "tokens"])
 
 /**
  * @typedef {{ path: string, sha256: string }} PinnedFile
- * @typedef {{ repository: string, branch: string, commit: string, files: { openapi: PinnedFile, gatewayEvents: PinnedFile }, rateLimits: PinnedFile }} Manifest
+ * @typedef {{ repository: string, branch: string, commit: string, files: { openapi: PinnedFile }, gatewayDocs: PinnedFile, rateLimits: PinnedFile }} Manifest
  * @typedef {{
  *     resolveCommit(repository: string, branch: string): Promise<string>,
  *     fetchFile(repository: string, commit: string, path: string): Promise<Buffer>,
@@ -55,8 +59,9 @@ export function validateManifest(manifest) {
         typeof manifest.branch !== "string" ||
         !commitPattern.test(manifest.commit ?? "") ||
         !files ||
-        Object.keys(files).sort().join(",") !== "gatewayEvents,openapi" ||
+        Object.keys(files).sort().join(",") !== "openapi" ||
         !Object.values(files).every(pinnedPath) ||
+        !pinnedPath(manifest.gatewayDocs) ||
         !pinnedPath(manifest.rateLimits)
     )
         throw new Error("Upstream manifest is invalid")
@@ -127,6 +132,62 @@ function withoutWording(value, parent) {
 }
 
 /**
+ * Keys position-based lists by what identifies each item, so inserting an item reports only that item: enum names and
+ * descriptions by enum value, bit flags by value and parameters by name and location
+ * @param {any} value
+ * @returns {any}
+ */
+function keyedLists(value) {
+    if (Array.isArray(value)) return value.map(keyedLists)
+    if (value === null || typeof value !== "object") return value
+    const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, keyedLists(item)]))
+    const values = Array.isArray(value.enum) ? value.enum.map(String) : undefined
+    const unique = (/** @type {string[]} */ keys) => new Set(keys).size === keys.length
+    if (values && unique(values))
+        for (const key of enumLists)
+            if (Array.isArray(value[key]) && value[key].length === values.length)
+                result[key] = Object.fromEntries(values.map((item, index) => [item, value[key][index]]))
+    const flags = value["x-bitflagValues"]
+    if (Array.isArray(flags) && flags.every((flag) => ["string", "number"].includes(typeof flag?.value))) {
+        const keys = flags.map((flag) => String(flag.value))
+        if (unique(keys)) result["x-bitflagValues"] = Object.fromEntries(keys.map((key, index) => [key, keyedLists(flags[index])]))
+    }
+    const parameters = value.parameters
+    if (Array.isArray(parameters) && parameters.every((item) => typeof item?.name === "string" && typeof item.in === "string")) {
+        const keys = parameters.map((item) => `${item.name} (${item.in})`)
+        if (unique(keys)) result.parameters = Object.fromEntries(keys.map((key, index) => [key, keyedLists(parameters[index])]))
+    }
+    return result
+}
+
+/**
+ * Names the Fluxer experiments that gate any part of a value
+ * @param {unknown} value
+ */
+function experiments(value) {
+    /** @type {Set<string>} */
+    const found = new Set()
+    JSON.stringify(value, (key, item) => {
+        if (key === experimentKey && typeof item === "string") found.add(item)
+        return item
+    })
+    return found
+}
+
+/**
+ * Labels an added or changed entry with experiments it newly depends on, because Fluxer serves such surface only to
+ * communities where the experiment is enabled
+ * @param {string} name
+ * @param {unknown} before
+ * @param {unknown} after
+ */
+function withExperiments(name, before, after) {
+    const previous = experiments(before)
+    const added = [...experiments(after)].filter((experiment) => !previous.has(experiment)).sort(compare)
+    return added.length ? `${name} [experiment: ${added.join(", ")}]` : name
+}
+
+/**
  * Compares named entries and sorts each change into the application-reachable or user-only group
  * @param {Map<string, unknown>} previous
  * @param {Map<string, unknown>} current
@@ -141,11 +202,11 @@ function compareEntries(previous, current, reachable) {
         const after = current.get(name)
         if (JSON.stringify(before) === JSON.stringify(after)) continue
         const target = reachable(name) ? result.application : result.userOnly
-        if (before === undefined) target.added.push(name)
+        if (before === undefined) target.added.push(withExperiments(name, before, after))
         else if (after === undefined) target.removed.push(name)
         else {
-            const details = differences(withoutWording(before), withoutWording(after), "", [])
-            if (details.length) target.changed.push({ name, details })
+            const details = differences(withoutWording(keyedLists(before)), withoutWording(keyedLists(after)), "", [])
+            if (details.length) target.changed.push({ name: withExperiments(name, before, after), details })
             else target.wordingOnly.push(name)
         }
     }
@@ -239,7 +300,8 @@ export function openapiChanges(before, after) {
 }
 
 /**
- * Splits the gateway events document into Dispatch event sections, each running to the next level two or three heading
+ * Splits gateway documentation into named sections, such as Dispatch events, each running to the next level one, two or
+ * three heading
  * @param {string} markdown
  */
 export function eventSections(markdown) {
@@ -324,23 +386,72 @@ export function rateLimitBuckets(sources) {
 }
 
 /**
+ * Reads the top-level files of an upstream directory that end with one of the suffixes, in path order
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ * @param {{ directory: string, label: string, suffixes: string[] }} target
+ */
+async function readDirectory(manifest, source, commit, { directory, label, suffixes }) {
+    const entries = await source.listDirectory(manifest.repository, commit, directory)
+    if (entries.some(({ path }) => !path.startsWith(`${directory}/`) || path.split("/").includes("..")))
+        throw new Error(`Upstream ${label} listing is outside its directory`)
+    // Only the top level is read, so a nested entry fails the check instead of hiding its contents
+    if (entries.some(({ type }) => type !== "file"))
+        throw new Error(`Upstream ${label} directory contains a subdirectory or other non-file entry. Extend the check to read it`)
+    const paths = entries.map(({ path }) => path).filter((path) => suffixes.some((suffix) => path.endsWith(suffix)))
+    const documents = []
+    for (const path of paths.sort(compare))
+        documents.push({ path, text: (await source.fetchFile(manifest.repository, commit, path)).toString("utf8") })
+    return documents
+}
+
+/**
  * @param {Manifest} manifest
  * @param {Source} source
  * @param {string} commit
  */
 async function readBuckets(manifest, source, commit) {
-    const directory = manifest.rateLimits.path
-    const entries = await source.listDirectory(manifest.repository, commit, directory)
-    if (entries.some(({ path }) => !path.startsWith(`${directory}/`) || path.split("/").includes("..")))
-        throw new Error("Upstream rate-limit listing is outside its directory")
-    // Only the top level is read, so a nested entry fails the check instead of hiding its buckets
-    if (entries.some(({ type }) => type !== "file"))
-        throw new Error("Upstream rate-limit directory contains a subdirectory or other non-file entry. Extend the check to read it")
-    const paths = entries.map(({ path }) => path).sort(compare)
-    const sources = []
-    for (const path of paths.filter((path) => path.endsWith(".ts")))
-        sources.push((await source.fetchFile(manifest.repository, commit, path)).toString("utf8"))
-    return rateLimitBuckets(sources)
+    const documents = await readDirectory(manifest, source, commit, {
+        directory: manifest.rateLimits.path,
+        label: "rate-limit",
+        suffixes: [".ts"],
+    })
+    return rateLimitBuckets(documents.map(({ text }) => text))
+}
+
+/**
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ */
+const readGatewayDocs = (manifest, source, commit) =>
+    readDirectory(manifest, source, commit, {
+        directory: manifest.gatewayDocs.path,
+        label: "gateway documentation",
+        suffixes: documentSuffixes,
+    })
+
+/**
+ * Hashes a set of documents by path and content, so an added, removed or edited document changes the hash
+ * @param {{ path: string, text: string }[]} documents
+ */
+export function documentsHash(documents) {
+    const lines = documents.map(({ path, text }) => `${path} ${sha256(Buffer.from(text))}`).sort(compare)
+    return sha256(Buffer.from(lines.join("\n")))
+}
+
+/**
+ * Compares gateway documentation folders by file and by named section across all files
+ * @param {{ path: string, text: string }[]} before
+ * @param {{ path: string, text: string }[]} after
+ */
+export function gatewayChanges(before, after) {
+    const names = (/** @type {{ path: string }[]} */ documents) => documents.map(({ path }) => path.split("/").at(-1) ?? path)
+    // A level one heading between files ends the previous file's last section
+    const joined = (/** @type {{ path: string, text: string }[]} */ documents) =>
+        documents.map(({ path, text }) => `# ${path}\n${text}`).join("\n")
+    return { files: listChanges(names(before), names(after)), ...eventChanges(joined(before), joined(after)) }
 }
 
 /**
@@ -369,6 +480,14 @@ export async function checkUpstream(manifest, source, { compareCommit = false } 
         const current = sha256(bytes)
         files[key] = { path: file.path, pinned: file.sha256, current, changed: current !== file.sha256, bytes }
     }
+    const gatewayDocuments = await readGatewayDocs(manifest, source, commit)
+    const gatewayHash = documentsHash(gatewayDocuments)
+    const gatewayDocs = {
+        path: manifest.gatewayDocs.path,
+        pinned: manifest.gatewayDocs.sha256,
+        current: gatewayHash,
+        changed: gatewayHash !== manifest.gatewayDocs.sha256,
+    }
     const buckets = await readBuckets(manifest, source, commit)
     const bucketHash = sha256(Buffer.from(buckets.join("\n")))
     const rateLimits = {
@@ -379,24 +498,28 @@ export async function checkUpstream(manifest, source, { compareCommit = false } 
     }
     const pinned = async (/** @type {PinnedFile} */ file) =>
         (await source.fetchFile(manifest.repository, manifest.commit, file.path)).toString("utf8")
-    /** @type {{ openapi?: ReturnType<typeof openapiChanges>, events?: ReturnType<typeof eventChanges>, buckets?: ReturnType<typeof listChanges> }} */
+    /** @type {{ openapi?: ReturnType<typeof openapiChanges>, gateway?: ReturnType<typeof gatewayChanges>, buckets?: ReturnType<typeof listChanges> }} */
     const details = {}
     if (files.openapi.changed)
         details.openapi = openapiChanges(
             JSON.parse(await pinned(manifest.files.openapi)),
             JSON.parse(files.openapi.bytes.toString("utf8")),
         )
-    if (files.gatewayEvents.changed)
-        details.events = eventChanges(await pinned(manifest.files.gatewayEvents), files.gatewayEvents.bytes.toString("utf8"))
+    if (gatewayDocs.changed) details.gateway = gatewayChanges(await readGatewayDocs(manifest, source, manifest.commit), gatewayDocuments)
     if (rateLimits.changed) details.buckets = listChanges(await readBuckets(manifest, source, manifest.commit), buckets)
     return {
         repository: manifest.repository,
         pinnedCommit: manifest.commit,
         commit,
-        drift: (compareCommit && commit !== manifest.commit) || rateLimits.changed || Object.values(files).some((file) => file.changed),
+        drift:
+            (compareCommit && commit !== manifest.commit) ||
+            gatewayDocs.changed ||
+            rateLimits.changed ||
+            Object.values(files).some((file) => file.changed),
         files: Object.fromEntries(
             Object.entries(files).map(([key, { path, pinned, current, changed }]) => [key, { path, pinned, current, changed }]),
         ),
+        gatewayDocs,
         rateLimits,
         ...details,
     }
@@ -492,6 +615,7 @@ export function renderReport(result, baseline = { kind: "repository-pin" }) {
         "| Document | Result |",
         "| --- | --- |",
         ...Object.values(result.files).map((file) => `| ${escape(file.path)} | ${file.changed ? "changed" : "unchanged"} |`),
+        `| Gateway documents in ${escape(result.gatewayDocs.path)} | ${result.gatewayDocs.changed ? "changed" : "unchanged"} |`,
         `| Rate-limit buckets in ${escape(result.rateLimits.path)} | ${result.rateLimits.changed ? "changed" : "unchanged"} |`,
         "",
     ]
@@ -503,14 +627,21 @@ export function renderReport(result, baseline = { kind: "repository-pin" }) {
         if (!endpoints.length && !schemas.length && !result.openapi.other.length)
             lines.push("### OpenAPI", "", "- Only formatting changed", "")
     }
-    if (result.events) {
+    if (result.gateway) {
         const details = [
-            ...nameList("Added", result.events.added),
-            ...nameList("Removed", result.events.removed),
-            ...detailedList("Field tables changed", result.events.fields),
-            ...nameList("Text only", result.events.textOnly),
+            ...nameList("Files added", result.gateway.files.added),
+            ...nameList("Files removed", result.gateway.files.removed),
+            ...nameList("Sections added", result.gateway.added),
+            ...nameList("Sections removed", result.gateway.removed),
+            ...detailedList("Field tables changed", result.gateway.fields),
+            ...nameList("Text only", result.gateway.textOnly),
         ]
-        lines.push("### Gateway Dispatch events", "", ...(details.length ? details : ["- Only text outside event sections changed"]), "")
+        lines.push(
+            "### Gateway events and other named sections",
+            "",
+            ...(details.length ? details : ["- Only text outside named sections changed"]),
+            "",
+        )
     }
     if (result.buckets) {
         lines.push(
@@ -613,7 +744,7 @@ async function readBaseline(manifest, path) {
             previous.repository !== manifest.repository ||
             previous.branch !== manifest.branch ||
             previous.files.openapi.path !== manifest.files.openapi.path ||
-            previous.files.gatewayEvents.path !== manifest.files.gatewayEvents.path ||
+            previous.gatewayDocs.path !== manifest.gatewayDocs.path ||
             previous.rateLimits.path !== manifest.rateLimits.path
         ) throw new Error("Baseline target differs from the repository manifest")
         return { manifest: previous, kind: "previous-run" }
@@ -633,7 +764,8 @@ function observation(manifest, result) {
         repository: manifest.repository,
         branch: manifest.branch,
         commit: result.commit,
-        files: { openapi: file("openapi"), gatewayEvents: file("gatewayEvents") },
+        files: { openapi: file("openapi") },
+        gatewayDocs: { path: result.gatewayDocs.path, sha256: result.gatewayDocs.current },
         rateLimits: { path: result.rateLimits.path, sha256: result.rateLimits.current },
     }
 }

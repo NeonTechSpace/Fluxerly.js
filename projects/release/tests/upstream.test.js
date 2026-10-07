@@ -4,11 +4,24 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { checkUpstream, eventChanges, openapiChanges, rateLimitBuckets, renderReport, runUpstream, validateManifest } from "../upstream.js"
+import {
+    checkUpstream,
+    documentsHash,
+    eventChanges,
+    gatewayChanges,
+    openapiChanges,
+    rateLimitBuckets,
+    renderReport,
+    runUpstream,
+    validateManifest,
+} from "../upstream.js"
 
 const pinned = "a".repeat(40)
 const current = "b".repeat(40)
 const limits = "limits"
+const gateway = "gateway"
+const gatewayHash = (files) =>
+    documentsHash(Object.entries(files).filter(([path]) => path.startsWith(`${gateway}/`)).map(([path, text]) => ({ path, text })))
 const hash = (text) => createHash("sha256").update(text).digest("hex")
 const openapi = (paths, schemas) => JSON.stringify({ openapi: "3.1.0", paths, components: { schemas } })
 const bot = [{ botToken: [] }, { sessionToken: [] }]
@@ -34,8 +47,8 @@ function upstream(files) {
             commit: pinned,
             files: {
                 openapi: { path: "openapi.json", sha256: hash(files[pinned]["openapi.json"]) },
-                gatewayEvents: { path: "events.md", sha256: hash(files[pinned]["events.md"]) },
             },
+            gatewayDocs: { path: gateway, sha256: gatewayHash(files[pinned]) },
             rateLimits: { path: limits, sha256: bucketHash },
         },
         source: {
@@ -60,7 +73,7 @@ function upstream(files) {
 
 const document = {
     "openapi.json": openapi({ "/users/@me": { get: returns("User", bot) } }, { User: { type: "object" } }),
-    "events.md": events([["READY", table(["| session_id | string | Session |"])]]),
+    [`${gateway}/events.md`]: events([["READY", table(["| session_id | string | Session |"])]]),
     [`${limits}/Channel.ts`]: bucket("channel:read::channel_id"),
 }
 
@@ -93,7 +106,7 @@ function workspace(t, manifest) {
     }
 }
 
-const changedDocument = { ...document, "events.md": events([["READY", table(["| session_id | integer | Session |"])]]) }
+const changedDocument = { ...document, [`${gateway}/events.md`]: events([["READY", table(["| session_id | integer | Session |"])]]) }
 
 test("The CLI keeps local comparisons and reviewed updates tied to the repository manifest", async (t) => {
     const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument })
@@ -110,7 +123,7 @@ test("The CLI keeps local comparisons and reviewed updates tied to the repositor
     assert.equal(updated.exitCode, 0)
     const nextManifest = JSON.parse(readFileSync(files.manifestFile, "utf8"))
     assert.equal(nextManifest.commit, current)
-    assert.equal(nextManifest.files.gatewayEvents.sha256, hash(changedDocument["events.md"]))
+    assert.equal(nextManifest.gatewayDocs.sha256, gatewayHash(changedDocument))
     assert.equal((await runUpstream([], { ...files, source })).exitCode, 0)
 })
 
@@ -125,6 +138,13 @@ test("Missing, malformed, invalid and incompatible previous observations fall ba
         JSON.stringify({ ...manifest, branch: "other" }),
         JSON.stringify({ ...manifest, files: { ...manifest.files, openapi: { ...manifest.files.openapi, path: "other.json" } } }),
         JSON.stringify({ ...manifest, rateLimits: { ...manifest.rateLimits, path: "other" } }),
+        JSON.stringify({ ...manifest, gatewayDocs: { ...manifest.gatewayDocs, path: "other" } }),
+        // An observation recorded before the gateway folder replaced the single events document
+        JSON.stringify({
+            ...manifest,
+            files: { ...manifest.files, gatewayEvents: { path: `${gateway}/events.md`, sha256: manifest.gatewayDocs.sha256 } },
+            gatewayDocs: undefined,
+        }),
     ]
     for (const content of cases) {
         if (content !== undefined) writeFileSync(files.baselineFile, content)
@@ -157,8 +177,8 @@ test("A failed observation becomes the next run's baseline, passes unchanged, an
         commit: current,
         files: {
             openapi: { path: "openapi.json", sha256: hash(changedDocument["openapi.json"]) },
-            gatewayEvents: { path: "events.md", sha256: hash(changedDocument["events.md"]) },
         },
+        gatewayDocs: { path: gateway, sha256: gatewayHash(changedDocument) },
         rateLimits: { path: limits, sha256: hash("channel:read::channel_id") },
     })
     writeFileSync(files.baselineFile, recordedText)
@@ -279,6 +299,79 @@ test("OpenAPI changes are reported per endpoint and field, with wording-only edi
         schemas.userOnly.changed.map(({ name }) => name),
         ["Phone"],
     )
+})
+
+test("Inserted enum values, bit flags and parameters are reported alone, and experiment-gated additions are labelled", () => {
+    const threads = { "x-fluxer-experiment": "channel_threads" }
+    const before = JSON.parse(
+        openapi(
+            {
+                "/webhooks/{id}": {
+                    post: { ...returns("ChannelType", bot), parameters: [{ name: "id", in: "path" }, { name: "wait", in: "query" }] },
+                },
+            },
+            {
+                ChannelType: { enum: [0, 2, 998], "x-enumNames": ["TEXT", "VOICE", "LINK"], "x-enumDescriptions": ["Text", "Voice", "Link"] },
+                Flags: { "x-bitflagValues": [{ name: "STAFF", value: "1" }, { name: "BOT", value: "16" }] },
+                Message: { type: "object", properties: { flags: { $ref: "#/components/schemas/Flags" } } },
+            },
+        ),
+    )
+    const after = JSON.parse(
+        openapi(
+            {
+                "/webhooks/{id}": {
+                    post: {
+                        ...returns("ChannelType", bot),
+                        parameters: [
+                            { name: "id", in: "path" },
+                            { name: "thread_id", in: "query", schema: { type: "string", ...threads } },
+                            { name: "wait", in: "query" },
+                        ],
+                    },
+                },
+                "/channels/{id}/threads": { post: { ...returns("Message", bot), ...threads } },
+            },
+            {
+                ChannelType: {
+                    enum: [0, 2, 11, 998],
+                    "x-enumNames": ["TEXT", "VOICE", "PUBLIC_THREAD", "LINK"],
+                    "x-enumDescriptions": ["Text", "Voice", "A thread", "Link"],
+                },
+                Flags: { "x-bitflagValues": [{ name: "STAFF", value: "1" }, { name: "HIDDEN", value: "8" }, { name: "BOT", value: "16" }] },
+                Message: { type: "object", properties: { flags: { $ref: "#/components/schemas/Flags" }, thread: { type: "object", ...threads } } },
+            },
+        ),
+    )
+    const { endpoints, schemas } = openapiChanges(before, after)
+    assert.deepEqual(endpoints.application.added, ["POST /channels/{id}/threads [experiment: channel_threads]"])
+    assert.deepEqual(endpoints.application.changed, [
+        { name: "POST /webhooks/{id} [experiment: channel_threads]", details: ["+ parameters.thread_id (query)"] },
+    ])
+    const schema = (name) => schemas.application.changed.find((entry) => entry.name.startsWith(name))?.details ?? []
+    assert.deepEqual(schema("ChannelType"), ["enum: + 11", "+ x-enumNames.11"], "Existing value names are unchanged")
+    assert.deepEqual(schema("Flags"), ["+ x-bitflagValues.8"])
+    assert.deepEqual(
+        schemas.application.changed.map(({ name }) => name),
+        ["ChannelType", "Flags", "Message [experiment: channel_threads]"],
+    )
+})
+
+test("A gateway documentation folder reports added files and the sections they define", async () => {
+    const threads = events([["THREAD_CREATE", table(["| id | snowflake | Thread |"])]])
+    const { manifest, source } = upstream({ [pinned]: document, [current]: { ...document, [`${gateway}/threads.md`]: threads } })
+    const result = await checkUpstream(manifest, source)
+    assert.equal(result.drift, true)
+    assert.equal(result.gatewayDocs.changed, true)
+    assert.deepEqual(result.gateway.files, { added: ["threads.md"], removed: [] })
+    assert.deepEqual(result.gateway.added, ["THREAD_CREATE"])
+    assert.deepEqual(result.gateway.fields, [], "The unchanged events document reports nothing")
+    const report = renderReport(result)
+    assert.match(report, /Gateway documents in gateway \| changed/)
+    assert.match(report, /Files added \(1\): threads\.md/)
+
+    const unrelated = gatewayChanges([{ path: "a.md", text: "### READY\nOne" }], [{ path: "a.md", text: "### READY\nOne" }, { path: "b.md", text: "Notes" }])
+    assert.deepEqual(unrelated.textOnly, [], "A file boundary ends the previous file's last section")
 })
 
 test("Gateway event sections separate field table changes from text edits", () => {

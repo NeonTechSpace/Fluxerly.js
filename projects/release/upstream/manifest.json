@@ -6,11 +6,11 @@
         "openapi": {
             "path": "fluxer_api/src/api/openapi/openapi.json",
             "sha256": "1f83d3cc3dbc06c72f2496b661f3e7e995a172bf2e754403fb92d303c50bcbd7"
-        },
-        "gatewayEvents": {
-            "path": "fluxer_docs/src/content/docs/gateway/events.md",
-            "sha256": "57d81ad417b23f017fbc93aa28774345a49b38f060c3c36aaff9f66127165f63"
         }
+    },
+    "gatewayDocs": {
+        "path": "fluxer_docs/src/content/docs/gateway",
+        "sha256": "fccff9c51db7881285474fbca70a7125c95ced857560dc441475e9e980f34853"
     },
     "rateLimits": {
         "path": "fluxer_api/src/api/rate_limit_configs",
