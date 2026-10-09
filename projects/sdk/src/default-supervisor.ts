@@ -13,7 +13,7 @@ import {
     type ConnectError,
     type DefectReason,
 } from "#sdk/errors"
-import { attachIdentifyGate } from "#sdk/internal/client"
+import { attachAccountLimits, attachIdentifyGate } from "#sdk/internal/client"
 import { throwIfErr } from "#sdk/internal/failures"
 import { operationSignalError } from "#sdk/internal/operation-signal"
 import {
@@ -271,7 +271,10 @@ function childClientOptions(
     bridge: ChildBridge,
 ): ClientOptions {
     const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
-    return attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate)
+    return attachAccountLimits(
+        attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate),
+        bridge.accountLimits,
+    )
 }
 
 /** Build default-API supervisor tools around this entry point's client creator */

@@ -116,7 +116,9 @@ export interface SupervisorIdentifyOptions {
  * block per child, and names the children process-0, process-1 and so on.
  * With totalShards set to "auto" the supervisor sizes the plan at start as a client with sharding "auto" does, from the
  * number of communities the bot is in. Communities are what the API calls guilds.
- * Assignments stay fixed across replacements. Without an identify coordinator, this supervisor does not coordinate other parents
+ * Assignments stay fixed across replacements. Without an identify coordinator, this supervisor does not coordinate other parents.
+ * Its children share a global rate-limit pause and the count of member requests through it, while per-route REST rate
+ * limits stay per child
  *
  * @category Sharding and supervision
  */

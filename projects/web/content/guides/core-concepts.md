@@ -24,7 +24,7 @@ The `presence.set` method retains the latest requested status for each ready loc
 
 The `guilds.fetchCounts`, `channels.fetchMemberCounts` and `members.iterateChunks` methods require a ready gateway and share a separate request-slot budget. Their deadlines include gateway pacing waits. Cancellation or deadline expiry withdraws unsent commands and releases local capacity, but cannot stop work already sent to Fluxer
 
-Fluxer accepts 12 member requests per account in 10 seconds and drops the rest without an answer. One client therefore sends at most 12 in any 11 seconds, and a further `members.iterateChunks` request fails at once with reason `rateLimit` and a `retryAfterMs` wait instead of timing out. A member request sent with `gateway.send` counts as well, but `gateway.send` never refuses one. Requests from other processes with the same token are not counted
+Fluxer accepts 12 member requests per account in 10 seconds and drops the rest without an answer. One client therefore sends at most 12 in any 11 seconds, and a further `members.iterateChunks` request fails at once with reason `rateLimit` and a `retryAfterMs` wait instead of timing out. A member request sent with `gateway.send` counts as well, but `gateway.send` never refuses one. The children of one [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) share this count, while other processes with the same token are not counted
 
 </details>
 

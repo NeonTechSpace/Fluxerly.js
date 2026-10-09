@@ -26,7 +26,13 @@ import { createClient } from "./client.js"
  * A crashed child restarts by default, up to three times in a row with exponentially increasing delays. Set restart to false to turn this off.
  * The childEnvironment, args and execArgv options affect child launch but are omitted from status and failures.
  * With totalShards "auto" and processes or shardsPerProcess, the plan is sized at start. Each child sends its client diagnostics, which status includes.
- * Children keep resumable sessions through clientOptions.sharding.sessions. This helper does not share REST rate limits
+ * Children keep resumable sessions through clientOptions.sharding.sessions.
+ * The children share Fluxer's limits per bot account through the parent. When one child is rate-limited globally, the parent
+ * holds the other children's REST requests until the same time. Member requests from all children share one count of 12 in
+ * any 11 seconds, and a members.iterateChunks request past it fails at once with reason rateLimit and retryAfterMs.
+ * A child that gets no answer from the parent within one second counts only its own member requests and logs
+ * supervisor.memberRequestsLocal once. Per-route REST rate limits stay per child, and other processes using the same
+ * token are not counted
  *
  * @example
  * ```ts

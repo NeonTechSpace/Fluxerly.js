@@ -2,7 +2,9 @@
  * Member chunk streams: One active guild member request per client with bounded unread batches.
  * Admission: Fluxer silently discards member requests past 12 per account in a rolling 10-second window, so the client
  * refuses a request that would be its 13th sent in the last 11 seconds instead of letting it time out. Only requests that
- * reached the socket count. Separate processes and other accounts' requests in a busy community are not tracked.
+ * reached the socket count. A supervised child asks its parent instead, which keeps one window for all its children, and
+ * uses its own window only when the parent does not answer. Other processes and other accounts' requests in a busy
+ * community are not tracked.
  * Invariant: A stream fails only for a connection gap on its shard or client closure, releases local intake on failure, and
  * publishes no cache or event data. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
@@ -23,14 +25,36 @@ import { readCaller, suspendMarked, thrownCause } from "./defects.js"
 import { decodePresenceUpdate } from "./presence.js"
 import { Opcode } from "./protocol/gateway.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
+import type { ClientLogger } from "./logging.js"
 
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
 /** Member requests Fluxer accepts per account in its rolling 10-second window */
-const memberRequestLimit = 12
+export const memberRequestLimit = 12
 /** Fluxer's window plus one second, so network and processing delay cannot leave Fluxer counting a request the client has stopped counting */
-const memberRequestWindowMs = 11_000
+export const memberRequestWindowMs = 11_000
+
+/** A supervisor's answer to a child that asks for an account-wide member request slot */
+export type MemberRequestSlot =
+    | {
+          readonly kind: "granted"
+          /** Report that the request reached the socket, so the parent counts it from now */
+          readonly sent: () => void
+          /** Free the slot of a request that will not be sent. Does nothing after sent */
+          readonly withdraw: () => void
+      }
+    | { readonly kind: "refused"; readonly retryAfterMs: number }
+    /** The parent did not answer, so the child's own window decides */
+    | { readonly kind: "unreachable" }
+
+/** Member request admission shared by the children of one supervisor */
+export interface MemberRequestGate {
+    /** Ask the parent for a slot before a member stream sends its request */
+    readonly request: () => Effect.Effect<MemberRequestSlot>
+    /** Report a member request that reached the socket without a granted slot, such as one from gateway.send */
+    readonly sent: () => void
+}
 
 interface Settings {
     readonly guildId: string
@@ -411,11 +435,16 @@ export class MemberChunkOwner {
      * memberRequestLimit within memberRequestWindowMs, the only ones that decide admission, and admission prunes again
      */
     #sentAt: number[] = []
+    /** Whether a member request already fell back to this client's own window because the parent did not answer */
+    #warnedLocal = false
 
     constructor(
         private readonly budget: GatewayRequestBudget,
         private readonly logical: LogicalScheduler,
         private readonly routeGuild: (guildId: string) => number | undefined = () => 0,
+        /** The supervisor parent's account-wide admission, only in a supervised child */
+        private readonly gate?: MemberRequestGate,
+        private readonly logger?: ClientLogger,
     ) {}
     attach(sender: Sender, shardId = 0) {
         if (!this.#closed && Number.isSafeInteger(shardId) && shardId >= 0) this.#senders.set(shardId, sender)
@@ -439,8 +468,15 @@ export class MemberChunkOwner {
         if (record(value) && typeof value.nonce === "string" && value.nonce === this.#active?.nonce)
             this.#active.receive(value, bytes)
     }
-    /** Count a member request handed to a socket, by this owner or by gateway.send, which Fluxer limits together */
+    /**
+     * Count a member request gateway.send handed to a socket, which Fluxer limits together with member streams, and
+     * report it to a supervisor parent
+     */
     countSent() {
+        this.#countLocal()
+        this.gate?.sent()
+    }
+    #countLocal() {
         const now = this.logical.now()
         this.#sentAt.push(now)
         while (this.#sentAt.length > memberRequestLimit || this.#sentAt[0]! <= now - memberRequestWindowMs)
@@ -467,24 +503,66 @@ export class MemberChunkOwner {
     }
 
     #open(config: Settings | InputValidationFailure): Effect.Effect<MemberChunkSource, MemberChunkFailure> {
+        if (config instanceof InputValidationFailure)
+            return Effect.fail(new MemberChunkError({ reason: "input", inputValidation: config.detail }))
+        const gate = this.gate
+        // A request that fails locally anyway fails without asking the parent
+        if (gate === undefined || !("sender" in this.#target(config))) return this.#admit(config, undefined)
+        // Interruption while waiting withdraws the request, and once the parent answers, admission runs to its end so
+        // a grant is either used or withdrawn
+        return Effect.uninterruptibleMask((restore) =>
+            restore(gate.request()).pipe(Effect.flatMap((slot) => this.#admit(config, slot))),
+        )
+    }
+
+    /** The shard sender for a request, or why it cannot be opened now apart from the member request window */
+    #target(config: Settings) {
+        if (this.#closed) return new ClientClosedError()
+        const shardId = this.routeGuild(config.guildId)
+        const sender = shardId === undefined ? undefined : this.#senders.get(shardId)
+        if (shardId === undefined || !sender) return new MemberChunkError({ reason: "notConnected" })
+        if (this.#active) return new MemberChunkError({ reason: "busy" })
+        return { shardId, sender }
+    }
+
+    /**
+     * Open a stream with the parent's answer, or without one outside a supervisor. A refusal fails as the local window
+     * does, and an unanswered request uses the local window
+     */
+    #admit(
+        config: Settings,
+        slot: MemberRequestSlot | undefined,
+    ): Effect.Effect<MemberChunkSource, MemberChunkFailure> {
         return Effect.gen({ self: this }, function* () {
-            if (config instanceof InputValidationFailure)
-                return yield* Effect.fail(new MemberChunkError({ reason: "input", inputValidation: config.detail }))
-            const shardId = this.routeGuild(config.guildId)
-            const sender = shardId === undefined ? undefined : this.#senders.get(shardId)
-            if (!sender) return yield* Effect.fail(new MemberChunkError({ reason: "notConnected" }))
-            if (this.#active) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
-            const now = this.logical.now()
-            while (this.#sentAt.length > 0 && this.#sentAt[0]! <= now - memberRequestWindowMs) this.#sentAt.shift()
-            if (this.#sentAt.length >= memberRequestLimit)
+            const granted = slot?.kind === "granted" ? slot : undefined
+            // The checks run again because the client could change while the parent answered
+            const target = this.#target(config)
+            if (!("sender" in target)) {
+                granted?.withdraw()
+                return yield* Effect.fail(target)
+            }
+            if (slot?.kind === "refused")
                 return yield* Effect.fail(
-                    new MemberChunkError({
-                        reason: "rateLimit",
-                        retryAfterMs: Math.max(1, Math.ceil(this.#sentAt[0]! + memberRequestWindowMs - now)),
-                    }),
+                    new MemberChunkError({ reason: "rateLimit", retryAfterMs: slot.retryAfterMs }),
                 )
+            if (slot?.kind === "unreachable") this.#warnLocal()
+            if (!granted) {
+                const now = this.logical.now()
+                while (this.#sentAt.length > 0 && this.#sentAt[0]! <= now - memberRequestWindowMs) this.#sentAt.shift()
+                if (this.#sentAt.length >= memberRequestLimit)
+                    return yield* Effect.fail(
+                        new MemberChunkError({
+                            reason: "rateLimit",
+                            retryAfterMs: Math.max(1, Math.ceil(this.#sentAt[0]! + memberRequestWindowMs - now)),
+                        }),
+                    )
+            }
             const release = this.budget.acquire()
-            if (!release) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
+            if (!release) {
+                granted?.withdraw()
+                return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
+            }
+            const { shardId, sender } = target
             let source: MemberChunkSource | undefined
             let withdraw: (() => void) | undefined
             try {
@@ -495,6 +573,7 @@ export class MemberChunkOwner {
                     }
                     withdraw?.()
                     withdraw = undefined
+                    granted?.withdraw()
                     release()
                 })
                 this.#active = source
@@ -502,7 +581,10 @@ export class MemberChunkOwner {
                 source.start()
                 // A request withdrawn before transmission never reaches Fluxer, so only a sent one counts
                 const submission = sender(config.payload, source.nonce, (sent) => {
-                    if (sent) this.countSent()
+                    if (!sent) return
+                    this.#countLocal()
+                    if (granted) granted.sent()
+                    else this.gate?.sent()
                 })
                 if (typeof submission === "string") {
                     const error = new MemberChunkError({ reason: submission === "busy" ? "busy" : "connectionLost" })
@@ -513,9 +595,25 @@ export class MemberChunkOwner {
                 return source
             } catch (error) {
                 source?.defect(error)
-                if (!source) release()
+                if (!source) {
+                    release()
+                    granted?.withdraw()
+                }
                 return yield* Effect.die(error)
             }
+        })
+    }
+
+    /** Record once per client that the parent did not answer, so this client's own window decided */
+    #warnLocal() {
+        if (this.#warnedLocal) return
+        this.#warnedLocal = true
+        this.logger?.log({
+            level: "warn",
+            category: "supervisor",
+            code: "supervisor.memberRequestsLocal",
+            message:
+                "The supervisor did not answer a request for a member request slot, so this child counted only its own member requests. Requests from other children are not counted then, and Fluxer drops a request past 12 per account in 10 seconds without an answer. Later requests still ask the supervisor first, and this record is not repeated",
         })
     }
 }

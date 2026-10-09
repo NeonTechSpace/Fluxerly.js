@@ -661,6 +661,12 @@ export const logCodes = {
             "The supervisor's identify coordinator rejected or threw instead of granting a child permission to start a new session, so the child retries as after a network failure",
         action: "Fix the permit function of the identify.coordinator supervisor option",
     },
+    "supervisor.memberRequestsLocal": {
+        levels: ["warn"],
+        meaning:
+            "A supervised child asked its parent for a member request slot and got no answer, because the parent did not answer within one second or the child lost its message channel to it. The child then counted only its own member requests, so requests from other children could pass Fluxer's limit of 12 per account in 10 seconds, and Fluxer drops those without an answer. Logged once per child",
+        action: "Read the supervisor records about this child before this one",
+    },
     "supervisor.childOutput": {
         levels: ["info", "warn"],
         meaning: "A child printed a line that is not a log record. Standard error lines are Warn",

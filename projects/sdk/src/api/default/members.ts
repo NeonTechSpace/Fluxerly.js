@@ -58,7 +58,8 @@ export interface Members {
      * Fluxer accepts 12 member requests per account in 10 seconds and drops the rest without an answer.
      * The SDK therefore sends at most 12 from one client in any 11 seconds and fails a further request at once with reason rateLimit and retryAfterMs, without sending it.
      * A member request sent with gateway.send counts as well, but gateway.send never refuses one.
-     * The count leaves out requests from other processes with the same token, such as supervisor children, and the SDK does not track Fluxer's limit of 40 requests per community in 10 seconds across all accounts.
+     * The children of one supervisor share one count through their parent. A child that gets no answer from the parent within one second counts only its own requests and logs supervisor.memberRequestsLocal once.
+     * The count leaves out requests from other processes with the same token, and the SDK does not track Fluxer's limit of 40 requests per community in 10 seconds across all accounts.
      * A request Fluxer drops in either case ends with reason timeout
      *
      * Batches are frozen and follow provider chunk order.

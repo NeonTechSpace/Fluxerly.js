@@ -82,6 +82,7 @@ export interface MemberChunk {
  * The SDK checks and copies these settings when consumption starts, not when the iterator or native Stream is created.
  * One client admits one member stream across its local shards, sharing four request slots with count calls.
  * It sends at most 12 member requests in any 11 seconds, keeping under Fluxer's limit of 12 per account in 10 seconds.
+ * The children of one supervisor keep that count together.
  * Ending the stream early releases the SDK's local request slot but cannot stop work Fluxer has already started
  *
  * @category Guilds and members

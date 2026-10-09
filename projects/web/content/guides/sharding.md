@@ -188,7 +188,12 @@ Unknown keys in supervisor creation, assignment, restart, Identify and child-run
 
 To resume sessions across a deploy, give each child the [session store](/docs/{{version}}/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` is the only sharding setting a child accepts
 
-The SDK limits member requests for each client separately. Fluxer accepts 12 member requests per bot account in 10 seconds across all processes and drops the rest without an answer, so a dropped request ends with reason `timeout` after its deadline. When several children request members, keep their combined rate under that limit
+Some of Fluxer's limits apply to the whole bot account rather than to one process, so the children share them through the parent:
+
+- When Fluxer pauses every request of the account with a global rate limit, the child that learns of it tells the parent, and the parent holds the other children's REST requests until the same time. A request that cannot wait that long fails at once with reason `rateLimit` and `retryAfterMs`
+- Fluxer accepts 12 member requests per account in 10 seconds and drops the rest without an answer. Each child asks the parent before `members.iterateChunks` sends a request, and the parent allows at most 12 in any 11 seconds across all children. A request past that fails at once with reason `rateLimit` and `retryAfterMs`. A member request sent with `gateway.send` counts too but is never refused
+
+A child that gets no answer from the parent within one second counts only its own member requests and logs `supervisor.memberRequestsLocal` once. Per-route rate limits stay with each child, and processes outside this supervisor that use the same token are not counted
 
 <details>
 <summary>Choose the plan yourself</summary>

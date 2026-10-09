@@ -85,7 +85,7 @@ import { InstanceResolver } from "./instance.js"
 import type { LinkHelpers } from "#sdk/helpers"
 import { CountOwner } from "./counts.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
-import { MemberChunkOwner } from "./member-chunks.js"
+import { MemberChunkOwner, type MemberRequestGate } from "./member-chunks.js"
 import { LogicalScheduler, type LogicalTimer, makeLogicalScheduler } from "./logical-scheduler.js"
 import { AttemptFailure } from "./gateway.js"
 import { sdkVersion } from "./logging.js"
@@ -274,6 +274,24 @@ export function attachIdentifyGate<T extends object>(options: T, gate: IdentifyG
     return options
 }
 
+/** Internal sharing of Fluxer's account-wide limits with the other children of a supervisor, used only by supervisor.child.run */
+export interface AccountLimits {
+    /** Pass a global pause this client learned from Fluxer, lasting waitMs from now, to the other children */
+    readonly shareGlobalPause: (waitMs: number) => void
+    /** Apply global pauses the other children learned. A pause that is still running reaches the listener at once */
+    readonly onGlobalPause: (listener: (waitMs: number) => void) => void
+    /** The parent's member request window */
+    readonly members: MemberRequestGate
+}
+
+const accountLimits = new WeakMap<object, AccountLimits>()
+
+/** Attach non-public account limit sharing to the helper-owned client configuration object */
+export function attachAccountLimits<T extends object>(options: T, limits: AccountLimits): T {
+    accountLimits.set(options, limits)
+    return options
+}
+
 export class ClientOwner<M extends MessageCore = Message> {
     readonly presence: PresenceOwner
     readonly #gatewayRequests = new GatewayRequestBudget()
@@ -367,6 +385,8 @@ export class ClientOwner<M extends MessageCore = Message> {
         failures: FailureReporter,
         readonly logical: LogicalScheduler,
         private readonly identifyGate: IdentifyGate | undefined,
+        /** Account limits shared with a supervisor's other children, only in a supervised child */
+        limits: AccountLimits | undefined,
         /** Network implementations for REST, discovery and the gateway */
         readonly transport: Transport = defaultTransport,
     ) {
@@ -384,7 +404,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         // The configured initial presence is the first presence intent: Identify carries it and READY publishes it
         if (configuration.gateway.presence !== undefined) this.presence.set(configuration.gateway.presence)
         this.counts = new CountOwner(this.#gatewayRequests, route)
-        this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, logical, route)
+        this.memberChunks = new MemberChunkOwner(
+            this.#gatewayRequests,
+            logical,
+            route,
+            limits?.members,
+            configuration.logging,
+        )
         this.logging = configuration.logging
         this.failures = failures
         this.tasks = new ScheduledTasks(logical, failures, configuration.logging)
@@ -445,7 +471,10 @@ export class ClientOwner<M extends MessageCore = Message> {
             logging: configuration.logging,
             http: transport.http,
             settings: configuration.rest,
+            shareGlobalPause: limits?.shareGlobalPause,
         })
+        // Fluxer pauses every request of the account, so a pause another child learned holds this client's requests too
+        limits?.onGlobalPause((waitMs) => this.rest.pauseGlobal(waitMs))
         if (configuration.sharding !== "auto") this.#adoptPlan(configuration.sharding, "Disconnected")
         this.#shardHost = {
             logging: this.logging,
@@ -1238,8 +1267,9 @@ export class ClientOwner<M extends MessageCore = Message> {
             if (!shard) return Effect.fail(new GatewaySendError({ reason: "notOwned", shardId, opcode: op }))
             if (shard.state !== "Connected" || shard.submit === undefined)
                 return Effect.fail(new GatewaySendError({ reason: "notReady", shardId, opcode: op }))
-            // Fluxer limits raw member requests together with members.iterateChunks, so one counts there too, from the
-            // moment the socket takes it, because a caller interrupted before it resumes cannot withdraw a sent frame
+            // Fluxer limits raw member requests together with members.iterateChunks, so one counts there too, and in a
+            // supervisor's account-wide window, from the moment the socket takes it, because a caller interrupted before it
+            // resumes cannot withdraw a sent frame. It is counted, never refused
             const sent = op === Opcode.requestGuildMembers ? () => this.memberChunks.countSent() : undefined
             return shard.submit(op, JSON.parse(encoded), sent).pipe(
                 Effect.mapError(
@@ -2319,7 +2349,11 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
 ): Effect.Effect<ClientOwner<SelectedMessage<F>>, ConfigurationError> {
     return Effect.gen(function* () {
         const identifyGate = typeof options === "object" && options !== null ? identifyGates.get(options) : undefined
-        if (typeof options === "object" && options !== null) identifyGates.delete(options)
+        const limits = typeof options === "object" && options !== null ? accountLimits.get(options) : undefined
+        if (typeof options === "object" && options !== null) {
+            identifyGates.delete(options)
+            accountLimits.delete(options)
+        }
         const configuration = yield* validateConfiguration<F>(options, native)
         return yield* configuration.logging.provide(
             Effect.gen(function* () {
@@ -2362,6 +2396,7 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
                     failures,
                     logical,
                     identifyGate,
+                    limits,
                     configuration.transport.transport,
                 )
             }),

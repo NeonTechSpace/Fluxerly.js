@@ -19,7 +19,12 @@ import { openClient } from "./client.js"
  *
  * The supervisor can size the plan at start with totalShards "auto", share the Identify budget through identify.coordinator and
  * include each child's client diagnostics in status. Children keep resumable sessions through clientOptions.sharding.sessions.
- * The supervisor does not share REST limits across children.
+ * The children share Fluxer's limits per bot account through the parent. When one child is rate-limited globally, the parent
+ * holds the other children's REST requests until the same time. Member requests from all children share one count of 12 in
+ * any 11 seconds, and a members.iterateChunks request past it fails at once with reason rateLimit and retryAfterMs.
+ * A child that gets no answer from the parent within one second counts only its own member requests and logs
+ * supervisor.memberRequestsLocal once. Per-route REST rate limits stay per child, and other processes using the same
+ * token are not counted.
  * It installs no signal handlers and does not terminate the process.
  * After the configured graceful deadline, the parent can terminate only its own unresponsive child and still waits for its exit.
  * A crashed child restarts by default with bounded exponential delays. Set restart to false to turn this off.

@@ -150,6 +150,8 @@ export interface RestOwnerOptions<M extends MessageCore> {
     readonly http?: HttpTransport | undefined
     /** Scheduling limits and default deadline, defaulting to the built-in limits */
     readonly settings?: RestConfiguration | undefined
+    /** Passes a global pause learned from Fluxer to a supervisor's other children, in milliseconds from now */
+    readonly shareGlobalPause?: ((waitMs: number) => void) | undefined
 }
 
 /** Mutable state shared by one owner's operations, attempts and downloads */
@@ -189,7 +191,12 @@ export class RestRuntime<M extends MessageCore> {
 
     constructor(options: RestOwnerOptions<M>) {
         this.settings = options.settings ?? defaultRestConfiguration
-        this.admission = new RestAdmission(options.logical, this.settings, () => this.busy("queue"))
+        this.admission = new RestAdmission(
+            options.logical,
+            this.settings,
+            () => this.busy("queue"),
+            options.shareGlobalPause,
+        )
         this.http = options.http ?? defaultHttpTransport
         this.cache = options.cache
         this.resources = options.resources
@@ -349,6 +356,11 @@ export class RestOwner<M extends MessageCore = Message> {
     /** Size the default API request slots for the client's local shard count */
     scaleConcurrency(localShards: number) {
         this.#runtime.admission.scaleConcurrency(localShards)
+    }
+
+    /** Apply a global pause another process learned, lasting waitMs from now, without sharing it again */
+    pauseGlobal(waitMs: number) {
+        this.#runtime.admission.pauseGlobal(this.#runtime.logical.now() + waitMs, true)
     }
 
     /** Completion signals of the operations and downloads running now, queued ones included, for a draining shutdown */
@@ -1622,7 +1634,11 @@ export class RestOwner<M extends MessageCore = Message> {
                 const instance =
                     resolved ??
                     (yield* Effect.acquireUseRelease(
-                        Effect.interruptible(runtime.admission.acquire({ route: "discovery", bytes })),
+                        // Discovery is not an API request, so a global pause, such as one another child learned,
+                        // cannot hold it past the operation's deadline
+                        Effect.interruptible(
+                            runtime.admission.acquire({ route: "discovery", bytes, rateLimited: false }),
+                        ),
                         () => runtime.resolveInstance(),
                         (release) => Effect.sync(release),
                     ).pipe(mapFailureCause(instanceFailure)))

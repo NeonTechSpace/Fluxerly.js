@@ -4,8 +4,11 @@
  * Invariant: Assignments are fixed once known: At creation, or at start after one community count for totalShards "auto".
  * An automatic plan changes only when a child reports a 4011 (sharding required) closure: Every child stops, the
  * communities are counted again and a larger plan starts, at most three times an hour.
- * Only an application-supplied identify coordinator reaches beyond the children it forked. It does not manage
- * distributed REST limits, and session retention belongs to each child's own SessionStore. It terminates only an
+ * Only an application-supplied identify coordinator reaches beyond the children it forked. The children share Fluxer's
+ * account-wide limits through the parent: It relays a global rate-limit pause one child learns to the others, and keeps
+ * the one member request window, counting a granted request from its grant and again once it reached the socket. An
+ * unanswered child uses its own window. Per-route REST buckets stay per process, and session retention belongs to each
+ * child's own SessionStore. It terminates only an
  * unresponsive child after the graceful deadline and awaits that child's exit, passes its resolved format to children
  * through FLUXERLY_LOG_FORMAT and FLUXERLY_LOG_COLOR, and keeps forwarded JSON output valid JSON Lines. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
@@ -21,7 +24,8 @@ import * as Fiber from "effect/Fiber"
 import { ConfigurationError, ConnectionError } from "#sdk/errors"
 import { loggingConfiguration, type ClientLogger } from "#sdk/internal/logging"
 import { maskText } from "#sdk/internal/masking"
-import { makeClient, type IdentifyGate } from "#sdk/internal/client"
+import { makeClient, type AccountLimits, type IdentifyGate } from "#sdk/internal/client"
+import { memberRequestLimit, memberRequestWindowMs, type MemberRequestSlot } from "#sdk/internal/member-chunks"
 import { validateConfiguration } from "#sdk/internal/configuration"
 import {
     admitReshard,
@@ -56,6 +60,8 @@ const maximumChildIdLength = 128
 const defaultStartupTimeoutMs = 30_000
 const defaultShutdownTimeoutMs = 5_000
 const grantAcknowledgementMs = 5_000
+/** Longest wait for the parent's answer to a member request slot, after which the child uses its own window */
+const memberAnswerMs = 1_000
 const defaultDiagnosticsIntervalMs = 5_000
 /** Part of shutdownTimeoutMs a stopping child keeps for closing its connections after draining running work */
 const childCloseReserveMs = 1_000
@@ -168,6 +174,13 @@ interface IdentifyRequest {
     readonly generation: number
     readonly requestId: number
     readonly shardId: number
+}
+
+/** A member request counted against Fluxer's account limit, from its grant or from when it reached a socket */
+interface CountedMemberRequest {
+    readonly at: number
+    /** The child request holding a granted slot that it has not reported as sent or withdrawn */
+    readonly holder?: { readonly slot: ChildSlot; readonly generation: number; readonly requestId: number }
 }
 
 interface OutstandingIdentify extends IdentifyRequest {
@@ -853,6 +866,13 @@ export class SupervisorOwner {
     #outstanding: OutstandingIdentify | undefined
     #lastIdentifyAt = -Infinity
     #grantTimer: ReturnType<typeof setTimeout> | undefined
+    /** Host time at which the latest global rate-limit pause a child reported ends. Fluxer pauses the whole account */
+    #globalPauseUntil = 0
+    /**
+     * Member requests of every child counted against Fluxer's account limit, oldest first. Only the latest
+     * memberRequestLimit decide admission, so no more are kept
+     */
+    #memberRequests: CountedMemberRequest[] = []
 
     constructor(configuration: SupervisorConfiguration, native = false) {
         this.#configuration = configuration
@@ -1232,8 +1252,10 @@ export class SupervisorOwner {
     }
 
     #message(slot: ChildSlot, child: ChildProcess, generation: number, message: unknown) {
-        if (this.#stopping || this.#failed || slot.child !== child || slot.generation !== generation) return
-        if (slot.disconnectTimer) return
+        if (slot.child !== child || slot.generation !== generation || slot.disconnectTimer) return
+        // Children that drain during a shutdown still share the account limits, so they never wait for an answer
+        if (this.#accountLimitMessage(slot, generation, message)) return
+        if (this.#stopping || this.#failed) return
         if (!record(message) || typeof message.type !== "string")
             return this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
         if ("generation" in message && message.generation !== generation) return
@@ -1250,6 +1272,9 @@ export class SupervisorOwner {
                 // A stopping child lets running work finish, keeping a reserve of shutdownTimeoutMs to close
                 drainMs: Math.max(0, shutdownTimeoutMs - childCloseReserveMs),
             })
+            // A new or restarted child starts with the account's running global pause
+            const waitMs = Math.ceil(this.#globalPauseUntil - performance.now())
+            if (waitMs > 0) this.#send(slot, { type: "globalPause", generation, waitMs })
             return
         }
         if (
@@ -1389,6 +1414,73 @@ export class SupervisorOwner {
             return
         }
         this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+    }
+
+    /**
+     * Handle a child message about Fluxer's account-wide limits, in every supervisor state. Returns false for any other
+     * message, including a malformed one, which the caller then treats like other messages
+     */
+    #accountLimitMessage(slot: ChildSlot, generation: number, message: unknown): boolean {
+        if (!record(message) || message.generation !== generation || !slot.hello) return false
+        const { type, requestId } = message
+        const request = safeInteger(requestId) && requestId >= 0 ? requestId : undefined
+        const exact = (keys: readonly string[]) => hasExactKeys(message, ["type", "generation", ...keys])
+        if (type === "globalPause" && exact(["waitMs"]) && positiveTimer(message.waitMs)) {
+            this.#relayGlobalPause(slot, message.waitMs)
+            return true
+        }
+        if (type === "memberRequest" && exact(["requestId"]) && request !== undefined) {
+            const now = performance.now()
+            this.#memberRequests = this.#memberRequests.filter(({ at }) => at > now - memberRequestWindowMs)
+            if (this.#memberRequests.length >= memberRequestLimit) {
+                const oldest = this.#memberRequests[this.#memberRequests.length - memberRequestLimit]!
+                this.#send(slot, {
+                    type: "memberDenied",
+                    generation,
+                    requestId: request,
+                    retryAfterMs: Math.max(1, Math.ceil(oldest.at + memberRequestWindowMs - now)),
+                })
+                return true
+            }
+            this.#countMemberRequest({ at: now, holder: { slot, generation, requestId: request } })
+            this.#send(slot, { type: "memberGrant", generation, requestId: request })
+            return true
+        }
+        // A sent report without requestId is a member request that had no grant, such as one from gateway.send
+        if (type === "memberSent" && (exact([]) || (exact(["requestId"]) && request !== undefined))) {
+            if (request !== undefined) this.#releaseMemberRequest(slot, generation, request)
+            this.#countMemberRequest({ at: performance.now() })
+            return true
+        }
+        if (type === "memberWithdrawn" && exact(["requestId"]) && request !== undefined) {
+            this.#releaseMemberRequest(slot, generation, request)
+            return true
+        }
+        return false
+    }
+
+    /** Record a global pause one child learned and pass it to every other child, unless a running pause ends later */
+    #relayGlobalPause(source: ChildSlot, waitMs: number) {
+        const until = performance.now() + waitMs
+        if (until <= this.#globalPauseUntil) return
+        this.#globalPauseUntil = until
+        for (const slot of this.#slots)
+            if (slot !== source && slot.hello && slot.child?.connected && !slot.disconnectTimer)
+                this.#send(slot, { type: "globalPause", generation: slot.generation, waitMs })
+    }
+
+    /** Count a member request as the latest, keeping only the latest memberRequestLimit */
+    #countMemberRequest(request: CountedMemberRequest) {
+        this.#memberRequests.push(request)
+        if (this.#memberRequests.length > memberRequestLimit) this.#memberRequests.shift()
+    }
+
+    /** Stop counting a child's granted request from its grant. It has been withdrawn, or is counted again as sent */
+    #releaseMemberRequest(slot: ChildSlot, generation: number, requestId: number) {
+        const index = this.#memberRequests.findIndex(
+            ({ holder }) => holder?.slot === slot && holder.generation === generation && holder.requestId === requestId,
+        )
+        if (index !== -1) this.#memberRequests.splice(index, 1)
     }
 
     #scheduleGrant() {
@@ -1554,6 +1646,12 @@ export class SupervisorOwner {
             // The child might have sent after the parent lost IPC, so start a fresh full interval only after verified exit
             this.#lastIdentifyAt = performance.now()
         }
+        // A granted member request the child never reported may have reached Fluxer just before the exit, so it counts
+        // from the exit
+        const exited = ({ holder }: CountedMemberRequest) => holder?.slot === slot && holder.generation === generation
+        const held = this.#memberRequests.filter(exited).length
+        this.#memberRequests = this.#memberRequests.filter((request) => !exited(request))
+        for (let index = 0; index < held; index++) this.#countMemberRequest({ at: performance.now() })
         if (this.#stopping || this.#failed) {
             slot.state = this.#failed ? "failed" : "closed"
             this.#checkStopped()
@@ -1720,12 +1818,19 @@ interface PendingPermit {
     readonly resume: (effect: Effect.Effect<void, ConnectionError>) => void
 }
 
+const unreachable: MemberRequestSlot = Object.freeze({ kind: "unreachable" })
+
 /** Child-side IPC bridge. It owns no process signals and reports no child output */
 export class ChildBridge {
     readonly #assignment = Deferred.makeUnsafe<SupervisorAssignment, SupervisorChildError>()
     readonly #stop = Deferred.makeUnsafe<void, SupervisorChildError>()
     readonly #pending = new Map<number, PendingPermit>()
     readonly #cancelled = new Set<number>()
+    /** Member request slots waiting for the parent's answer, by request ID */
+    readonly #memberAnswers = new Map<number, (slot: MemberRequestSlot) => void>()
+    /** Host time at which the latest global pause the parent relayed ends */
+    #globalPauseUntil = 0
+    #onGlobalPause: ((waitMs: number) => void) | undefined
     #generation: number | undefined
     #diagnosticsIntervalMs = defaultDiagnosticsIntervalMs
     #drainMs = 0
@@ -1740,6 +1845,25 @@ export class ChildBridge {
 
     readonly identifyGate: IdentifyGate = {
         permit: (shardId, send) => this.#permit(shardId, send),
+    }
+
+    readonly accountLimits: AccountLimits = {
+        shareGlobalPause: (waitMs) => {
+            if (!this.#ended && this.#generation !== undefined && positiveTimer(waitMs))
+                this.#send({ type: "globalPause", generation: this.#generation, waitMs })
+        },
+        onGlobalPause: (listener) => {
+            this.#onGlobalPause = listener
+            const waitMs = Math.ceil(this.#globalPauseUntil - performance.now())
+            if (waitMs > 0) listener(waitMs)
+        },
+        members: {
+            request: () => this.#memberRequest(),
+            sent: () => {
+                if (!this.#ended && this.#generation !== undefined)
+                    this.#send({ type: "memberSent", generation: this.#generation })
+            },
+        },
     }
 
     private readonly onMessage = (message: unknown) => this.#message(message)
@@ -1835,9 +1959,95 @@ export class ChildBridge {
         })
     }
 
+    /**
+     * Ask the parent for a member request slot. The answer is unreachable at once without a channel, when the channel
+     * closes, or after memberAnswerMs without an answer, so a child never waits on a parent that cannot answer.
+     * Interruption or a missed answer withdraws the request, so a late grant frees its slot again
+     */
+    #memberRequest(): Effect.Effect<MemberRequestSlot> {
+        const bridge = this
+        return Effect.callback<MemberRequestSlot>((resume) => {
+            const generation = bridge.#generation
+            if (bridge.#ended || generation === undefined) {
+                resume(Effect.succeed(unreachable))
+                return
+            }
+            const requestId = bridge.#nextRequestId++
+            const withdraw = () => bridge.#send({ type: "memberWithdrawn", generation, requestId })
+            const timer = setTimeout(() => {
+                if (!bridge.#memberAnswers.delete(requestId)) return
+                withdraw()
+                resume(Effect.succeed(unreachable))
+            }, memberAnswerMs)
+            bridge.#memberAnswers.set(requestId, (slot) => {
+                clearTimeout(timer)
+                resume(Effect.succeed(slot))
+            })
+            if (!bridge.#send({ type: "memberRequest", generation, requestId })) {
+                bridge.#memberAnswers.delete(requestId)
+                clearTimeout(timer)
+                resume(Effect.succeed(unreachable))
+                return
+            }
+            return Effect.sync(() => {
+                if (!bridge.#memberAnswers.delete(requestId)) return
+                clearTimeout(timer)
+                withdraw()
+            })
+        })
+    }
+
+    /** A granted slot that reports exactly once whether its request reached the socket */
+    #grantedMember(generation: number, requestId: number): MemberRequestSlot {
+        let reported = false
+        const report = (type: "memberSent" | "memberWithdrawn") => {
+            if (reported) return
+            reported = true
+            if (!this.#ended) this.#send({ type, generation, requestId })
+        }
+        return { kind: "granted", sent: () => report("memberSent"), withdraw: () => report("memberWithdrawn") }
+    }
+
     #message(message: unknown) {
         if (this.#ended) return
         if (!record(message) || typeof message.type !== "string") return this.#protocol()
+        if (
+            (message.type === "memberGrant" || message.type === "memberDenied") &&
+            hasExactKeys(
+                message,
+                message.type === "memberGrant"
+                    ? ["type", "generation", "requestId"]
+                    : ["type", "generation", "requestId", "retryAfterMs"],
+            ) &&
+            safeInteger(message.generation) &&
+            message.generation === this.#generation &&
+            safeInteger(message.requestId) &&
+            (message.type === "memberGrant" || positiveTimer(message.retryAfterMs))
+        ) {
+            const answer = this.#memberAnswers.get(message.requestId)
+            // An answer after this child stopped waiting is ignored. The child withdrew that request then
+            if (!answer) return
+            this.#memberAnswers.delete(message.requestId)
+            answer(
+                message.type === "memberGrant"
+                    ? this.#grantedMember(message.generation, message.requestId)
+                    : { kind: "refused", retryAfterMs: message.retryAfterMs as number },
+            )
+            return
+        }
+        if (
+            message.type === "globalPause" &&
+            hasExactKeys(message, ["type", "generation", "waitMs"]) &&
+            message.generation === this.#generation &&
+            positiveTimer(message.waitMs)
+        ) {
+            const until = performance.now() + message.waitMs
+            if (until > this.#globalPauseUntil) {
+                this.#globalPauseUntil = until
+                this.#onGlobalPause?.(message.waitMs)
+            }
+            return
+        }
         if (
             message.type === "assignment" &&
             hasExactKeys(message, ["type", "generation", "assignment", "diagnosticsIntervalMs", "drainMs"]) &&
@@ -1980,6 +2190,10 @@ export class ChildBridge {
         }
         this.#pending.clear()
         this.#cancelled.clear()
+        const answers = [...this.#memberAnswers.values()]
+        this.#memberAnswers.clear()
+        for (const answer of answers) answer(unreachable)
+        this.#onGlobalPause = undefined
     }
 
     #send(message: object): boolean {

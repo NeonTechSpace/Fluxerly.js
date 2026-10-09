@@ -1,10 +1,10 @@
 /**
  * REST admission for one client: The bounded request queue, active-request slots, learned rate-limit waits and the
  * shared global pause.
- * Invariant: Admission coordinates requests and rate state within one client, never across processes sharing a
- * credential. A request waits in the queue only while count and JSON-byte budgets allow it and no learned wait outlasts
- * its deadline, media transfers use their own slots so upload sources cannot starve their own reads, and closure fails
- * every waiting request.
+ * Invariant: Admission coordinates requests and rate state within one client. The only state that crosses processes is
+ * the global pause, which a supervised child shares with the other children of its supervisor. A request waits in the
+ * queue only while count and JSON-byte budgets allow it and no learned wait outlasts its deadline, media transfers use
+ * their own slots so upload sources cannot starve their own reads, and closure fails every waiting request.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Effect from "effect/Effect"
@@ -65,6 +65,8 @@ export class RestAdmission {
         private readonly settings: RestConfiguration = defaultRestConfiguration,
         /** Called when a request fails with busy because the queue budgets are full */
         private readonly onBusy: () => void = () => {},
+        /** Receives each longer global pause learned from Fluxer, in milliseconds from now, to share with other processes */
+        private readonly shareGlobalPause?: (waitMs: number) => void,
     ) {
         this.#concurrency = settings.concurrency
     }
@@ -95,9 +97,14 @@ export class RestAdmission {
         return this.#pending.length < this.settings.maxQueued && bytes <= this.settings.queuedJsonMaxBytes - this.#bytes
     }
 
-    /** Hold every rate-limited route until the given logical time, keeping any later pause */
-    pauseGlobal(until: number) {
-        this.#globalUntil = Math.max(this.#globalUntil, until)
+    /**
+     * Hold every rate-limited route until the given logical time, keeping any later pause. A longer pause learned from
+     * Fluxer goes to shareGlobalPause, while one shared by another process is not passed on again
+     */
+    pauseGlobal(until: number, shared = false) {
+        if (until <= this.#globalUntil) return
+        this.#globalUntil = until
+        if (!shared) this.shareGlobalPause?.(Math.ceil(until - this.logical.now()))
     }
 
     #pump() {

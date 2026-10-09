@@ -4,7 +4,7 @@ import * as Exit from "effect/Exit"
 import * as Stream from "effect/Stream"
 import type * as Scope from "effect/Scope"
 import { ConfigurationError, type ConnectError } from "#sdk/errors"
-import { attachIdentifyGate } from "#sdk/internal/client"
+import { attachAccountLimits, attachIdentifyGate } from "#sdk/internal/client"
 import { ChildBridge, childFailureReason, createSupervisor, supervisorOptionError } from "#sdk/internal/supervisor"
 import { childClientOptionsError } from "#sdk/internal/configuration"
 import { readInput } from "#sdk/internal/defects"
@@ -205,7 +205,10 @@ function childClientOptions<E, R>(
     bridge: ChildBridge,
 ): ClientOptions<E, R> {
     const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
-    return attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate)
+    return attachAccountLimits(
+        attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate),
+        bridge.accountLimits,
+    )
 }
 
 /** Build native supervisor tools around this entry point's scoped client creator */

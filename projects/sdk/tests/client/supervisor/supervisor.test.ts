@@ -161,6 +161,55 @@ test.each(["default", "native"] as const)(
     10_000,
 )
 
+test.each(["default", "native"] as const)(
+    "%s children share the account's member request window and global pause through their parent",
+    async (mode) => {
+        // Catches: The child bridge and the parent disagreed on the account-limit messages, so a child's request or
+        // report never reached the shared window, or a pause never reached the other child
+        const options = {
+            entry: fixture("supervisor-account-limits-worker.js"),
+            totalShards: 2,
+            processes: 2,
+            restart: false as const,
+            logging: { level: "silent" as const },
+        }
+        if (mode === "default") {
+            const managed = supervisor.create(options)
+            onTestFinished(async () => {
+                await managed.shutdown()
+            })
+            expect((await managed.start()).isOk()).toBe(true)
+            expect((await managed.waitForReady()).isOk()).toBe(true)
+            expect((await managed.shutdown()).isOk()).toBe(true)
+        } else {
+            const managed = await Effect.runPromise(nativeSupervisor.create(options))
+            onTestFinished(() => Effect.runPromise(managed.shutdown()))
+            await Effect.runPromise(managed.start())
+            await Effect.runPromise(managed.waitForReady())
+            await Effect.runPromise(managed.shutdown())
+        }
+    },
+    10_000,
+)
+
+test("a child that loses the parent's answer to a member request falls back and frees the slot", async () => {
+    // Catches: A child waited without end for an answer the IPC channel lost, or kept the parent counting a grant it
+    // never used, so later requests were refused
+    const managed = supervisor.create({
+        entry: fixture("supervisor-unanswered-worker.js"),
+        totalShards: 1,
+        processes: 1,
+        restart: false,
+        logging: { level: "silent" },
+    })
+    onTestFinished(async () => {
+        await managed.shutdown()
+    })
+    expect((await managed.start()).isOk()).toBe(true)
+    expect((await managed.waitForReady()).isOk()).toBe(true)
+    expect((await managed.shutdown()).isOk()).toBe(true)
+}, 10_000)
+
 test("partial assignments snapshot status without retaining launch configuration", async () => {
     const created = supervisor.create({
         entry: fixture("supervisor-never-hello-worker.js"),
