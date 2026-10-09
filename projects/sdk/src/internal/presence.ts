@@ -3,12 +3,18 @@
  * Invariant: The owner keeps callers' requested presence and a bounded member selection, each shard sends its own paced updates,
  * and no roster is retained. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import type { ObservedPresenceStatus, PresenceUpdate, PresenceUpdateBulk } from "#sdk/events"
+import type {
+    ObservedCustomStatus,
+    ObservedCustomStatusEmoji,
+    ObservedPresenceStatus,
+    PresenceUpdate,
+    PresenceUpdateBulk,
+} from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { CustomStatusEmoji, PresenceInput, PresenceStatus } from "#sdk/presence"
 import { gatewayIdentifier, identifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller } from "./defects.js"
-import { validCalendarTimestamp } from "./decode/timestamp.js"
+import { nullableTimestamp, validCalendarTimestamp } from "./decode/timestamp.js"
 import { Opcode } from "./protocol/gateway.js"
 import type { InternalSubmission, QueuedCommand } from "./gateway/commands.js"
 
@@ -71,6 +77,32 @@ function observedStatus(status: string): ObservedPresenceStatus {
     return knownStatuses.has(status) ? (status as ObservedPresenceStatus) : "unknown"
 }
 
+const optionalText = (value: unknown) =>
+    value === undefined || value === null || (typeof value === "string" && value.isWellFormed())
+
+/**
+ * Decode a provider custom status, where an absent or null field is not set and the whole status is null when Fluxer
+ * sends none. A field of another type reads as null, because the status is user-supplied text Fluxer does not validate
+ */
+function observedCustomStatus(value: unknown): ObservedCustomStatus | null {
+    // Fluxer stores a user's custom status without validating it, so one odd field reads as null instead of costing
+    // the whole presence update
+    if (!record(value)) return null
+    const text = optionalText(value.text) ? ((value.text ?? null) as string | null) : null
+    const expiresAt =
+        value.expires_at !== undefined && nullableTimestamp(value.expires_at)
+            ? (value.expires_at as string | null)
+            : null
+    const id = identifier(value.emoji_id) ? value.emoji_id : null
+    const name = optionalText(value.emoji_name) ? ((value.emoji_name ?? null) as string | null) : null
+    // Only a custom emoji can be animated, so a flag sent with a Unicode emoji reads as false
+    const emoji: ObservedCustomStatusEmoji | null =
+        id === null && name === null
+            ? null
+            : Object.freeze({ id, name, animated: id !== null && value.emoji_animated === true })
+    return Object.freeze({ text, emoji, expiresAt })
+}
+
 /** Decode the stable subset of an inbound provider presence without retaining it */
 export function decodePresenceUpdate(value: unknown): PresenceUpdate | undefined {
     if (!record(value)) return undefined
@@ -86,11 +118,13 @@ export function decodePresenceUpdate(value: unknown): PresenceUpdate | undefined
         typeof value.afk !== "boolean"
     )
         return undefined
+    const customStatus = observedCustomStatus(value.custom_status)
     const presence = {
         userId: value.user.id,
         status: observedStatus(value.status),
         mobile: value.mobile,
         afk: value.afk,
+        customStatus,
     }
     return Object.freeze(guildId === undefined ? presence : { guildId, ...presence })
 }

@@ -13,6 +13,7 @@ import { createClient as createNative } from "../../src/effect.js"
 import { Opcode as GatewayOpcode } from "../../src/internal/protocol/gateway.js"
 import { decodeVoiceState, decodeVoiceStateSnapshot } from "../../src/internal/guilds.js"
 import { defaultApi as fixtureClient } from "../support/both-apis.js"
+import { captureLogs } from "../support/log-capture.js"
 import { startHostedLoopback } from "../support/instance.js"
 import { sendJson } from "../support/rest-server.js"
 import { settle, typedResult } from "../support/settle.js"
@@ -56,13 +57,25 @@ const metadataWire = (content = "metadata") => ({
         },
     ],
 })
+const customStatusWire = {
+    text: "Reviewing",
+    expires_at: "2099-01-01T00:00:00.000Z",
+    emoji_id: "55",
+    emoji_name: "party",
+    emoji_animated: true,
+}
+const customStatus = {
+    text: "Reviewing",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    emoji: { id: "55", name: "party", animated: true },
+}
 const presenceWire = (overrides: Record<string, unknown> = {}) => ({
     guild_id: "40",
     user: { id: "30", username: "fixture" },
     status: "idle",
     mobile: true,
     afk: false,
-    custom_status: { text: "not part of the public projection" },
+    custom_status: customStatusWire,
     ...overrides,
 })
 const directPresenceWire = (overrides: Record<string, unknown> = {}) => ({
@@ -80,7 +93,7 @@ const presenceBulkWire = (overrides: Record<string, unknown> = {}) => ({
             status: "online",
             mobile: false,
             afk: true,
-            custom_status: { text: "not part of the public projection" },
+            custom_status: { text: null, expires_at: null, emoji_id: null, emoji_name: "🎉", emoji_animated: false },
         },
     ],
     ...overrides,
@@ -403,11 +416,12 @@ test("default presence callbacks and pull subscriptions project one frozen guild
     await settle(client.connect())
     server.dispatch("PRESENCE_UPDATE", presenceWire())
     await vi.waitFor(() => expect(callbacks).toHaveLength(1))
-    const expected = { guildId: "40", userId: "30", status: "idle", mobile: true, afk: false }
+    const expected = { guildId: "40", userId: "30", status: "idle", mobile: true, afk: false, customStatus }
     expect(callbacks[0]).toEqual(expected)
     expect(await settle(pull.next())).toEqual(expected)
     expect(Object.isFrozen(callbacks[0])).toBe(true)
-    expect(callbacks[0]).not.toHaveProperty("customStatus")
+    expect(Object.isFrozen(callbacks[0]!.customStatus)).toBe(true)
+    expect(Object.isFrozen(callbacks[0]!.customStatus!.emoji)).toBe(true)
 })
 
 test("default presence subscriptions preserve a valid relationship or group-DM observation without guild scope", async () => {
@@ -417,9 +431,59 @@ test("default presence subscriptions preserve a valid relationship or group-DM o
     await settle(client.connect())
     server.dispatch("PRESENCE_UPDATE", directPresenceWire())
     const presence = await settle(pull.next())
-    expect(presence).toEqual({ userId: "30", status: "idle", mobile: true, afk: false })
+    expect(presence).toEqual({ userId: "30", status: "idle", mobile: true, afk: false, customStatus: null })
     expect(presence).not.toHaveProperty("guildId")
     expect(Object.isFrozen(presence)).toBe(true)
+})
+
+test("a presence with an unusable custom status field is still delivered, with that field read as null", async () => {
+    const server = await fixture()
+    const logs = captureLogs()
+    const client = fixtureClient({ logging: logs.logging })
+    const received: PresenceUpdate[] = []
+    client.on("presenceUpdate", (presence) => {
+        received.push(presence)
+    })
+    await settle(client.connect())
+    // Fluxer stores user-supplied custom statuses without validation, so one odd field must not cost the presence
+    server.dispatch("PRESENCE_UPDATE", presenceWire({ custom_status: { text: 5, emoji_name: "🎉" } }))
+    await vi.waitFor(() => expect(received).toHaveLength(1))
+    expect(received[0]).toMatchObject({ customStatus: { text: null, emoji: { name: "🎉" } } })
+    expect(client.diagnostics().counters).toMatchObject({ protocolFailures: 0, eventsDropped: { malformed: 0 } })
+    expect(logs.withCode("gateway.dispatchRejected")).toEqual([])
+})
+
+// Catches: The animated flag was copied without an emoji ID, contradicting the documented false for a Unicode emoji
+const unicodeAnimatedWire = presenceWire({
+    custom_status: { text: null, expires_at: null, emoji_id: null, emoji_name: "🔥", emoji_animated: true },
+})
+const unicodeEmoji = { id: null, name: "🔥", animated: false }
+
+test("default presence reads a Unicode custom status emoji as not animated, even when Fluxer sends the flag", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const pull = client.subscribe("presenceUpdate")
+    await settle(client.connect())
+    server.dispatch("PRESENCE_UPDATE", unicodeAnimatedWire)
+    expect((await settle(pull.next()))?.customStatus?.emoji).toEqual(unicodeEmoji)
+})
+
+test("native presence reads a Unicode custom status emoji as not animated, even when Fluxer sends the flag", async () => {
+    const server = await fixture()
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const native = yield* createNative({ token: "fixture-only-not-a-credential" })
+                const stream = yield* Effect.forkScoped(
+                    Stream.runCollect(native.subscribe("presenceUpdate").pipe(Stream.take(1))),
+                )
+                yield* native.connect()
+                server.dispatch("PRESENCE_UPDATE", unicodeAnimatedWire)
+                const [presence] = yield* Fiber.join(stream)
+                expect(presence!.customStatus?.emoji).toEqual(unicodeEmoji)
+            }),
+        ),
+    )
 })
 
 test("native presence callbacks and streams route the same frozen observation", async () => {
@@ -442,7 +506,14 @@ test("native presence callbacks and streams route the same frozen observation", 
                 )
                 yield* client.connect()
                 server.dispatch("PRESENCE_UPDATE", presenceWire({ status: "online", mobile: false, afk: true }))
-                const expected = { guildId: "40", userId: "30", status: "online", mobile: false, afk: true }
+                const expected = {
+                    guildId: "40",
+                    userId: "30",
+                    status: "online",
+                    mobile: false,
+                    afk: true,
+                    customStatus,
+                }
                 expect(yield* Fiber.join(stream)).toEqual([expected])
                 yield* Effect.promise(() => vi.waitFor(() => expect(callbacks).toEqual([expected])))
                 yield* subscription.close()
@@ -469,7 +540,16 @@ test("presence recovery batches stay frozen and distinct from individual observa
     await vi.waitFor(() => expect(batches).toHaveLength(1))
     const expected = {
         guildId: "40",
-        presences: [{ guildId: "40", userId: "30", status: "online", mobile: false, afk: true }],
+        presences: [
+            {
+                guildId: "40",
+                userId: "30",
+                status: "online",
+                mobile: false,
+                afk: true,
+                customStatus: { text: null, expiresAt: null, emoji: { id: null, name: "🎉", animated: false } },
+            },
+        ],
     }
     expect(batches[0]).toEqual(expected)
     expect(await settle(pull.next())).toEqual(expected)

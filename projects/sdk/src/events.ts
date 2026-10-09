@@ -216,6 +216,42 @@ export interface PresenceUpdate {
     readonly mobile: boolean
     /** Whether Fluxer reported the account as away from keyboard */
     readonly afk: boolean
+    /**
+     * The account's custom status, or null when it has none. Fluxer reports null for an account whose status is offline
+     * or invisible, so an invisible account never reveals one, and after it clears or expires a status.
+     * Fluxer stores custom statuses without validating them, so a field of an unexpected type reads as null and the
+     * presence is still delivered
+     */
+    readonly customStatus: ObservedCustomStatus | null
+}
+
+/**
+ * A custom status observed in a presence event, kept as Fluxer sent it. The SDK does not compare expiresAt with the
+ * clock, so a status can be past its expiry when read. A field Fluxer left out or sent as null is null
+ *
+ * @category Events and collectors
+ */
+export interface ObservedCustomStatus {
+    /** Status text, or null when the status has none, such as one that shows only an emoji */
+    readonly text: string | null
+    /** The emoji shown with the text, or null when the status has none */
+    readonly emoji: ObservedCustomStatusEmoji | null
+    /** ISO 8601 time at which the status expires, or null when it does not expire */
+    readonly expiresAt: string | null
+}
+
+/**
+ * The emoji of an observed custom status. A Unicode emoji has a name and no id, and a custom emoji has both
+ *
+ * @category Events and collectors
+ */
+export interface ObservedCustomStatusEmoji {
+    /** ID of the custom emoji, or null for a Unicode emoji */
+    readonly id: string | null
+    /** The Unicode emoji, or the custom emoji's name. Null when Fluxer sent an id without a name */
+    readonly name: string | null
+    /** Whether the custom emoji is animated, always false for a Unicode emoji or when Fluxer left the flag out */
+    readonly animated: boolean
 }
 
 /**
@@ -636,7 +672,7 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Evicts the enabled member-cache entry
      */
     readonly guildMemberRemove: import("./guilds.js").MemberReference
-    /** A delivered presence observation, without custom-status text, account data, retained state or automatic member subscriptions */
+    /** A delivered presence observation with its custom status, without account data, retained state or automatic member subscriptions */
     readonly presenceUpdate: PresenceUpdate
     /** A channel's pins changed, with community context only when supplied and without fetching the list.
      * Does not identify the message. The timestamp may stay unchanged after unpin

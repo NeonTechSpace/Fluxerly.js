@@ -646,6 +646,8 @@ export type {
     TypingStart,
     PresenceUpdate,
     ObservedPresenceStatus,
+    ObservedCustomStatus,
+    ObservedCustomStatusEmoji,
     PresenceUpdateBulk,
     VoiceState,
     VoiceStateSnapshot,

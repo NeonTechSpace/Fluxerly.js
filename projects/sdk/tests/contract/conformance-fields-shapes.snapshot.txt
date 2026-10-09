@@ -990,7 +990,7 @@ field|shared|ClientClosedError.hint|string | undefined|optional=true|nullable=fa
 field|shared|ClientClosedError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|shared|ClientCounters.cleanupFailures|number|optional=false|nullable=false
 field|shared|ClientCounters.commandRejections|number|optional=false|nullable=false
-field|shared|ClientCounters.eventsDropped|{ readonly overflow: number; readonly malformed: number; readonly collector: number; }|optional=false|nullable=false
+field|shared|ClientCounters.eventsDropped|{ readonly overflow: number; readonly malformed: number; readonly collector: number; readonly closed: number; }|optional=false|nullable=false
 field|shared|ClientCounters.handlerFailures|number|optional=false|nullable=false
 field|shared|ClientCounters.hookFailures|number|optional=false|nullable=false
 field|shared|ClientCounters.protocolFailures|number|optional=false|nullable=false
@@ -2606,6 +2606,12 @@ field|shared|OAuthTokens.expiresInSeconds|number|optional=false|nullable=false
 field|shared|OAuthTokens.refreshToken|string|optional=false|nullable=false
 field|shared|OAuthTokens.scopes|readonly string[]|optional=false|nullable=false
 field|shared|OAuthTokens.tokenType|"Bearer"|optional=false|nullable=false
+field|shared|ObservedCustomStatus.emoji|ObservedCustomStatusEmoji | null|optional=false|nullable=true
+field|shared|ObservedCustomStatus.expiresAt|null | string|optional=false|nullable=true
+field|shared|ObservedCustomStatus.text|null | string|optional=false|nullable=true
+field|shared|ObservedCustomStatusEmoji.animated|boolean|optional=false|nullable=false
+field|shared|ObservedCustomStatusEmoji.id|null | string|optional=false|nullable=true
+field|shared|ObservedCustomStatusEmoji.name|null | string|optional=false|nullable=true
 field|default|OperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|OperationSignal.aborted|boolean|optional=false|nullable=false
 field|default|OperationSignal.addEventListener|(type: "abort", listener: () => void, options?: { once?: boolean; } | undefined) => void|optional=false|nullable=false
@@ -2673,6 +2679,7 @@ field|shared|PresenceFailure.toJSON|() => FluxerlyErrorJson|optional=false|nulla
 field|shared|PresenceInput.customStatus|CustomStatusInput | null | undefined|optional=true|nullable=true
 field|shared|PresenceInput.status|PresenceStatus|optional=false|nullable=false
 field|shared|PresenceUpdate.afk|boolean|optional=false|nullable=false
+field|shared|PresenceUpdate.customStatus|ObservedCustomStatus | null|optional=false|nullable=true
 field|shared|PresenceUpdate.guildId|string | undefined|optional=true|nullable=false
 field|shared|PresenceUpdate.mobile|boolean|optional=false|nullable=false
 field|shared|PresenceUpdate.status|ObservedPresenceStatus|optional=false|nullable=false

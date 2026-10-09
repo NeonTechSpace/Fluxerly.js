@@ -1010,8 +1010,12 @@ export function watchPresence(client: Client) {
             const update: PresenceUpdate = presence
             const status: string = update.status
             const guildId: string | undefined = update.guildId
+            const emojiName: string | null | undefined = update.customStatus?.emoji?.name
+            const expiresAt: string | null | undefined = update.customStatus?.expiresAt
             void status
             void guildId
+            void emojiName
+            void expiresAt
             // @ts-expect-error Presence observations are immutable
             update.afk = true
         }),

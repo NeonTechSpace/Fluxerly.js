@@ -182,6 +182,72 @@ test("observed presence keeps a recognized status and reports an unrecognized pr
     ).toEqual(["idle", "unknown"])
 })
 
+test("observed presence keeps the custom status Fluxer reports, with null for none and for an offline account", () => {
+    const decode = (customStatus: unknown, status = "online") =>
+        decodePresenceUpdate({
+            user: { id: "30" },
+            status,
+            mobile: false,
+            afk: false,
+            guild_id: "20",
+            ...(customStatus === undefined ? {} : { custom_status: customStatus }),
+        })?.customStatus
+    expect(decode(undefined)).toBeNull()
+    expect(decode(null)).toBeNull()
+    // Fluxer suppresses the status of an offline or invisible account to null
+    expect(decode(null, "offline")).toBeNull()
+    expect(decode({ text: "Busy" })).toEqual({ text: "Busy", emoji: null, expiresAt: null })
+    expect(decode({ text: null, expires_at: null, emoji_id: null, emoji_name: "🎉", emoji_animated: false })).toEqual({
+        text: null,
+        emoji: { id: null, name: "🎉", animated: false },
+        expiresAt: null,
+    })
+    expect(
+        decode({
+            text: "Live",
+            expires_at: "2099-01-01T00:00:00.000Z",
+            emoji_id: "55",
+            emoji_name: "party",
+            emoji_animated: true,
+        }),
+    ).toEqual({
+        text: "Live",
+        emoji: { id: "55", name: "party", animated: true },
+        expiresAt: "2099-01-01T00:00:00.000Z",
+    })
+    expect(decode({ emoji_id: "55" })).toEqual({
+        text: null,
+        emoji: { id: "55", name: null, animated: false },
+        expiresAt: null,
+    })
+    const batch = decodePresenceUpdateBulk({
+        guild_id: "20",
+        presences: [
+            { user: { id: "30" }, status: "online", mobile: false, afk: false, custom_status: { text: "One" } },
+            { user: { id: "31" }, status: "idle", mobile: false, afk: false, custom_status: null },
+        ],
+    })
+    expect(batch?.presences.map((presence) => presence.customStatus?.text ?? null)).toEqual(["One", null])
+})
+
+test("a custom status field of the wrong type reads as null, because Fluxer stores user statuses without validating them", () => {
+    const valid = { user: { id: "30" }, status: "online", mobile: false, afk: false, guild_id: "20" }
+    for (const custom_status of ["Busy", ["Busy"], 5])
+        expect(decodePresenceUpdate({ ...valid, custom_status })).toMatchObject({ customStatus: null })
+    const odd = { text: 5, expires_at: "tomorrow", emoji_id: "01", emoji_name: 5, emoji_animated: "yes" }
+    expect(decodePresenceUpdate({ ...valid, custom_status: odd })).toMatchObject({
+        customStatus: { text: null, emoji: null, expiresAt: null },
+    })
+    expect(
+        decodePresenceUpdate({ ...valid, custom_status: { text: "\ud800", emoji_name: "x", emoji_animated: null } }),
+    ).toMatchObject({ customStatus: { text: null, emoji: { id: null, name: "x", animated: false } } })
+    const bulk = decodePresenceUpdateBulk({
+        guild_id: "20",
+        presences: [valid, { ...valid, user: { id: "31" }, custom_status: { text: 5 } }],
+    })
+    expect(bulk?.presences).toHaveLength(2)
+})
+
 test("presence input is validated, copied and encoded without caller-owned fields", () => {
     const input = {
         status: "idle",
