@@ -230,6 +230,7 @@ test.each(modes)("%s rejects every server-managed flag before send or edit dispa
     expect(MessageFlags.Crossposted).toBe(1)
     expect(MessageFlags.IsCrosspost).toBe(2)
     expect(MessageFlags.SourceMessageDeleted).toBe(8)
+    expect(MessageFlags.VoiceMessage).toBe(8192)
     expect(MessageType.ChannelFollowAdd).toBe(12)
     for (const flag of [MessageFlags.Crossposted, MessageFlags.IsCrosspost, MessageFlags.SourceMessageDeleted]) {
         for (const flags of [flag, flag | MessageFlags.SuppressEmbeds]) {

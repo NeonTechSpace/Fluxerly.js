@@ -395,12 +395,15 @@ export const MessageFlags: Readonly<{
     readonly SourceMessageDeleted: 8
     /** Writable bit that suppresses push and desktop notifications */
     readonly SuppressNotifications: 4096
+    /** Bit that marks a voice message. Message and webhook send and edit operations reject it before dispatch */
+    readonly VoiceMessage: 8192
 }> = Object.freeze({
     Crossposted: 1,
     IsCrosspost: 2,
     SuppressEmbeds: 4,
     SourceMessageDeleted: 8,
     SuppressNotifications: 4096,
+    VoiceMessage: 8192,
 } as const)
 
 /** Fluxer's message types, the values of Message.type, such as `message.type === MessageType.UserJoin`.

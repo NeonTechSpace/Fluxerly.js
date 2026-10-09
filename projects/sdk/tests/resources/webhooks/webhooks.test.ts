@@ -492,7 +492,7 @@ test.each(modes)(
             MessageFlags.Crossposted,
             MessageFlags.IsCrosspost,
             MessageFlags.SourceMessageDeleted,
-            8192, // Fluxer's VoiceMessage bit has no writable SDK constant
+            MessageFlags.VoiceMessage,
             MessageFlags.Crossposted | MessageFlags.SuppressEmbeds,
             -1,
             1.5,
