@@ -12,7 +12,7 @@ import {
     nativeApi as createNativeApi,
     type Mode,
 } from "../../support/both-apis.js"
-import { sdkClock } from "../../support/client-clock.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { startSynchronousGateway } from "../../support/messages-gateway.js"
 import { settle, typedResult } from "../../support/settle.js"
@@ -329,6 +329,7 @@ test.each(modes)("%s rejects invalid pin inputs and malformed pages without part
 test.each(modes)(
     "%s classifies pin failures, preserves rejected cache entries and evicts uncertain changes",
     async (mode) => {
+        const clock = sdkClock()
         let status = 204,
             calls = 0
         rest(async (_url, init) =>
@@ -351,7 +352,10 @@ test.each(modes)(
         expect(calls).toBe(8)
         for (const code of [403, 404, 500, 204]) {
             rest(async () => new Response(null, { status: code }))
-            await expect(api.pins()).rejects.toMatchObject({ operation: "fetchPins", status: code })
+            await driveSdkTime(
+                clock,
+                expect(api.pins()).rejects.toMatchObject({ operation: "fetchPins", status: code }),
+            )
         }
     },
 )

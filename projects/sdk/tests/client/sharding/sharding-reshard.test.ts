@@ -92,6 +92,7 @@ const coordinated: ShardingOptions = { totalShards: "auto", identify: { permit: 
 
 describeBothApis("automatic resharding", (mode) => {
     test("moves every shard to the plan for the new guild count after a 4011 closure and keeps running", async () => {
+        const clock = sdkClock()
         const driver = await open(mode, { sharding: "auto", cache: { guilds: true } })
         await driver.ready()
         expect(driver.client.shards.map((shard) => shard.shardId)).toEqual([0])
@@ -101,6 +102,9 @@ describeBothApis("automatic resharding", (mode) => {
 
         driver.setGuilds(2_001)
         await driver.disconnect(0, 4011)
+        // Without an identify coordinator, the SDK starts the second shard's session one second after the first
+        await clock.waiting(1_000)
+        await clock.advance(1_000)
         await connectedWith(driver, 2)
 
         expect(logsWithCode(driver, "lifecycle.resharded")).toEqual([

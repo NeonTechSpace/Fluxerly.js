@@ -6,7 +6,7 @@ import { Opcode as GatewayOpcode } from "../../../src/internal/protocol/gateway.
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { modes, type Mode } from "../../support/both-apis.js"
-import { sdkClock } from "../../support/client-clock.js"
+import { sdkClock, type SdkClock } from "../../support/client-clock.js"
 
 const transport = vi.hoisted(() => ({
     url: "",
@@ -188,7 +188,11 @@ async function makeDriver(mode: Mode, startupTimeoutMs?: number, maxStartupAttem
     }
 }
 
-async function waitForIdentifies(fixture: Awaited<ReturnType<typeof gatewayFixture>>) {
+async function waitForIdentifies(fixture: Awaited<ReturnType<typeof gatewayFixture>>, clock: SdkClock) {
+    await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
+    // The SDK starts shard sessions one second apart
+    await clock.waiting(1_000)
+    await clock.advance(1_000)
     await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
     const first = fixture.identifies.find((command) => shardTuple(command)[0] === 0)
     const second = fixture.identifies.find((command) => shardTuple(command)[0] === 1)
@@ -226,6 +230,8 @@ afterEach(() => {
 })
 
 test.each(modes)("%s retains a permanent shard failure and a sibling socket cleanup defect", async (mode) => {
+    // SDK time stands still between steps, so the fixture's 100 ms heartbeats cannot time out on a slow machine
+    const clock = sdkClock()
     const cleanup = new Error("private socket cleanup detail")
     const fixture = await gatewayFixture()
     // One startup attempt, so the invalid READY below ends startup instead of retrying with a new session
@@ -234,7 +240,7 @@ test.each(modes)("%s retains a permanent shard failure and a sibling socket clea
         const pending = driver.defaultApi
             ? Promise.resolve(driver.defaultApi.connect())
             : Effect.runPromiseExit(driver.native!.connect())
-        const { first, second } = await waitForIdentifies(fixture)
+        const { first, second } = await waitForIdentifies(fixture, clock)
         fixture.ready(first)
         await vi.waitFor(
             () => expect(driver.client.shards.find((shard) => shard.shardId === 0)?.state).toBe("Connected"),
@@ -342,6 +348,8 @@ test.each(modes)("%s retains a startup timeout and a socket cleanup defect", asy
 })
 
 test.each(modes)("%s retains caller interruption and a socket cleanup defect", async (mode) => {
+    // SDK time stands still, so the fixture's 100 ms heartbeats cannot time out on a slow machine
+    sdkClock()
     const cleanup = new Error("private socket cleanup detail")
     const fixture = await gatewayFixture()
     const driver = await makeDriver(mode)

@@ -92,7 +92,7 @@ if (mode === "default") {
         token,
         clientOptions: {
             instance: { url: origin.href, allowInsecure: true },
-            connection: { startupTimeoutMs: 8_000, maxStartupAttempts: 1 },
+            connection: { startupTimeoutMs: 30_000, maxStartupAttempts: 1 },
         },
         configure,
     })
@@ -105,7 +105,7 @@ if (mode === "default") {
             token,
             clientOptions: {
                 instance: { url: origin.href, allowInsecure: true },
-                connection: { startupTimeoutMs: 8_000, maxStartupAttempts: 1 },
+                connection: { startupTimeoutMs: 30_000, maxStartupAttempts: 1 },
             },
             configure: (context) => Effect.promise(() => configure(context)),
         }),

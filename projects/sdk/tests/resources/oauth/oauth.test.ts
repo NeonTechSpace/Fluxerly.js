@@ -179,6 +179,7 @@ async function fixture(
         | "operationRateLimit"
         | "revokeRejected"
         | "revokeBody"
+        | "rotatedTokens"
         | "connectionsMalformed"
         | "connectionsForbidden"
         | "connectionsStall"
@@ -191,7 +192,13 @@ async function fixture(
         | "introspectionLarge" = "normal",
     webappPath = "",
 ) {
-    const requests: Array<{ path: string; authorization?: string; body: string }> = []
+    const requests: Array<{
+        path: string
+        method: string
+        authorization?: string
+        contentType?: string
+        body: string
+    }> = []
     let base = ""
     const server = createServer(async (request, response) => {
         const body = await new Promise<string>((resolve) => {
@@ -201,7 +208,9 @@ async function fixture(
         })
         requests.push({
             path: request.url ?? "",
+            method: request.method ?? "",
             ...(request.headers.authorization === undefined ? {} : { authorization: request.headers.authorization }),
+            ...(request.headers["content-type"] === undefined ? {} : { contentType: request.headers["content-type"] }),
             body,
         })
         if (request.headers.authorization?.startsWith("Basic ") && new URLSearchParams(body).has("client_id")) {
@@ -257,6 +266,16 @@ async function fixture(
             response.write('{"access_token":"access"')
             return
         }
+        if (request.url === "/oauth2/token" && mode === "rotatedTokens")
+            return response.end(
+                JSON.stringify({
+                    access_token: "rotated-access",
+                    refresh_token: "rotated-refresh",
+                    token_type: "Bearer",
+                    expires_in: 3600,
+                    scope: "identify email guilds",
+                }),
+            )
         if (request.url === "/oauth2/token")
             return response.end(
                 JSON.stringify({
@@ -764,6 +783,38 @@ describe("oauth", () => {
                     )
                     .map((entry) => entry.authorization),
             ).toEqual(["Bearer access", "Bearer access", "Bearer access"])
+        },
+    )
+
+    test.each(modes)(
+        "%s refresh posts the refresh grant form with Basic credentials and projects the rotated tokens",
+        async (mode) => {
+            const { base, requests } = await fixture("rotatedTokens")
+            const client = await oauthClient(mode, base)
+            // Reserved form characters show that the token is encoded as a form value, not joined into the body
+            const refreshToken = "old refresh+token/with=reserved&chars"
+            const tokens = await settle(client.refresh(refreshToken))
+            const dispatched = requests.filter((request) => request.path === "/oauth2/token")
+            expect(dispatched).toHaveLength(1)
+            expect(dispatched[0]).toMatchObject({
+                method: "POST",
+                contentType: "application/x-www-form-urlencoded",
+                authorization: `Basic ${Buffer.from("1:secret").toString("base64")}`,
+            })
+            expect([...new URLSearchParams(dispatched[0]!.body)]).toEqual([
+                ["grant_type", "refresh_token"],
+                ["refresh_token", refreshToken],
+            ])
+            // The rotated pair differs from the sent token and from each other, so a swapped field or a reused token fails
+            expect(tokens).toStrictEqual({
+                accessToken: "rotated-access",
+                refreshToken: "rotated-refresh",
+                tokenType: "Bearer",
+                expiresInSeconds: 3600,
+                scopes: ["identify", "email", "guilds"],
+            })
+            expect(Object.isFrozen(tokens)).toBe(true)
+            expect(Object.isFrozen(tokens.scopes)).toBe(true)
         },
     )
 

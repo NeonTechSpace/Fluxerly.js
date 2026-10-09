@@ -5,6 +5,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, SdkDefect, type DefaultCollectorOptions } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
 import { modes, type Mode } from "../support/both-apis.js"
+import { sdkClock } from "../support/client-clock.js"
 import { wsTarget } from "../support/ws-redirect.js"
 import { startHostedLoopback } from "../support/instance.js"
 import { settle, typedResult } from "../support/settle.js"
@@ -194,6 +195,8 @@ test.each(modes)(
 test.each(modes.flatMap((mode) => ["timeout", "idle"].map((reason) => ({ mode, reason }))))(
     "$mode rechecks $reason after synchronous progress",
     async ({ mode, reason }) => {
+        // Sleeps never wake, so only the recheck after the callback can end the collector
+        sdkClock()
         const server = await fixture()
         const api = await driver(mode)
         await api.connect()
@@ -277,6 +280,7 @@ test.each(
         ).map((reason) => ({ mode, reason })),
     ),
 )("$mode $reason interrupts active progress and completion waits for cleanup", async ({ mode, reason }) => {
+    const clock = reason === "timeout" || reason === "idle" ? sdkClock() : undefined
     const server = await fixture()
     const api = await driver(mode)
     await api.connect()
@@ -344,6 +348,11 @@ test.each(
         if (reason === "overflow") {
             server.deliver("11")
             server.deliver("12")
+        }
+        if (clock) {
+            // The collector's own timer ends the wait, so SDK time moves to its 100 ms deadline
+            await clock.waiting(100)
+            await clock.advance(100)
         }
         let operationSettled = false
         void operation.then(

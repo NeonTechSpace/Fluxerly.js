@@ -23,6 +23,7 @@ import {
     nativeApi as createNativeApi,
     type Mode,
 } from "../../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { waitUntil } from "../../support/clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle, typedResult } from "../../support/settle.js"
@@ -287,6 +288,7 @@ test.each(modes.flatMap((mode) => [false, true].map((custom) => ({ mode, custom 
 test.each(modes)(
     "%s emoji selection does not bypass pending limits and preserves timeout and filter failures",
     async (mode) => {
+        const clock = sdkClock()
         await gateway()
         mockRest(async () => new Response(null, { status: 204 }))
         const api = await setup(mode)
@@ -296,6 +298,8 @@ test.each(modes)(
         })
         const ignored = await api.collect({ emoji: "👍", filter, timeoutMs: 30 })
         deliverReaction(addition()).deliver()
+        await clock.waiting(30)
+        await clock.advance(30)
         expect(await ignored.wait()).toEqual({ reason: "timeout", reactions: [] })
         expect(filter).not.toHaveBeenCalled()
         const failed = await api.collect({ emoji: "👍", filter })
@@ -438,6 +442,8 @@ test.each(modes)(
 test.each(modes)(
     "%s reaction collector timeout is total, checks slow filters and stop preserves partial results",
     async (mode) => {
+        // Sleeps wake only when the test says so, while the collector reads the manual time below
+        const clock = sdkClock()
         await gateway()
         mockRest(async () => new Response(null, { status: 204 }))
         const api = await setup(mode)
@@ -464,6 +470,8 @@ test.each(modes)(
         expect(await slow.wait()).toEqual({ reason: "timeout", reactions: [] })
         const empty = await api.collect({ timeoutMs: 5 })
         now += 5
+        await clock.waiting(5)
+        await clock.advance(5)
         expect(await empty.wait()).toEqual({ reason: "timeout", reactions: [] })
         const stopped = await api.collect({ maxReactions: 5 })
         deliverReaction(addition()).deliver()
@@ -515,20 +523,21 @@ test.each(modes)("%s reaction idle renews accepted batch additions but not exclu
 })
 
 test.each(modes)("%s reaction idle timer handles empty collection and an early wakeup after renewal", async (mode) => {
+    const clock = sdkClock()
     await gateway()
     mockRest(async () => new Response(null, { status: 204 }))
     const api = await setup(mode)
     await api.connect()
-    let now = 0
-    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() => BigInt(now) * 1_000_000n)
     const empty = await api.collect({ idleMs: 1 })
-    now = 1
+    await clock.waiting(1)
+    await clock.advance(1)
     expect(await empty.wait()).toEqual({ reason: "idle", reactions: [] })
     const schedule = vi.spyOn(LogicalScheduler.prototype, "set")
     const collectorTimers = () => schedule.mock.calls.filter(([, , owner]) => owner === "reaction collector").length
     const collector = await api.collect({ idleMs: 10, maxReactions: 5 })
     const scheduled = collectorTimers()
-    now = 10
+    await clock.waiting(10)
+    await clock.advance(9)
     deliverReaction(addition()).deliver()
     await turn()
     let closed = false
@@ -536,11 +545,11 @@ test.each(modes)("%s reaction idle timer handles empty collection and an early w
         closed = true
         return value
     })
-    now = 11
     // The original deadline wakes before the renewed idle deadline and must reschedule rather than close
+    await clock.advance(1)
     await waitUntil(() => collectorTimers() > scheduled, { message: "The early idle wakeup was not rescheduled" })
     expect(closed).toBe(false)
-    now = 20
+    await clock.advance(9)
     expect(await result).toEqual({ reason: "idle", reactions: [observed()] })
 })
 
@@ -1052,6 +1061,7 @@ test.each(modes)(
 )
 
 test.each(modes)("%s classifies reactor read failures and shares reaction rate limits", async (mode) => {
+    const clock = sdkClock()
     let calls = 0,
         status = 403
     mockRest(async () => {
@@ -1067,7 +1077,10 @@ test.each(modes)("%s classifies reactor read failures and shares reaction rate l
     ] as const) {
         status = code
         const before = calls
-        await expect(api.users()).rejects.toMatchObject({ operation: "fetchReactionUsers", reason, status })
+        await driveSdkTime(
+            clock,
+            expect(api.users()).rejects.toMatchObject({ operation: "fetchReactionUsers", reason, status }),
+        )
         expect(calls - before).toBe(code === 500 ? 3 : 1)
     }
     calls = 0
@@ -1076,7 +1089,7 @@ test.each(modes)("%s classifies reactor read failures and shares reaction rate l
             ? Response.json({ retry_after: 0.01 }, { status: 429 })
             : Response.json({ items: [], has_more: false, next_after: null }),
     )
-    await api.users()
+    await driveSdkTime(clock, api.users())
     expect(calls).toBe(2)
     mockRest(async () => {
         calls++
@@ -1229,6 +1242,7 @@ test.each(
             .map((reason) => ({ mode, reason })),
     ),
 )("$mode $reason interrupts progress and waits for cleanup", async ({ mode, reason }) => {
+    const clock = reason === "timeout" || reason === "idle" ? sdkClock() : undefined
     await gateway()
     mockRest(async () => new Response(null, { status: 204 }))
     const api = await setup(mode)
@@ -1293,6 +1307,11 @@ test.each(
     if (reason === "overflow") {
         deliverReaction(addition("31")).deliver()
         deliverReaction(addition("32")).deliver()
+    }
+    if (clock) {
+        // The collector's own timer ends the wait, so SDK time moves to its 100 ms deadline
+        await clock.waiting(100)
+        await clock.advance(100)
     }
     await vi.waitFor(() => expect(cancelled).toBe(true))
     expect(closed).toBe(false)

@@ -104,11 +104,15 @@ test("text send and reply retain caller nonces, preserve payloads, suppress ment
 })
 
 test("confirmed rate limits retain a caller nonce, while server failure and malformed success never resend", async () => {
+    const clock = sdkClock()
     const server = await fixture()
     const client = defaultApi({ token })
     server.control.status = 429
     server.control.failOnce = true
-    await settle(client.messages.send("20", { content: "retry", nonce: "known-429" }))
+    const retried = settle(client.messages.send("20", { content: "retry", nonce: "known-429" }))
+    await clock.waiting(20)
+    await clock.advance(20)
+    await retried
     expect(server.requests).toHaveLength(2)
     expect(server.requests[0]!.nonce).toBe("known-429")
     expect(server.requests[1]!.nonce).toBe("known-429")

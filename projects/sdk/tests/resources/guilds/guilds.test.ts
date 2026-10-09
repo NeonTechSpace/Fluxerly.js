@@ -32,7 +32,7 @@ import { memberTimeout } from "../../../src/internal/moderation.js"
 import { Opcode as GatewayOpcode } from "../../../src/internal/protocol/gateway.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { monotonicClock } from "../../support/clock.js"
-import { sdkClock } from "../../support/client-clock.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { wsTarget } from "../../support/ws-redirect.js"
@@ -265,6 +265,7 @@ test.each(modes)("%s dispatched moderation rejection blocks delayed cache restor
 })
 
 test.each(modes)("%s ban events invalidate member observations before delivery and survive recovery", async (mode) => {
+    const clock = sdkClock()
     const dispatch = await gateway()
     rest(async () => Response.json(member()))
     const api = await setup(mode, { members: true })
@@ -282,6 +283,9 @@ test.each(modes)("%s ban events invalidate member observations before delivery a
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     expect(seen[0]).toEqual({ event: "guildBanAdd", value: target, cached: undefined })
     wsTarget.sockets[0]!.terminate()
+    // With the jitter at 0.5, the first recovery waits 500 ms
+    await clock.waiting(500)
+    await clock.advance(500)
     await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2))
     await vi.waitFor(() => expect(api.state()).toBe("Connected"))
     await api.member()
@@ -1907,10 +1911,14 @@ test.each(modes)(
 
 // Retry counts belong to the shared method-based policy in client/read-retries.test.ts and client/rest-request.test.ts
 test.each(modes)("%s retains typed member failures without private provider bodies", async (mode) => {
+    const clock = sdkClock()
     const api = await setup(mode)
     for (const status of [401, 403, 404, 503]) {
         rest(async () => new Response("private upstream body", { status }))
-        const error = await api.member().catch((error) => error)
+        const error = await driveSdkTime(
+            clock,
+            api.member().catch((error) => error),
+        )
         expect(error).toMatchObject({
             _tag: "GuildOperationError",
             operation: "members.fetch",
@@ -2059,6 +2067,7 @@ test.each(modes)("%s request input is captured at execution and remains stable w
 })
 
 test.each(modes)("%s delivers member events across resume without synthesizing REST events", async (mode) => {
+    const clock = sdkClock()
     const dispatch = await gateway()
     rest(async () => Response.json(member()))
     const api = await setup(mode)
@@ -2074,6 +2083,9 @@ test.each(modes)("%s delivers member events across resume without synthesizing R
     await vi.waitFor(() => expect(seen).toHaveLength(3))
     expect(seen[2]).toEqual({ event: "guildMemberRemove", value: target })
     wsTarget.sockets[0]!.terminate()
+    // With the jitter at 0.5, the first recovery waits 500 ms
+    await clock.waiting(500)
+    await clock.advance(500)
     await vi.waitFor(() => expect(wsTarget.sockets).toHaveLength(2))
     await vi.waitFor(() => expect(api.state()).toBe("Connected"))
     dispatch("GUILD_MEMBER_UPDATE", { ...member(), guild_id: "20" })

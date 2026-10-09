@@ -1,3 +1,4 @@
+import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
 import { expect, onTestFinished, test, vi } from "vitest"
 import type { PaginateResult } from "../../../src/index.js"
@@ -29,6 +30,8 @@ interface Driver {
     respond(matcher: TestRequestMatcher, response: TestResponse | TestResponder): { next(): Promise<TestRequest> }
     emit(type: string, payload: unknown): Promise<void>
     requests(): readonly TestRequest[]
+    /** Mark the failures the client reported as seen, so shutdown does not raise them */
+    failures(): readonly unknown[]
     /** Start client.messages.paginate, with stop aborting its signal or interrupting its fiber */
     paginate(
         channelId: string,
@@ -87,6 +90,7 @@ async function open(mode: Mode, state: State): Promise<Driver> {
             respond: (matcher, response) => bot.rest.respond(matcher, response),
             emit: async (type, payload) => bot.emit(type, payload),
             requests: () => bot.requests(),
+            failures: () => bot.failures(),
             paginate: (channelId, pages, options) => {
                 const controller = new AbortController()
                 const outcome = Promise.resolve(
@@ -129,6 +133,7 @@ async function open(mode: Mode, state: State): Promise<Driver> {
         },
         emit: (type, payload) => unwrap(bot.emit(type, payload)),
         requests: () => bot.requests(),
+        failures: () => bot.failures(),
         paginate: (channelId, pages, options) => {
             const fiber = Effect.runFork(bot.client.messages.paginate(channelId, pages, options as never))
             return {
@@ -381,4 +386,273 @@ test.each(modes)("%s sendHelp pages long help with reactions and sends short hel
     const invalid = nextOutcome(state)
     await driver.emit("MESSAGE_CREATE", driver.fixtures.message({ content: "!help" }))
     expect(await invalid.promise).toEqual({ error: expect.objectContaining({ _tag: "ConfigurationError" }) })
+})
+
+const everyone = () => true
+const forbidden = { status: 403, body: { code: "MISSING_PERMISSIONS", message: "Missing permissions" } }
+
+/**
+ * Answer the page message's reaction requests with a function, after pageServer's own answer, which it overrides.
+ * The returned route yields each reaction request in order
+ */
+function answerReactions(driver: Driver, id: string, answer: (request: TestRequest) => TestResponse) {
+    return driver.respond(new RegExp(`^/channels/\\d+/messages/${id}/reactions/`), answer)
+}
+
+test.each(modes)("%s rejects invalid pages and options before sending anything", async (mode) => {
+    const driver = await open(mode, newState())
+    pageServer(driver)
+    const channelId = driver.fixtures.ids.channel
+    const rows: readonly (readonly [string, unknown, Record<string, unknown>, string])[] = [
+        ["no pages", [], { users: everyone }, "pages"],
+        ["an empty text page", [""], { users: everyone }, "pages"],
+        ["a page that is neither text nor an object", [5], { users: everyone }, "pages"],
+        ["a page object with an unsupported property", [{ content: "a", extra: 1 }], { users: everyone }, "pages"],
+        ["page content that is not text", [{ content: 5 }], { users: everyone }, "pages"],
+        ["page embeds that are not a list", [{ embeds: "x" }], { users: everyone }, "pages"],
+        ["a page object with nothing to show", [{}], { users: everyone }, "pages"],
+        ["a page object with empty content and no embeds", [{ content: "", embeds: [] }], { users: everyone }, "pages"],
+        ["an unsupported option", ["Page"], { users: everyone, idle: 5 }, "paginateOptions"],
+        ["a zero idle time", ["Page"], { users: everyone, idleMs: 0 }, "idleMs"],
+        ["a timeout beyond the timer limit", ["Page"], { users: everyone, timeoutMs: 2_147_483_648 }, "timeoutMs"],
+        ["a removeClicks flag that is not boolean", ["Page"], { users: everyone, removeClicks: "yes" }, "removeClicks"],
+        ["user IDs that are not decimal", ["Page"], { users: ["abc"] }, "users"],
+        ["users given as a string", ["Page"], { users: "30" }, "users"],
+    ]
+    for (const [name, pages, options, field] of rows) {
+        const outcome = await driver.paginate(channelId, pages as never, options).outcome
+        expect(outcome, name).toEqual({ error: expect.objectContaining({ _tag: "ConfigurationError", field }) })
+    }
+    // The unsupported option names the option that was probably meant
+    const misspelled = await driver.paginate(channelId, ["Page"], { users: everyone, idle: 5 }).outcome
+    expect(JSON.stringify(misspelled)).toContain("idleMs")
+    expect(driver.requests()).toEqual([])
+})
+
+test.each(modes)("%s replaces both text and embeds on every page change", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    const pages = driver.paginate(
+        driver.fixtures.ids.channel,
+        [{ content: "Intro", embeds: [{ title: "One" }] }, { embeds: [{ title: "Two" }] }, "Plain"] as never,
+        { users: everyone },
+    )
+    expect((await server.sends.next()).body).toMatchObject({ content: "Intro", embeds: [{ title: "One" }] })
+    await server.reactions.next()
+    await server.reactions.next()
+    await requestsSettled(clock)
+
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️")
+    // An embed-only page clears the previous text, and a text-only page clears the previous embeds
+    expect((await server.edits.next()).body).toMatchObject({ content: "", embeds: [{ title: "Two" }] })
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️")
+    expect((await server.edits.next()).body).toMatchObject({ content: "Plain", embeds: [] })
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "◀️")
+    expect((await server.edits.next()).body).toMatchObject({ content: "", embeds: [{ title: "Two" }] })
+    await requestsSettled(clock)
+    pages.stop()
+    await pages.outcome
+})
+
+test.each(modes)("%s a rejected arrow ends the pages with its error and still removes both arrows", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    answerReactions(driver, server.id, (request) => (request.method === "PUT" ? forbidden : { status: 204 }))
+    const outcome = await driver.paginate(driver.fixtures.ids.channel, ["Page 1", "Page 2"], { users: everyone })
+        .outcome
+    expect(outcome).toEqual({ error: expect.objectContaining({ _tag: "MessageOperationError", status: 403 }) })
+    // The second arrow is never added, yet both are removed, so a partly added pair does not stay on the message
+    expect(reactionRequests(driver, server.id)).toEqual(["PUT ◀️ @me", "DELETE ◀️ @me", "DELETE ▶️ @me"])
+    await requestsSettled(clock)
+})
+
+test.each(modes)("%s returns an arrow removal failure after an otherwise normal end", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    const answers = answerReactions(driver, server.id, (request) =>
+        request.method === "DELETE" ? forbidden : { status: 204 },
+    )
+    const pages = driver.paginate(driver.fixtures.ids.channel, ["Page 1", "Page 2"], { users: everyone, idleMs: 100 })
+    await answers.next()
+    await answers.next()
+    await requestsSettled(clock)
+    await clock.advance(100)
+    expect(await pages.outcome).toEqual({
+        error: expect.objectContaining({ _tag: "MessageOperationError", status: 403 }),
+    })
+    // The first failed removal does not stop the second arrow from being removed
+    expect(reactionRequests(driver, server.id)).toEqual(["PUT ◀️ @me", "PUT ▶️ @me", "DELETE ◀️ @me", "DELETE ▶️ @me"])
+})
+
+test.each(modes)("%s a failed page change wins over a failed arrow removal", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    driver.respond(`PATCH /channels/:id/messages/${server.id}`, forbidden)
+    const answers = answerReactions(driver, server.id, (request) =>
+        request.method === "DELETE" ? forbidden : { status: 204 },
+    )
+    const pages = driver.paginate(driver.fixtures.ids.channel, ["Page 1", "Page 2"], { users: everyone })
+    await answers.next()
+    await answers.next()
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️")
+    // The removal failure is secondary, so the error that ended the pages is the one returned
+    expect(await pages.outcome).toEqual({
+        error: expect.objectContaining({ _tag: "MessageOperationError", operation: "edit" }),
+    })
+    expect(reactionRequests(driver, server.id).slice(-2)).toEqual(["DELETE ◀️ @me", "DELETE ▶️ @me"])
+})
+
+test.each(modes)("%s a click that cannot be removed ends the pages and still removes the arrows", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    const answers = answerReactions(driver, server.id, (request) =>
+        request.method === "DELETE" && !request.path.endsWith("/@me") ? forbidden : { status: 204 },
+    )
+    const pages = driver.paginate(driver.fixtures.ids.channel, ["Page 1", "Page 2"], {
+        users: everyone,
+        removeClicks: true,
+    })
+    await answers.next()
+    await answers.next()
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️")
+    expect(await pages.outcome).toEqual({
+        error: expect.objectContaining({ _tag: "MessageOperationError", status: 403 }),
+    })
+    // The page had already changed before the click could not be removed
+    expect((await server.edits.next()).body).toMatchObject({ content: "Page 2" })
+    expect(reactionRequests(driver, server.id)).toEqual([
+        "PUT ◀️ @me",
+        "PUT ▶️ @me",
+        `DELETE ▶️ ${driver.fixtures.ids.user}`,
+        "DELETE ◀️ @me",
+        "DELETE ▶️ @me",
+    ])
+})
+
+test.each(modes)("%s a users check that throws ends the pages with a filter failure", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    const pages = driver.paginate(driver.fixtures.ids.channel, ["Page 1", "Page 2"], {
+        users: () => {
+            throw new Error("users check failed")
+        },
+    })
+    await server.reactions.next()
+    await server.reactions.next()
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️")
+    expect(await pages.outcome).toEqual({
+        error: expect.objectContaining({ _tag: "CollectorError", reason: "filter" }),
+    })
+    expect(reactionRequests(driver, server.id).slice(-2)).toEqual(["DELETE ◀️ @me", "DELETE ▶️ @me"])
+    // The application's own fault is reported to the client, which a test run raises at shutdown unless it is seen
+    expect(driver.failures()).toHaveLength(1)
+})
+
+test.each(modes)("%s ctx.paginate defaults users to the author and keeps the other caller options", async (mode) => {
+    const clock = sdkClock()
+    const state = newState()
+    const driver = await open(mode, state)
+    const server = pageServer(driver)
+    state.pages = ["Page 1", "Page 2"]
+    state.options = { idleMs: 500 }
+    const outcome = nextOutcome(state)
+    await driver.emit("MESSAGE_CREATE", driver.fixtures.message({ content: "!pages" }))
+    await server.reactions.next()
+    await server.reactions.next()
+    await requestsSettled(clock)
+    // Another user's click is ignored. The author's click turns the page and starts the caller's idle time again
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️", driver.fixtures.nextId())
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️")
+    expect(await edited(clock, server.edits)).toBe("Page 2")
+    await clock.advance(499)
+    expect(outcome.settled()).toBeUndefined()
+    await clock.advance(1)
+    expect(await outcome.promise).toEqual({ value: expect.objectContaining({ reason: "idle", page: 1 }) })
+    expect(driver.requests().filter((request) => request.method === "PATCH")).toHaveLength(1)
+})
+
+test.each(modes)("%s ctx.paginate lets an explicit users check replace the author", async (mode) => {
+    const clock = sdkClock()
+    const state = newState()
+    const driver = await open(mode, state)
+    const server = pageServer(driver)
+    state.pages = ["Page 1", "Page 2"]
+    state.options = { users: everyone, idleMs: 500 }
+    const outcome = nextOutcome(state)
+    await driver.emit("MESSAGE_CREATE", driver.fixtures.message({ content: "!pages" }))
+    await server.reactions.next()
+    await server.reactions.next()
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️", driver.fixtures.nextId())
+    expect(await edited(clock, server.edits)).toBe("Page 2")
+    await clock.advance(500)
+    expect(await outcome.promise).toEqual({ value: expect.objectContaining({ reason: "idle", page: 1 }) })
+})
+
+test.each(modes)("%s ctx.paginate rejects a misspelled option instead of ignoring it", async (mode) => {
+    const state = newState()
+    const driver = await open(mode, state)
+    pageServer(driver)
+    state.pages = ["Page 1", "Page 2"]
+    state.options = { idle: 500 }
+    const outcome = nextOutcome(state)
+    await driver.emit("MESSAGE_CREATE", driver.fixtures.message({ content: "!pages" }))
+    expect(await outcome.promise).toEqual({
+        error: expect.objectContaining({ _tag: "ConfigurationError", field: "paginateOptions" }),
+    })
+    expect(driver.requests()).toEqual([])
+})
+
+test.each(modes)("%s turns clicks that arrive during a page change one at a time and in order", async (mode) => {
+    const clock = sdkClock()
+    const driver = await open(mode, newState())
+    const server = pageServer(driver)
+    const gate = Promise.withResolvers<void>()
+    const entered = Promise.withResolvers<void>()
+    const last = Promise.withResolvers<void>()
+    const edits: string[] = []
+    driver.respond(`PATCH /channels/:id/messages/${server.id}`, async (request) => {
+        const content = String((request.body as { content: unknown }).content)
+        edits.push(content)
+        if (edits.length === 1) {
+            entered.resolve()
+            await gate.promise
+        }
+        if (edits.length === 4) last.resolve()
+        return { body: driver.fixtures.message({ id: server.id, content, author: driver.fixtures.botUser() }) }
+    })
+    const pages = driver.paginate(driver.fixtures.ids.channel, ["Page 1", "Page 2", "Page 3", "Page 4"], {
+        users: everyone,
+    })
+    await server.reactions.next()
+    await server.reactions.next()
+    await requestsSettled(clock)
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️", driver.fixtures.nextId())
+    await entered.promise
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️", driver.fixtures.nextId())
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️", driver.fixtures.nextId())
+    await server.reaction("MESSAGE_REACTION_ADD", "▶️", driver.fixtures.nextId())
+    // The first change is still waiting for its response, so the other three clicks have not started another change
+    for (let count = 0; count < 5; count++) await turn()
+    expect(edits).toEqual(["Page 2"])
+    gate.resolve()
+    await last.promise
+    // The pages wrap after the last one, and no click is lost
+    expect(edits).toEqual(["Page 2", "Page 3", "Page 4", "Page 1"])
+    await requestsSettled(clock)
+    pages.stop()
+    expect(await pages.outcome).toEqual(
+        mode === "default" ? { error: expect.objectContaining({ _tag: "CancelledError" }) } : "interrupted",
+    )
 })

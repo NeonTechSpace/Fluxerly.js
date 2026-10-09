@@ -1,6 +1,6 @@
 import { Deferred, Effect, Exit, Fiber, Scope } from "effect"
 import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
-import { fakeHostTime, hostTurnsUntil } from "../support/client-clock.js"
+import { fakeHostTime, hostTurnsUntil, sdkClock } from "../support/client-clock.js"
 import { ConfigurationError, runBot, type LogRecord } from "../../src/index.js"
 import { runBot as runNativeBot } from "../../src/effect.js"
 import { createTestClient } from "../../src/testing.js"
@@ -61,6 +61,7 @@ describe("default API drain", () => {
     })
 
     test("the drain deadline cancels unfinished work and logs how much it cut off", async () => {
+        const clock = sdkClock()
         const test = open()
         let aborted = false
         test.client.on("typingStart", (_event, signal) => {
@@ -75,7 +76,11 @@ describe("default API drain", () => {
         test.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 })
         await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
 
-        expect((await test.client.shutdown({ drainMs: 50 })).isOk()).toBe(true)
+        const stopping = test.client.shutdown({ drainMs: 50 })
+        await clock.waiting(50)
+        expect(aborted).toBe(false)
+        await clock.advance(50)
+        expect((await stopping).isOk()).toBe(true)
         expect(aborted).toBe(true)
         const timedOut = test.logs().find((record) => record.code === "lifecycle.drainTimedOut")
         expect(timedOut).toMatchObject({ level: "warn", fields: { running: 1, waiting: 0, drainMs: 50 } })

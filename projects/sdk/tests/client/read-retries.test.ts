@@ -11,7 +11,7 @@ import {
 import { createClient as createNative } from "../../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { modes, type Mode } from "../support/both-apis.js"
-import { fakeHostTime, hostTurnsUntil } from "../support/client-clock.js"
+import { fakeHostTime, hostTurnsUntil, sdkClock } from "../support/client-clock.js"
 
 const reads = ["fetch", "fetchHistory", "fetchReactionUsers", "fetchPins"] as const
 const target = { id: "10", channelId: "20" }
@@ -168,6 +168,57 @@ test.each(modes.flatMap((mode) => reads.map((operation) => ({ mode, operation })
     },
 )
 
+/**
+ * Make every jitter sample 0.25: Math.random for default clients, the Random service for native runs.
+ * Effect also draws object hashes from Math.random, so a default client cannot be given an ordered sequence
+ */
+function quarterJitter(api: Awaited<ReturnType<typeof setup>>) {
+    ;(api.native ? api.random : vi.mocked(Math.random)).mockReturnValue(0.25)
+}
+
+// Without jitter, retries wait only their 125 and 250 ms minimums, so clients that fail together retry together
+test.each(modes)("%s spreads first and later read retries by the random source", async (mode) => {
+    const time = retryTime()
+    let calls = 0
+    stubFetchWithHostedDiscovery(async () => (++calls < 3 ? new Response(null, { status: 503 }) : Response.json(wire)))
+    const api = await setup(mode, time.logging)
+    quarterJitter(api)
+    const reading = api.read()
+    // 125 ms × 1.25 rounds up to 157 ms, and 250 ms × 1.25 rounds up to 313 ms
+    await time.runRetry(1, 157, () => calls)
+    await time.runRetry(2, 313, () => calls)
+    expect(await reading).toMatchObject({ id: "10" })
+    expect(calls).toBe(3)
+})
+
+// The deadline check must use the jittered wait: 157 + 250 ms fits the 450 ms deadline, but 157 + 313 ms does not
+test.each(modes)(
+    "%s returns the received failure at once when a jittered retry would pass the deadline",
+    async (mode) => {
+        const time = retryTime()
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () => {
+            calls++
+            return new Response(null, { status: 503 })
+        })
+        const api = await setup(mode, time.logging)
+        quarterJitter(api)
+        let completed = false
+        const pending = api
+            .read("fetch", { timeoutMs: 450 })
+            .catch((failure: unknown) => failure)
+            .finally(() => {
+                completed = true
+            })
+        await time.runRetry(1, 157, () => calls)
+        await hostTurnsUntil(() => completed || time.retries().length > 1)
+        expect(time.retries()).toHaveLength(1)
+        expect(await pending).toMatchObject({ reason: "rejected", status: 503 })
+        expect(performance.now()).toBe(157)
+        expect(calls).toBe(2)
+    },
+)
+
 test.each(modes)(
     "%s exhausts only eligible failures and never retries rejection or malformed success",
     async (mode) => {
@@ -241,6 +292,7 @@ test.each(modes)("%s rejects non-429 responses once while retaining only usable 
 })
 
 test.each(modes)("%s preserves confirmed 429 handling separately from transient retries", async (mode) => {
+    const time = retryTime()
     let calls = 0
     stubFetchWithHostedDiscovery(async () => {
         calls++
@@ -249,7 +301,7 @@ test.each(modes)("%s preserves confirmed 429 handling separately from transient 
         return Response.json(wire)
     })
     const api = await setup(mode)
-    expect(await api.read()).toMatchObject({ id: "10" })
+    expect(await time.drive(api.read())).toMatchObject({ id: "10" })
     expect(calls).toBe(6)
 })
 
@@ -349,6 +401,8 @@ test.each(modes)("%s honors numeric and HTTP-date Retry-After without blocking u
 })
 
 test.each(modes)("%s retry backlogs share the existing pending count budget", async (mode) => {
+    // SDK time stands still, so no three-second Retry-After wait ends while the backlog fills
+    sdkClock()
     let calls = 0
     stubFetchWithHostedDiscovery(async () => {
         calls++
@@ -395,7 +449,8 @@ test.each(modes)("%s POST, PATCH, PUT and DELETE never use transient read retrie
 })
 
 test.each(modes)("%s a mutation overlapping a successful retry prevents stale cache admission", async (mode) => {
-    const api = await setup(mode)
+    const time = retryTime()
+    const api = await setup(mode, time.logging)
     let calls = 0
     let respond!: (response: Response) => void
     stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
@@ -406,7 +461,7 @@ test.each(modes)("%s a mutation overlapping a successful retry prevents stale ca
         })
     })
     const pending = api.read()
-    await vi.waitFor(() => expect(calls).toBe(2))
+    await time.runRetry(1, 125, () => calls)
     await api.edit()
     respond(Response.json(wire))
     expect(await pending).toMatchObject({ content: "read" })
@@ -416,11 +471,12 @@ test.each(modes)("%s a mutation overlapping a successful retry prevents stale ca
 test.each(modes)(
     "%s a read that failed after dispatch stays retryable, unlike a write with an unknown outcome",
     async (mode) => {
+        const time = retryTime()
         const api = await setup(mode)
         stubFetchWithHostedDiscovery(async () => {
             throw Error("private network failure")
         })
-        const read: unknown = await api.read().catch((error: unknown) => error)
+        const read: unknown = await time.drive(api.read().catch((error: unknown) => error))
         expect(read).toMatchObject({ reason: "network", outcome: "unknown", details: { read: true } })
         expect(errors.isRetryable(read)).toBe(true)
         const write: unknown = api.defaultApi

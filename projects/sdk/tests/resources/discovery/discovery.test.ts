@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from "vitest"
 import { DiscoveryCategories } from "../../../src/index.js"
 import { modes, setup as setupClient, type Mode } from "../../support/both-apis.js"
-import { sdkClock } from "../../support/client-clock.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle } from "../../support/settle.js"
 
@@ -41,6 +41,7 @@ const directoryGuild = (extra: Record<string, unknown> = {}) => ({
 })
 
 test.each(modes)("%s reads one volatile directory page with explicit metadata and GET recovery", async (mode) => {
+    const clock = sdkClock()
     const client = await setup(mode)
     const urls: string[] = []
     const fetch = vi.fn(async (url: string) => {
@@ -61,16 +62,19 @@ test.each(modes)("%s reads one volatile directory page with explicit metadata an
         })
     })
     stubFetchWithHostedDiscovery(fetch)
-    const page = await settle(
-        client.discovery.search({
-            query: "fixture",
-            categoryId: 4,
-            primaryLanguage: "en-US",
-            tag: "typescript",
-            sortBy: "onlineCount",
-            limit: 2,
-            offset: 4,
-        }),
+    const page = await driveSdkTime(
+        clock,
+        settle(
+            client.discovery.search({
+                query: "fixture",
+                categoryId: 4,
+                primaryLanguage: "en-US",
+                tag: "typescript",
+                sortBy: "onlineCount",
+                limit: 2,
+                offset: 4,
+            }),
+        ),
     )
     expect(page).toMatchObject({ total: 7, offset: 4, limit: 2, categoryCounts: [{ categoryId: 4, count: 7 }] })
     expect(page.guilds[0]).toMatchObject({
@@ -399,6 +403,7 @@ test.each(modes)("%s rejects malformed collections and cross-guild application r
 })
 
 test.each(modes)("%s retries reads but not uncertain submission or withdrawal", async (mode) => {
+    const clock = sdkClock()
     const client = await setup(mode)
     let reads = 0,
         writes = 0
@@ -410,7 +415,7 @@ test.each(modes)("%s retries reads but not uncertain submission or withdrawal", 
         writes++
         throw Error("Private application lost")
     })
-    await settle(client.discovery.fetchStatus("200"))
+    await driveSdkTime(clock, settle(client.discovery.fetchStatus("200")))
     expect(reads).toBe(2)
     for (const operation of [
         () => client.discovery.apply("200", { description: "Private application", categoryId: 4 }),

@@ -4,6 +4,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createClient, type ClientOptions, type GuildMember, type MemberReference } from "../../../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
 const target: MemberReference = { guildId: "20", userId: "31" }
@@ -200,6 +201,7 @@ test.each(modes)("%s rejects a mismatched member response and evicts its uncerta
 })
 
 test.each(modes)("%s never replays an uncertain role replacement but retries a confirmed rate limit", async (mode) => {
+    const clock = sdkClock()
     let attempts = 0
     stubFetchWithHostedDiscovery(async () => {
         attempts++
@@ -223,7 +225,7 @@ test.each(modes)("%s never replays an uncertain role replacement but retries a c
             return Response.json({ retry_after: 0.001 }, { status: 429, headers: { "retry-after": "0.001" } })
         return Response.json(wireMember(["50"]))
     })
-    expect((await api.setRoles(target, ["50"])).roleIds).toEqual(["50"])
+    expect((await driveSdkTime(clock, api.setRoles(target, ["50"]))).roleIds).toEqual(["50"])
     expect(attempts).toBe(2)
 })
 

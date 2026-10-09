@@ -3,6 +3,7 @@ import { Effect, Fiber } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
 const configuration = { token: "fixture-only-not-a-credential", cache: { messages: {} } }
@@ -13,7 +14,10 @@ const message = (id: string) => ({
     author: { id: "30", username: "fixture" },
 })
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 test("default deleteOwnMessages operations use exact bodyless 202 routes and reject invalid IDs before dispatch", async () => {
     const requests: Array<{ url: string; init: RequestInit }> = []
@@ -166,6 +170,7 @@ test("default cancellation before and after guild deletion dispatch does not rep
 })
 
 test("native deleteOwnMessages operations are lazy, retry only confirmed 429, and retain cancellation cleanup", async () => {
+    const clock = sdkClock()
     let attempts = 0
     let started!: () => void
     const dispatched = new Promise<void>((resolve) => {
@@ -186,7 +191,11 @@ test("native deleteOwnMessages operations are lazy, retry only confirmed 429, an
                 const client = yield* createNative(configuration)
                 const lazy = client.messages.deleteOwnMessages("20", { confirm: true })
                 expect(attempts).toBe(0)
-                yield* lazy
+                const deleting = yield* lazy.pipe(Effect.forkChild)
+                // The confirmed 429 asks for a 1 ms wait before the request is sent again
+                yield* Effect.promise(() => clock.waiting(1))
+                yield* Effect.promise(() => clock.advance(1))
+                yield* Fiber.join(deleting)
                 expect(attempts).toBe(2)
                 const fiber = yield* client.guilds.deleteOwnMessages("30", { confirm: true }).pipe(Effect.forkChild)
                 yield* Effect.promise(() => dispatched)

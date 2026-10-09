@@ -1,6 +1,6 @@
 import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
-import { describe, expect, onTestFinished, test, vi } from "vitest"
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
 import {
     ClientClosedError,
     ConfigurationError,
@@ -21,8 +21,13 @@ import * as nativeTesting from "../../src/effect-testing.js"
 import * as defaultTesting from "../../src/testing.js"
 import { fixtureToken } from "../../src/internal/testing/fixtures.js"
 import { modes, type Mode } from "../support/both-apis.js"
+import { sdkClock } from "../support/client-clock.js"
 import { settle } from "../support/settle.js"
 import { ownedResources } from "../support/owned-resources.js"
+
+afterEach(() => {
+    vi.restoreAllMocks()
+})
 
 /**
  * One test client driven through either API style with the same promise-returning calls, so each behavior below is
@@ -359,8 +364,13 @@ describe.each(modes)("%s test client", (mode) => {
     })
 
     test("emitted dispatches reach the shard a guild routes to and resume with that shard's sequence", async () => {
+        const clock = sdkClock()
         const driver = await open(mode, { sharding: { totalShards: 2 } })
-        await driver.ready()
+        const ready = driver.ready()
+        // The SDK starts the second shard's session one second after the first
+        await clock.waiting(1_000)
+        await clock.advance(1_000)
+        await ready
         const identifies = driver.test.commands().filter((command) => command.op === 2)
         expect(identifies.map((command) => (command.d as { shard: unknown }).shard).toSorted()).toEqual([
             [0, 2],
@@ -372,6 +382,9 @@ describe.each(modes)("%s test client", (mode) => {
         await driver.emit("TYPING_START", typing)
         await driver.emit("TYPING_START", { ...typing, guild_id: undefined }, { shardId: 1 })
         await driver.disconnect({ shardId: 1 })
+        // With the jitter at 0.5, the first recovery waits 500 ms
+        await clock.waiting(500)
+        await clock.advance(500)
         await expect.poll(() => driver.test.client.state, { timeout: 10_000 }).toBe("Connected")
         await expect.poll(() => driver.test.counters().resumes, { timeout: 10_000 }).toBe(1)
         const resume = driver.test.commands().find((command) => command.op === 6)

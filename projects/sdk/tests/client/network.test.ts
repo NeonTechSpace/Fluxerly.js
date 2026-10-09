@@ -606,9 +606,13 @@ test.each([4004, 4002, 4010, 4011, 4012] as const)("permanent rejection %s is ty
 })
 
 test("startup deadline ends a silent handshake and run closes permanently on failure", async () => {
+    const clock = sdkClock()
     await fixture({ holdHello: true })
     const client = defaultApi({ startupTimeoutMs: 80, maxStartupAttempts: 1 })
-    const result = await client.run()
+    const running = client.run()
+    await clock.waiting(80)
+    await clock.advance(80)
+    const result = await running
     expect(result._unsafeUnwrapErr()._tag).toBe("ConnectionTimeoutError")
     expect(client.state).toBe("Closed")
 })
@@ -741,12 +745,16 @@ test("shutdown waits five seconds for an uncooperative peer, then terminates and
 }, 10_000)
 
 test("server-requested heartbeats are immediate, and missing ACKs trigger recovery that shutdown stops", async () => {
+    const clock = sdkClock()
     const server = await fixture({ interval: 60, noAck: true })
     const logs = sinkLogs()
     const client = defaultApi(undefined, { sink: logs.sink })
     await client.connect()
+    await clock.waiting(60)
     server.send({ op: GatewayOpcode.heartbeat, d: null })
+    // SDK time stands still, so only the server request can produce this heartbeat
     await vi.waitFor(() => expect(server.commands.some((command) => command.op === 1)).toBe(true), { interval: 5 })
+    await clock.advance(60)
     await vi.waitFor(() => expect(client.state).toBe("Recovering"), { interval: 5 })
     expect(client.gatewayLatencyMs).toBe(null)
     await vi.waitFor(() =>
@@ -868,6 +876,8 @@ test("cancellation plus a cleanup defect rejects rather than returning Cancelled
 })
 
 test("native heartbeat measurement uses the client creation Clock across the background connection", async () => {
+    // Sleeps, including the heartbeat interval, wait on logical time, and the default Clock reads zero throughout
+    sdkClock()
     const server = await fixture({ noAck: true })
     const scope = Scope.makeUnsafe()
     onTestFinished(async () => {

@@ -6,7 +6,6 @@ import WebSocket, { WebSocketServer } from "ws"
 import { createClient, type Client as DefaultClient } from "../../../src/index.js"
 import { createClient as createNative, type Client as NativeClient } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
-import { monotonicClock } from "../../support/clock.js"
 import { sdkClock, type SdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { wsTarget } from "../../support/ws-redirect.js"
@@ -62,11 +61,10 @@ function shardTuple(command: Command): readonly [number, number] {
 }
 
 /**
- * Record when the SDK writes each Identify, read from the default Effect Clock that its Identify pacing uses unless a
- * logical time source is given. Send-side times make spacing exact, unlike fixture receipt times that include loopback
- * delivery
+ * Record when the SDK writes each Identify, read from the logical time source its Identify pacing uses. Send-side times
+ * make spacing exact, unlike fixture receipt times that include loopback delivery
  */
-function recordIdentifySends(now = () => Number(process.hrtime.bigint()) / 1_000_000): number[] {
+function recordIdentifySends(now: () => number): number[] {
     const sentAt: number[] = []
     wsTarget.onSend = (_socket, data) => {
         if (record(JSON.parse(String(data))).op === 2) sentAt.push(now())
@@ -92,7 +90,7 @@ function outcome<A>(exit: Exit.Exit<A, unknown>): Outcome<A> {
     return { kind: "failure", error: failure.error }
 }
 
-// A hand-written gateway rather than startGatewayServer, because it holds HELLO per connection and delays ACKs per shard
+// A hand-written gateway rather than startGatewayServer, because it holds HELLO per connection and withholds ACKs
 async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
     let sequence = 0
     let readyAutomatically = autoReady
@@ -105,7 +103,8 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
     const resumes: Command[] = []
     const restRequests: RestRequest[] = []
     const sessionShards = new Map<string, number>()
-    const acknowledgementDelayMs = new Map<number, number>()
+    let acknowledgeAutomatically = true
+    const withheldAcknowledgements: ServerSocket[] = []
     let restHandler: ((request: RestRequest) => void) | undefined
     const server = createServer((request, response) => {
         if (request.url !== "/v1/gateway/bot") {
@@ -149,10 +148,8 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
             }
             commands.push(command)
             if (command.op === 1) {
-                const delay = acknowledgementDelayMs.get(connection.shardId ?? -1) ?? 0
-                setTimeout(() => {
-                    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ op: 11 }))
-                }, delay)
+                if (acknowledgeAutomatically) socket.send(JSON.stringify({ op: 11 }))
+                else withheldAcknowledgements.push(socket)
             }
             if (command.op === 2) {
                 identifies.push(command)
@@ -185,7 +182,15 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
         identifies,
         resumes,
         restRequests,
-        acknowledgementDelayMs,
+        /** Withhold HEARTBEAT_ACK replies until acknowledge() sends them */
+        set autoAcknowledge(value: boolean) {
+            acknowledgeAutomatically = value
+        },
+        /** Send each withheld HEARTBEAT_ACK in the order its heartbeat arrived */
+        acknowledge() {
+            for (const socket of withheldAcknowledgements.splice(0))
+                if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ op: 11 }))
+        },
         setRestHandler(handler: ((request: RestRequest) => void) | undefined) {
             restHandler = handler
         },
@@ -398,11 +403,13 @@ afterEach(() => {
 })
 
 test.each(modes)("%s waits for both sharded READY frames and exposes immutable aggregate state", async (mode) => {
-    const clock = monotonicClock()
+    const clock = sdkClock()
     const { fixture, driver } = await setup(mode, { totalShards: 2 }, false, undefined, false)
-    const identifySentAt = recordIdentifySends()
-    fixture.acknowledgementDelayMs.set(0, 45)
-    fixture.acknowledgementDelayMs.set(1, 1)
+    const identifySentAt = recordIdentifySends(clock.now)
+    // Each shard heartbeats 2,000 ms after its Hello, and the test answers after a chosen logical round trip
+    fixture.heartbeatIntervalMs = 2_000
+    fixture.autoAcknowledge = false
+    const heartbeats = () => fixture.commands.filter((command) => command.op === 1)
     let settled = false
     const startup = connect(driver).then((value) => {
         settled = true
@@ -414,16 +421,18 @@ test.each(modes)("%s waits for both sharded READY frames and exposes immutable a
     // the held handshake finishes 900 ms of logical time after the first Identify and must still wait out the spacing
     fixture.hello(fixture.connections[1]!)
     await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
-    clock.advance(900)
+    await clock.advance(900)
     fixture.hello(fixture.connections[0]!)
+    await clock.waiting(100)
+    expect(identifySentAt).toEqual([0])
+    await clock.advance(100)
     await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
     const identifies = [...fixture.identifies]
     expect(identifies.map(shardTuple).sort((left, right) => left[0] - right[0])).toEqual([
         [0, 2],
         [1, 2],
     ])
-    expect(identifySentAt).toHaveLength(2)
-    expect(identifySentAt[1]!).toBeGreaterThanOrEqual(identifySentAt[0]! + 1_000)
+    expect(identifySentAt).toEqual([0, 1_000])
     expect(driver.client.state).toBe("Connecting")
     expect(driver.client.gatewayLatencyMs).toBe(null)
     const connectingSnapshot = driver.client.shards
@@ -434,6 +443,21 @@ test.each(modes)("%s waits for both sharded READY frames and exposes immutable a
     expect(Object.isFrozen(connectingSnapshot)).toBe(true)
     expect(connectingSnapshot.every(Object.isFrozen)).toBe(true)
     expect(() => (connectingSnapshot as unknown as unknown[]).push({})).toThrow(TypeError)
+
+    // The first Hello's shard measures a 1 ms round trip and the second's 45 ms, both before READY
+    const measured = () => new Set(driver.client.shards.map((shard) => shard.gatewayLatencyMs))
+    await clock.advance(1_000)
+    await vi.waitFor(() => expect(heartbeats()).toHaveLength(1), { interval: 5 })
+    await clock.advance(1)
+    fixture.acknowledge()
+    await vi.waitFor(() => expect(measured()).toEqual(new Set([1, null])), { interval: 5 })
+    await clock.advance(899)
+    await vi.waitFor(() => expect(heartbeats()).toHaveLength(2), { interval: 5 })
+    await clock.advance(45)
+    fixture.acknowledge()
+    await vi.waitFor(() => expect(measured()).toEqual(new Set([1, 45])), { interval: 5 })
+    // Every shard has a measurement, but the client reports none until it is connected
+    expect(driver.client.gatewayLatencyMs).toBe(null)
 
     fixture.ready(identifies[0]!)
     await vi.waitFor(() =>
@@ -453,6 +477,7 @@ test.each(modes)("%s waits for both sharded READY frames and exposes immutable a
     const readySnapshot = driver.client.shards
     const latencies = readySnapshot.map((shard) => shard.gatewayLatencyMs!)
     expect(driver.client.gatewayLatencyMs).toBe(Math.max(...latencies))
+    expect(driver.client.gatewayLatencyMs).toBe(45)
 
     await driver.close()
     await fixture.waitClosed()

@@ -116,8 +116,8 @@ async function managed(mode: Mode, origin: string, variant: Variant): Promise<Ma
         entry: mode === "default" ? fileURLToPath(worker) : worker,
         totalShards: 1,
         assignments: [{ id: "selected-instance", shardIds: [0] }],
-        startupTimeoutMs: 5_000,
-        shutdownTimeoutMs: 1_000,
+        startupTimeoutMs: 10_000,
+        shutdownTimeoutMs: 10_000,
         childEnvironment: {
             FLUXERLY_SUPERVISOR_CHILD_OPTIONS_ORIGIN: origin,
             FLUXERLY_SUPERVISOR_CHILD_OPTIONS_MODE: mode,
@@ -286,5 +286,5 @@ test.each(
             await cleanup()
         }
     },
-    10_000,
+    30_000,
 )

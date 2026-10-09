@@ -319,6 +319,8 @@ test.each(modes)(
 )
 
 test.each(modes)("%s timeout returns partial replies without renewing the registration deadline", async (mode) => {
+    // Sleeps wake only when the test says so, while the collector reads the manual time below
+    const clock = sdkClock()
     const server = await fixture()
     const api = await driver(mode)
     let now = 0
@@ -332,6 +334,8 @@ test.each(modes)("%s timeout returns partial replies without renewing the regist
     expect(await collector.wait()).toEqual({ reason: "timeout", messages: [projection("10")] })
     const empty = await api.open({ timeoutMs: 5 })
     now += 5
+    await clock.waiting(5)
+    await clock.advance(5)
     expect(await empty.wait()).toEqual({ reason: "timeout", messages: [] })
 })
 

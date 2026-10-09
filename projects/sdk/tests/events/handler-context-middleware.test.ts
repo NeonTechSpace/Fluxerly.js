@@ -8,11 +8,15 @@ import type { ClientOwner } from "../../src/internal/client.js"
 import { clientServices } from "../../src/internal/client-registry.js"
 import { describeBothApis, setup, type FixtureClientOptions, type Mode } from "../support/both-apis.js"
 import type { ReceivedCommand } from "../support/gateway-server.js"
+import { sdkClock } from "../support/client-clock.js"
 import { startHostedLoopback } from "../support/instance.js"
 import { counters } from "../support/log-capture.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 type AnyClient = Client | NativeClient
 
@@ -100,14 +104,21 @@ async function reportingClient(mode: Mode) {
 
 describeBothApis("handler context", (mode) => {
     test("carries the receiving shard and the byte length of each received frame", async () => {
+        const clock = sdkClock()
         const { gateway } = await startHostedLoopback({
             gateway: { ready: (identify: ReceivedCommand) => ({ shard: identify.d.shard }) },
         })
         const client = await setup(mode, { sharding: { totalShards: 2 } })
         const received: [string, EventContext][] = []
         await handle(mode, client, (event, context) => void received.push([event.channelId, context]))
-        if (mode === "default") expect((await (client as Client).connect()).isOk()).toBe(true)
-        else await Effect.runPromise((client as NativeClient).connect())
+        const connecting =
+            mode === "default"
+                ? (client as Client).connect().then((result) => expect(result.isOk()).toBe(true))
+                : Effect.runPromise((client as NativeClient).connect())
+        // The SDK starts the second shard's session one second after the first
+        await clock.waiting(1_000)
+        await clock.advance(1_000)
+        await connecting
 
         const socketOf = (shardId: number) => {
             const identify = gateway.commands.find((command) => command.op === 2 && command.d.shard[0] === shardId)!

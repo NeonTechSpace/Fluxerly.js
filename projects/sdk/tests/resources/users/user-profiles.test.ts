@@ -4,10 +4,14 @@ import { afterEach, expect, test, vi } from "vitest"
 import type { DefaultUserOperationOptions, UserProfileQuery } from "../../../src/index.js"
 import type { Client as NativeClient } from "../../../src/effect.js"
 import { fixtureToken, modes, setup, type FixtureClientOptions, type Mode } from "../../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { settle } from "../../support/settle.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 const user = (id = "30", extra: Record<string, unknown> = {}) => ({
     id,
@@ -217,6 +221,7 @@ test.each(modes)("%s avoids all user-cache writes and invalidation", async (mode
 })
 
 test.each(modes)("%s retries profile reads, redacts failure bodies, and awaits cancellation cleanup", async (mode) => {
+    const clock = sdkClock()
     const api = await profiles(mode)
     let calls = 0
     rest(async () => {
@@ -225,7 +230,7 @@ test.each(modes)("%s retries profile reads, redacts failure bodies, and awaits c
             ? Response.json({ message: "private transient profile body" }, { status: 503 })
             : Response.json(profile())
     })
-    await expect(api.fetchProfile()).resolves.toMatchObject({ user: { id: "30" } })
+    await driveSdkTime(clock, expect(api.fetchProfile()).resolves.toMatchObject({ user: { id: "30" } }))
     expect(calls).toBe(2)
 
     calls = 0

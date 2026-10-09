@@ -9,6 +9,7 @@ import type { LogCode } from "../../src/internal/code-catalogue.js"
 import { ClientLogger, loggingConfiguration } from "../../src/internal/logging.js"
 import { maskPayload, maskText } from "../../src/internal/masking.js"
 import { EventBus } from "../../src/internal/events.js"
+import { driveSdkTime, sdkClock } from "../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 
 afterEach(() => {
@@ -254,6 +255,7 @@ test("credentials stay masked in messages, errors and unsafe payloads, and unsaf
 })
 
 test("REST requests produce Debug records with route templates, and retries and rate-limit waits are counted", async () => {
+    const clock = sdkClock()
     let calls = 0
     stubFetchWithHostedDiscovery(async () => {
         calls++
@@ -267,7 +269,7 @@ test("REST requests produce Debug records with route templates, and retries and 
         token,
         logging: { categories: { rest: "debug", ratelimit: "debug" }, sink: (record) => records.push(record) },
     })
-    expect((await client.messages.fetch({ id: "10", channelId: "20" })).isOk()).toBe(true)
+    expect((await driveSdkTime(clock, client.messages.fetch({ id: "10", channelId: "20" }))).isOk()).toBe(true)
     expect((await client.shutdown()).isOk()).toBe(true)
     const requests = records.filter((record) => record.code === "rest.request")
     expect(requests.map((record) => [record.status, record.attempt, record.route])).toEqual([

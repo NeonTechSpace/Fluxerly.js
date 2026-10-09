@@ -5,9 +5,13 @@ import { createClient as createNative } from "../../../src/effect.js"
 import { decodeMessage, encodeEdit, encodeForward } from "../../../src/internal/message.js"
 import { InputValidationFailure } from "../../../src/input-validation.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 const message = (overrides: Record<string, unknown> = {}) => ({
     id: "99",
@@ -219,6 +223,7 @@ test("received message nonces preserve omitted and explicit null response states
 test.each(modes)(
     "forward generates distinct valid nonces when omitted and retains one through a 429 retry via the %s API",
     async (surface) => {
+        const clock = sdkClock()
         const requests: Record<string, unknown>[] = []
         stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
             requests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
@@ -226,8 +231,8 @@ test.each(modes)(
                 ? Response.json({ retry_after: 0.01 }, { status: 429 })
                 : Response.json(forwardedMessage())
         })
-        await forwardSuccess(surface, { source: { id: "10", channelId: "30" } })
-        await forwardSuccess(surface, { source: { id: "10", channelId: "30" } })
+        await driveSdkTime(clock, forwardSuccess(surface, { source: { id: "10", channelId: "30" } }))
+        await driveSdkTime(clock, forwardSuccess(surface, { source: { id: "10", channelId: "30" } }))
         expect(requests).toHaveLength(3)
         expect(requests[0]?.nonce).toMatch(/^.{1,32}$/)
         expect(requests[1]?.nonce).toMatch(/^.{1,32}$/)

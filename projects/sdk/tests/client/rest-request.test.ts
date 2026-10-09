@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { RestRequestError, type DefaultRestRequest, type RestRequestFailure } from "../../src/index.js"
 import { describeBothApis, setup, type FixtureClientOptions, type Mode } from "../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../support/client-clock.js"
 import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
 import { captureLogs } from "../support/log-capture.js"
 import { rateLimitHeaders, rateLimitedResponse } from "../support/rest-server.js"
@@ -10,7 +11,10 @@ import { expectErr, settle } from "../support/settle.js"
 const discoveryUrl = "https://fluxer.app/.well-known/fluxer"
 const api = "https://api.fluxer.app/v1"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 interface Call {
     readonly url: string
@@ -227,6 +231,7 @@ describeBothApis("rest.request", (mode) => {
     })
 
     test("never repeats a write with an uncertain outcome but retries reads within the bounded policy", async () => {
+        const clock = sdkClock()
         const { calls, request } = await restClient(mode, (url) =>
             url.endsWith("/network")
                 ? Promise.reject(new TypeError("socket reset"))
@@ -242,7 +247,7 @@ describeBothApis("rest.request", (mode) => {
             outcome: "unknown",
         })
         expect(calls.map((call) => call.init.method)).toEqual(["POST", "PUT"])
-        const read = await rejection(request({ method: "GET", path: "/channels/20/network" }))
+        const read = await driveSdkTime(clock, rejection(request({ method: "GET", path: "/channels/20/network" })))
         expect(read).toMatchObject({ reason: "network", outcome: "unknown" })
         expect(calls.map((call) => call.init.method)).toEqual(["POST", "PUT", "GET", "GET", "GET"])
     })
@@ -257,10 +262,13 @@ describeBothApis("rest.request", (mode) => {
                         controller.error(Object.assign(new Error("socket reset"), { code: "ECONNRESET" })),
                 }),
             )
+        const clock = sdkClock()
         const { calls, request } = await restClient(mode, (_url, init, call) =>
             init.method === "GET" && call === 2 ? Response.json({ id: "30" }) : dropped(),
         )
-        expect((await settle(request({ method: "GET", path: "/users/@me" }))).body).toEqual({ id: "30" })
+        expect((await driveSdkTime(clock, settle(request({ method: "GET", path: "/users/@me" })))).body).toEqual({
+            id: "30",
+        })
         expect(await rejection(request({ method: "POST", path: "/channels/20/custom", body: {} }))).toMatchObject({
             reason: "network",
             outcome: "unknown",
@@ -270,6 +278,7 @@ describeBothApis("rest.request", (mode) => {
     })
 
     test("waits out a confirmed 429 and sends the write again", async () => {
+        const clock = sdkClock()
         const logs = captureLogs()
         const { calls, request } = await restClient(
             mode,
@@ -277,9 +286,13 @@ describeBothApis("rest.request", (mode) => {
                 call === 1 ? rateLimitedResponse({ retryAfterSeconds: 0.02 }) : Response.json({ id: "1" }),
             { logging: { ...logs.logging, level: "debug" } },
         )
-        const response = await settle(
-            request({ method: "POST", path: "/channels/20/messages", body: { content: "x" } }),
-        )
+        const pending = settle(request({ method: "POST", path: "/channels/20/messages", body: { content: "x" } }))
+        await clock.waiting(20)
+        // The write is held for the whole required wait, so it is not sent again early
+        await clock.advance(19)
+        expect(calls).toHaveLength(1)
+        await clock.advance(1)
+        const response = await pending
         expect(response.body).toEqual({ id: "1" })
         expect(calls).toHaveLength(2)
         expect(calls[1]!.body).toBe(calls[0]!.body)

@@ -13,6 +13,7 @@ import {
     type PresenceTimer,
 } from "../../../src/internal/presence.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { startHostedLoopback } from "../../support/instance.js"
 import { wsTarget } from "../../support/ws-redirect.js"
 
@@ -499,6 +500,7 @@ test.each(modes)("%s accepts only real future calendar dates for custom-status e
 test.each(modes)(
     "%s member selection refreshes unchanged input and reconciles a clear after RESUMED and guild availability",
     async (mode) => {
+        const clock = sdkClock()
         const fixture = await publicGateway()
         const api = await publicDriver(mode)
         try {
@@ -521,14 +523,17 @@ test.each(modes)(
                 d: { subscriptions: { "40": { members: ["30"] } } },
             })
             api.setMembers("40", ["30"])
+            // The gateway command queue paces the repeated subscription frame
+            await clock.waiting(125)
+            await clock.advance(125)
             await vi.waitFor(() => expect(fixture.commands.filter((command) => command.op === 14)).toHaveLength(2))
             expect(fixture.commands.filter((command) => command.op === 14).at(-1)?.d).toEqual({
                 subscriptions: { "40": { members: ["30"] } },
             })
-            // No reconnect jitter, so the replacement connection starts without a real backoff wait
-            vi.spyOn(Math, "random").mockReturnValue(0)
             fixture.sockets[0]!.close(4000)
             api.setMembers("40", [])
+            await clock.waiting(500)
+            await clock.advance(500)
             await vi.waitFor(
                 () =>
                     expect(fixture.commands.some((command) => command.connection === 1 && command.op === 14)).toBe(
@@ -543,6 +548,9 @@ test.each(modes)(
                 { id: "40", properties: { id: "40", name: "fixture", owner_id: "90", features: [] } },
                 fixture.sockets[1],
             )
+            // The queued subscription frame leaves after the command queue's pacing
+            await clock.waiting(125)
+            await clock.advance(125)
             await vi.waitFor(() => expect(resumed()).toHaveLength(2))
             expect(resumed().at(-1)?.d).toEqual({ subscriptions: { "40": { members: [] } } })
         } finally {

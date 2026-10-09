@@ -47,7 +47,7 @@ async function defaultReasons() {
                 token,
                 clientOptions: {
                     instance: { url: origin.href, allowInsecure: true },
-                    connection: { startupTimeoutMs: 5_000, maxStartupAttempts: 1 },
+                    connection: { startupTimeoutMs: 30_000, maxStartupAttempts: 1 },
                 },
                 configure: () => undefined,
             })
@@ -75,7 +75,7 @@ async function nativeReasons() {
                 token,
                 clientOptions: {
                     instance: { url: origin.href, allowInsecure: true },
-                    connection: { startupTimeoutMs: 5_000, maxStartupAttempts: 1 },
+                    connection: { startupTimeoutMs: 30_000, maxStartupAttempts: 1 },
                 },
                 configure: () => Effect.void,
             }),

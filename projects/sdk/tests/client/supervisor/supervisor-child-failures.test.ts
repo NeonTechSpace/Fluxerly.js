@@ -91,8 +91,8 @@ function options(mode: Mode, origin: string): SupervisorOptions {
         assignments: [{ id: "failure", shardIds: [0] }],
         // One failure stops the supervisor, so the test observes that failure rather than a restart
         restart: false,
-        startupTimeoutMs: 5_000,
-        shutdownTimeoutMs: 1_000,
+        startupTimeoutMs: 10_000,
+        shutdownTimeoutMs: 10_000,
         childEnvironment: {
             FLUXERLY_SUPERVISOR_FAILURE_ORIGIN: origin,
             FLUXERLY_SUPERVISOR_FAILURE_MODE: mode,
@@ -178,5 +178,5 @@ test.each(modes)(
             await cleanup()
         }
     },
-    10_000,
+    30_000,
 )

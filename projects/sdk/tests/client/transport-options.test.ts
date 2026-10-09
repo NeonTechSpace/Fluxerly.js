@@ -12,6 +12,7 @@ import {
 } from "../../src/effect.js"
 import { defaultSocketFactory } from "../../src/internal/transport/index.js"
 import { describeBothApis, fixtureToken, modes, setup, type Mode } from "../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../support/client-clock.js"
 import { creationField } from "../support/client-creation.js"
 import { hostedDiscoveryDocument, stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { startInstance } from "../support/instance.js"
@@ -25,7 +26,10 @@ const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.me
 const defaultAgent = `Fluxerly.js/${manifest.version} (+${manifest.homepage})`
 const discoveryUrl = "https://fluxer.app/.well-known/fluxer"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 const userAgentOf = (init: RequestInit) => new Headers(init.headers).get("user-agent")
 
@@ -116,6 +120,7 @@ describeBothApis("transport option", (mode) => {
     })
 
     test("a throwing custom fetch fails the request as a network failure", async () => {
+        const clock = sdkClock()
         const client = await setup(mode, {
             transport: {
                 fetch: (url) => {
@@ -124,7 +129,7 @@ describeBothApis("transport option", (mode) => {
                 },
             },
         })
-        expect(await expectErr(restRequest(mode, client))).toMatchObject({
+        expect(await driveSdkTime(clock, expectErr(restRequest(mode, client)))).toMatchObject({
             _tag: "RestRequestError",
             reason: "network",
         })

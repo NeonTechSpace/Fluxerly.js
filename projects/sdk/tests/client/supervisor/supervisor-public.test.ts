@@ -1,5 +1,6 @@
 import { once } from "node:events"
 import { createServer } from "node:http"
+import { setImmediate as turn } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { Effect, Fiber } from "effect"
 import { expect, onTestFinished, test, vi } from "vitest"
@@ -298,6 +299,18 @@ function processRunning(pid: number): boolean {
     }
 }
 
+/** Stops a supervisor whose parent timers are faked, releasing every held deadline, then restores real timers */
+async function stopWithFakeTimers(owner: Managed, barrier: { close(): Promise<void> }) {
+    try {
+        const closing = owner.shutdown().catch(() => undefined)
+        if (vi.isFakeTimers()) await vi.runAllTimersAsync()
+        await closing
+        await barrier.close()
+    } finally {
+        vi.useRealTimers()
+    }
+}
+
 async function managed(mode: Mode, options: SupervisorOptions): Promise<Managed> {
     if (mode === "default") {
         const value = defaultSupervisor.create(options)
@@ -558,10 +571,10 @@ test.each(modes)(
             shutdownTimeoutMs: timeoutMs,
             childEnvironment: { FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin },
         })
-        onTestFinished(async () => {
-            await owner.shutdown().catch(() => undefined)
-            await barrier.close()
-        })
+        // Only the parent's timers are faked, so the observation window expires when the test advances it, never from
+        // the time real children need to start, disconnect and stop
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+        onTestFinished(() => stopWithFakeTimers(owner, barrier))
         await owner.start()
         await owner.waitForReady()
         await barrier.entered
@@ -579,14 +592,21 @@ test.each(modes)(
         expect(processRunning(disconnectedPid)).toBe(true)
         expect(processRunning(siblingPid)).toBe(true)
         barrier.release()
-        await vi.waitFor(() =>
-            expect(owner.status().children).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({ id: "disconnected", pid: disconnectedPid, connectionState: null }),
-                    expect.objectContaining({ id: "sibling", pid: siblingPid, connectionState: "Connected" }),
-                ]),
-            ),
+        await realTimeUntil(
+            () => owner.status().children.find((child) => child.id === "disconnected")?.connectionState === null,
         )
+        expect(owner.status().children).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ id: "disconnected", pid: disconnectedPid, connectionState: null }),
+                expect.objectContaining({ id: "sibling", pid: siblingPid, connectionState: "Connected" }),
+            ]),
+        )
+        // The window is the disconnected child's only grace, so the supervisor keeps running until it has fully passed
+        await vi.advanceTimersByTimeAsync(timeoutMs - 1)
+        expect(owner.status().state).toBe("running")
+        await vi.advanceTimersByTimeAsync(1)
+        // The sibling never exits on a stop request, so only its own stop timeout ends it
+        await vi.advanceTimersByTimeAsync(timeoutMs)
 
         await expect(owner.waitForClose()).rejects.toMatchObject({
             _tag: "SupervisorError",
@@ -610,6 +630,7 @@ test.each(modes)(
 test.each(modes)(
     "%s parent shutdown remains successful while a current child is in its IPC-disconnect observation window",
     async (mode) => {
+        const shutdownTimeoutMs = 1_000
         const barrier = await disconnectBarrier()
         const disconnectWorker = new URL("./workers/supervisor-disconnect-worker.js", import.meta.url)
         const owner = await managed(mode, {
@@ -617,13 +638,12 @@ test.each(modes)(
             totalShards: 1,
             assignments: [{ id: "disconnected", shardIds: [0] }],
             startupTimeoutMs: 5_000,
-            shutdownTimeoutMs: 1_000,
+            shutdownTimeoutMs,
             childEnvironment: { FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin },
         })
-        onTestFinished(async () => {
-            await owner.shutdown().catch(() => undefined)
-            await barrier.close()
-        })
+        // Only the parent's timers are faked, so the observation window cannot expire before the test shuts down
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+        onTestFinished(() => stopWithFakeTimers(owner, barrier))
         await owner.start()
         await owner.waitForReady()
         await barrier.entered
@@ -631,15 +651,12 @@ test.each(modes)(
             children: [{ id: "disconnected", pid: expect.any(Number), connectionState: "Connected" }],
         })
         barrier.release()
-        await vi.waitFor(
-            () =>
-                expect(owner.status().children[0]).toMatchObject({
-                    pid: expect.any(Number),
-                    connectionState: null,
-                }),
-            { interval: 5 },
-        )
-        await Promise.all([owner.shutdown(), owner.shutdown()])
+        await realTimeUntil(() => owner.status().children[0]!.connectionState === null)
+        expect(owner.status().children[0]).toMatchObject({ pid: expect.any(Number), connectionState: null })
+        const stopping = Promise.all([owner.shutdown(), owner.shutdown()])
+        // The disconnected child cannot hear the stop request, so only its stop timeout ends it
+        await vi.advanceTimersByTimeAsync(shutdownTimeoutMs)
+        await stopping
         await owner.waitForClose()
         expect(owner.status()).toMatchObject({
             state: "closed",
@@ -721,28 +738,36 @@ test.each(modes)(
 test.each(modes)(
     "%s IPC loss freezes a queued Identify without replacing the observation failure",
     async (mode) => {
+        const minimumSpacingMs = 1_000
+        const shutdownTimeoutMs = 1_500
         const barrier = await disconnectBarrier("queued")
         const worker = new URL("./workers/supervisor-disconnect-coordination-worker.js", import.meta.url)
         const owner = await managed(mode, {
             entry: mode === "default" ? fileURLToPath(worker) : worker,
             totalShards: 1,
             assignments: [{ id: "queued", shardIds: [0] }],
-            identify: { minimumSpacingMs: 1_000 },
+            identify: { minimumSpacingMs },
             startupTimeoutMs: 5_000,
-            shutdownTimeoutMs: 1_500,
+            shutdownTimeoutMs,
             childEnvironment: {
                 FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
                 FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "queued",
             },
         })
-        onTestFinished(async () => {
-            await owner.shutdown().catch(() => undefined)
-            await barrier.close()
-        })
+        // The parent's clock moves only when the test advances it, so the spacing and the observation window cannot
+        // pass at a time that depends on how fast real children start and disconnect
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] })
+        onTestFinished(() => stopWithFakeTimers(owner, barrier))
         await owner.start()
         await owner.waitForReady()
         await barrier.entered
         barrier.release()
+        await realTimeUntil(() => owner.status().children[0]!.connectionState === null)
+        // The spacing ends before the window, so a queued Identify that stayed granted would reach the lost channel
+        await vi.advanceTimersByTimeAsync(minimumSpacingMs)
+        for (let index = 0; index < 20; index++) await turn()
+        expect(owner.status()).toMatchObject({ state: "running", children: [{ state: "running" }] })
+        await vi.advanceTimersByTimeAsync(shutdownTimeoutMs - minimumSpacingMs)
         await expect(owner.waitForClose()).rejects.toMatchObject({
             _tag: "SupervisorError",
             childId: "queued",
@@ -757,6 +782,8 @@ test.each(modes)(
 test.each(modes)(
     "%s IPC loss freezes an outstanding Identify acknowledgement without replacing the observation failure",
     async (mode) => {
+        const acknowledgementMs = 5_000
+        const shutdownTimeoutMs = acknowledgementMs + 100
         const barrier = await disconnectBarrier("outstanding")
         const worker = new URL("./workers/supervisor-disconnect-coordination-worker.js", import.meta.url)
         const owner = await managed(mode, {
@@ -764,20 +791,25 @@ test.each(modes)(
             totalShards: 1,
             assignments: [{ id: "outstanding", shardIds: [0] }],
             startupTimeoutMs: 5_000,
-            shutdownTimeoutMs: 5_100,
+            shutdownTimeoutMs,
             childEnvironment: {
                 FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
                 FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "outstanding",
             },
         })
-        onTestFinished(async () => {
-            await owner.shutdown().catch(() => undefined)
-            await barrier.close()
-        })
+        // Only the parent's timers are faked, so neither the acknowledgement deadline nor the observation window can
+        // pass at a time that depends on how fast real children start and disconnect
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+        onTestFinished(() => stopWithFakeTimers(owner, barrier))
         await owner.start()
         await owner.waitForReady()
         await barrier.entered
         barrier.release()
+        await realTimeUntil(() => owner.status().children[0]!.connectionState === null)
+        // The acknowledgement deadline ends before the window, so a deadline that stayed armed would stop the child
+        await vi.advanceTimersByTimeAsync(acknowledgementMs)
+        expect(owner.status()).toMatchObject({ state: "running", children: [{ state: "running" }] })
+        await vi.advanceTimersByTimeAsync(shutdownTimeoutMs - acknowledgementMs)
         await expect(owner.waitForClose()).rejects.toMatchObject({
             _tag: "SupervisorError",
             childId: "outstanding",
@@ -837,7 +869,7 @@ function options(
         identify: { minimumSpacingMs },
         startupTimeoutMs: 10_000,
         ...(overrides.restart === undefined ? {} : { restart: overrides.restart }),
-        shutdownTimeoutMs: overrides.shutdownTimeoutMs ?? 1_000,
+        shutdownTimeoutMs: overrides.shutdownTimeoutMs ?? 10_000,
         childEnvironment: {
             FLUXERLY_SUPERVISOR_LOOPBACK: origin,
             FLUXERLY_SUPERVISOR_MODE: mode,

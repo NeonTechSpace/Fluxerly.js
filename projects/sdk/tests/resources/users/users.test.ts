@@ -13,6 +13,7 @@ import {
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { expectFailure, settle } from "../../support/settle.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { monotonicClock } from "../../support/clock.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
@@ -294,10 +295,13 @@ test.each(modes)("%s snapshots bounded latest-message channel IDs from indexed v
 })
 
 test.each(modes)("%s cancels an admitted latest-message batch and releases its private read slot", async (mode) => {
+    const clock = sdkClock()
     let aborted = false
+    const dispatched = Promise.withResolvers<void>()
     rest(
         (_url, init) =>
             new Promise((_resolve, reject) => {
+                dispatched.resolve()
                 const abort = () => {
                     aborted = true
                     reject(init.signal?.reason)
@@ -307,7 +311,13 @@ test.each(modes)("%s cancels an admitted latest-message batch and releases its p
             }),
     )
     const api = await setup(mode)
-    await expect(api.fetchLatestMessages(["10"], { timeoutMs: 25 })).rejects.toMatchObject({ reason: "timeout" })
+    const timedOut = expect(api.fetchLatestMessages(["10"], { timeoutMs: 25 })).rejects.toMatchObject({
+        reason: "timeout",
+    })
+    await dispatched.promise
+    await clock.waiting(25)
+    await clock.advance(25)
+    await timedOut
     expect(aborted).toBe(true)
     rest(async () => Response.json({ "10": null }))
     expect(await api.fetchLatestMessages(["10"])).toEqual({ messages: { "10": null }, omittedChannelIds: [] })
@@ -440,22 +450,28 @@ test.each(modes)("%s sets, clears and omits a group name without other group cha
 })
 
 test.each(modes)("%s uses one deadline across mutation preflight and write", async (mode) => {
+    const clock = sdkClock()
     const calls: string[] = []
+    const preflight = Promise.withResolvers<void>()
     rest(async (url, init) => {
         calls.push(`${init.method} ${new URL(url).pathname}`)
         if (init.method === "GET") {
-            // The preflight stays pending until the shared deadline aborts it. The deadline leaves client startup ample
-            // time to send it, so only the deadline, not a race with startup, can prevent the write
+            preflight.resolve()
+            // The preflight stays pending until the shared deadline aborts it, so only the deadline can prevent the write
             await new Promise((resolve) => init.signal!.addEventListener("abort", resolve, { once: true }))
             throw init.signal!.reason
         }
         return Response.json(group())
     })
     const api = await setup(mode)
-    await expect(api.editGroup("10", { name: "edited" }, { timeoutMs: 500 })).rejects.toMatchObject({
+    const timedOut = expect(api.editGroup("10", { name: "edited" }, { timeoutMs: 500 })).rejects.toMatchObject({
         operation: "directMessages.editGroup",
         reason: "timeout",
     })
+    await preflight.promise
+    await clock.waiting(500)
+    await clock.advance(500)
+    await timedOut
     expect(calls).toEqual(["GET /v1/channels/10"])
 })
 
@@ -807,13 +823,14 @@ test.each(modes)("%s reports the DM-opening rejection when send cannot reach mes
 })
 
 test.each(modes)("%s retries reads but never repeats uncertain conversation writes or sends", async (mode) => {
+    const clock = sdkClock()
     const api = await setup(mode)
     let calls = 0
     rest(async () => {
         if (++calls === 1) throw Error("private read failure")
         return Response.json(user())
     })
-    expect((await api.fetchUser()).id).toBe("30")
+    expect((await driveSdkTime(clock, api.fetchUser())).id).toBe("30")
     expect(calls).toBe(2)
 
     calls = 0

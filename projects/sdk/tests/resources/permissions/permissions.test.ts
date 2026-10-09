@@ -135,6 +135,57 @@ test.each(modes)("%s calculates a bigint with owner/admin bypass and Fluxer over
 })
 
 test.each(modes)(
+    "%s ignores overwrites for other members and roles the member lacks, in either order",
+    async (mode) => {
+        const api = await setup(mode)
+        const bit = (position: number) => 1n << BigInt(position)
+        const roles = [
+            role("20", bit(1) | bit(6) | bit(7)),
+            role("40", bit(2) | bit(8) | unknownPermission),
+            // A role the member does not hold, whose own permissions must not leak into the result
+            role("41", bit(9)),
+        ]
+        const related = [
+            { id: "20", type: "role" as const, allow: bit(10), deny: bit(1) },
+            { id: "40", type: "role" as const, allow: bit(11), deny: bit(2) },
+            { id: "30", type: "member" as const, allow: bit(12), deny: bit(6) },
+        ]
+        // Each unrelated overwrite allows a bit that the right answer lacks and denies a bit that the right answer keeps
+        const unrelated = [
+            { id: "41", type: "role" as const, allow: bit(13), deny: bit(8) },
+            { id: "31", type: "member" as const, allow: bit(14), deny: bit(10) },
+            { id: "42", type: "role" as const, allow: bit(15), deny: bit(11) },
+            { id: "32", type: "member" as const, allow: bit(16), deny: bit(12) },
+        ]
+        const expected = bit(7) | bit(8) | unknownPermission | bit(10) | bit(11) | bit(12)
+        const calculate = (overwrites: typeof related) =>
+            api.calculate({ ...input(), roles, channel: channel(overwrites) })
+
+        expect(calculate(related)).toBe(expected)
+        expect(calculate([...unrelated, ...related])).toBe(expected)
+        expect(calculate([...related, ...unrelated])).toBe(expected)
+        expect(calculate([...unrelated.slice(0, 2), ...related, ...unrelated.slice(2)].reverse())).toBe(expected)
+        // Only unrelated overwrites leave the guild-level permissions untouched
+        expect(calculate(unrelated)).toBe(bit(1) | bit(2) | bit(6) | bit(7) | bit(8) | unknownPermission)
+    },
+)
+
+test.each(modes)("%s matches overwrites by type as well as ID", async (mode) => {
+    const api = await setup(mode)
+    const bit = (position: number) => 1n << BigInt(position)
+    const roles = [role("20", bit(1) | bit(7)), role("40", bit(2) | unknownPermission)]
+    // A member overwrite never acts as the everyone or role overwrite that shares its ID, and the reverse holds too
+    const sameIdOtherType = [
+        { id: "20", type: "member" as const, allow: bit(10), deny: bit(1) },
+        { id: "40", type: "member" as const, allow: bit(11), deny: bit(2) },
+        { id: "30", type: "role" as const, allow: bit(12), deny: bit(7) },
+    ]
+    const base = bit(1) | bit(2) | bit(7) | unknownPermission
+    for (const overwrites of [sameIdOtherType, [...sameIdOtherType].reverse()])
+        expect(api.calculate({ ...input(), roles, channel: channel(overwrites) })).toBe(base)
+})
+
+test.each(modes)(
     "%s throws GuildOperationError for incomplete, inconsistent, and malformed snapshots",
     async (mode) => {
         const api = await setup(mode)

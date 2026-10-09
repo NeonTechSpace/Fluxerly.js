@@ -12,7 +12,7 @@ import {
 } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi, fixtureToken, modes, nativeApi, type Mode } from "../../support/both-apis.js"
-import { sdkClock } from "../../support/client-clock.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { runWithTestClock } from "../../support/clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
@@ -426,6 +426,7 @@ test("default traversal preparation sanitizes unexpected input-access defects be
 })
 
 test.each(modes)("%s defaults to 100 logical pages and counts transient retries within the same page", async (mode) => {
+    const clock = sdkClock()
     const api = await fixture(mode)
     let id = 1000
     api.control.respond = async () => Response.json([wire(String(id--))])
@@ -436,7 +437,7 @@ test.each(modes)("%s defaults to 100 logical pages and counts transient retries 
     api.requests.length = 0
     api.control.respond = async () =>
         api.requests.length === 1 ? new Response(null, { status: 503 }) : Response.json([wire("10")])
-    expect(await gather(api.iterate("history", { maxItems: 1, maxPages: 1 }))).toHaveLength(1)
+    expect(await driveSdkTime(clock, gather(api.iterate("history", { maxItems: 1, maxPages: 1 })))).toHaveLength(1)
     expect(api.requests).toHaveLength(2)
 })
 

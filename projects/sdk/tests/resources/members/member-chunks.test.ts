@@ -10,7 +10,7 @@ import {
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
-import { monotonicClock, waitUntil } from "../../support/clock.js"
+import { monotonicClock } from "../../support/clock.js"
 import { startHostedLoopback } from "../../support/instance.js"
 import { wsTarget } from "../../support/ws-redirect.js"
 
@@ -236,28 +236,21 @@ for (const mode of modes) {
     })
 
     test(`${mode} releases paused incomplete intake on timeout and discards unread batches on closure`, async () => {
+        const clock = sdkClock()
         const f = await fixture(mode)
         const iterator = f.iterate({ all: true }, { timeoutMs: 100 })
         const first = iterator.next()
         const sent = await f.request(1)
         f.chunk(sent.nonce, [member("30")], 0, 2)
         await first
-        // Only the paused stream's own timer can release its slot, because nothing reads it. Retry admission until the
-        // slot is free rather than sleeping for a fixed time: a busy attempt fails at once and sends no request
-        let replacement!: ReturnType<typeof f.iterate>
-        let next!: Promise<IteratorResult<MemberChunk>>
-        await vi.waitFor(async () => {
-            const candidate = f.iterate()
-            const attempt = candidate.next()
-            let failure: unknown
-            attempt.catch((error: unknown) => {
-                failure = error ?? "failed"
-            })
-            await waitUntil(() => failure !== undefined || f.requestCount() === 2)
-            expect(failure).toBeUndefined()
-            replacement = candidate
-            next = attempt
-        })
+        // Only the paused stream's own timer can release its slot, because nothing reads it. Until that timer fires
+        // the slot stays held, so another stream fails busy at once and sends no request
+        await clock.advance(99)
+        await expect(f.iterate().next()).rejects.toMatchObject({ reason: "busy" })
+        expect(f.requestCount()).toBe(1)
+        await clock.advance(1)
+        const replacement = f.iterate()
+        const next = replacement.next()
         const fresh = await f.request(2)
         f.chunk(fresh.nonce, [member("31")], 0, 2)
         await next

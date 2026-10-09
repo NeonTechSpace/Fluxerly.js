@@ -7,7 +7,7 @@ import { EventBus } from "../../src/internal/events.js"
 import { eventDispatchTypes, type MappedEvent } from "../../src/internal/gateway/event-dispatches.js"
 import { Opcode } from "../../src/internal/protocol/gateway.js"
 import { describeBothApis, setup, type FixtureClientOptions } from "../support/both-apis.js"
-import { sdkClock } from "../support/client-clock.js"
+import { sdkClock, type SdkClock } from "../support/client-clock.js"
 import { startGatewayServer, type GatewayServer } from "../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { captureLogs } from "../support/log-capture.js"
@@ -35,9 +35,14 @@ function identifies(server: GatewayServer): Record<string, unknown>[] {
     return server.commandsWithOp(Opcode.identify).map((command) => command.d as Record<string, unknown>)
 }
 
-/** End the current session so the next attempt sends a new Identify */
-async function newSession(server: GatewayServer, count: number) {
+/**
+ * End the current session so the next attempt sends a new Identify, after the recovery wait of this many milliseconds.
+ * With the jitter at 0.5, the 100 ms recovery ceiling set in start() halves for the first wait and then doubles
+ */
+async function newSession(server: GatewayServer, count: number, clock: SdkClock, recoveryWaitMs: number) {
     server.send({ op: Opcode.invalidSession, d: false }, server.sockets.at(-1))
+    await clock.waiting(recoveryWaitMs)
+    await clock.advance(recoveryWaitMs)
     await vi.waitFor(() => expect(identifies(server)).toHaveLength(count))
 }
 
@@ -81,9 +86,10 @@ describeBothApis("Identify fields", (mode) => {
     })
 
     test("carries the latest presence.set intent in a later new session", async () => {
+        const clock = sdkClock()
         const { server, client } = await start({ gateway: { presence: { status: "idle" } } }, mode)
         await settle((client as Client).presence.set({ status: "dnd" }))
-        await newSession(server, 2)
+        await newSession(server, 2, clock, 50)
         expect(identifies(server)[1]).toMatchObject({ presence: { status: "dnd" } })
     })
 
@@ -98,6 +104,7 @@ describeBothApis("Identify fields", (mode) => {
     })
 
     test("automatic filtering keeps registered events, SDK needs and cache categories, re-evaluated per session", async () => {
+        const clock = sdkClock()
         const { server, client } = await start(
             { gateway: { ignoredEvents: "auto" }, cache: { channels: true } },
             mode,
@@ -113,10 +120,10 @@ describeBothApis("Identify fields", (mode) => {
             expect(first).not.toContain(never)
         // A registration made after the session started applies from the next new session
         subscribe(mode, client, "typingStart")
-        await newSession(server, 2)
+        await newSession(server, 2, clock, 50)
         expect(identifies(server)[1]!.ignored_events).not.toContain("TYPING_START")
         subscribe(mode, client, "raw")
-        await newSession(server, 3)
+        await newSession(server, 3, clock, 100)
         expect(identifies(server)[2]).not.toHaveProperty("ignored_events")
     })
 

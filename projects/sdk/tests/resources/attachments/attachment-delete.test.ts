@@ -1,6 +1,7 @@
 import { Effect, Fiber } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 import { defaultApi as createDefault, modes, nativeApi, type Mode } from "../../support/both-apis.js"
+import { fakeHostTime, hostTurnsUntil } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle, typedResult } from "../../support/settle.js"
 
@@ -14,7 +15,11 @@ const wire = (message = target) => ({
     author: { id: "30", username: "fixture" },
 })
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+})
 
 function mockRest(handler: (url: string, init: RequestInit) => Promise<Response> | Response) {
     stubFetchWithHostedDiscovery(async (url, init) => handler(url, init))
@@ -128,17 +133,31 @@ test.each(modes)("%s classifies rejected attachment deletion without treating 40
 test.each(modes)(
     "%s evicts only the target cache entry after success or an unknown network or timeout deletion without replay",
     async (mode) => {
+        // The deadline reads the Effect Clock, which follows the faked host time, so a slow machine cannot pass it
+        // before the delete is dispatched
+        fakeHostTime()
         let failure: "network" | "timeout" | undefined
+        let dispatched = false
+        let aborted = false
         const calls: string[] = []
         mockRest((url, init) => {
             calls.push(`${init.method} ${url}`)
             if (init.method === "GET") return Response.json(wire(url.endsWith("/11") ? other : target))
             if (failure === "network") return Promise.reject(new Error("private fixture transport failure"))
             // A dispatched delete that never answers, so only its deadline ends it
-            if (failure === "timeout")
+            if (failure === "timeout") {
+                dispatched = true
                 return new Promise((_resolve, reject) =>
-                    init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true }),
+                    init.signal!.addEventListener(
+                        "abort",
+                        () => {
+                            aborted = true
+                            reject(init.signal!.reason)
+                        },
+                        { once: true },
+                    ),
                 )
+            }
             return new Response(null, { status: 204 })
         })
         const api = await setup(mode)
@@ -153,12 +172,21 @@ test.each(modes)(
             await api.fetch()
             failure = reason
             const options = reason === "timeout" ? { timeoutMs: 100 } : undefined
-            await expect(api.remove(target, "40", options)).rejects.toMatchObject({
+            const removal = expect(api.remove(target, "40", options)).rejects.toMatchObject({
                 _tag: "MessageOperationError",
                 operation: "deleteAttachment",
                 reason,
                 outcome: "unknown",
             })
+            if (reason === "timeout") {
+                // The deadline ends the dispatched delete at exactly its limit, not before
+                await hostTurnsUntil(() => dispatched)
+                await vi.advanceTimersByTimeAsync(99)
+                expect(aborted).toBe(false)
+                await vi.advanceTimersByTimeAsync(1)
+                expect(aborted).toBe(true)
+            }
+            await removal
             failure = undefined
             expect(await api.get()).toBeUndefined()
             expect(await api.get(other)).toBe(retained)

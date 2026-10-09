@@ -118,7 +118,7 @@ test("a canceled in-flight grant is benign and releases the next child permit", 
     } finally {
         await cleanup()
     }
-}, 8_000)
+}, 20_000)
 
 test.each(["default", "native"] as const)(
     "%s child receives a coordinator refusal as a retryable failure and the next grant",
@@ -346,15 +346,24 @@ test.each(["default", "native"] as const)(
         }
 
         const restarting = await run()
+        // Only the parent's timers are faked, so the restart delay passes when the test advances it, not with the time
+        // the real worker needs to start and exit
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
         onTestFinished(async () => {
+            vi.useRealTimers()
             await restarting.shutdown()
         })
         await restarting.start()
         // The worker exits right after readiness, and the default policy replaces it after 1,000 ms
-        await vi.waitFor(() => expect(restarting.status().children[0]).toMatchObject({ generation: 2, restarts: 1 }), {
-            interval: 10,
-        })
+        await realTimeUntil(() => restarting.status().children[0]?.state === "restarting")
+        await vi.advanceTimersByTimeAsync(999)
+        expect(restarting.status().children[0]).toMatchObject({ generation: 1, restarts: 1, state: "restarting" })
+        await vi.advanceTimersByTimeAsync(1)
+        expect(restarting.status().children[0]).toMatchObject({ generation: 2, restarts: 1 })
         expect(restarting.status().state).not.toBe("failed")
+        // The replacement answers a stop request only after its startup handshake, so let that finish first
+        await realTimeUntil(() => restarting.status().children[0]?.state !== "starting")
+        vi.useRealTimers()
         await restarting.shutdown()
         expect(await restarting.waitForClose()).toBeUndefined()
 

@@ -103,8 +103,20 @@ test.each(modes)(
         await vi.waitFor(() => expect(handled).toHaveLength(70))
         await vi.waitFor(() => expect(counters(client).reportsDropped).toBe(5))
         expect(calls).toEqual(["fail-1"])
-        // The hook never resolves, so completed shutdown proves it was not awaited beyond bounded cleanup
-        await shutdown(mode, client)
+        // The hook never resolves, so completed shutdown proves it was not awaited beyond bounded cleanup. The native
+        // hook ignores interruption, so shutdown waits out its one-second cleanup grace on a host timer
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+        onTestFinished(() => void vi.useRealTimers())
+        let closed = false
+        const closing = shutdown(mode, client).then(() => {
+            closed = true
+        })
+        for (let step = 0; !closed; step++) {
+            if (step > 100) throw new Error("Shutdown did not finish within the cleanup grace")
+            await vi.advanceTimersByTimeAsync(50)
+            await turn()
+        }
+        await closing
         const failures = logs.withCode("events.handlerFailed").filter((record) => record.level === "error")
         const logged = (outcome: string) =>
             failures.filter((record) => record.fields?.reportOutcome === outcome).map((record) => record.error?.message)

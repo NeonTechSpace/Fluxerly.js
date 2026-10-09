@@ -3,6 +3,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { SdkDefect, describeError, type Client as DefaultClient } from "../../src/index.js"
 import type { Client as NativeClient } from "../../src/effect.js"
 import { fixtureToken, modes, setup } from "../support/both-apis.js"
+import { fakeHostTime } from "../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { settle } from "../support/settle.js"
 
@@ -12,7 +13,12 @@ const target = { id: "10", channelId: "20" }
 
 afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
 })
+
+/** The bound on reading a rejected response's body, which the SDK measures on host timers */
+const errorBodyReadBoundMs = 100
 
 /** A 403 JSON response whose body never finishes, recording its cancellation */
 function stalledRejection(cancel: () => void | Promise<void>, reading?: () => void) {
@@ -83,6 +89,7 @@ test.each(modes)("%s drops deceptively short oversized API error bodies", async 
 })
 
 test.each(modes)("%s bounds stalled API error reads and releases their body", async (mode) => {
+    fakeHostTime()
     let reading!: () => void
     const started = new Promise<void>((resolve) => {
         reading = resolve
@@ -97,13 +104,18 @@ test.each(modes)("%s bounds stalled API error reads and releases their body", as
     )
     const client = await setup(mode)
     const operation = settle(client.messages.fetch(target))
-    await started
-    await expect(operation).rejects.toMatchObject({
+    const failure = expect(operation).rejects.toMatchObject({
         _tag: "MessageOperationError",
         outcome: "rejected",
         status: 403,
         apiError: null,
     })
+    await started
+    // One millisecond short of the bound the read is still waiting for its body
+    await vi.advanceTimersByTimeAsync(errorBodyReadBoundMs - 1)
+    expect(cancelled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    await failure
     expect(cancelled).toBe(true)
 })
 
@@ -142,6 +154,7 @@ test.each(modes)("%s cancels stalled API error reads without retaining their bod
 test.each(modes)(
     "%s retains a rejected outcome with the API error body cleanup defect and masks its credentials",
     async (mode) => {
+        fakeHostTime()
         const cleanup = new Error(`API error cleanup marker authorization: Bot ${fixtureToken}`)
         const unhandled: unknown[] = []
         const onUnhandled = (reason: unknown) => unhandled.push(reason)
@@ -149,8 +162,13 @@ test.each(modes)(
         onTestFinished(() => {
             process.off("unhandledRejection", onUnhandled)
         })
-        stubFetchWithHostedDiscovery(vi.fn(async () => stalledRejection(() => Promise.reject(cleanup))))
+        const reading = Promise.withResolvers<void>()
+        stubFetchWithHostedDiscovery(
+            vi.fn(async () => stalledRejection(() => Promise.reject(cleanup), reading.resolve)),
+        )
         const client = await setup(mode)
+        // The stalled body read ends at its bound, which cancels the body and reports the failing cleanup
+        const bounded = reading.promise.then(() => vi.advanceTimersByTimeAsync(errorBodyReadBoundMs))
         const rejected = expect.objectContaining({ _tag: "MessageOperationError", outcome: "rejected", status: 403 })
         let defect: unknown
         if (mode === "default") {
@@ -186,6 +204,7 @@ test.each(modes)(
             expect(text).toContain("API error cleanup marker")
             expect(text).not.toContain(fixtureToken)
         }
+        await bounded
         // Both APIs keep the original cleanup failure as the cause of the SDK's cleanup defect
         expect((defect as Error).cause).toBe(cleanup)
         await new Promise<void>((resolve) => setImmediate(resolve))

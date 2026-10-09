@@ -56,6 +56,29 @@ export function sdkClock() {
 export type SdkClock = ReturnType<typeof sdkClock>
 
 /**
+ * Settle an operation by moving SDK time forward in small steps, for retry and backoff waits whose exact delays the
+ * test does not check. The limit bounds a hung test in SDK time, so a far deadline never fires before the operation
+ * settles. Use it only when the operation needs no real I/O, such as one served by a stubbed transport
+ */
+export async function driveSdkTime<T>(
+    clock: SdkClock,
+    operation: PromiseLike<T>,
+    { stepMs = 50, limitMs = 10_000 }: { stepMs?: number; limitMs?: number } = {},
+): Promise<T> {
+    let done = false
+    const tracked = Promise.resolve(operation).finally(() => {
+        done = true
+    })
+    // The caller receives the outcome below, so a failure while time advances is not an unhandled rejection
+    tracked.catch(() => undefined)
+    for (let elapsed = 0; !done; elapsed += stepMs) {
+        if (elapsed >= limitMs) throw new Error(`The operation did not settle within ${limitMs} ms of SDK time`)
+        await clock.advance(stepMs)
+    }
+    return tracked
+}
+
+/**
  * Fake host timers, performance and Date, and make the default Effect Clock's monotonic time follow the faked
  * performance.now. Advance with vi.advanceTimersByTimeAsync. The caller's afterEach restores real timers and mocks
  */

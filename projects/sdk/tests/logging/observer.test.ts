@@ -1,20 +1,22 @@
 import { Effect, Exit, Scope } from "effect"
-import { describe, expect, onTestFinished, test, vi } from "vitest"
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
 import { ConfigurationError, createClient, type Observation } from "../../src/index.js"
 import { createTestClient } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { modes, type Mode } from "../support/both-apis.js"
+import { sdkClock } from "../support/client-clock.js"
+
+afterEach(() => {
+    vi.restoreAllMocks()
+})
 
 /**
  * One test client per API style that records observations, with the calls these tests need as promises.
  * Handlers fail by throwing in the default API and by failing their Effect in the native API
  */
-// A short first recovery ceiling keeps the reconnect well inside the default wait, instead of racing a one-second backoff
-const connection = { recovery: { minDelayMs: 100 } }
-
 async function open(mode: Mode, observe: (observation: Observation) => void) {
     if (mode === "default") {
-        const test = createTestClient({ observe, connection })
+        const test = createTestClient({ observe })
         onTestFinished(() => test.shutdown().catch(() => undefined))
         return {
             test,
@@ -34,7 +36,7 @@ async function open(mode: Mode, observe: (observation: Observation) => void) {
     }
     const scope = Scope.makeUnsafe()
     onTestFinished(async () => void (await Effect.runPromiseExit(Scope.close(scope, Exit.void))))
-    const test = await Effect.runPromise(createNativeTestClient({ observe, connection }).pipe(Scope.provide(scope)))
+    const test = await Effect.runPromise(createNativeTestClient({ observe }).pipe(Scope.provide(scope)))
     return {
         test,
         ready: () => Effect.runPromise(test.ready()),
@@ -56,6 +58,7 @@ const typing = { channel_id: "20", user_id: "30", timestamp: 1 }
 
 describe.each(modes)("%s observer", (mode) => {
     test("REST attempts report their route template, status and attempt, and a rate-limit wait reports its delay", async () => {
+        const clock = sdkClock()
         const observations: Observation[] = []
         const driver = await open(mode, (observation) => void observations.push(observation))
         let calls = 0
@@ -67,7 +70,10 @@ describe.each(modes)("%s observer", (mode) => {
                   }
                 : { body: driver.test.fixtures.message({ content: "hello" }) },
         )
-        await driver.send(driver.test.fixtures.ids.channel)
+        const sending = driver.send(driver.test.fixtures.ids.channel)
+        await clock.waiting(20)
+        await clock.advance(20)
+        await sending
         const rest = observations.filter((observation) => observation.type === "rest")
         expect(rest).toEqual([
             expect.objectContaining({ method: "POST", route: "/channels/:id/messages", status: 429, attempt: 1 }),
@@ -109,10 +115,14 @@ describe.each(modes)("%s observer", (mode) => {
     })
 
     test("a lost connection reports the reconnection attempt and the resumed session", async () => {
+        const clock = sdkClock()
         const observations: Observation[] = []
         const driver = await open(mode, (observation) => void observations.push(observation))
         await driver.ready()
         await driver.disconnect()
+        // With the jitter at 0.5, the first recovery waits 500 ms
+        await clock.waiting(500)
+        await clock.advance(500)
         await vi.waitFor(() =>
             expect(observations).toContainEqual(expect.objectContaining({ type: "resume", shardId: 0 })),
         )

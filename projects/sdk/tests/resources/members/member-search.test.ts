@@ -3,10 +3,14 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { type GuildMemberJoinSourceType, GuildMemberJoinSourceTypes, createClient } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle } from "../../support/settle.js"
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 async function setup(mode: Mode, cacheMembers = false) {
     const scope = Scope.makeUnsafe()
@@ -303,6 +307,7 @@ test.each(modes)("%s rejects malformed pages without caching an invented member"
 })
 
 test.each(modes)("%s keeps unknown POST failures single-attempt but retries confirmed rate limits", async (mode) => {
+    const clock = sdkClock()
     const client = await setup(mode)
     const fetch = vi.fn(async () => new Response(null, { status: 503 }))
     stubFetchWithHostedDiscovery(fetch)
@@ -322,6 +327,6 @@ test.each(modes)("%s keeps unknown POST failures single-attempt but retries conf
             Response.json({ retry_after: 0.001 }, { status: 429, headers: { "retry-after": "0.001" } }),
         )
         .mockResolvedValueOnce(Response.json(page()))
-    expect((await settle(client.members.search("20"))).pageResultCount).toBe(1)
+    expect((await driveSdkTime(clock, settle(client.members.search("20")))).pageResultCount).toBe(1)
     expect(fetch).toHaveBeenCalledTimes(2)
 })

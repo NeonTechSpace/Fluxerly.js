@@ -13,6 +13,7 @@ import {
 } from "../../../src/index.js"
 import { createClient as createNative, createWebhookClient as createNativeWebhook } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { expectErr, settle } from "../../support/settle.js"
 import { expectThrown } from "../defects.js"
@@ -451,6 +452,7 @@ test.each(modes)("%s rejects mismatched identities and malformed lists without e
 })
 
 test.each(modes)("%s does not replay unknown sends, but retries confirmed rate limits", async (mode) => {
+    const clock = sdkClock()
     let attempts = 0,
         rate = false
     stubFetchWithHostedDiscovery(
@@ -469,7 +471,7 @@ test.each(modes)("%s does not replay unknown sends, but retries confirmed rate l
     expect(attempts).toBe(1)
     rate = true
     attempts = 0
-    await settle(webhook.send({ content: "x" }))
+    await driveSdkTime(clock, settle(webhook.send({ content: "x" })))
     expect(attempts).toBe(2)
 })
 
@@ -525,6 +527,7 @@ test.each(modes)(
 )
 
 test.each(modes)("%s snapshots binary uploads and replays identical multipart after 429", async (mode) => {
+    const clock = sdkClock()
     let calls = 0
     const bytes = new Uint8Array([1, 2, 3])
     const observed: Uint8Array[] = []
@@ -544,11 +547,15 @@ test.each(modes)("%s snapshots binary uploads and replays identical multipart af
         }),
     )
     const { webhook } = await setup(mode)
-    await settle(webhook.send({ attachments: [{ data: bytes, filename: "report.txt", description: "Build log" }] }))
+    await driveSdkTime(
+        clock,
+        settle(webhook.send({ attachments: [{ data: bytes, filename: "report.txt", description: "Build log" }] })),
+    )
     expect(observed).toEqual([new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 3])])
 })
 
 test.each(modes)("%s recreates copied webhook bytes when a 429 arrives before multipart consumption", async (mode) => {
+    const clock = sdkClock()
     let attempts = 0
     const observed: Uint8Array[] = []
     stubFetchWithHostedDiscovery(
@@ -567,7 +574,7 @@ test.each(modes)("%s recreates copied webhook bytes when a 429 arrives before mu
     const bytes = new Uint8Array([4, 5, 6])
     const pending = settle(webhook.send({ attachments: [{ data: bytes, filename: "early-429.txt" }] }))
     bytes.fill(9)
-    await pending
+    await driveSdkTime(clock, pending)
     expect(attempts).toBe(2)
     expect(observed).toEqual([new Uint8Array([4, 5, 6])])
 })
@@ -651,6 +658,7 @@ test("invalid client configuration contains no rejected values", () => {
 })
 
 test.each(modes)("%s retries transient reads but never retries rejected or server-failed writes", async (mode) => {
+    const clock = sdkClock()
     let calls = 0,
         status = 503
     stubFetchWithHostedDiscovery(
@@ -661,7 +669,7 @@ test.each(modes)("%s retries transient reads but never retries rejected or serve
         }),
     )
     const { webhook } = await setup(mode)
-    await settle(webhook.fetchMessage("400"))
+    await driveSdkTime(clock, settle(webhook.fetchMessage("400")))
     expect(calls).toBe(3)
     for (const code of [400, 403, 404, 500, 503]) {
         calls = 0

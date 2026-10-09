@@ -13,6 +13,48 @@ import {
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { modes, type Mode } from "../support/both-apis.js"
 
+const timers = vi.hoisted(() => ({ fake: false }))
+// Test waits import their timers from node:timers so that faking the global timers leaves them real. While a test sets
+// timers.fake, new waits use the global timers instead, so fake time can move their deadlines without real waiting
+vi.mock("node:timers", async (original) => {
+    const real = await original<typeof import("node:timers")>()
+    const realHandles = new WeakSet<object>()
+    return {
+        ...real,
+        setTimeout: (handler: () => void, delay: number) => {
+            if (timers.fake) return globalThis.setTimeout(handler, delay)
+            const handle = real.setTimeout(handler, delay)
+            realHandles.add(handle)
+            return handle
+        },
+        clearTimeout: (handle: ReturnType<typeof setTimeout> | undefined) =>
+            handle !== undefined && realHandles.has(handle)
+                ? real.clearTimeout(handle)
+                : globalThis.clearTimeout(handle),
+    }
+})
+
+/** Run a bounded wait on fake time: Still pending one millisecond before its deadline, then TestTimeoutError at it */
+async function expiresAt(timeoutMs: number, start: () => Promise<unknown>) {
+    timers.fake = true
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+        let outcome: unknown = "pending"
+        const wait = start().then(
+            () => "resolved",
+            (error: unknown) => error,
+        )
+        void wait.then((value) => (outcome = value))
+        await vi.advanceTimersByTimeAsync(timeoutMs - 1)
+        expect(outcome).toBe("pending")
+        await vi.advanceTimersByTimeAsync(1)
+        expect(await wait).toBeInstanceOf(TestTimeoutError)
+    } finally {
+        vi.useRealTimers()
+        timers.fake = false
+    }
+}
+
 /**
  * One test client driven through either API style with promise-returning calls. Native waits run as Effects, native
  * handlers are Effects, and a native wait's typed failure or defect rejects with the underlying error
@@ -249,13 +291,13 @@ describe.each(modes)("%s test client waits", (mode) => {
         expect((await pending).body).toMatchObject({ content: "second" })
         expect(replies.requests()).toHaveLength(2)
         // Both requests were returned, so a further wait has nothing to return
-        await expect(replies.next({ timeoutMs: 20 })).rejects.toBeInstanceOf(TestTimeoutError)
+        await expiresAt(20, () => replies.next({ timeoutMs: 20 }))
     })
 
     test("TestRoute.next fails with TestTimeoutError without a request and ClientClosedError at shutdown", async () => {
         const driver = await open(mode)
         const replies = driver.replies()
-        await expect(replies.next({ timeoutMs: 20 })).rejects.toBeInstanceOf(TestTimeoutError)
+        await expiresAt(20, () => replies.next({ timeoutMs: 20 }))
         const waiting = replies.next({ timeoutMs: 60_000 })
         await driver.shutdown()
         await expect(waiting).rejects.toBeInstanceOf(ClientClosedError)

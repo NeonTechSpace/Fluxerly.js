@@ -5,12 +5,16 @@ import { createClient as createNative } from "../../src/effect.js"
 import { createTestClient } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { modes } from "../support/both-apis.js"
+import { sdkClock } from "../support/client-clock.js"
 import { startGatewayServer } from "../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { captureLogs } from "../support/log-capture.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 const message = (id: string, content = `Message ${id}`) => ({
     id,
@@ -225,6 +229,7 @@ test.each(modes)(
 test.each(modes)(
     "%s keeps identical malformed dispatches on different shards in separate records instead of collapsing them",
     async (mode) => {
+        const clock = sdkClock()
         const options = { sharding: { totalShards: 2 } }
         // The user ID must be a string, so both shards skip the same dispatch with the same message
         const malformed = { channel_id: "20", user_id: 30, timestamp: 1_767_225_600 }
@@ -233,7 +238,11 @@ test.each(modes)(
             const test = createTestClient(options)
             onTestFinished(() => test.shutdown())
             test.client.on("typingStart", () => undefined)
-            await test.ready()
+            const ready = test.ready()
+            // The SDK starts the second shard's session one second after the first
+            await clock.waiting(1_000)
+            await clock.advance(1_000)
+            await ready
             // The test gateway delivers each dispatch synchronously, so its record exists when emit returns
             for (const shardId of [0, 1]) test.emit("TYPING_START", malformed, { shardId })
             records = () => test.logs()
@@ -242,7 +251,10 @@ test.each(modes)(
             onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
             const test = await Effect.runPromise(createNativeTestClient(options).pipe(Scope.provide(scope)))
             await Effect.runPromise(test.client.on("typingStart", () => Effect.void).pipe(Scope.provide(scope)))
-            await Effect.runPromise(test.ready())
+            const ready = Effect.runPromise(test.ready())
+            await clock.waiting(1_000)
+            await clock.advance(1_000)
+            await ready
             for (const shardId of [0, 1]) await Effect.runPromise(test.emit("TYPING_START", malformed, { shardId }))
             records = () => test.logs()
         }

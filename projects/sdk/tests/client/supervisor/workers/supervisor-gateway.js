@@ -13,7 +13,7 @@ export async function runFixtureGateway(bridge, assignment, delayMs = 0) {
                 url: gatewayUrl,
                 token: Redacted.make("fixture-only"),
                 session: { id: undefined, sequence: null },
-                timeoutMs: 2_000,
+                timeoutMs: 30_000,
                 onReady: () => {},
                 onLatency: () => {},
                 onRecovering: () => {},

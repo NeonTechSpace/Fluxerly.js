@@ -52,9 +52,14 @@ async function start(
 
 describeBothApis("automatic sharding", (mode) => {
     test("sizes the plan from the guild count at 2,000 guilds per shard and owns every shard", async () => {
+        const clock = sdkClock()
         const { rest, gateway, client, logs } = await start(mode, guildPages(2_001))
         expect(client.shards).toEqual([])
-        await settle((client as Client).connect())
+        const connecting = settle((client as Client).connect())
+        // The SDK starts the second shard's session one second after the first
+        await clock.waiting(1_000)
+        await clock.advance(1_000)
+        await connecting
         expect(client.shards.map((shard) => [shard.shardId, shard.state])).toEqual([
             [0, "Connected"],
             [1, "Connected"],

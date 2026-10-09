@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http"
 import { setImmediate as turn } from "node:timers/promises"
 import { runInNewContext } from "node:vm"
-import { Clock, Effect, Exit, References, Scope } from "effect"
+import { Clock, Duration, Effect, Exit, References, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     ConfigurationError,
@@ -453,11 +453,25 @@ test("native local reads respect exact monotonic-age boundaries without renewing
     onTestFinished(() => {
         process.off("warning", observe)
     })
+    // Fake host timers emulate Node's overflow of a delay past the 32-bit limit to 1 ms, and record every delay requested
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    onTestFinished(() => void vi.useRealTimers())
+    const scheduleTimer = globalThis.setTimeout
+    const timerDelays: number[] = []
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, delay?: number) => {
+        timerDelays.push(delay ?? 0)
+        return scheduleTimer(handler, delay)
+    }) as typeof setTimeout)
     const baseClock = Effect.runSync(Clock.Clock)
     let monotonicNanos = 1_000_000_000n
     // Keep the prototype so span timing can still read wall-clock time
     const clock = Object.assign(Object.create(baseClock) as Clock.Clock, {
-        sleep: baseClock.sleep.bind(baseClock),
+        // Pass each delay straight to the host timer, so only the SDK's own cap keeps it within the 32-bit limit
+        sleep: (duration: Duration.Duration) =>
+            Effect.callback<void>((resume) => {
+                const handle = setTimeout(() => resume(Effect.void), Duration.toMillis(duration))
+                return Effect.sync(() => clearTimeout(handle))
+            }),
         monotonicTimeNanosUnsafe: () => monotonicNanos,
     })
     await Effect.runPromise(
@@ -479,14 +493,15 @@ test("native local reads respect exact monotonic-age boundaries without renewing
                     cache: { messages: { maxAgeMs: 2_147_483_648 } },
                 })
                 const retained = yield* long.messages.fetch({ id: "11", channelId: "20" })
-                // An uncapped host timer overflows to about 1 ms, so a later 5 ms timer runs after it would have fired
-                yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+                // An uncapped host timer overflows to about 1 ms, so it would have fired within the next 5 ms
+                yield* Effect.promise(() => vi.advanceTimersByTimeAsync(5))
                 expect(yield* long.messages.get({ id: "11", channelId: "20" })).toEqual(retained)
                 yield* long.shutdown()
             }),
         ).pipe(Effect.provideService(Clock.Clock, clock)),
     )
     expect(warnings).not.toContain("TimeoutOverflowWarning")
+    expect(Math.max(...timerDelays)).toBeLessThanOrEqual(2_147_483_647)
 })
 
 test("default policy failures reach onError in order with their errors and do not change successful remote results", async () => {
@@ -754,6 +769,7 @@ test("native onError shutdown does not wait on its own report fiber", async () =
 })
 
 test("a late REST response crossing a resumed connection gap cannot repopulate the cleared cache", async () => {
+    const clock = sdkClock()
     const server = await fixture()
     const client = defaultApi({ token, cache: { messages: true } })
     const original = value(await client.messages.fetch(target))
@@ -770,6 +786,9 @@ test("a late REST response crossing a resumed connection gap cannot repopulate t
     const late = client.messages.fetch(target)
     await vi.waitFor(() => expect(server.requests).toHaveLength(2))
     server.closeCurrentSocket()
+    // With the jitter at 0.5, the first recovery waits 500 ms
+    await clock.waiting(500)
+    await clock.advance(500)
     await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true))
     reply()
     expect(value(await late).content).toBe("late")
@@ -782,6 +801,7 @@ test("a late REST response crossing a resumed connection gap cannot repopulate t
 })
 
 test("a fetch queued before a gateway gap cannot populate after its delayed admission", async () => {
+    const clock = sdkClock()
     const server = await fixture()
     const client = defaultApi({ token, cache: { messages: true } })
     value(await client.connect())
@@ -806,6 +826,9 @@ test("a fetch queued before a gateway gap cannot populate after its delayed admi
     await waitUntil(() => client.diagnostics().rest.queuedRequests === 1 || server.requests.length > 4)
     expect(server.requests).toHaveLength(4)
     server.closeCurrentSocket()
+    // With the jitter at 0.5, the first recovery waits 500 ms
+    await clock.waiting(500)
+    await clock.advance(500)
     await vi.waitFor(() => expect(server.commands.some((command) => command.op === 6)).toBe(true))
     // The fetch is still waiting for admission after the gap, because every slot is still held
     expect(server.requests).toHaveLength(4)
