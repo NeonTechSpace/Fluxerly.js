@@ -86,6 +86,6 @@ The `@neontechspace/fluxerly/testing` entry point creates a real client connecte
 <details>
 <summary>Does the bot need sharding?</summary>
 
-Most bots do not. One [shard](/docs/{{version}}/glossary/#shard) carries up to 2,500 communities, Fluxer's limit. For a larger bot in one process, `sharding: "auto"` counts its communities when it first connects and opens one shard per 2,000 communities, which leaves room to grow. Spreading shards across processes needs an explicit shard total. See [sharding](/docs/{{version}}/sharding/)
+Most bots do not. One [shard](/docs/{{version}}/glossary/#shard) carries up to 2,500 communities, Fluxer's limit. For a larger bot in one process, `sharding: "auto"` counts its communities when it first connects and opens one shard per 2,000 communities, which leaves room to grow. A bot without `sharding` settings that passes the limit moves to that automatic count when Fluxer refuses its one shard, so it keeps running. Spreading shards across processes needs an explicit shard total. See [sharding](/docs/{{version}}/sharding/)
 
 </details>

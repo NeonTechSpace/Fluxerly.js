@@ -324,8 +324,8 @@ export const logCodes = {
     "lifecycle.resharded": {
         levels: ["warn"],
         meaning:
-            "Fluxer closed a shard of an automatically sized client with 4011 (sharding required), so the SDK counted the communities again and moved every shard to a larger plan. Every shard started a new session, so events sent during the move were missed",
-        action: "No action is needed. If it repeats, the bot may be growing fast, and each move is logged with the new total",
+            "Fluxer closed a shard with 4011 (sharding required) on an automatically sized client or a client without sharding settings, so the SDK counted the communities again and moved every shard to a larger automatic plan. Every shard started a new session, so events sent during the move were missed",
+        action: 'No action is needed. If it repeats, the bot may be growing fast, and each move is logged with the new total. A client without sharding settings moves again at each start while the bot has outgrown one shard, which sharding "auto" avoids',
     },
     "lifecycle.cacheRefill": {
         levels: ["info", "warn"],

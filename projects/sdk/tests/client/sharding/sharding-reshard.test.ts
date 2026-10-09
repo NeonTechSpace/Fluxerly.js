@@ -1,9 +1,21 @@
 import { Effect, Exit, Scope } from "effect"
-import { expect, onTestFinished, test, vi } from "vitest"
-import { ConnectionError, ShardConnectionError, type ShardingOptions } from "../../../src/index.js"
+import { afterEach, expect, onTestFinished, test, vi } from "vitest"
+import { ConnectionError, ShardConnectionError, type Client, type ShardingOptions } from "../../../src/index.js"
 import { createTestClient as createDefaultTestClient, type TestClientOptions } from "../../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../../src/effect-testing.js"
-import { describeBothApis, type Mode } from "../../support/both-apis.js"
+import { Opcode } from "../../../src/internal/protocol/gateway.js"
+import { describeBothApis, setup, type Mode } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
+import { startGatewayServer } from "../../support/gateway-server.js"
+import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
+import { captureLogs } from "../../support/log-capture.js"
+import { settle } from "../../support/settle.js"
+
+vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
+afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+})
 
 /** A community ID that Fluxer routes to shard 0 under one shard and to shard 1 under two */
 const movingGuildId = String(1n << 22n)
@@ -157,6 +169,52 @@ describeBothApis("automatic resharding", (mode) => {
         const automatic = await open(mode, { sharding: "auto" })
         // The plan is unknown until the first connect counts the communities
         expect(automatic.client.shardIdForGuild("1")).toBeUndefined()
+    })
+
+    test("moves a client without sharding settings to automatic sharding when Fluxer refuses its session with 4011", async () => {
+        const clock = sdkClock()
+        // Fluxer checks a bot's community count when a session starts, so this gateway refuses the unsharded Identify
+        const server = await startGatewayServer({
+            autoReady: (command) => command.d.shard !== undefined,
+            ready: (identify) => ({ shard: identify.d.shard }),
+            onCommand: (command, socket) => {
+                if (command.op === Opcode.identify && command.d.shard === undefined) socket.close(4011)
+            },
+        })
+        const requests: string[] = []
+        // An empty community list fits the old total, so the move adds one shard
+        stubFetchWithHostedDiscovery(async (url) => {
+            requests.push(new URL(url).pathname)
+            return Response.json([])
+        })
+        const logs = captureLogs()
+        const client = await setup(mode, { logging: logs.logging })
+        const connecting = settle((client as Client).connect())
+        // The SDK starts the new plan's shard sessions one second apart. A failed connect ends the wait at once
+        await Promise.race([clock.waiting(1_000), connecting])
+        await clock.advance(1_000)
+        await connecting
+
+        expect(client.shards.map((shard) => [shard.shardId, shard.state])).toEqual([
+            [0, "Connected"],
+            [1, "Connected"],
+        ])
+        // The new plan's handshakes may finish in either order
+        const [refused, ...sharded] = server.commandsWithOp(Opcode.identify).map((command) => command.d.shard)
+        expect(refused).toBeUndefined()
+        expect(sharded.toSorted()).toEqual([
+            [0, 2],
+            [1, 2],
+        ])
+        expect(requests).toEqual(["/v1/users/@me/guilds"])
+        expect(logs.withCode("lifecycle.resharded")).toEqual([
+            expect.objectContaining({
+                level: "warn",
+                shardId: 0,
+                fields: { guilds: 0, previousTotalShards: 1, totalShards: 2 },
+            }),
+        ])
+        expect(logs.withCode("lifecycle.connectionEnded")).toEqual([])
     })
 
     test("keeps failing clearly with an explicit total", async () => {

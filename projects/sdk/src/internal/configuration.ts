@@ -175,6 +175,8 @@ export interface Configuration<M extends MessageCore = Message> {
     readonly userCache: Pick<ResourceSettings, "users" | "directMessages">
     /** Fixed plan, or auto until the first connect computes it */
     readonly sharding: ShardPlan | "auto"
+    /** Whether a 4011 (sharding required) closure moves to a larger automatic plan: For "auto" and omitted settings */
+    readonly reshard: boolean
     /** Public Identify coordinator, when configured */
     readonly identifyCoordinator: IdentifyCoordinator | undefined
     /** Public session persistence, when configured */
@@ -456,6 +458,7 @@ export function validateConfiguration<F extends MessageFields | undefined = unde
             startupTimeoutMs: timeout ?? 30_000,
             maxStartupAttempts: attempts ?? 3,
             sharding: sharding.plan,
+            reshard: sharding.reshard,
             identifyCoordinator: sharding.identify,
             sessions: sharding.sessions,
             refillCaches: sharding.refillCaches,

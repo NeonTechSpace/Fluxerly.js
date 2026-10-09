@@ -474,11 +474,16 @@ async function fixture(
     }
 }
 
-function defaultApi(connection?: ClientOptions["connection"], logging?: ClientOptions["logging"]) {
+function defaultApi(
+    connection?: ClientOptions["connection"],
+    logging?: ClientOptions["logging"],
+    sharding?: ClientOptions["sharding"],
+) {
     const client = createClient({
         token: "fixture-only-not-a-credential",
         ...(connection ? { connection } : {}),
         ...(logging ? { logging } : {}),
+        ...(sharding ? { sharding } : {}),
     })
     onTestFinished(async () => {
         await client.shutdown()
@@ -587,7 +592,8 @@ test("one cancelled lifetime waiter leaves other and late observers intact", asy
 
 test.each([4004, 4002, 4010, 4011, 4012] as const)("permanent rejection %s is typed and not retried", async (code) => {
     const server = await fixture({ reject: code })
-    const client = defaultApi()
+    // Without sharding settings, 4011 moves the client to automatic sharding instead of ending it
+    const client = defaultApi(undefined, undefined, { totalShards: 1 })
     const result = await client.connect()
     expect(result._unsafeUnwrapErr()).toMatchObject(
         code === 4004

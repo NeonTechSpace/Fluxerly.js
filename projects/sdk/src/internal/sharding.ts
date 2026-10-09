@@ -2,8 +2,9 @@
  * Shard plan: Validation of the fixed local shard assignment, automatic plan sizing, scaling hooks and guild-to-shard
  * routing.
  * Invariant: A plan is immutable once known and decides guild ownership, never cache contents or discovery hints. An
- * automatic plan is computed at the first connect from the bot's guild count. The client replaces it with a new, larger
- * plan only when Fluxer closes a shard with 4011 (sharding required), and an explicit plan never changes.
+ * automatic plan is computed at the first connect from the bot's guild count, and omitted settings start with one shard.
+ * The client replaces either with a new, larger automatic plan only when Fluxer closes a shard with 4011 (sharding
+ * required), and an explicit plan never changes.
  * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
 import { ConfigurationError } from "#sdk/errors"
@@ -35,6 +36,8 @@ export interface ShardPlan {
 /** Validated sharding settings: A known plan or "auto", plus the optional scaling hooks */
 export interface ShardingConfiguration {
     readonly plan: ShardPlan | "auto"
+    /** Whether a 4011 (sharding required) closure moves to a larger automatic plan: For "auto" and omitted settings */
+    readonly reshard: boolean
     readonly identify: IdentifyCoordinator | undefined
     readonly sessions: SessionStore | undefined
     /** Whether shards that resume a stored session refill the guild, role and channel caches through REST */
@@ -44,6 +47,7 @@ export interface ShardingConfiguration {
 const defaultShardPlan = immutablePlan(1, [0])
 const defaultSharding: ShardingConfiguration = Object.freeze({
     plan: defaultShardPlan,
+    reshard: true,
     identify: undefined,
     sessions: undefined,
     refillCaches: true,
@@ -75,7 +79,13 @@ function hook<K extends string>(
 export function parseSharding(input: unknown): ShardingConfiguration | ConfigurationError {
     if (input === undefined) return defaultSharding
     if (input === "auto")
-        return Object.freeze({ plan: "auto", identify: undefined, sessions: undefined, refillCaches: true })
+        return Object.freeze({
+            plan: "auto",
+            reshard: true,
+            identify: undefined,
+            sessions: undefined,
+            refillCaches: true,
+        })
     if (!record(input)) return new ConfigurationError("sharding", 'Sharding settings must be an object or "auto"')
     const shardingKeys = ["totalShards", "shardIds", "identify", "sessions", "refillCaches"]
     const unsupported = Reflect.ownKeys(input).find((key) => typeof key !== "string" || !shardingKeys.includes(key))
@@ -109,7 +119,7 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
                     hint: "Set sharding.totalShards to a number to run only some shards",
                 },
             )
-        return Object.freeze({ plan: "auto", ...hooks })
+        return Object.freeze({ plan: "auto", reshard: true, ...hooks })
     }
     if (
         typeof totalShards !== "number" ||
@@ -130,6 +140,7 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
                 totalShards,
                 Array.from({ length: totalShards }, (_, shardId) => shardId),
             ),
+            reshard: false,
             ...hooks,
         })
     }
@@ -154,7 +165,7 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
         seen.add(shardId)
         shardIds.push(shardId)
     }
-    return Object.freeze({ plan: immutablePlan(totalShards, shardIds), ...hooks })
+    return Object.freeze({ plan: immutablePlan(totalShards, shardIds), reshard: false, ...hooks })
 }
 
 /** The plan automatic sharding picks for a guild count: Every shard, at most guildsPerShard guilds each on average */

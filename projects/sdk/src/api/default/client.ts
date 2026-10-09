@@ -503,8 +503,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
  * **Connection and sharding**
  *
  * Gateway startup defaults to a 30,000 ms overall budget and three total attempts per assigned shard.
- * An explicit sharding plan fixes this client's assigned IDs for its lifetime, while automatic sharding may move to a
- * larger plan when Fluxer asks for more shards.
+ * An explicit sharding plan fixes this client's assigned IDs for its lifetime, while automatic sharding and a client
+ * without sharding settings may move to a larger plan when Fluxer asks for more shards.
  * Shard zero receives direct-message gateway traffic.
  * Request and cache limits still apply across the whole client, not separately to each shard
  *

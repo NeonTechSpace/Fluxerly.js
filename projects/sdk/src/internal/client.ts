@@ -247,7 +247,7 @@ function automaticPlanFailure(
     return new ConnectionError("discovery", error.reason === "response" ? "protocol" : "network", error.status, {
         cause: error,
         details: { detail: "the community count for automatic sharding could not be read" },
-        hint: 'Check that the bot token can list the bot\'s communities, or set sharding.totalShards to a number instead of "auto"',
+        hint: "Check that the bot token can list the bot's communities, or set sharding.totalShards to a number",
     })
 }
 
@@ -451,9 +451,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             sessions: configuration.sessions,
             saveSessionOnClose: (shardId) =>
                 configuration.sessions !== undefined && this.#saveOnClose?.has(shardId) === true,
-            ...(configuration.sharding === "auto"
-                ? { reshard: (shardId: number) => this.#acceptReshard(shardId) }
-                : {}),
+            ...(configuration.reshard ? { reshard: (shardId: number) => this.#acceptReshard(shardId) } : {}),
             ...(configuration.sessions && configuration.refillCaches
                 ? { restored: (shardId: number) => void this.#restoredShards.add(shardId) }
                 : {}),
@@ -1791,10 +1789,10 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     /**
-     * Move every local shard to a larger automatic plan after Fluxer closed shardId with 4011. The old sessions are
-     * already closed. Their guild-scoped observations are released under the old routing, the guilds are counted again
-     * and the new plan's shards start new sessions. Guild-scoped state observers see the waiting state, because the
-     * shard that served their guild is gone
+     * Move every local shard to a larger automatic plan after Fluxer closed shardId with 4011, from an automatic plan or
+     * the one-shard plan of omitted settings. The old sessions are already closed. Their guild-scoped observations are
+     * released under the old routing, the guilds are counted again and the new plan's shards start new sessions.
+     * Guild-scoped state observers see the waiting state, because the shard that served their guild is gone
      */
     #reshard(
         configuration: Configuration<M>,
@@ -1820,11 +1818,13 @@ export class ClientOwner<M extends MessageCore = Message> {
             owner.#reshardShard = undefined
             owner.#adoptPlan(plan, "Connecting")
             owner.presence.reroute()
+            // Omitted settings start with this fixed one-shard plan and switch to automatic sharding at the first move
+            const switched = previous === configuration.sharding
             owner.logging.log({
                 level: "warn",
                 category: "lifecycle",
                 code: "lifecycle.resharded",
-                message: `Fluxer closed shard ${shardId} with close code 4011 (sharding required), so automatic sharding moved from ${previous.totalShards} to ${plan.totalShards} shards for ${guilds} communit${guilds === 1 ? "y" : "ies"}. Every shard starts a new session, so events sent during the move are missed`,
+                message: `Fluxer closed shard ${shardId} with close code 4011 (sharding required), so ${switched ? "the client without sharding settings switched to automatic sharding and moved" : "automatic sharding moved"} from ${previous.totalShards} to ${plan.totalShards} shards for ${guilds} communit${guilds === 1 ? "y" : "ies"}. Every shard starts a new session, so events sent during the move are missed${switched ? '. Set sharding to "auto" to start with enough shards next time' : ""}`,
                 shardId,
                 fields: { guilds, previousTotalShards: previous.totalShards, totalShards: plan.totalShards },
             })

@@ -507,7 +507,10 @@ export interface ThreadMembersUpdate {
  * @category Events and collectors
  */
 export interface EventContext {
-    /** Local shard whose gateway connection received the event. A client without a sharding plan uses shard 0 */
+    /**
+     * Local shard whose gateway connection received the event. A client without a sharding plan uses shard 0 until
+     * Fluxer requires more shards and it moves to automatic sharding
+     */
     readonly shardId: number
     /** UTF-8 byte length of the whole received gateway frame that carried the event, the same size counted against maxPendingBytes.
      * Events decoded from one frame, such as guildCreate and its voiceStateSnapshot, report the same value

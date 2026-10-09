@@ -254,7 +254,8 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
     }
     /**
      * Divide community gateway traffic into numbered connections, called shards, and choose which this client owns.
-     * Omit this setting for one gateway connection, or omit shardIds to assign every shard in totalShards to this client.
+     * Omit this setting for one gateway connection, which moves to automatic sharding when Fluxer requires more shards, as
+     * described below. Omit shardIds to assign every shard in totalShards to this client.
      * Explicit IDs are copied in the supplied order and cannot change during this client's lifetime.
      * Use non-overlapping ID lists when another supervisor distributes shards across processes.
      * Shard zero receives direct-message traffic, so a client handling DMs must own ID zero.
@@ -275,10 +276,15 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * moves every shard to a larger plan in the same process: The plan for the new count, or one shard more when the count
      * still fits the old total. Every shard then starts a new session under the new total, so events sent during the
      * switch are missed and community-scoped caches refill from the new sessions. The SDK logs lifecycle.resharded at Warn
-     * and keeps running. A failed count during a move ends the client with the same errors as a failed count at startup.
+     * with the old and new totals and keeps running. A failed count during a move ends the client with the same errors as a
+     * failed count at startup.
      * After 3 such moves within an hour, or at 16,384 shards, a further 4011 ends the client with a
      * ConnectionError as an explicit total does. Automatic sizing suits one process that owns every shard. Processes
      * that split shards need an explicit total
+     *
+     * A client without this setting makes the same move from its one shard when Fluxer closes it with 4011, so a bot that
+     * outgrows one connection keeps running instead of failing. Above that limit, each start first opens a session that
+     * Fluxer rejects, which the value "auto" avoids. An explicit total, including totalShards 1, never moves
      */
     readonly sharding?: ShardingOptions | "auto"
 }
@@ -535,8 +541,8 @@ export interface ClientState {
     readonly gatewayLatencyMs: number | null
     /**
      * Frozen connection state and heartbeat measurements for this client's shards, in configured local ID order.
-     * An unsharded client contains only shard ID zero, and an automatically sized client contains none until its
-     * first connect has chosen the plan.
+     * An unsharded client contains only shard ID zero until it moves to automatic sharding, and an automatically sized
+     * client contains none until its first connect has chosen the plan. Both contain the new plan's shards after a move.
      * Inspect this to identify a recovering shard even while other shards remain ready.
      * It excludes shards owned by other processes and does not establish whole-bot state or cross-process ordering
      */
@@ -545,7 +551,8 @@ export interface ClientState {
      * Return the ID of this client's shard that receives a community's gateway events, or undefined when another
      * process owns that shard. Fluxer calls a community a guild, so the argument is a guild ID.
      * An automatically sized client returns undefined until its first connect has chosen the plan, and the answer can
-     * change when automatic sharding moves to a larger plan. snowflakes.shardFor computes the same routing for any plan.
+     * change when automatic sharding moves to a larger plan, including the first move of a client without sharding
+     * settings. snowflakes.shardFor computes the same routing for any plan.
      * Throws ConfigurationError when the ID is not a decimal string
      */
     shardIdForGuild(guildId: string): number | undefined

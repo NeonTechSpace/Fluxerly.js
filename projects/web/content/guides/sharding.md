@@ -27,6 +27,8 @@ await runBot({
 
 Handlers and commands work the same on every shard. The `client.shards` list shows the shards this client owns, and a handler registered with `client.on` receives an `EventContext` third argument whose `shardId` names the shard that delivered the event. When the bot outgrows its plan while it runs, Fluxer closes a shard with close code 4011 and the SDK moves every shard to a larger plan in the same process, so the bot keeps running
 
+A bot without `sharding` settings makes the same move from its one shard when Fluxer refuses it with 4011, so it keeps running too. Until it sets `sharding: "auto"`, each start first opens a session that Fluxer refuses before the move. An explicit `totalShards`, including 1, never moves
+
 <details>
 <summary>Details of automatic sizing</summary>
 

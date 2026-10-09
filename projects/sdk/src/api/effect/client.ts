@@ -59,8 +59,8 @@ import { type DirectMessages } from "./direct-messages.js"
  * Choose the client's connection, logging, message fields, failure hook and optional caches.
  * The createClient function reads these options when its Effect executes, not when the Effect is built.
  * Required services for the onError hook are captured at that time.
- * The sharding option chooses which gateway shards this client owns, and automatic sharding may move them to a larger
- * plan while the client runs. Shard zero receives direct-message traffic.
+ * The sharding option chooses which gateway shards this client owns. Automatic sharding, and a client without sharding
+ * settings, may move to a larger plan while the client runs. Shard zero receives direct-message traffic.
  * HTTP and cache budgets apply to the whole client, not separately to each shard.
  * The messageFields option chooses which optional message fields are returned, including nested results, callbacks and cached messages.
  * Omission returns full Message objects. The selection cannot change after client creation.
@@ -573,7 +573,9 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
  * **Connection and sharding**
  *
  * Connection settings default to a 30,000 ms overall startup budget and three total attempts per assigned shard.
- * A sharding plan fixes this client's local IDs for its lifetime. Shard zero receives direct-message gateway traffic.
+ * An explicit sharding plan fixes this client's local IDs for its lifetime, while automatic sharding and a client
+ * without sharding settings may move to a larger plan when Fluxer asks for more shards.
+ * Shard zero receives direct-message gateway traffic.
  * REST and cache budgets apply across the whole client, not separately to each shard
  *
  * @example

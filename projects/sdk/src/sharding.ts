@@ -33,7 +33,8 @@ export interface ShardRecoveryDiagnostic {
  *
  * Creation validates the plan and copies the supplied IDs in order without changing caller input.
  * Invalid plans fail creation with ConfigurationError. An explicit plan cannot change during the client's lifetime.
- * An automatic plan moves to a larger one while the client runs when Fluxer closes a shard with 4011 (sharding required)
+ * An automatic plan moves to a larger one while the client runs when Fluxer closes a shard with 4011 (sharding required),
+ * and so does the single shard of a client created without sharding settings
  *
  * Shard zero receives direct-message gateway traffic. Include it when this client must receive direct messages.
  * The SDK does not coordinate other processes unless identify supplies a coordinator
@@ -254,8 +255,8 @@ export function fileSessionStore(directory: string | URL): SessionStore {
  * Frozen connection-state snapshot for one gateway shard owned by this client.
  * Use client.shards to inspect local connections rather than the health of other processes or the whole bot.
  * An explicit plan keeps its shards for the client's lifetime. A client without sharding options reports shard ID zero.
- * An automatically sized client reports no shards until its first connect has chosen the plan, and reports the new
- * plan's shards after it moves to a larger plan
+ * An automatically sized client reports no shards until its first connect has chosen the plan. Both report the new
+ * plan's shards after they move to a larger plan
  *
  * @category Sharding and supervision
  */
