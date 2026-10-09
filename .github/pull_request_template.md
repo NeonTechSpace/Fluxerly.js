@@ -1,7 +1,7 @@
 <!--
 Issues and PRs remain maintainer-only until the first Stable release
 This template prepares the contribution process without opening public access
-Contributor policy: /CONTRIBUTING.md
+Contributor policy: /docs/CONTRIBUTING.md
 
 Model-written prose that has not been edited by a human must include this note
 outside this comment, replacing the placeholders with actual values:

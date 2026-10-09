@@ -27,7 +27,7 @@
 > [!NOTE]
 > Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/) and review the changelog before upgrading
 >
-> Issues and pull requests are maintainer-only until the first Stable release. The [contribution guide](/CONTRIBUTING.md) and submission templates are prepared for that release, without opening public access now
+> Issues and pull requests are maintainer-only until the first Stable release. The [contribution guide](/docs/CONTRIBUTING.md) and submission templates are prepared for that release, without opening public access now
 
 ## Why Fluxerly was built
 
@@ -38,9 +38,6 @@ Over the years, software I used and libraries I built on kept changing under me.
 I wanted something for myself that I know I can rely on. With the knowledge to build it, it felt like the right moment to start realizing my dreams
 
 Since AI has made code cheap and I strive for quality, I chose to make it usable for everybody. So Fluxerly is a Fluxer-native SDK instead of a Discord-compatible layer. It follows modern developer standards and is made for developers of every size, whether you code with or without AI
-
-**Neonsy**<br>
-NeonTechSpace
 
 ## What Fluxerly includes
 

@@ -3,7 +3,7 @@
 This guide covers contributor setup, the code map and checks.
 The SDK is a prerelease with no stable version yet
 
-Contribution policy is in [Contributing](/CONTRIBUTING.md). Maintainer access
+Contribution policy is in [Contributing](/docs/CONTRIBUTING.md). Maintainer access
 preparation and permission commands are in
 [contribution administration](/docs/CONTRIBUTIONS.md)
 
@@ -72,7 +72,7 @@ Run shared pnpm commands from that directory
 | [.editorconfig](/.editorconfig) | Shared editor formatting defaults |
 | [.gitattributes](/.gitattributes) | Shared Git text and line-ending rules |
 | [.github/CODEOWNERS](/.github/CODEOWNERS) | Review ownership for the repository, workflows and release tooling |
-| [SECURITY.md](/SECURITY.md) | Supported versions and private vulnerability reporting |
+| [SECURITY.md](/docs/SECURITY.md) | Supported versions and private vulnerability reporting |
 | [LICENSE](/LICENSE) | Apache-2.0 license for the SDK, website code, and authored documentation |
 
 See [technology choices](/docs/TECHNOLOGY.md#shared-development-tooling) for the development Node pin, pnpm selection and update procedure, and [consumer support](/docs/TECHNOLOGY.md#consumer-support) for the separate consumer Node floor and its [support policy](/docs/TECHNOLOGY.md#support-policy)

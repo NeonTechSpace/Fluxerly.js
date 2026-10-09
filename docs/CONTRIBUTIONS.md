@@ -2,7 +2,7 @@
 
 This guide covers repository maintainers preparing contribution access, operating
 permission commands, and recovering failed checks. Contributor requirements live
-in [Contributing](/CONTRIBUTING.md)
+in [Contributing](/docs/CONTRIBUTING.md)
 
 ## Preparation status
 

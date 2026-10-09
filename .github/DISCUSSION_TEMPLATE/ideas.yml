@@ -8,7 +8,7 @@ body:
 
         Propose one idea per discussion and describe the problem before proposing a solution. Opening a discussion does not approve implementation or grant permission to submit a PR
 
-        Bug reports belong in Issues and usage questions belong in Q&A. Security vulnerabilities must be reported privately through the [security policy](/SECURITY.md)
+        Bug reports belong in Issues and usage questions belong in Q&A. Security vulnerabilities must be reported privately through the [security policy](/docs/SECURITY.md)
   - type: checkboxes
     id: before-posting
     attributes:

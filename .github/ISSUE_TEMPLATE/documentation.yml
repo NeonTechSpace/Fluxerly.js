@@ -10,7 +10,7 @@ body:
 
         Report problems with existing documentation here. Requests for new SDK capabilities belong in Ideas discussions once Discussions open
 
-        Security vulnerabilities must be reported privately through the [security policy](/SECURITY.md). Reporting a problem does not grant permission to submit a PR
+        Security vulnerabilities must be reported privately through the [security policy](/docs/SECURITY.md). Reporting a problem does not grant permission to submit a PR
   - type: checkboxes
     id: before-submitting
     attributes:

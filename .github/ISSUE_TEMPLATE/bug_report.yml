@@ -10,7 +10,7 @@ body:
 
         Report one concrete problem per issue. Feature ideas belong in Ideas discussions and usage questions belong in Q&A once Discussions open
 
-        Security vulnerabilities must be reported privately through the [security policy](/SECURITY.md). Reporting a bug does not grant permission to submit a PR
+        Security vulnerabilities must be reported privately through the [security policy](/docs/SECURITY.md). Reporting a bug does not grant permission to submit a PR
   - type: checkboxes
     id: before-submitting
     attributes:

@@ -26,7 +26,7 @@ Once public contributions open:
 - Ideas discussions are for feature requests and proposals
 - Q&A discussions are for usage questions
 - Security vulnerabilities must be reported privately through the process in
-  [the security policy](/SECURITY.md)
+  [the security policy](/docs/SECURITY.md)
 
 Search existing issues, discussions, and documentation before opening a report.
 Keep each report focused on one underlying problem
@@ -45,7 +45,7 @@ Documentation reports must concern documentation for an in-scope version.
 Use documentation matching the installed SDK version
 
 Security reports follow the separate supported-version policy in
-[the security policy](/SECURITY.md)
+[the security policy](/docs/SECURITY.md)
 
 ## Permission to submit a PR
 

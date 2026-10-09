@@ -277,7 +277,7 @@ async function checkPr(api, number, dryRun, log) {
     )
     if (decision.allowed) return
     const comments = await api.list(`${base}/issues/${number}/comments?per_page=100`)
-    const body = `${outcomeMarker}\nThis PR has no verified contribution permission. General vouch status or a maintainer grant to this author for a linked, open issue is required\n\nFor issue-specific permission, include a line such as \`Issue: #123\` or \`Issue: https://github.com/${repository}/issues/123\` in the PR body. Reopen the PR after correcting the issue reference and receiving permission\n\nSee [permission to submit a PR](https://github.com/${repository}/blob/main/CONTRIBUTING.md#permission-to-submit-a-pr). Permission does not approve feature scope or merging`
+    const body = `${outcomeMarker}\nThis PR has no verified contribution permission. General vouch status or a maintainer grant to this author for a linked, open issue is required\n\nFor issue-specific permission, include a line such as \`Issue: #123\` or \`Issue: https://github.com/${repository}/issues/123\` in the PR body. Reopen the PR after correcting the issue reference and receiving permission\n\nSee [permission to submit a PR](https://github.com/${repository}/blob/main/docs/CONTRIBUTING.md#permission-to-submit-a-pr). Permission does not approve feature scope or merging`
     if (!comments.some((comment) => comment.user?.id === policy.permissionWriterId && comment.body === body)) {
         await change(api, dryRun, "POST", `${base}/issues/${number}/comments`, { body }, log)
     }
