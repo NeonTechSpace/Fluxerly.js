@@ -457,6 +457,8 @@ export class ClientOwner<M extends MessageCore = Message> {
             ...(configuration.sessions && configuration.refillCaches
                 ? { restored: (shardId: number) => void this.#restoredShards.add(shardId) }
                 : {}),
+            // Fluxer replays every missed dispatch on Resume except THREAD_LIST_SYNC, so cached threads may be stale
+            resumed: (shardId) => this.channelCache?.dropThreads(this.#shardGuilds(shardId)),
             readyUser: (body, shardId) => this.#readyUser(body, shardId),
         }
     }
@@ -879,6 +881,10 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     #selfUserId: string | undefined
+    /** The bot account ID once READY or a self read supplied it, without starting a read, for gateway cache intake */
+    get botUserId(): string | undefined {
+        return this.#selfUserId
+    }
     /** The bot's own public account from the latest READY that carried a complete one, for users.getSelf */
     #selfUser: User | undefined
     /** The one users.fetchSelf read in flight, which concurrent mentions share */

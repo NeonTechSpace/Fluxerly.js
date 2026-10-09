@@ -1,8 +1,9 @@
 import { Effect } from "effect"
 import { err } from "neverthrow"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { guards, Permissions, type PrefixCommandRejection } from "../../../src/index.js"
+import { guards, Permissions, type PermissionName, type PrefixCommandRejection } from "../../../src/index.js"
 import { guards as nativeGuards } from "../../../src/effect.js"
+import { fixtures } from "../../../src/testing.js"
 import { guardDenials } from "../../../src/internal/command-guards.js"
 import { modes } from "../../support/both-apis.js"
 import { settle } from "../../support/settle.js"
@@ -108,6 +109,33 @@ function channelKinds(call: RecordedCall): Response | undefined {
     for (const id of ["20", "21"]) if (call.path === `/v1/channels/${id}`) return Response.json(directMessageWire(id))
     for (const id of ["22", "23"]) if (call.path === `/v1/channels/${id}`) return Response.json({ ...channelWire, id })
     if (call.path === "/v1/channels/24") return Response.json({ message: "Internal", code: 0 }, { status: 400 })
+    return undefined
+}
+
+/**
+ * Answer thread reads: Thread 25 in channel 20, and thread 27 in channel 26, whose overwrite denies role 41
+ * SendMessagesInThreads. Role 41 grants ManageMessages, SendMessages and SendMessagesInThreads
+ */
+function threadRoutes(call: RecordedCall): Response | undefined {
+    if (call.method !== "GET") return undefined
+    const { ManageMessages, SendMessages, SendMessagesInThreads } = Permissions
+    if (call.path === `/v1/guilds/${guildId}/roles`)
+        return Response.json([
+            roleWire(guildId, "0"),
+            roleWire("41", String(ManageMessages | SendMessages | SendMessagesInThreads)),
+        ])
+    for (const [id, parentId] of [
+        ["25", "20"],
+        ["27", "26"],
+    ])
+        if (call.path === `/v1/channels/${id}`)
+            return Response.json(fixtures.thread({ id, guild_id: guildId, parent_id: parentId }))
+    if (call.path === "/v1/channels/26")
+        return Response.json({
+            ...channelWire,
+            id: "26",
+            permission_overwrites: [{ id: "41", type: 0, allow: "0", deny: String(SendMessagesInThreads) }],
+        })
     return undefined
 }
 
@@ -408,13 +436,84 @@ describe.each(modes)("%s built-in guards", (mode) => {
         expect(reports).toEqual([])
     })
 
-    test("requirePermissions denies in an unknown channel type without overwrites, and decides one that has them", async () => {
-        // Fluxer reads a thread (type 11) without overwrites, because a thread takes its parent channel's permissions
-        const thread = { ...channelWithoutOverwrites, id: "25", type: 11, parent_id: "20" }
+    test("requirePermissions decides in a thread from its parent channel, where SendMessages follows SendMessagesInThreads", async () => {
+        // Fluxer 4749eb7f calculates a thread in its parent channel (BaseChannelAuthService.getThreadChannelAuth with
+        // threadViewPermissions), so the guard reads the thread and then its parent, five reads in all without caches
+        const remote = await commandFixture((call) => threadRoutes(call) ?? permissionRoutes(call))
+        const connected = await connect(mode)
+        const executed: string[] = []
+        const rejected: PrefixCommandRejection[] = []
+        const command = (names: readonly PermissionName[]) => ({
+            guard: guardSet.requirePermissions(names),
+            onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
+                act(mode, () => void rejected.push(rejection)),
+            execute: ({ name, message }: { name: string; message: { channelId: string } }) =>
+                act(mode, () => void executed.push(`${name}:${message.channelId}`)),
+        })
+        const router = createRouter(mode, { prefix: "!" }).registerMany({
+            send: command(["SendMessages"]),
+            purge: command(["ManageMessages"]),
+        })
+        const reports = await attach(connected, router, { concurrency: 1 })
+        remote.deliver("!send", { guildId, channelId: "25" })
+        remote.deliver("!send", { guildId, channelId: "27" })
+        remote.deliver("!purge", { guildId, channelId: "27" })
+        await vi.waitFor(() => expect(executed.length + rejected.length + reports.length).toBe(3))
+        // The parent of thread 27 denies SendMessagesInThreads, which takes SendMessages away in its threads only
+        expect(executed).toEqual(["send:25", "purge:27"])
+        expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.missing(["SendMessages"]) }])
+        expect(reports).toEqual([])
+        const reads = (thread: string, parent: string) => [
+            `/v1/guilds/${guildId}`,
+            `/v1/guilds/${guildId}/members/30`,
+            `/v1/guilds/${guildId}/roles`,
+            `/v1/channels/${thread}`,
+            `/v1/channels/${parent}`,
+        ]
+        expect(remote.calls.map((call) => call.path)).toEqual([
+            ...reads("25", "20"),
+            ...reads("27", "26"),
+            ...reads("27", "26"),
+        ])
+    })
+
+    test("requirePermissions in a thread uses a cached thread and parent and reads only what the cache lacks", async () => {
+        const remote = await commandFixture((call) => threadRoutes(call) ?? permissionRoutes(call))
+        const connected = await connect(mode, { cache: { channels: true } })
+        const { client } = connected
+        const executed: string[] = []
+        const rejected: PrefixCommandRejection[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "send",
+            guard: guardSet.requirePermissions(["SendMessages"]),
+            onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
+                act(mode, () => void rejected.push(rejection)),
+            execute: ({ message }: { message: { channelId: string } }) =>
+                act(mode, () => void executed.push(message.channelId)),
+        })
+        const reports = await attach(connected, router, { concurrency: 1 })
+        // Both threads are cached without overwrites, which a thread never has, and only the parent of thread 27 is cached
+        for (const id of ["25", "27", "26"]) await settle(client.channels.fetch(id))
+        for (const id of ["25", "27", "26"]) expect(await settle(client.channels.get(id))).toBeDefined()
+        remote.calls.length = 0
+
+        remote.deliver("!send", { guildId, channelId: "27" })
+        remote.deliver("!send", { guildId, channelId: "25" })
+        await vi.waitFor(() => expect(executed.length + rejected.length + reports.length).toBe(2))
+        expect(executed).toEqual(["25"])
+        expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.missing(["SendMessages"]) }])
+        expect(remote.calls.filter((call) => call.path.startsWith("/v1/channels/")).map((call) => call.path)).toEqual([
+            "/v1/channels/20",
+        ])
+        expect(reports).toEqual([])
+    })
+
+    test("requirePermissions denies in an unknown channel type without overwrites, and decides a forum that has them", async () => {
+        const future = { ...channelWithoutOverwrites, id: "27", type: 13 }
         const forum = { ...channelWire, id: "26", type: 15 }
         const remote = await commandFixture((call) => {
-            if (call.method === "GET" && call.path === "/v1/channels/25") return Response.json(thread)
             if (call.method === "GET" && call.path === "/v1/channels/26") return Response.json(forum)
+            if (call.method === "GET" && call.path === "/v1/channels/27") return Response.json(future)
             return permissionRoutes(call)
         })
         const connected = await connect(mode)
@@ -429,9 +528,9 @@ describe.each(modes)("%s built-in guards", (mode) => {
                 act(mode, () => void executed.push(message.channelId)),
         })
         const reports = await attach(connected, router, { concurrency: 1 })
-        remote.deliver("!purge", { guildId, channelId: "25" })
         remote.deliver("!purge", { guildId, channelId: "26" })
-        await vi.waitFor(() => expect(executed.length + rejected.length).toBe(2))
+        remote.deliver("!purge", { guildId, channelId: "27" })
+        await vi.waitFor(() => expect(executed.length + rejected.length + reports.length).toBe(2))
         expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.unconfirmedChannel }])
         expect(executed).toEqual(["26"])
         expect(reports).toEqual([])

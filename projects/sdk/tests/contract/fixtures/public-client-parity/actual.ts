@@ -25,6 +25,7 @@ export type Paired = {
     Emojis: [Default.Emojis, Native.Emojis]
     Stickers: [Default.Stickers, Native.Stickers]
     Channels: [Default.Channels, Native.Channels]
+    Threads: [Default.Threads, Native.Threads]
     Members: [Default.Members, Native.Members]
     Attachments: [Default.Attachments, Native.Attachments]
     Messages: [Default.Messages, Native.Messages]

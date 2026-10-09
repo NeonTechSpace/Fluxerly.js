@@ -146,6 +146,20 @@ test.each(modes)(
     },
 )
 
+// Fluxer 4749eb7f: flagThreadActiveUserGuilds sends threads_active only as true, on communities with threads available
+test.each(modes)("%s guild pages report which communities have threads available", async (mode) => {
+    const api = await setup(mode)
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json([{ ...wireGuild("20"), threads_active: true }, wireGuild("21")]),
+    )
+    expect(await api.page()).toMatchObject([
+        { id: "20", threadsActive: true },
+        { id: "21", threadsActive: false },
+    ])
+    stubFetchWithHostedDiscovery(async () => Response.json([{ ...wireGuild("20"), threads_active: "yes" }]))
+    await expect(api.page()).rejects.toMatchObject({ reason: "response" })
+})
+
 test.each(modes)("%s guild iteration forwards withCounts to every remote page", async (mode) => {
     const api = await setup(mode)
     const calls: URL[] = []

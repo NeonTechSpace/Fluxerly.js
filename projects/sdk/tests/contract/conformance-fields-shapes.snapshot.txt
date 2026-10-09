@@ -4,8 +4,11 @@ operation|default|Attachments.stream|(attachment: Attachment, options: DefaultAt
 operation|default|AuditLogs.fetchPage|(guildId: string, query: AuditLogQuery, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<AuditLogPage, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|AuditLogs.iterate|(guildId: string, query: AuditLogIterationQuery, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<AuditLogEntry, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
 operation|default|Channels.create|(guildId: string, input: ChannelCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.createForumTag|(channelId: string, input: ForumTagInput, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.delete|(channelId: string, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.deleteForumTag|(channelId: string, tagId: string, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.edit|(channelId: string, input: ChannelEdit, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.editForumTag|(channelId: string, tagId: string, input: ForumTagInput, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.fetch|(channelId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.fetchAll|(guildId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly GuildChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.fetchFollowerStats|(channelId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ChannelFollowerStats, CancelledError | ConfigurationError | ChannelOperationFailure>
@@ -162,17 +165,31 @@ operation|default|Stickers.fetchAll|(guildId: string, options?: DefaultGuildOper
 operation|default|Stickers.fetchMetadata|(id: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<ExpressionMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Stickers.fetchSource|(id: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<ExpressionSourceGuild, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Stickers.get|(target: ExpressionReference) => GuildSticker | undefined
+operation|default|Threads.addMember|(threadId: string, userId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.create|(channelId: string, input: ThreadCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.createFromMessage|(message: MessageReference, input: ThreadFromMessageCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.createPost|(channelId: string, input: ForumPostCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<ForumPost<M>, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.edit|(threadId: string, input: ThreadEdit, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchActive|(guildId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly GuildThreadChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchArchived|(channelId: string, query?: ArchivedThreadQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ArchivedThreadPage, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchMember|(threadId: string, userId: string, query?: ThreadMemberQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ThreadMember, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchMembers|(threadId: string, query?: ThreadMemberPageQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly ThreadMember[], CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.iterateMembers|(threadId: string, query: ThreadMemberIterationQuery, options?: DefaultChannelOperationOptions | undefined) => AsyncIterable<Result<ThreadMember, CancelledError | ConfigurationError | PaginationError | ChannelOperationFailure>>
+operation|default|Threads.join|(threadId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.leave|(threadId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.removeMember|(threadId: string, userId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.search|(channelId: string, query?: ThreadSearchQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ThreadSearchPage<M>, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Users.fetch|(id: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: DefaultUserOperationOptions | undefined) => ResultAsync<UserProfile, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|Users.fetchSelf|(options?: DefaultUserOperationOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|Users.get|(id: string) => User | undefined
 operation|default|Users.getSelf|() => User | undefined
 operation|default|WebhookClient.delete|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.deleteMessage|(messageId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.deleteMessage|(messageId: string, options?: DefaultWebhookMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.edit|(input: WebhookTokenEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: DefaultWebhookMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.fetch|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.fetchMessage|(messageId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.fetchMessage|(messageId: string, options?: DefaultWebhookMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.send|(input: string | WebhookMessageInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.shutdown|() => ResultAsync<void, never>
 operation|default|Webhooks.create|(channelId: string, input: WebhookCreate, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<CreatedWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
@@ -187,8 +204,11 @@ operation|native|Attachments.stream|(attachment: Attachment, options: Attachment
 operation|native|AuditLogs.fetchPage|(guildId: string, query: AuditLogQuery, options?: GuildOperationOptions | undefined) => Effect<AuditLogPage, GuildOperationFailure, never>
 operation|native|AuditLogs.iterate|(guildId: string, query: AuditLogIterationQuery, options?: GuildOperationOptions | undefined) => Stream<AuditLogEntry, PaginationError | GuildOperationFailure, never>
 operation|native|Channels.create|(guildId: string, input: ChannelCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
+operation|native|Channels.createForumTag|(channelId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
 operation|native|Channels.delete|(channelId: string, options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Channels.deleteForumTag|(channelId: string, tagId: string, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
 operation|native|Channels.edit|(channelId: string, input: ChannelEdit, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
+operation|native|Channels.editForumTag|(channelId: string, tagId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
 operation|native|Channels.fetch|(channelId: string, options?: ChannelOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
 operation|native|Channels.fetchAll|(guildId: string, options?: ChannelOperationOptions | undefined) => Effect<readonly GuildChannel[], ChannelOperationFailure, never>
 operation|native|Channels.fetchFollowerStats|(channelId: string, options?: ChannelOperationOptions | undefined) => Effect<ChannelFollowerStats, ChannelOperationFailure, never>
@@ -345,17 +365,31 @@ operation|native|Stickers.fetchAll|(guildId: string, options?: GuildOperationOpt
 operation|native|Stickers.fetchMetadata|(id: string, options?: GuildOperationOptions | undefined) => Effect<ExpressionMetadata, GuildOperationFailure, never>
 operation|native|Stickers.fetchSource|(id: string, options?: GuildOperationOptions | undefined) => Effect<ExpressionSourceGuild, GuildOperationFailure, never>
 operation|native|Stickers.get|(target: ExpressionReference) => Effect<GuildSticker | undefined, never, never>
+operation|native|Threads.addMember|(threadId: string, userId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.create|(channelId: string, input: ThreadCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
+operation|native|Threads.createFromMessage|(message: MessageReference, input: ThreadFromMessageCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
+operation|native|Threads.createPost|(channelId: string, input: ForumPostCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<ForumPost<M>, ChannelOperationFailure, never>
+operation|native|Threads.edit|(threadId: string, input: ThreadEdit, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
+operation|native|Threads.fetchActive|(guildId: string, options?: ChannelOperationOptions | undefined) => Effect<readonly GuildThreadChannel[], ChannelOperationFailure, never>
+operation|native|Threads.fetchArchived|(channelId: string, query?: ArchivedThreadQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<ArchivedThreadPage, ChannelOperationFailure, never>
+operation|native|Threads.fetchMember|(threadId: string, userId: string, query?: ThreadMemberQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<ThreadMember, ChannelOperationFailure, never>
+operation|native|Threads.fetchMembers|(threadId: string, query?: ThreadMemberPageQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<readonly ThreadMember[], ChannelOperationFailure, never>
+operation|native|Threads.iterateMembers|(threadId: string, query: ThreadMemberIterationQuery, options?: ChannelOperationOptions | undefined) => Stream<ThreadMember, PaginationError | ChannelOperationFailure, never>
+operation|native|Threads.join|(threadId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.leave|(threadId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.removeMember|(threadId: string, userId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.search|(channelId: string, query?: ThreadSearchQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<ThreadSearchPage<M>, ChannelOperationFailure, never>
 operation|native|Users.fetch|(id: string, options?: UserOperationOptions | undefined) => Effect<User, UserOperationFailure, never>
 operation|native|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: UserOperationOptions | undefined) => Effect<UserProfile, UserOperationFailure, never>
 operation|native|Users.fetchSelf|(options?: UserOperationOptions | undefined) => Effect<User, UserOperationFailure, never>
 operation|native|Users.get|(id: string) => Effect<User | undefined, never, never>
 operation|native|Users.getSelf|() => Effect<User | undefined, never, never>
 operation|native|WebhookClient.delete|(options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
-operation|native|WebhookClient.deleteMessage|(messageId: string, options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
+operation|native|WebhookClient.deleteMessage|(messageId: string, options?: WebhookMessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
 operation|native|WebhookClient.edit|(input: WebhookTokenEdit, options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
-operation|native|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
+operation|native|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: WebhookMessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
 operation|native|WebhookClient.fetch|(options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
-operation|native|WebhookClient.fetchMessage|(messageId: string, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
+operation|native|WebhookClient.fetchMessage|(messageId: string, options?: WebhookMessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
 operation|native|WebhookClient.send|(input: string | WebhookMessageInput, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
 operation|native|WebhookClient.shutdown|() => Effect<void, never, never>
 operation|native|Webhooks.create|(channelId: string, input: WebhookCreate, options?: WebhookOperationOptions | undefined) => Effect<CreatedWebhook, WebhookOperationFailure, never>
@@ -387,6 +421,7 @@ member|default|Client.roles|Roles
 member|default|Client.shards|readonly ShardState[]
 member|default|Client.state|ConnectionState
 member|default|Client.stickers|Stickers
+member|default|Client.threads|Threads<M>
 member|default|Client.users|Users
 member|default|Client.webhooks|Webhooks
 member|default|WebhookClient.id|string
@@ -414,6 +449,7 @@ member|native|Client.roles|Roles
 member|native|Client.shards|readonly ShardState[]
 member|native|Client.state|ConnectionState
 member|native|Client.stickers|Stickers
+member|native|Client.threads|Threads<M>
 member|native|Client.users|Users
 member|native|Client.webhooks|Webhooks
 member|native|WebhookClient.id|string
@@ -422,11 +458,11 @@ union|default|AttachmentDownloadFailure|AttachmentDownloadError || ClientClosedE
 union|default|AttachmentInput|AttachmentBytesInput || AttachmentFileInput || AttachmentStreamInput
 union|default|AttachmentRefreshFailure|AttachmentRefreshError || ClientClosedError
 union|default|AttachmentStreamReadResult|{ readonly done: true; readonly value: Uint8Array<ArrayBufferLike> | undefined; } || { readonly done: true; readonly value?: Uint8Array<ArrayBufferLike>; } || { readonly done?: false; readonly value: Uint8Array<ArrayBufferLike>; }
-union|default|AuditLogChangeValue|AuditLogPermissionsDiff || false || null || number || readonly number[] || readonly string[] || string || true
+union|default|AuditLogChangeValue|AuditLogPermissionsDiff || ForumDefaultReaction || false || null || number || readonly ForumTag[] || readonly number[] || readonly string[] || string || true
 union|default|AuditLogIterationQuery|AuditLogIterationQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogIterationQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|default|AuditLogQuery|AuditLogQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|default|BotApplicationOperationFailure|BotApplicationOperationError || ClientClosedError
-union|default|ChannelCreate|AnnouncementChannelCreate || CategoryChannelCreate || LinkChannelCreate || TextChannelCreate || VoiceChannelCreate
+union|default|ChannelCreate|AnnouncementChannelCreate || CategoryChannelCreate || ForumChannelCreate || LinkChannelCreate || MediaChannelCreate || TextChannelCreate || VoiceChannelCreate
 union|default|ChannelLinkTarget|Pick<DirectMessageChannel, "id"> || Pick<GuildChannel, "guildId" | "id">
 union|default|ChannelOperationFailure|ChannelOperationError || ClientClosedError
 union|default|CollectorFailure|ClientClosedError || CollectorError
@@ -435,12 +471,14 @@ union|default|ConnectionFailure|AuthenticationError || ConnectionError || Connec
 union|default|CountOperationFailure|ClientClosedError || CountOperationError
 union|default|CustomStatusEmoji|{ readonly id: string; } || { readonly name: string; }
 union|default|EditMessageInput|EditMessageOptions & { readonly flags: number; readonly content?: never; readonly embeds?: never; readonly attachments?: never; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions
-union|default|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildHealthUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
+union|default|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildHealthUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"threadCreate", M> || EventInvocationOf<"threadDelete", M> || EventInvocationOf<"threadListSync", M> || EventInvocationOf<"threadMembersUpdate", M> || EventInvocationOf<"threadUpdate", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
 union|default|EventReadError|EventOverflowError || EventReadBusyError
 union|default|EventWaitFailure|ClientClosedError || ConfigurationError || EventOverflowError || EventWaitError
+union|default|ForumPostMessage|{ readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags"> || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags">
 union|default|GatewaySendFailure|ClientClosedError || GatewaySendError
-union|default|GuildChannel|GuildAnnouncementChannel || GuildCategoryChannel || GuildLinkChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
+union|default|GuildChannel|GuildAnnouncementChannel || GuildAnnouncementThreadChannel || GuildCategoryChannel || GuildForumChannel || GuildLinkChannel || GuildMediaChannel || GuildPrivateThreadChannel || GuildPublicThreadChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
 union|default|GuildOperationFailure|ClientClosedError || GuildOperationError
+union|default|GuildThreadChannel|GuildAnnouncementThreadChannel || GuildPrivateThreadChannel || GuildPublicThreadChannel
 union|default|InstanceResolveError|ClientClosedError || ConfigurationError || ConnectionError || ConnectionTimeoutError || RateLimitError
 union|default|MemberChunkFailure|ClientClosedError || MemberChunkError
 union|default|MemberChunkQuery|{ readonly all: true; readonly userIds?: never; readonly query?: never; readonly limit?: never; } & { readonly presences?: boolean; } || { readonly query: string; readonly limit?: number; readonly all?: never; readonly userIds?: never; } & { readonly presences?: boolean; } || { readonly userIds: readonly string[]; readonly all?: never; readonly query?: never; readonly limit?: never; } & { readonly presences?: boolean; }
@@ -459,19 +497,21 @@ union|default|ReactionEmojiInput|GuildEmoji || ReactionEmoji || string
 union|default|ReplyInput|{ readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts"> || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts">
 union|default|RestRequestFailure|ClientClosedError || RestRequestError
 union|default|SendError|ClientClosedError || MessageError
+union|default|ThreadCreateEvent|GuildAnnouncementThreadChannel & { readonly isNewlyCreated: boolean; } || GuildPrivateThreadChannel & { readonly isNewlyCreated: boolean; } || GuildPublicThreadChannel & { readonly isNewlyCreated: boolean; }
+union|default|ThreadSearchPage|ThreadSearchIndexingPage || ThreadSearchResultsPage<M>
 union|default|UserOperationFailure|ClientClosedError || UserOperationError
 union|default|Webhook|ChannelFollowerWebhook || IncomingWebhook || UnknownWebhook
-union|default|WebhookMessageInput|WebhookMessageOptions & { readonly messageReference: WebhookForwardReference; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; }
+union|default|WebhookMessageInput|WebhookMessageOptions & { readonly messageReference: WebhookForwardReference; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; }
 union|default|WebhookOperationFailure|ClientClosedError || WebhookOperationError
 union|native|AttachmentDownloadFailure|AttachmentDownloadError || ClientClosedError
 union|native|AttachmentInput|AttachmentBytesInput || AttachmentFileInput || AttachmentStreamInput
 union|native|AttachmentRefreshFailure|AttachmentRefreshError || ClientClosedError
 union|native|AttachmentStreamReadResult|{ readonly done: true; readonly value: Uint8Array<ArrayBufferLike> | undefined; } || { readonly done: true; readonly value?: Uint8Array<ArrayBufferLike>; } || { readonly done?: false; readonly value: Uint8Array<ArrayBufferLike>; }
-union|native|AuditLogChangeValue|AuditLogPermissionsDiff || false || null || number || readonly number[] || readonly string[] || string || true
+union|native|AuditLogChangeValue|AuditLogPermissionsDiff || ForumDefaultReaction || false || null || number || readonly ForumTag[] || readonly number[] || readonly string[] || string || true
 union|native|AuditLogIterationQuery|AuditLogIterationQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogIterationQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|native|AuditLogQuery|AuditLogQueryBase & { readonly userId: string; readonly actionType?: AuditLogActionType; } || AuditLogQueryBase & { readonly userId?: string; readonly actionType: AuditLogActionType; }
 union|native|BotApplicationOperationFailure|BotApplicationOperationError || ClientClosedError
-union|native|ChannelCreate|AnnouncementChannelCreate || CategoryChannelCreate || LinkChannelCreate || TextChannelCreate || VoiceChannelCreate
+union|native|ChannelCreate|AnnouncementChannelCreate || CategoryChannelCreate || ForumChannelCreate || LinkChannelCreate || MediaChannelCreate || TextChannelCreate || VoiceChannelCreate
 union|native|ChannelLinkTarget|Pick<DirectMessageChannel, "id"> || Pick<GuildChannel, "guildId" | "id">
 union|native|ChannelOperationFailure|ChannelOperationError || ClientClosedError
 union|native|CollectorFailure|ClientClosedError || CollectorError
@@ -480,11 +520,13 @@ union|native|ConnectionFailure|AuthenticationError || ConnectionError || Connect
 union|native|CountOperationFailure|ClientClosedError || CountOperationError
 union|native|CustomStatusEmoji|{ readonly id: string; } || { readonly name: string; }
 union|native|EditMessageInput|EditMessageOptions & { readonly flags: number; readonly content?: never; readonly embeds?: never; readonly attachments?: never; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly (AttachmentReference | AttachmentInput)[]; } & EditMessageOptions
-union|native|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildHealthUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
+union|native|EventInvocation|EventInvocationOf<"callCreate", M> || EventInvocationOf<"callDelete", M> || EventInvocationOf<"callUpdate", M> || EventInvocationOf<"channelPinsUpdate", M> || EventInvocationOf<"directMessageCreate", M> || EventInvocationOf<"directMessageDelete", M> || EventInvocationOf<"directMessageRecipientAdd", M> || EventInvocationOf<"directMessageRecipientRemove", M> || EventInvocationOf<"directMessageUpdate", M> || EventInvocationOf<"entranceSoundPlay", M> || EventInvocationOf<"guildAuditLogEntryCreate", M> || EventInvocationOf<"guildBanAdd", M> || EventInvocationOf<"guildBanRemove", M> || EventInvocationOf<"guildChannelCreate", M> || EventInvocationOf<"guildChannelDelete", M> || EventInvocationOf<"guildChannelUpdate", M> || EventInvocationOf<"guildChannelUpdateBulk", M> || EventInvocationOf<"guildCreate", M> || EventInvocationOf<"guildDelete", M> || EventInvocationOf<"guildEmojisUpdate", M> || EventInvocationOf<"guildHealthUpdate", M> || EventInvocationOf<"guildMemberAdd", M> || EventInvocationOf<"guildMemberRemove", M> || EventInvocationOf<"guildMemberUpdate", M> || EventInvocationOf<"guildRoleCreate", M> || EventInvocationOf<"guildRoleDelete", M> || EventInvocationOf<"guildRoleUpdate", M> || EventInvocationOf<"guildRoleUpdateBulk", M> || EventInvocationOf<"guildStickersUpdate", M> || EventInvocationOf<"guildUpdate", M> || EventInvocationOf<"inviteCreate", M> || EventInvocationOf<"inviteDelete", M> || EventInvocationOf<"messageCreate", M> || EventInvocationOf<"messageDelete", M> || EventInvocationOf<"messageDeleteBulk", M> || EventInvocationOf<"messageReactionAdd", M> || EventInvocationOf<"messageReactionAddMany", M> || EventInvocationOf<"messageReactionRemove", M> || EventInvocationOf<"messageReactionRemoveAll", M> || EventInvocationOf<"messageReactionRemoveEmoji", M> || EventInvocationOf<"messageUpdate", M> || EventInvocationOf<"presenceUpdate", M> || EventInvocationOf<"presenceUpdateBulk", M> || EventInvocationOf<"raw", M> || EventInvocationOf<"threadCreate", M> || EventInvocationOf<"threadDelete", M> || EventInvocationOf<"threadListSync", M> || EventInvocationOf<"threadMembersUpdate", M> || EventInvocationOf<"threadUpdate", M> || EventInvocationOf<"typingStart", M> || EventInvocationOf<"userUpdate", M> || EventInvocationOf<"voiceStateSnapshot", M> || EventInvocationOf<"voiceStateUpdate", M> || EventInvocationOf<"webhooksUpdate", M>
 union|native|EventWaitFailure|ClientClosedError || ConfigurationError || EventOverflowError || EventWaitError
+union|native|ForumPostMessage|{ readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags"> || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags">
 union|native|GatewaySendFailure|ClientClosedError || GatewaySendError
-union|native|GuildChannel|GuildAnnouncementChannel || GuildCategoryChannel || GuildLinkChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
+union|native|GuildChannel|GuildAnnouncementChannel || GuildAnnouncementThreadChannel || GuildCategoryChannel || GuildForumChannel || GuildLinkChannel || GuildMediaChannel || GuildPrivateThreadChannel || GuildPublicThreadChannel || GuildTextChannel || GuildUnknownChannel || GuildVoiceChannel
 union|native|GuildOperationFailure|ClientClosedError || GuildOperationError
+union|native|GuildThreadChannel|GuildAnnouncementThreadChannel || GuildPrivateThreadChannel || GuildPublicThreadChannel
 union|native|InstanceResolveError|ClientClosedError || ConfigurationError || ConnectionError || ConnectionTimeoutError || RateLimitError
 union|native|MemberChunkFailure|ClientClosedError || MemberChunkError
 union|native|MemberChunkQuery|{ readonly all: true; readonly userIds?: never; readonly query?: never; readonly limit?: never; } & { readonly presences?: boolean; } || { readonly query: string; readonly limit?: number; readonly all?: never; readonly userIds?: never; } & { readonly presences?: boolean; } || { readonly userIds: readonly string[]; readonly all?: never; readonly query?: never; readonly limit?: never; } & { readonly presences?: boolean; }
@@ -503,9 +545,11 @@ union|native|ReactionEmojiInput|GuildEmoji || ReactionEmoji || string
 union|native|ReplyInput|{ readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts"> || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts"> || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & Pick<MessageInput, "allowedMentions" | "flags" | "nonce" | "tts">
 union|native|RestRequestFailure|ClientClosedError || RestRequestError
 union|native|SendError|ClientClosedError || MessageError
+union|native|ThreadCreateEvent|GuildAnnouncementThreadChannel & { readonly isNewlyCreated: boolean; } || GuildPrivateThreadChannel & { readonly isNewlyCreated: boolean; } || GuildPublicThreadChannel & { readonly isNewlyCreated: boolean; }
+union|native|ThreadSearchPage|ThreadSearchIndexingPage || ThreadSearchResultsPage<M>
 union|native|UserOperationFailure|ClientClosedError || UserOperationError
 union|native|Webhook|ChannelFollowerWebhook || IncomingWebhook || UnknownWebhook
-union|native|WebhookMessageInput|WebhookMessageOptions & { readonly messageReference: WebhookForwardReference; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & { readonly messageReference?: WebhookReplyReference; }
+union|native|WebhookMessageInput|WebhookMessageOptions & { readonly messageReference: WebhookForwardReference; } || { readonly content: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments: readonly AttachmentInput[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; } || { readonly content?: string; readonly embeds?: readonly (EmbedBuilder | EmbedInput)[]; readonly attachments?: readonly AttachmentInput[]; readonly stickerIds: readonly string[]; } & { readonly stickerIds?: readonly string[]; } & WebhookMessageOptions & WebhookForumPostOptions & { readonly messageReference?: WebhookReplyReference; }
 union|native|WebhookOperationFailure|ClientClosedError || WebhookOperationError
 field|shared|AllowedMentions.everyone|boolean | undefined|optional=true|nullable=false
 field|shared|AllowedMentions.repliedUser|boolean | undefined|optional=true|nullable=false
@@ -514,6 +558,8 @@ field|shared|AllowedMentions.users|readonly string[] | undefined|optional=true|n
 field|shared|AnnouncementChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|AnnouncementChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|AnnouncementChannelCreate.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|AnnouncementChannelCreate.defaultThreadRateLimitPerUser|null | number | undefined|optional=true|nullable=true
 field|shared|AnnouncementChannelCreate.name|string|optional=false|nullable=false
 field|shared|AnnouncementChannelCreate.nsfw|boolean | undefined|optional=true|nullable=false
 field|shared|AnnouncementChannelCreate.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
@@ -532,6 +578,11 @@ field|shared|ApiErrorDetail.validationErrors|readonly ApiValidationErrorDetail[]
 field|shared|ApiValidationErrorDetail.explanation|string|optional=false|nullable=false
 field|shared|ApiValidationErrorDetail.path|string | undefined|optional=true|nullable=false
 field|shared|ApiValidationErrorDetail.providerCode|(string & {}) | ApiValidationCode|optional=false|nullable=false
+field|shared|ArchivedThreadPage.hasMore|boolean|optional=false|nullable=false
+field|shared|ArchivedThreadPage.threads|readonly GuildThreadChannel[]|optional=false|nullable=false
+field|shared|ArchivedThreadQuery.before|string | undefined|optional=true|nullable=false
+field|shared|ArchivedThreadQuery.limit|number | undefined|optional=true|nullable=false
+field|shared|ArchivedThreadQuery.scope|ArchivedThreadScope | undefined|optional=true|nullable=false
 field|shared|AssetUrlOptions.animated|boolean | undefined|optional=true|nullable=false
 field|shared|AssetUrlOptions.format|AssetFormat | undefined|optional=true|nullable=false
 field|shared|AssetUrlOptions.size|number | undefined|optional=true|nullable=false
@@ -660,6 +711,8 @@ field|shared|AuditLogChange.key|string|optional=false|nullable=false
 field|shared|AuditLogChange.newValue|AuditLogChangeValue | undefined|optional=true|nullable=false
 field|shared|AuditLogChange.oldValue|AuditLogChangeValue | undefined|optional=true|nullable=false
 field|shared|AuditLogChangeValue.added|readonly string[] | undefined|optional=true|nullable=false
+field|shared|AuditLogChangeValue.emojiId|null | string | undefined|optional=true|nullable=true
+field|shared|AuditLogChangeValue.emojiName|null | string | undefined|optional=true|nullable=true
 field|shared|AuditLogChangeValue.removed|readonly string[] | undefined|optional=true|nullable=false
 field|shared|AuditLogEntry.actionType|number|optional=false|nullable=false
 field|shared|AuditLogEntry.changes|readonly AuditLogChange[] | undefined|optional=true|nullable=false
@@ -694,6 +747,7 @@ field|shared|AuditLogOptions.temporary|boolean | undefined|optional=true|nullabl
 field|shared|AuditLogOptions.type|number | undefined|optional=true|nullable=false
 field|shared|AuditLogOptions.uses|number | undefined|optional=true|nullable=false
 field|shared|AuditLogPage.entries|readonly AuditLogEntry[]|optional=false|nullable=false
+field|shared|AuditLogPage.threads|readonly GuildThreadChannel[]|optional=false|nullable=false
 field|shared|AuditLogPage.users|readonly User[]|optional=false|nullable=false
 field|shared|AuditLogPage.webhooks|readonly AuditLogWebhook[]|optional=false|nullable=false
 field|shared|AuditLogPermissionsDiff.added|readonly string[]|optional=false|nullable=false
@@ -824,9 +878,17 @@ field|shared|CategoryChannelCreate.userLimit|null | number | undefined|optional=
 field|shared|CategoryChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|native|ChannelAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
 field|native|ChannelAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|ChannelCreate.availableTags|readonly ForumTagInput[] | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.defaultForumLayout|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.defaultReactionEmoji|ForumDefaultReactionInput | null | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.defaultTagSetting|"match_all" | "match_some" | null | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.defaultThreadRateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelCreate.flags|number | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.name|string|optional=false|nullable=false
 field|shared|ChannelCreate.nsfw|boolean | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
@@ -834,13 +896,21 @@ field|shared|ChannelCreate.parentId|null | string | undefined|optional=true|null
 field|shared|ChannelCreate.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.topic|null | string | undefined|optional=true|nullable=true
-field|shared|ChannelCreate.type|0 | 2 | 4 | 5 | 998|optional=false|nullable=false
+field|shared|ChannelCreate.type|0 | 15 | 16 | 2 | 4 | 5 | 998|optional=false|nullable=false
 field|shared|ChannelCreate.url|null | string | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.availableTags|readonly ForumTagInput[] | undefined|optional=true|nullable=false
 field|shared|ChannelEdit.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|ChannelEdit.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.defaultForumLayout|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.defaultReactionEmoji|ForumDefaultReactionInput | null | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.defaultTagSetting|"match_all" | "match_some" | null | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.defaultThreadRateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.flags|number | undefined|optional=true|nullable=false
 field|shared|ChannelEdit.name|string | undefined|optional=true|nullable=false
 field|shared|ChannelEdit.nsfw|boolean | null | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
@@ -1153,6 +1223,9 @@ field|default|DefaultTimeoutOptions.timeoutMs|number | undefined|optional=true|n
 field|default|DefaultTimeoutOptions.timeoutReason|null | string | undefined|optional=true|nullable=true
 field|default|DefaultUserOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|DefaultUserOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|default|DefaultWebhookMessageOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|default|DefaultWebhookMessageOperationOptions.threadId|string | undefined|optional=true|nullable=false
+field|default|DefaultWebhookMessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|default|DefaultWebhookOperationOptions.auditReason|string | undefined|optional=true|nullable=false
 field|default|DefaultWebhookOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|DefaultWebhookOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
@@ -1341,8 +1414,8 @@ field|native|EventHandlerOptions.onError|((report: FailureReport) => Effect<unkn
 field|shared|EventHandlerOptions.overflow|"dropNewest" | "dropOldest" | "stop" | undefined|optional=true|nullable=false
 field|shared|EventHandlerOptions.partition|"channel" | "guild" | ((event: T) => string | undefined) | undefined|optional=true|nullable=false
 field|shared|EventInvocation.context|EventContext|optional=false|nullable=false
-field|shared|EventInvocation.event|"callCreate" | "callDelete" | "callUpdate" | "channelPinsUpdate" | "directMessageCreate" | "directMessageDelete" | "directMessageRecipientAdd" | "directMessageRecipientRemove" | "directMessageUpdate" | "entranceSoundPlay" | "guildAuditLogEntryCreate" | "guildBanAdd" | "guildBanRemove" | "guildChannelCreate" | "guildChannelDelete" | "guildChannelUpdate" | "guildChannelUpdateBulk" | "guildCreate" | "guildDelete" | "guildEmojisUpdate" | "guildHealthUpdate" | "guildMemberAdd" | "guildMemberRemove" | "guildMemberUpdate" | "guildRoleCreate" | "guildRoleDelete" | "guildRoleUpdate" | "guildRoleUpdateBulk" | "guildStickersUpdate" | "guildUpdate" | "inviteCreate" | "inviteDelete" | "messageCreate" | "messageDelete" | "messageDeleteBulk" | "messageReactionAdd" | "messageReactionAddMany" | "messageReactionRemove" | "messageReactionRemoveAll" | "messageReactionRemoveEmoji" | "messageUpdate" | "presenceUpdate" | "presenceUpdateBulk" | "raw" | "typingStart" | "userUpdate" | "voiceStateSnapshot" | "voiceStateUpdate" | "webhooksUpdate"|optional=false|nullable=false
-field|shared|EventInvocation.payload|CallCreate | CallDelete | CallUpdate | ChannelPinsUpdate | DirectMessageChannel | DirectMessageRecipientChange | EntranceSoundPlay | Guild | GuildAuditLogEntryCreate | GuildChannel | GuildChannelUpdateBulk | GuildCreate | GuildDeletion | GuildEmojisUpdate | GuildHealthUpdate | GuildMember | GuildRole | GuildRoleUpdateBulk | GuildStickersUpdate | InviteDeleteEvent | InviteMetadata | M | MemberReference | MessageBulkDeletion | MessageDeletion | MessageReaction | MessageReactionBatch | MessageReactionEmojiRemoval | PresenceUpdate | PresenceUpdateBulk | RawDispatch | ReactionTarget | RoleReference | TypingStart | User | VoiceState | VoiceStateSnapshot | WebhooksUpdate | { readonly id: string; }|optional=false|nullable=false
+field|shared|EventInvocation.event|"callCreate" | "callDelete" | "callUpdate" | "channelPinsUpdate" | "directMessageCreate" | "directMessageDelete" | "directMessageRecipientAdd" | "directMessageRecipientRemove" | "directMessageUpdate" | "entranceSoundPlay" | "guildAuditLogEntryCreate" | "guildBanAdd" | "guildBanRemove" | "guildChannelCreate" | "guildChannelDelete" | "guildChannelUpdate" | "guildChannelUpdateBulk" | "guildCreate" | "guildDelete" | "guildEmojisUpdate" | "guildHealthUpdate" | "guildMemberAdd" | "guildMemberRemove" | "guildMemberUpdate" | "guildRoleCreate" | "guildRoleDelete" | "guildRoleUpdate" | "guildRoleUpdateBulk" | "guildStickersUpdate" | "guildUpdate" | "inviteCreate" | "inviteDelete" | "messageCreate" | "messageDelete" | "messageDeleteBulk" | "messageReactionAdd" | "messageReactionAddMany" | "messageReactionRemove" | "messageReactionRemoveAll" | "messageReactionRemoveEmoji" | "messageUpdate" | "presenceUpdate" | "presenceUpdateBulk" | "raw" | "threadCreate" | "threadDelete" | "threadListSync" | "threadMembersUpdate" | "threadUpdate" | "typingStart" | "userUpdate" | "voiceStateSnapshot" | "voiceStateUpdate" | "webhooksUpdate"|optional=false|nullable=false
+field|shared|EventInvocation.payload|CallCreate | CallDelete | CallUpdate | ChannelPinsUpdate | DirectMessageChannel | DirectMessageRecipientChange | EntranceSoundPlay | Guild | GuildAuditLogEntryCreate | GuildChannel | GuildChannelUpdateBulk | GuildCreate | GuildDeletion | GuildEmojisUpdate | GuildHealthUpdate | GuildMember | GuildRole | GuildRoleUpdateBulk | GuildStickersUpdate | GuildThreadChannel | InviteDeleteEvent | InviteMetadata | M | MemberReference | MessageBulkDeletion | MessageDeletion | MessageReaction | MessageReactionBatch | MessageReactionEmojiRemoval | PresenceUpdate | PresenceUpdateBulk | RawDispatch | ReactionTarget | RoleReference | ThreadCreateEvent | ThreadDeletion | ThreadListSync | ThreadMembersUpdate | TypingStart | User | VoiceState | VoiceStateSnapshot | WebhooksUpdate | { readonly id: string; }|optional=false|nullable=false
 field|shared|EventInvocation.subscriptionId|string|optional=false|nullable=false
 field|shared|EventInvocationOf.context|EventContext|optional=false|nullable=false
 field|shared|EventInvocationOf.event|K|optional=false|nullable=false
@@ -1392,6 +1465,11 @@ field|shared|EventMap.messageUpdate|M|optional=false|nullable=false
 field|shared|EventMap.presenceUpdate|PresenceUpdate|optional=false|nullable=false
 field|shared|EventMap.presenceUpdateBulk|PresenceUpdateBulk|optional=false|nullable=false
 field|shared|EventMap.raw|RawDispatch|optional=false|nullable=false
+field|shared|EventMap.threadCreate|ThreadCreateEvent|optional=false|nullable=false
+field|shared|EventMap.threadDelete|ThreadDeletion|optional=false|nullable=false
+field|shared|EventMap.threadListSync|ThreadListSync|optional=false|nullable=false
+field|shared|EventMap.threadMembersUpdate|ThreadMembersUpdate|optional=false|nullable=false
+field|shared|EventMap.threadUpdate|GuildThreadChannel|optional=false|nullable=false
 field|shared|EventMap.typingStart|TypingStart|optional=false|nullable=false
 field|shared|EventMap.userUpdate|User|optional=false|nullable=false
 field|shared|EventMap.voiceStateSnapshot|VoiceStateSnapshot|optional=false|nullable=false
@@ -1475,6 +1553,55 @@ field|shared|FluxerlyErrorJson.message|string|optional=false|nullable=false
 field|shared|FluxerlyErrorJson.name|string|optional=false|nullable=false
 field|shared|FollowedChannel.channelId|string|optional=false|nullable=false
 field|shared|FollowedChannel.webhookId|string|optional=false|nullable=false
+field|shared|ForumChannelCreate.availableTags|readonly ForumTagInput[] | undefined|optional=true|nullable=false
+field|shared|ForumChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|ForumChannelCreate.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.defaultForumLayout|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.defaultReactionEmoji|ForumDefaultReactionInput | null | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.defaultTagSetting|"match_all" | "match_some" | null | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.defaultThreadRateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.flags|number | undefined|optional=true|nullable=false
+field|shared|ForumChannelCreate.name|string|optional=false|nullable=false
+field|shared|ForumChannelCreate.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|ForumChannelCreate.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.parentId|null | string | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|ForumChannelCreate.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.topic|null | string | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.type|15|optional=false|nullable=false
+field|shared|ForumChannelCreate.url|null | string | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
+field|shared|ForumChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
+field|shared|ForumDefaultReaction.emojiId|null | string|optional=false|nullable=true
+field|shared|ForumDefaultReaction.emojiName|null | string|optional=false|nullable=true
+field|shared|ForumDefaultReactionInput.emojiId|null | string | undefined|optional=true|nullable=true
+field|shared|ForumDefaultReactionInput.emojiName|null | string | undefined|optional=true|nullable=true
+field|shared|ForumPost.message|M|optional=false|nullable=false
+field|shared|ForumPost.thread|GuildPublicThreadChannel|optional=false|nullable=false
+field|shared|ForumPostCreate.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|ForumPostCreate.autoArchiveMinutes|number | undefined|optional=true|nullable=false
+field|shared|ForumPostCreate.message|ForumPostMessage|optional=false|nullable=false
+field|shared|ForumPostCreate.name|string|optional=false|nullable=false
+field|shared|ForumPostCreate.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|ForumPostMessage.allowedMentions|AllowedMentions | undefined|optional=true|nullable=false
+field|shared|ForumPostMessage.attachments|readonly AttachmentInput[] | undefined|optional=true|nullable=false
+field|shared|ForumPostMessage.content|string | undefined|optional=true|nullable=false
+field|shared|ForumPostMessage.embeds|readonly (EmbedBuilder | EmbedInput)[] | undefined|optional=true|nullable=false
+field|shared|ForumPostMessage.flags|number | undefined|optional=true|nullable=false
+field|shared|ForumPostMessage.stickerIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|ForumTag.emojiId|null | string|optional=false|nullable=true
+field|shared|ForumTag.emojiName|null | string|optional=false|nullable=true
+field|shared|ForumTag.id|string|optional=false|nullable=false
+field|shared|ForumTag.moderated|boolean|optional=false|nullable=false
+field|shared|ForumTag.name|string|optional=false|nullable=false
+field|shared|ForumTagInput.emojiId|null | string | undefined|optional=true|nullable=true
+field|shared|ForumTagInput.emojiName|null | string | undefined|optional=true|nullable=true
+field|shared|ForumTagInput.id|string | undefined|optional=true|nullable=false
+field|shared|ForumTagInput.moderated|boolean | undefined|optional=true|nullable=false
+field|shared|ForumTagInput.name|string|optional=false|nullable=false
 field|shared|ForwardMessageInput.attachmentIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|ForwardMessageInput.embedIndices|readonly number[] | undefined|optional=true|nullable=false
 field|shared|ForwardMessageInput.nonce|MessageNonce | undefined|optional=true|nullable=false
@@ -1520,6 +1647,8 @@ field|shared|Guild.systemChannelId|null | string | undefined|optional=true|nulla
 field|shared|Guild.verificationLevel|GuildVerificationLevel | undefined|optional=true|nullable=false
 field|shared|GuildAnnouncementChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|GuildAnnouncementChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementChannel.defaultThreadRateLimitPerUser|number | undefined|optional=true|nullable=false
 field|shared|GuildAnnouncementChannel.guildId|string|optional=false|nullable=false
 field|shared|GuildAnnouncementChannel.id|string|optional=false|nullable=false
 field|shared|GuildAnnouncementChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
@@ -1533,6 +1662,31 @@ field|shared|GuildAnnouncementChannel.position|number | undefined|optional=true|
 field|shared|GuildAnnouncementChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
 field|shared|GuildAnnouncementChannel.topic|null | string | undefined|optional=true|nullable=true
 field|shared|GuildAnnouncementChannel.type|5|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.archiveTimestamp|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.archived|boolean|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.autoArchiveMinutes|number|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementThreadChannel.createdAt|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.flags|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.id|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementThreadChannel.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementThreadChannel.locked|boolean|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.memberCount|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.membership|ThreadMembership | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.messageCount|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.name|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildAnnouncementThreadChannel.ownerId|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.parentId|string|optional=false|nullable=false
+field|shared|GuildAnnouncementThreadChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.totalMessageSent|number | undefined|optional=true|nullable=false
+field|shared|GuildAnnouncementThreadChannel.type|10|optional=false|nullable=false
 field|shared|GuildAuditLogEntryCreate.actionType|number|optional=false|nullable=false
 field|shared|GuildAuditLogEntryCreate.changes|readonly AuditLogChange[] | undefined|optional=true|nullable=false
 field|shared|GuildAuditLogEntryCreate.guildId|string|optional=false|nullable=false
@@ -1562,16 +1716,35 @@ field|shared|GuildCategoryChannel.parentId|null | string | undefined|optional=tr
 field|shared|GuildCategoryChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
 field|shared|GuildCategoryChannel.position|number | undefined|optional=true|nullable=false
 field|shared|GuildCategoryChannel.type|4|optional=false|nullable=false
+field|shared|GuildChannel.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|GuildChannel.archiveTimestamp|string | undefined|optional=true|nullable=false
+field|shared|GuildChannel.archived|boolean | undefined|optional=true|nullable=false
+field|shared|GuildChannel.autoArchiveMinutes|number | undefined|optional=true|nullable=false
+field|shared|GuildChannel.availableTags|readonly ForumTag[] | undefined|optional=true|nullable=false
 field|shared|GuildChannel.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|GuildChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|GuildChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildChannel.createdAt|string | undefined|optional=true|nullable=false
+field|shared|GuildChannel.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|GuildChannel.defaultForumLayout|number | undefined|optional=true|nullable=false
+field|shared|GuildChannel.defaultReactionEmoji|ForumDefaultReaction | null | undefined|optional=true|nullable=true
+field|shared|GuildChannel.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|GuildChannel.defaultTagSetting|string | undefined|optional=true|nullable=false
+field|shared|GuildChannel.defaultThreadRateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildChannel.flags|number | undefined|optional=true|nullable=false
 field|shared|GuildChannel.guildId|string|optional=false|nullable=false
 field|shared|GuildChannel.id|string|optional=false|nullable=false
+field|shared|GuildChannel.invitable|boolean | undefined|optional=true|nullable=false
 field|shared|GuildChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|GuildChannel.locked|boolean | undefined|optional=true|nullable=false
+field|shared|GuildChannel.memberCount|number | undefined|optional=true|nullable=false
+field|shared|GuildChannel.membership|ThreadMembership | undefined|optional=true|nullable=false
+field|shared|GuildChannel.messageCount|number | undefined|optional=true|nullable=false
 field|shared|GuildChannel.name|string | undefined|optional=true|nullable=false
 field|shared|GuildChannel.nsfw|boolean | undefined|optional=true|nullable=false
 field|shared|GuildChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildChannel.ownerId|string | undefined|optional=true|nullable=false
 field|shared|GuildChannel.parentId|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
 field|shared|GuildChannel.position|number | undefined|optional=true|nullable=false
@@ -1579,7 +1752,8 @@ field|shared|GuildChannel.rateLimitPerUser|number | undefined|optional=true|null
 field|shared|GuildChannel.rawType|number | undefined|optional=true|nullable=false
 field|shared|GuildChannel.rtcRegion|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.topic|null | string | undefined|optional=true|nullable=true
-field|shared|GuildChannel.type|"unknown" | 0 | 2 | 4 | 5 | 998|optional=false|nullable=false
+field|shared|GuildChannel.totalMessageSent|number | undefined|optional=true|nullable=false
+field|shared|GuildChannel.type|"unknown" | 0 | 10 | 11 | 12 | 15 | 16 | 2 | 4 | 5 | 998|optional=false|nullable=false
 field|shared|GuildChannel.url|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|GuildChannel.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
@@ -1639,6 +1813,28 @@ field|shared|GuildEmoji.id|string|optional=false|nullable=false
 field|shared|GuildEmoji.name|string|optional=false|nullable=false
 field|shared|GuildEmojisUpdate.guildId|string|optional=false|nullable=false
 field|shared|GuildEmojisUpdate.items|readonly GuildEmoji[]|optional=false|nullable=false
+field|shared|GuildForumChannel.availableTags|readonly ForumTag[] | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.defaultForumLayout|number | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.defaultReactionEmoji|ForumDefaultReaction | null | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.defaultTagSetting|string | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.defaultThreadRateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.flags|number | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildForumChannel.id|string|optional=false|nullable=false
+field|shared|GuildForumChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.name|string | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.parentId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildForumChannel.topic|null | string | undefined|optional=true|nullable=true
+field|shared|GuildForumChannel.type|15|optional=false|nullable=false
 field|shared|GuildHealthUpdate.degraded|boolean|optional=false|nullable=false
 field|shared|GuildHealthUpdate.guildId|string|optional=false|nullable=false
 field|shared|GuildIterationQuery.after|string | undefined|optional=true|nullable=false
@@ -1685,7 +1881,29 @@ field|shared|GuildListSummary.splash|null | string | undefined|optional=true|nul
 field|shared|GuildListSummary.splashCardAlignment|GuildSplashCardAlignment | undefined|optional=true|nullable=false
 field|shared|GuildListSummary.systemChannelFlags|number | undefined|optional=true|nullable=false
 field|shared|GuildListSummary.systemChannelId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildListSummary.threadsActive|boolean|optional=false|nullable=false
 field|shared|GuildListSummary.verificationLevel|GuildVerificationLevel | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.availableTags|readonly ForumTag[] | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.defaultReactionEmoji|ForumDefaultReaction | null | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.defaultTagSetting|string | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.defaultThreadRateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.flags|number | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildMediaChannel.id|string|optional=false|nullable=false
+field|shared|GuildMediaChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.name|string | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.parentId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildMediaChannel.topic|null | string | undefined|optional=true|nullable=true
+field|shared|GuildMediaChannel.type|16|optional=false|nullable=false
 field|shared|GuildMember.accentColor|null | number | undefined|optional=true|nullable=true
 field|shared|GuildMember.avatar|null | string | undefined|optional=true|nullable=true
 field|shared|GuildMember.banner|null | string | undefined|optional=true|nullable=true
@@ -1726,6 +1944,58 @@ field|shared|GuildOperationFailure.retryAfterMs|null | number | undefined|option
 field|shared|GuildOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|GuildOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|native|GuildOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.archiveTimestamp|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.archived|boolean|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.autoArchiveMinutes|number|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildPrivateThreadChannel.createdAt|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.flags|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.id|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.invitable|boolean|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildPrivateThreadChannel.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|GuildPrivateThreadChannel.locked|boolean|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.memberCount|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.membership|ThreadMembership | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.messageCount|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.name|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildPrivateThreadChannel.ownerId|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.parentId|string|optional=false|nullable=false
+field|shared|GuildPrivateThreadChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.totalMessageSent|number | undefined|optional=true|nullable=false
+field|shared|GuildPrivateThreadChannel.type|12|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.archiveTimestamp|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.archived|boolean|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.autoArchiveMinutes|number|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildPublicThreadChannel.createdAt|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.flags|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.id|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildPublicThreadChannel.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|GuildPublicThreadChannel.locked|boolean|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.memberCount|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.membership|ThreadMembership | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.messageCount|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.name|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildPublicThreadChannel.ownerId|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.parentId|string|optional=false|nullable=false
+field|shared|GuildPublicThreadChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.totalMessageSent|number | undefined|optional=true|nullable=false
+field|shared|GuildPublicThreadChannel.type|11|optional=false|nullable=false
 field|shared|GuildRole.color|number|optional=false|nullable=false
 field|shared|GuildRole.guildId|string|optional=false|nullable=false
 field|shared|GuildRole.hoist|boolean|optional=false|nullable=false
@@ -1748,6 +2018,8 @@ field|shared|GuildStickersUpdate.guildId|string|optional=false|nullable=false
 field|shared|GuildStickersUpdate.items|readonly GuildSticker[]|optional=false|nullable=false
 field|shared|GuildTextChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|GuildTextChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildTextChannel.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|GuildTextChannel.defaultThreadRateLimitPerUser|number | undefined|optional=true|nullable=false
 field|shared|GuildTextChannel.guildId|string|optional=false|nullable=false
 field|shared|GuildTextChannel.id|string|optional=false|nullable=false
 field|shared|GuildTextChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
@@ -1761,6 +2033,33 @@ field|shared|GuildTextChannel.position|number | undefined|optional=true|nullable
 field|shared|GuildTextChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
 field|shared|GuildTextChannel.topic|null | string | undefined|optional=true|nullable=true
 field|shared|GuildTextChannel.type|0|optional=false|nullable=false
+field|shared|GuildThreadChannel.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.archiveTimestamp|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.archived|boolean|optional=false|nullable=false
+field|shared|GuildThreadChannel.autoArchiveMinutes|number|optional=false|nullable=false
+field|shared|GuildThreadChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|GuildThreadChannel.createdAt|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.flags|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.guildId|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.id|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.invitable|boolean | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|GuildThreadChannel.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|GuildThreadChannel.locked|boolean|optional=false|nullable=false
+field|shared|GuildThreadChannel.memberCount|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.membership|ThreadMembership | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.messageCount|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.name|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|GuildThreadChannel.ownerId|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.parentId|string|optional=false|nullable=false
+field|shared|GuildThreadChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.position|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.totalMessageSent|number | undefined|optional=true|nullable=false
+field|shared|GuildThreadChannel.type|10 | 11 | 12|optional=false|nullable=false
 field|shared|GuildUnknownChannel.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|GuildUnknownChannel.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|GuildUnknownChannel.contentWarningText|null | string | undefined|optional=true|nullable=true
@@ -1887,6 +2186,27 @@ field|shared|LinkChannelCreate.userLimit|null | number | undefined|optional=true
 field|shared|LinkChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|shared|LogLevelSettings.categories|Readonly<Partial<Record<LogCategory, LogThreshold>>> | undefined|optional=true|nullable=false
 field|shared|LogLevelSettings.level|LogThreshold | undefined|optional=true|nullable=false
+field|shared|MediaChannelCreate.availableTags|readonly ForumTagInput[] | undefined|optional=true|nullable=false
+field|shared|MediaChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|MediaChannelCreate.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.defaultReactionEmoji|ForumDefaultReactionInput | null | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.defaultSortOrder|null | number | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.defaultTagSetting|"match_all" | "match_some" | null | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.defaultThreadRateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.flags|number | undefined|optional=true|nullable=false
+field|shared|MediaChannelCreate.name|string|optional=false|nullable=false
+field|shared|MediaChannelCreate.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|MediaChannelCreate.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.parentId|null | string | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|MediaChannelCreate.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.topic|null | string | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.type|16|optional=false|nullable=false
+field|shared|MediaChannelCreate.url|null | string | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
+field|shared|MediaChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|shared|MemberChunk.count|number|optional=false|nullable=false
 field|shared|MemberChunk.guildId|string|optional=false|nullable=false
 field|shared|MemberChunk.index|number|optional=false|nullable=false
@@ -1986,6 +2306,7 @@ field|shared|Message.reactions|null | readonly MessageReactionSummary[] | undefi
 field|shared|Message.referencedMessage|ReferencedMessage | null | undefined|optional=true|nullable=true
 field|shared|Message.referencedUsers|null | readonly MessageUser[] | undefined|optional=true|nullable=true
 field|shared|Message.stickers|readonly MessageSticker[]|optional=false|nullable=false
+field|shared|Message.thread|GuildThreadChannel | undefined|optional=true|nullable=false
 field|shared|Message.tts|boolean | undefined|optional=true|nullable=false
 field|shared|Message.type|number | undefined|optional=true|nullable=false
 field|shared|Message.webhookId|string | undefined|optional=true|nullable=false
@@ -2144,6 +2465,7 @@ field|shared|MessageSearchPage.hitsPerPage|number | undefined|optional=true|null
 field|shared|MessageSearchPage.indexing|false | true|optional=false|nullable=false
 field|shared|MessageSearchPage.messages|readonly M[] | undefined|optional=true|nullable=false
 field|shared|MessageSearchPage.page|number | undefined|optional=true|nullable=false
+field|shared|MessageSearchPage.threads|readonly GuildThreadChannel[] | undefined|optional=true|nullable=false
 field|shared|MessageSearchPage.total|number | undefined|optional=true|nullable=false
 field|shared|MessageSearchQuery.attachmentExtensions|readonly string[] | undefined|optional=true|nullable=false
 field|shared|MessageSearchQuery.attachmentFilenames|readonly string[] | undefined|optional=true|nullable=false
@@ -2182,6 +2504,7 @@ field|shared|MessageSearchResultsPage.hitsPerPage|number|optional=false|nullable
 field|shared|MessageSearchResultsPage.indexing|false|optional=false|nullable=false
 field|shared|MessageSearchResultsPage.messages|readonly M[]|optional=false|nullable=false
 field|shared|MessageSearchResultsPage.page|number|optional=false|nullable=false
+field|shared|MessageSearchResultsPage.threads|readonly GuildThreadChannel[]|optional=false|nullable=false
 field|shared|MessageSearchResultsPage.total|number|optional=false|nullable=false
 field|shared|MessageSnapshot.attachments|null | readonly Attachment[] | undefined|optional=true|nullable=true
 field|shared|MessageSnapshot.content|null | string | undefined|optional=true|nullable=true
@@ -2319,6 +2642,7 @@ field|shared|PaginationError.toJSON|() => FluxerlyErrorJson|optional=false|nulla
 field|shared|PermissionInput.channel|GuildChannel | undefined|optional=true|nullable=false
 field|shared|PermissionInput.guild|Guild|optional=false|nullable=false
 field|shared|PermissionInput.member|GuildMember|optional=false|nullable=false
+field|shared|PermissionInput.parentChannel|GuildChannel | undefined|optional=true|nullable=false
 field|shared|PermissionInput.roles|readonly GuildRole[]|optional=false|nullable=false
 field|shared|PermissionOverwrite.allow|bigint|optional=false|nullable=false
 field|shared|PermissionOverwrite.deny|bigint|optional=false|nullable=false
@@ -2421,6 +2745,7 @@ field|shared|ReferencedMessage.pinned|boolean | undefined|optional=true|nullable
 field|shared|ReferencedMessage.reactions|null | readonly MessageReactionSummary[] | undefined|optional=true|nullable=true
 field|shared|ReferencedMessage.referencedUsers|null | readonly MessageUser[] | undefined|optional=true|nullable=true
 field|shared|ReferencedMessage.stickers|readonly MessageSticker[]|optional=false|nullable=false
+field|shared|ReferencedMessage.thread|GuildThreadChannel | undefined|optional=true|nullable=false
 field|shared|ReferencedMessage.tts|boolean | undefined|optional=true|nullable=false
 field|shared|ReferencedMessage.type|number | undefined|optional=true|nullable=false
 field|shared|ReferencedMessage.webhookId|string | undefined|optional=true|nullable=false
@@ -2534,6 +2859,8 @@ field|native|Subscription.waitForClose|() => Effect<void, EventOverflowError, ne
 field|shared|TextChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|TextChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
 field|shared|TextChannelCreate.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|TextChannelCreate.defaultAutoArchiveMinutes|null | number | undefined|optional=true|nullable=true
+field|shared|TextChannelCreate.defaultThreadRateLimitPerUser|null | number | undefined|optional=true|nullable=true
 field|shared|TextChannelCreate.name|string|optional=false|nullable=false
 field|shared|TextChannelCreate.nsfw|boolean | undefined|optional=true|nullable=false
 field|shared|TextChannelCreate.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
@@ -2545,6 +2872,99 @@ field|shared|TextChannelCreate.type|0|optional=false|nullable=false
 field|shared|TextChannelCreate.url|null | string | undefined|optional=true|nullable=true
 field|shared|TextChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|TextChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
+field|shared|ThreadCreate.autoArchiveMinutes|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreate.invitable|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadCreate.name|string|optional=false|nullable=false
+field|shared|ThreadCreate.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreate.type|10 | 11 | 12 | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.archiveTimestamp|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.archived|boolean|optional=false|nullable=false
+field|shared|ThreadCreateEvent.autoArchiveMinutes|number|optional=false|nullable=false
+field|shared|ThreadCreateEvent.contentWarningLevel|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.contentWarningText|null | string | undefined|optional=true|nullable=true
+field|shared|ThreadCreateEvent.createdAt|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.flags|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.guildId|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.id|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.invitable|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.isNewlyCreated|boolean|optional=false|nullable=false
+field|shared|ThreadCreateEvent.lastMessageId|null | string | undefined|optional=true|nullable=true
+field|shared|ThreadCreateEvent.lastPinTimestamp|null | string | undefined|optional=true|nullable=true
+field|shared|ThreadCreateEvent.locked|boolean|optional=false|nullable=false
+field|shared|ThreadCreateEvent.memberCount|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.membership|ThreadMembership | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.messageCount|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.name|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.nsfwOverride|boolean | null | undefined|optional=true|nullable=true
+field|shared|ThreadCreateEvent.ownerId|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.parentId|string|optional=false|nullable=false
+field|shared|ThreadCreateEvent.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.position|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.totalMessageSent|number | undefined|optional=true|nullable=false
+field|shared|ThreadCreateEvent.type|10 | 11 | 12|optional=false|nullable=false
+field|shared|ThreadDeletion.guildId|string|optional=false|nullable=false
+field|shared|ThreadDeletion.id|string|optional=false|nullable=false
+field|shared|ThreadDeletion.parentId|string|optional=false|nullable=false
+field|shared|ThreadDeletion.type|10 | 11 | 12|optional=false|nullable=false
+field|shared|ThreadEdit.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.archived|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.autoArchiveMinutes|number | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.invitable|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.locked|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.name|string | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.pinned|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadEdit.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|ThreadFromMessageCreate.autoArchiveMinutes|number | undefined|optional=true|nullable=false
+field|shared|ThreadFromMessageCreate.name|string|optional=false|nullable=false
+field|shared|ThreadFromMessageCreate.rateLimitPerUser|number | undefined|optional=true|nullable=false
+field|shared|ThreadListSync.guildId|string|optional=false|nullable=false
+field|shared|ThreadListSync.parentIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|ThreadListSync.threads|readonly GuildThreadChannel[]|optional=false|nullable=false
+field|shared|ThreadMember.flags|number|optional=false|nullable=false
+field|shared|ThreadMember.joinedAt|string|optional=false|nullable=false
+field|shared|ThreadMember.member|GuildMember | undefined|optional=true|nullable=false
+field|shared|ThreadMember.threadId|string|optional=false|nullable=false
+field|shared|ThreadMember.userId|string|optional=false|nullable=false
+field|shared|ThreadMemberIterationQuery.after|string | undefined|optional=true|nullable=false
+field|shared|ThreadMemberIterationQuery.maxItems|number|optional=false|nullable=false
+field|shared|ThreadMemberIterationQuery.maxPages|number | undefined|optional=true|nullable=false
+field|shared|ThreadMemberIterationQuery.pageSize|number | undefined|optional=true|nullable=false
+field|shared|ThreadMemberIterationQuery.withMember|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadMemberPageQuery.after|string | undefined|optional=true|nullable=false
+field|shared|ThreadMemberPageQuery.limit|number | undefined|optional=true|nullable=false
+field|shared|ThreadMemberPageQuery.withMember|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadMemberQuery.withMember|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadMembersUpdate.added|readonly ThreadMember[]|optional=false|nullable=false
+field|shared|ThreadMembersUpdate.guildId|string|optional=false|nullable=false
+field|shared|ThreadMembersUpdate.memberCount|number|optional=false|nullable=false
+field|shared|ThreadMembersUpdate.removedUserIds|readonly string[]|optional=false|nullable=false
+field|shared|ThreadMembersUpdate.threadId|string|optional=false|nullable=false
+field|shared|ThreadMembership.flags|number|optional=false|nullable=false
+field|shared|ThreadMembership.joinedAt|string|optional=false|nullable=false
+field|shared|ThreadSearchIndexingPage.indexing|true|optional=false|nullable=false
+field|shared|ThreadSearchPage.firstMessages|readonly M[] | undefined|optional=true|nullable=false
+field|shared|ThreadSearchPage.hasMore|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadSearchPage.indexing|false | true|optional=false|nullable=false
+field|shared|ThreadSearchPage.threads|readonly GuildThreadChannel[] | undefined|optional=true|nullable=false
+field|shared|ThreadSearchPage.total|number | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.archived|boolean | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.limit|number | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.maxId|string | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.minId|string | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.name|string | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.offset|number | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.sortBy|"archive_time" | "creation_time" | "last_message_time" | "relevance" | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.sortOrder|"asc" | "desc" | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.tagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|ThreadSearchQuery.tagSetting|"match_all" | "match_some" | undefined|optional=true|nullable=false
+field|shared|ThreadSearchResultsPage.firstMessages|readonly M[]|optional=false|nullable=false
+field|shared|ThreadSearchResultsPage.hasMore|boolean|optional=false|nullable=false
+field|shared|ThreadSearchResultsPage.indexing|false|optional=false|nullable=false
+field|shared|ThreadSearchResultsPage.threads|readonly GuildThreadChannel[]|optional=false|nullable=false
+field|shared|ThreadSearchResultsPage.total|number|optional=false|nullable=false
 field|native|TimeoutOptions.auditReason|string | undefined|optional=true|nullable=false
 field|native|TimeoutOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|native|TimeoutOptions.timeoutReason|null | string | undefined|optional=true|nullable=true
@@ -2661,6 +3081,8 @@ field|shared|WebhookCredentials.revealToken|() => string|optional=false|nullable
 field|shared|WebhookEdit.avatar|null | string | undefined|optional=true|nullable=true
 field|shared|WebhookEdit.channelId|string | undefined|optional=true|nullable=false
 field|shared|WebhookEdit.name|string | undefined|optional=true|nullable=false
+field|shared|WebhookForumPostOptions.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|WebhookForumPostOptions.threadName|string | undefined|optional=true|nullable=false
 field|shared|WebhookForwardReference.source|ForwardMessageInput|optional=false|nullable=false
 field|shared|WebhookForwardReference.type|"forward"|optional=false|nullable=false
 field|shared|WebhookMessageEdit.allowedMentions|AllowedMentions | undefined|optional=true|nullable=false
@@ -2668,6 +3090,7 @@ field|shared|WebhookMessageEdit.content|string | undefined|optional=true|nullabl
 field|shared|WebhookMessageEdit.embeds|readonly (EmbedBuilder | EmbedInput)[] | undefined|optional=true|nullable=false
 field|shared|WebhookMessageEdit.flags|number | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.allowedMentions|AllowedMentions | undefined|optional=true|nullable=false
+field|shared|WebhookMessageInput.appliedTagIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.attachments|readonly AttachmentInput[] | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.avatarUrl|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.content|string | undefined|optional=true|nullable=false
@@ -2676,11 +3099,16 @@ field|shared|WebhookMessageInput.flags|number | undefined|optional=true|nullable
 field|shared|WebhookMessageInput.messageReference|WebhookForwardReference | WebhookReplyReference | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.nonce|MessageNonce | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.stickerIds|readonly string[] | undefined|optional=true|nullable=false
+field|shared|WebhookMessageInput.threadId|string | undefined|optional=true|nullable=false
+field|shared|WebhookMessageInput.threadName|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.username|string | undefined|optional=true|nullable=false
+field|native|WebhookMessageOperationOptions.threadId|string | undefined|optional=true|nullable=false
+field|native|WebhookMessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.allowedMentions|AllowedMentions | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.avatarUrl|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.flags|number | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.nonce|MessageNonce | undefined|optional=true|nullable=false
+field|shared|WebhookMessageOptions.threadId|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.username|string | undefined|optional=true|nullable=false
 field|shared|WebhookOperationError._tag|"WebhookOperationError"|optional=false|nullable=false
 field|shared|WebhookOperationError.apiError|ApiErrorDetail | null|optional=false|nullable=true

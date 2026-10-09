@@ -96,6 +96,7 @@ export type PaginationOperation =
     | "iterateReactionUsers"
     | "iteratePins"
     | "auditLogs.iterate"
+    | "threads.iterateMembers"
 
 /** What each non-input pagination failure means, for the error message */
 const paginationExplanations: Readonly<Record<PaginationError["reason"], string>> = {

@@ -10,6 +10,8 @@
         "---Bot guides---",
         "messages",
         "announcement-channels",
+        "threads",
+        "forum-channels",
         "commands",
         "events-and-collectors",
         "guilds-and-permissions",

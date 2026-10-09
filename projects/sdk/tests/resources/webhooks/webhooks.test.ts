@@ -493,6 +493,8 @@ test.each(modes)(
             MessageFlags.IsCrosspost,
             MessageFlags.SourceMessageDeleted,
             MessageFlags.VoiceMessage,
+            MessageFlags.HasThread,
+            MessageFlags.FailedToMentionSomeRolesInThread,
             MessageFlags.Crossposted | MessageFlags.SuppressEmbeds,
             -1,
             1.5,

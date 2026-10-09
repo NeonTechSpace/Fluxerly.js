@@ -88,6 +88,8 @@ To release cached data while the bot runs, call `client.cache.clear("messages")`
 The cache stores data only in memory. A message may be missing because it was removed to make room, expired or conflicted with another observation of the same message. A lost gateway connection also clears the messages cached before it, even when the connection recovers, because changes during the gap may have been missed.
 The entry and byte limits do not count runtime overhead or copies held elsewhere in the application. To react to cache changes, register a listener with `client.cache.onChange`, which reports each stored, deleted or cleared entry
 
+Deleting a channel or a [thread](/docs/{{version}}/threads/) removes its cached messages. Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no thread deletion for them. A message does not record which channel holds its thread, so the cache then also removes the messages of every channel in that community that the channel cache does not hold. Messages read through REST carry no community, so they count as possibly in that community. Without `cache.channels`, all of these messages go. With it, which also fills from each community's startup snapshot, messages in the channels and threads it still holds stay
+
 See [`ClientOptions.cache`](/docs/{{version}}/api/interfaces/js-ts.ClientOptions/#cache) and [`MessageCacheSettings`](/docs/{{version}}/api/interfaces/js-ts.MessageCacheSettings/) for the complete cache contract
 
 </details>

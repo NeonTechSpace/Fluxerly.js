@@ -86,6 +86,66 @@ test.each(modes)(
     },
 )
 
+// Fluxer 4749eb7f: ThreadDenials, ThreadParentSettings, ForumTagRules, ThreadRepository and WebhookService define these
+// rejections. SEARCH_INDEX_NOT_READY is left out because Fluxer answers it with HTTP 202, which the SDK returns as a
+// search page, and WEBHOOK_FORUM_TARGET_CONFLICT because webhook sends refuse a post name together with a thread before
+// any request
+const threadRejections = [
+    { providerCode: "THREAD_ARCHIVED", code: "threadArchived", status: 400 },
+    { providerCode: "THREAD_LOCKED", code: "threadLocked", status: 400 },
+    { providerCode: "THREAD_ALREADY_CREATED_FOR_MESSAGE", code: "threadAlreadyCreated", status: 400 },
+    { providerCode: "CHANNEL_HAS_THREADS", code: "channelHasThreads", status: 400 },
+    { providerCode: "INVALID_CHANNEL_TYPE", code: "invalidChannelType", status: 400 },
+    { providerCode: "FORUM_TAG_NAMES_MUST_BE_UNIQUE", code: "forumTagNamesNotUnique", status: 400 },
+    { providerCode: "FORUM_TAG_REQUIRED", code: "forumTagRequired", status: 400 },
+    { providerCode: "NO_TAGS_AVAILABLE_TO_NON_MODERATORS", code: "noTagsAvailable", status: 400 },
+    { providerCode: "HIDE_MEDIA_DOWNLOAD_OPTION_MEDIA_ONLY", code: "mediaChannelRequired", status: 400 },
+    { providerCode: "WEBHOOK_FORUM_TARGET_REQUIRED", code: "webhookForumTargetRequired", status: 400 },
+    { providerCode: "WEBHOOK_THREAD_NAME_REQUIRES_FORUM", code: "webhookThreadNameRequiresForum", status: 400 },
+    { providerCode: "MAX_ACTIVE_THREADS", code: "resourceLimit", status: 400 },
+    { providerCode: "MAX_FORUM_TAGS", code: "resourceLimit", status: 400 },
+    { providerCode: "MAX_PINNED_THREADS_IN_FORUM", code: "resourceLimit", status: 400 },
+    { providerCode: "MAX_THREAD_MEMBERS", code: "resourceLimit", status: 400 },
+    { providerCode: "UNKNOWN_FORUM_TAG", code: "unknownResource", status: 404 },
+    { providerCode: "UNKNOWN_THREAD_MEMBER", code: "unknownResource", status: 404 },
+] as const
+
+test.each(modes)(
+    "%s classifies thread, forum tag and webhook post rejections with a category and a hint",
+    async (mode) => {
+        onTestFinished(() => void vi.unstubAllGlobals())
+        let rejection: (typeof threadRejections)[number] = threadRejections[0]
+        const marker = "private thread response text"
+        stubFetchWithHostedDiscovery(async () =>
+            Response.json({ code: rejection.providerCode, message: marker }, { status: rejection.status }),
+        )
+        const client = await setup(mode)
+        for (const reviewed of threadRejections) {
+            rejection = reviewed
+            const error = await expectErr(
+                client.rest.request({ method: "POST", path: "/channels/10/messages", body: {} }),
+            )
+            expect(error).toMatchObject({
+                _tag: "RestRequestError",
+                status: reviewed.status,
+                outcome: "rejected",
+                apiError: {
+                    providerCode: reviewed.providerCode,
+                    code: reviewed.code,
+                    explanation: expect.stringMatching(/\S/),
+                },
+                details: { apiError: reviewed.providerCode },
+                hint: expect.stringMatching(/\S/),
+            })
+            expect(errors.apiCode(error)).toBe(reviewed.code)
+            expect(native.errors.apiCode(error)).toBe(reviewed.code)
+            expect(errors.isRetryable(error)).toBe(false)
+            expect(error.details).not.toHaveProperty("providerCode")
+            for (const text of [error.message, JSON.stringify(error)]) expect(text).not.toContain(marker)
+        }
+    },
+)
+
 test.each(modes)("%s treats the retired phone-verification code as unrecognized", async (mode) => {
     onTestFinished(() => void vi.unstubAllGlobals())
     const providerCode = "GUILD_PHONE_VERIFICATION_REQUIRED"

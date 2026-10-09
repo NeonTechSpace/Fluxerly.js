@@ -18,6 +18,9 @@ export interface PermissionHelpers {
      * Community owner or base Administrator gets all flags.
      * Otherwise the calculation applies everyone, combined roles, then member overwrites.
      * Only the target channel's stored overwrites are used, not its parent category's.
+     * A thread uses the overwrites of the parentChannel supplied with it, then grants SendMessages exactly when
+     * SendMessagesInThreads is granted, as Fluxer does. A thread without its parentChannel, or with any other channel as
+     * parentChannel, is rejected.
      * Missing or inconsistent input is misuse and throws GuildOperationError for permissions.calculate with reason input in both APIs
      *
      * @remarks
@@ -28,6 +31,7 @@ export interface PermissionHelpers {
     /**
      * Fetch guild, member, role and optional channel data, then calculate their permission flags.
      * No gateway connection or cache-first lookup is needed.
+     * A thread channel adds a read of its parent channel, and the result follows Fluxer's thread rule as in calculate.
      * Underlying reads can enter enabled caches, but the calculated result is not cached.
      * The sequential reads are separate observations, so the result does not guarantee a later action will succeed.
      * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the whole helper with shared read retries and awaited cancellation cleanup.

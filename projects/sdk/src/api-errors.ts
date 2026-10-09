@@ -84,6 +84,50 @@ export const apiErrorMappings = {
         code: "publishedMessageEditRateLimited",
         explanation: "The published message has reached its editing rate limit",
     },
+    INVALID_CHANNEL_TYPE: {
+        code: "invalidChannelType",
+        explanation: "Fluxer does not allow this operation for the type of this channel",
+    },
+    CHANNEL_HAS_THREADS: {
+        code: "channelHasThreads",
+        explanation: "The channel has private threads and cannot become an announcement channel",
+    },
+    THREAD_ALREADY_CREATED_FOR_MESSAGE: {
+        code: "threadAlreadyCreated",
+        explanation: "The message already has a thread",
+    },
+    THREAD_ARCHIVED: {
+        code: "threadArchived",
+        explanation: "Fluxer does not allow this operation in an archived thread",
+    },
+    THREAD_LOCKED: {
+        code: "threadLocked",
+        explanation: "Fluxer allows only members who can manage threads to act in a locked thread",
+    },
+    FORUM_TAG_NAMES_MUST_BE_UNIQUE: {
+        code: "forumTagNamesNotUnique",
+        explanation: "Fluxer requires every tag of a forum or media channel to have a different name",
+    },
+    FORUM_TAG_REQUIRED: {
+        code: "forumTagRequired",
+        explanation: "The forum or media channel requires every post to have at least one tag",
+    },
+    NO_TAGS_AVAILABLE_TO_NON_MODERATORS: {
+        code: "noTagsAvailable",
+        explanation: "The channel requires a tag on every post but has no tag that is not moderated",
+    },
+    HIDE_MEDIA_DOWNLOAD_OPTION_MEDIA_ONLY: {
+        code: "mediaChannelRequired",
+        explanation: "Fluxer accepts the flag that hides download options only on a media channel",
+    },
+    WEBHOOK_FORUM_TARGET_REQUIRED: {
+        code: "webhookForumTargetRequired",
+        explanation: "A webhook in a forum or media channel needs either a post name or an existing post to send to",
+    },
+    WEBHOOK_THREAD_NAME_REQUIRES_FORUM: {
+        code: "webhookThreadNameRequiresForum",
+        explanation: "Fluxer accepts a post name and tags only from a webhook in a forum or media channel",
+    },
     CAPTCHA_REQUIRED: { code: "captchaRequired", explanation: "Fluxer requires CAPTCHA verification" },
     INVALID_CAPTCHA: { code: "invalidCaptcha", explanation: "Fluxer rejected the CAPTCHA verification" },
     INVALID_FORM_BODY: { code: "invalidFormBody", explanation: "Fluxer rejected one or more request fields" },
@@ -91,12 +135,14 @@ export const apiErrorMappings = {
     UNKNOWN_APPLICATION: { code: "unknownResource", explanation: "The requested application was not found" },
     UNKNOWN_CHANNEL: { code: "unknownResource", explanation: "The requested channel was not found" },
     UNKNOWN_EMOJI: { code: "unknownResource", explanation: "The requested emoji was not found" },
+    UNKNOWN_FORUM_TAG: { code: "unknownResource", explanation: "The requested forum tag was not found" },
     UNKNOWN_GUILD: { code: "unknownResource", explanation: "The requested community was not found" },
     UNKNOWN_INVITE: { code: "unknownResource", explanation: "The requested invite was not found" },
     UNKNOWN_MEMBER: { code: "unknownResource", explanation: "The requested member was not found" },
     UNKNOWN_MESSAGE: { code: "unknownResource", explanation: "The requested message was not found" },
     UNKNOWN_ROLE: { code: "unknownResource", explanation: "The requested role was not found" },
     UNKNOWN_STICKER: { code: "unknownResource", explanation: "The requested sticker was not found" },
+    UNKNOWN_THREAD_MEMBER: { code: "unknownResource", explanation: "The requested thread member was not found" },
     UNKNOWN_USER: { code: "unknownResource", explanation: "The requested user was not found" },
     UNKNOWN_WEBHOOK: { code: "unknownResource", explanation: "The requested webhook was not found" },
     MISSING_OAUTH_SCOPE: { code: "missingOAuthScope", explanation: "The OAuth token lacks a required scope" },
@@ -173,14 +219,21 @@ export const apiErrorMappings = {
         code: "featureNotAvailableSelfHosted",
         explanation: "Fluxer does not offer this feature on this self-hosted instance",
     },
+    MAX_ACTIVE_THREADS: { code: "resourceLimit", explanation: "Fluxer's community active-thread limit was reached" },
     MAX_CATEGORY_CHANNELS: { code: "resourceLimit", explanation: "Fluxer's category-channel limit was reached" },
     MAX_EMOJIS: { code: "resourceLimit", explanation: "Fluxer's emoji limit was reached" },
+    MAX_FORUM_TAGS: { code: "resourceLimit", explanation: "Fluxer's forum-tag limit was reached" },
     MAX_GUILD_CHANNELS: { code: "resourceLimit", explanation: "Fluxer's community channel limit was reached" },
     MAX_GUILD_MEMBERS: { code: "resourceLimit", explanation: "Fluxer's community member limit was reached" },
     MAX_GUILD_ROLES: { code: "resourceLimit", explanation: "Fluxer's community role limit was reached" },
     MAX_INVITES: { code: "resourceLimit", explanation: "Fluxer's community invite limit was reached" },
+    MAX_PINNED_THREADS_IN_FORUM: {
+        code: "resourceLimit",
+        explanation: "Fluxer's pinned-post limit for a forum or media channel was reached",
+    },
     MAX_REACTIONS: { code: "resourceLimit", explanation: "Fluxer's reaction limit was reached" },
     MAX_STICKERS: { code: "resourceLimit", explanation: "Fluxer's sticker limit was reached" },
+    MAX_THREAD_MEMBERS: { code: "resourceLimit", explanation: "Fluxer's thread member limit was reached" },
     MAX_WEBHOOKS_PER_CHANNEL: {
         code: "resourceLimit",
         explanation: "Fluxer's channel-webhook limit was reached",
@@ -227,7 +280,9 @@ export const validationErrorMappings = {
  * Stable SDK category of a recognized Fluxer API rejection, read from ApiErrorDetail.code.
  * Branch on this rather than on providerCode when several server codes mean the same thing, such as every resource limit.
  * Announcement, follow, channel conversion and publishing preconditions have distinct categories. Publishing and
- * published-message editing limits are separate from the general rateLimited category
+ * published-message editing limits are separate from the general rateLimited category. Thread state, forum tag and
+ * webhook post preconditions also have distinct categories, while the thread, tag and pinned-post limits join
+ * resourceLimit and a missing forum tag or thread member joins unknownResource
  *
  * @category Errors
  */
@@ -249,6 +304,17 @@ export type ApiErrorCode =
     | "messageNotCrosspostable"
     | "messageCrosspostRateLimited"
     | "publishedMessageEditRateLimited"
+    | "invalidChannelType"
+    | "channelHasThreads"
+    | "threadAlreadyCreated"
+    | "threadArchived"
+    | "threadLocked"
+    | "forumTagNamesNotUnique"
+    | "forumTagRequired"
+    | "noTagsAvailable"
+    | "mediaChannelRequired"
+    | "webhookForumTargetRequired"
+    | "webhookThreadNameRequiresForum"
     | "captchaRequired"
     | "invalidCaptcha"
     | "invalidFormBody"
@@ -309,6 +375,17 @@ export type ApiProviderCode =
     | "MESSAGE_NOT_CROSSPOSTABLE"
     | "MESSAGE_CROSSPOST_RATE_LIMITED"
     | "PUBLISHED_MESSAGE_EDIT_RATE_LIMITED"
+    | "INVALID_CHANNEL_TYPE"
+    | "CHANNEL_HAS_THREADS"
+    | "THREAD_ALREADY_CREATED_FOR_MESSAGE"
+    | "THREAD_ARCHIVED"
+    | "THREAD_LOCKED"
+    | "FORUM_TAG_NAMES_MUST_BE_UNIQUE"
+    | "FORUM_TAG_REQUIRED"
+    | "NO_TAGS_AVAILABLE_TO_NON_MODERATORS"
+    | "HIDE_MEDIA_DOWNLOAD_OPTION_MEDIA_ONLY"
+    | "WEBHOOK_FORUM_TARGET_REQUIRED"
+    | "WEBHOOK_THREAD_NAME_REQUIRES_FORUM"
     | "CAPTCHA_REQUIRED"
     | "INVALID_CAPTCHA"
     | "INVALID_FORM_BODY"
@@ -316,12 +393,14 @@ export type ApiProviderCode =
     | "UNKNOWN_APPLICATION"
     | "UNKNOWN_CHANNEL"
     | "UNKNOWN_EMOJI"
+    | "UNKNOWN_FORUM_TAG"
     | "UNKNOWN_GUILD"
     | "UNKNOWN_INVITE"
     | "UNKNOWN_MEMBER"
     | "UNKNOWN_MESSAGE"
     | "UNKNOWN_ROLE"
     | "UNKNOWN_STICKER"
+    | "UNKNOWN_THREAD_MEMBER"
     | "UNKNOWN_USER"
     | "UNKNOWN_WEBHOOK"
     | "MISSING_OAUTH_SCOPE"
@@ -359,14 +438,18 @@ export type ApiProviderCode =
     | "CANNOT_EXECUTE_ON_DM"
     | "INVITES_DISABLED"
     | "FEATURE_NOT_AVAILABLE_SELF_HOSTED"
+    | "MAX_ACTIVE_THREADS"
     | "MAX_CATEGORY_CHANNELS"
     | "MAX_EMOJIS"
+    | "MAX_FORUM_TAGS"
     | "MAX_GUILD_CHANNELS"
     | "MAX_GUILD_MEMBERS"
     | "MAX_GUILD_ROLES"
     | "MAX_INVITES"
+    | "MAX_PINNED_THREADS_IN_FORUM"
     | "MAX_REACTIONS"
     | "MAX_STICKERS"
+    | "MAX_THREAD_MEMBERS"
     | "MAX_WEBHOOKS_PER_CHANNEL"
     | "MAX_WEBHOOKS_PER_GUILD"
 
@@ -552,6 +635,18 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
         "Publish an ordinary source message rather than a reply, forwarded message or received crosspost copy",
     messageCrosspostRateLimited: "Wait at least retryAfterMs before publishing another message in this channel",
     publishedMessageEditRateLimited: "Wait at least retryAfterMs before editing this published message again",
+    invalidChannelType: "Check the channel's type, because this operation does not accept it",
+    channelHasThreads: "Delete the channel's private threads before converting it to an announcement channel",
+    threadAlreadyCreated: "Use the existing thread, which has the same ID as the message",
+    threadArchived: "Unarchive the thread first, by editing it with archived set to false, then repeat the operation",
+    threadLocked: "Grant the bot's role Manage Threads, or ask a member who has it to unlock the thread",
+    forumTagNamesNotUnique: "Give every tag of the channel a different name",
+    forumTagRequired: "Include at least one of the channel's tag IDs, because the channel requires a tag on every post",
+    noTagsAvailable: "Add a tag that is not moderated to the channel, or turn off ChannelFlags.RequireTag",
+    mediaChannelRequired: "Remove ChannelFlags.HideMediaDownloadOptions, because only a media channel accepts it",
+    webhookForumTargetRequired: "Set threadName to start a post, or threadId to send into an existing post",
+    webhookThreadNameRequiresForum:
+        "Remove threadName and appliedTagIds, because only a webhook in a forum or media channel starts posts",
     cannotSendMessagesInNonTextChannel: "Send the message to a text channel",
     cannotEditOtherUserMessage: "Only messages that the bot sent can be edited",
     twoFactorRequired: "The application owner's account needs two-factor authentication enabled for this operation",

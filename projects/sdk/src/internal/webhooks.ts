@@ -24,12 +24,13 @@ import {
     type WebhookMessageEdit,
     type WebhookTokenEdit,
     type WebhookOperation,
+    type WebhookMessageOperationOptions,
     type WebhookOperationOptions,
     type WebhookClientOptions,
     type WebhookCredentials,
 } from "#sdk/webhooks"
 import { decodeMessage, encodeForward, encodeMessage, encodeEdit, messageObject, snapshotReference } from "./message.js"
-import { count as nonNegativeInt32, fieldsOnce, identifier, record } from "./decode/primitives.js"
+import { count as nonNegativeInt32, fieldsOnce, identifier, record, snapshotArray } from "./decode/primitives.js"
 import { suspendInput } from "./defects.js"
 import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
@@ -47,6 +48,8 @@ export type WebhookRequest<A> = {
     body?: EncodedBody
     tokenAuth?: true
     auditReason?: string
+    /** The operation's options may carry threadId, which the builder already folded into the path */
+    threadOption?: true
     decode: (value: unknown) => A | undefined
 }
 type WebhookValidationResult<A> = WebhookRequest<A> | InputValidationFailure
@@ -308,15 +311,25 @@ function webhookReplyTarget(
         : undefined
 }
 
-function messageRequest(id: string, messageId?: string): WebhookValidationResult<Message> {
+/** Read the thread_id option of a message fetch, edit or delete. Options that are not an object fail later in the REST owner */
+function optionThreadId(options: unknown): string | undefined | InputValidationFailure {
+    if (!record(options)) return undefined
+    const threadId = options.threadId
+    if (threadId === undefined || identifier(threadId)) return threadId
+    return inputValidationFailure("options.threadId", "format", "Thread IDs must be decimal strings")
+}
+
+function messageRequest(id: string, messageId?: string, threadId?: string): WebhookValidationResult<Message> {
     if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
     if (messageId !== undefined && !identifier(messageId))
         return inputValidationFailure("messageId", "format", "Message IDs must be decimal strings")
+    // A send always waits for the message, so its query already has a first parameter
+    const path = messageId === undefined ? "?wait=true" : `/messages/${messageId}`
     return {
         majorId: id,
         tokenAuth: true,
         method: messageId === undefined ? "POST" : "GET",
-        path: messageId === undefined ? "?wait=true" : `/messages/${messageId}`,
+        path: threadId === undefined ? path : `${path}${messageId === undefined ? "&" : "?"}thread_id=${threadId}`,
         status: 200,
         decode: (value) => {
             const message = decodeMessage(value)
@@ -333,8 +346,6 @@ function messageRequest(id: string, messageId?: string): WebhookValidationResult
 }
 
 export function webhookSend(id: string, value: WebhookMessageInput | string): WebhookValidationResult<Message> {
-    const base = messageRequest(id)
-    if (base instanceof InputValidationFailure) return base
     const input = messageObject(value)
     if (!record(input))
         return inputValidationFailure("input", "type", "Webhook message input must be a string or an object")
@@ -351,12 +362,50 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
             "flags",
             "username",
             "avatarUrl",
+            "threadId",
+            "threadName",
+            "appliedTagIds",
         ],
         "input",
         "the webhook message input",
     )
     if (unsupported) return unsupported
-    const { username, avatarUrl, messageReference, ...message } = input
+    const { username, avatarUrl, messageReference, threadId, threadName, appliedTagIds, ...message } = input
+    if (threadId !== undefined && !identifier(threadId))
+        return inputValidationFailure("threadId", "format", "Webhook threadId must be a decimal string")
+    const base = messageRequest(id, undefined, threadId)
+    if (base instanceof InputValidationFailure) return base
+    if (threadName !== undefined && !normalizedText(threadName, 1, 100))
+        return inputValidationFailure(
+            "threadName",
+            "length",
+            "Webhook threadName must contain 1 through 100 UTF-16 code units after Fluxer's normalization",
+        )
+    const tagIds = appliedTagIds === undefined ? undefined : snapshotArray(appliedTagIds, 5)
+    if (appliedTagIds !== undefined && (tagIds === undefined || !tagIds.every(identifier)))
+        return inputValidationFailure(
+            "appliedTagIds",
+            "format",
+            "Webhook appliedTagIds must be an array of at most 5 decimal tag IDs",
+        )
+    if (appliedTagIds !== undefined && threadName === undefined)
+        return inputValidationFailure(
+            "appliedTagIds",
+            "relationship",
+            "Webhook appliedTagIds applies to a new post, so it needs threadName",
+        )
+    if (threadName !== undefined && threadId !== undefined)
+        return inputValidationFailure(
+            "threadName",
+            "relationship",
+            "Webhook threadName starts a new post and threadId targets an existing thread, so a message sets only one",
+        )
+    if (threadName !== undefined && messageReference !== undefined)
+        return inputValidationFailure(
+            "threadName",
+            "relationship",
+            "A new post has no earlier message to refer to, so a message with a messageReference cannot set threadName",
+        )
     if (username !== undefined && !name(username))
         return inputValidationFailure(
             "username",
@@ -440,19 +489,40 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
         ...payload,
         ...(username === undefined ? {} : { username }),
         ...(avatarUrl === undefined ? {} : { avatar_url: avatarUrl }),
+        ...(threadName === undefined ? {} : { thread_name: threadName }),
+        ...(tagIds === undefined ? {} : { applied_tags: tagIds }),
     })
     return { ...base, body }
 }
 
-export function webhookMessage(
+/** A request on one message of this webhook, in the thread named by the options when they name one */
+function threadMessageRequest(
     id: string,
     messageId: string,
-    method: "GET" | "PATCH",
-    value?: WebhookMessageEdit | string,
+    options?: WebhookMessageOperationOptions,
 ): WebhookValidationResult<Message> {
-    const base = messageRequest(id, messageId)
+    const threadId = optionThreadId(options)
+    if (threadId instanceof InputValidationFailure) return threadId
+    const found = messageRequest(id, messageId, threadId)
+    return found instanceof InputValidationFailure ? found : { ...found, threadOption: true }
+}
+
+export function webhookMessageFetch(
+    id: string,
+    messageId: string,
+    options?: WebhookMessageOperationOptions,
+): WebhookValidationResult<Message> {
+    return threadMessageRequest(id, messageId, options)
+}
+
+export function webhookMessageEdit(
+    id: string,
+    messageId: string,
+    value: WebhookMessageEdit | string,
+    options?: WebhookMessageOperationOptions,
+): WebhookValidationResult<Message> {
+    const base = threadMessageRequest(id, messageId, options)
     if (base instanceof InputValidationFailure) return base
-    if (method === "GET") return base
     const input = messageObject(value)
     if (!record(input))
         return inputValidationFailure("input", "type", "Webhook message edit must be a string or an object")
@@ -464,11 +534,15 @@ export function webhookMessage(
     )
     if (unsupported) return unsupported
     const body = encodeEdit(input)
-    return body instanceof InputValidationFailure ? body : { ...base, method, body }
+    return body instanceof InputValidationFailure ? body : { ...base, method: "PATCH", body }
 }
 
-export function webhookMessageDelete(id: string, messageId: string): WebhookValidationResult<void> {
-    const base = messageRequest(id, messageId)
+export function webhookMessageDelete(
+    id: string,
+    messageId: string,
+    options?: WebhookMessageOperationOptions,
+): WebhookValidationResult<void> {
+    const base = threadMessageRequest(id, messageId, options)
     return base instanceof InputValidationFailure
         ? base
         : { ...base, method: "DELETE", status: 204, decode: () => undefined }

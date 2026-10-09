@@ -28,6 +28,7 @@ import { MessageError } from "#sdk/message-errors"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
+import { decodeThread } from "./channel-decode.js"
 import { count, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 
@@ -141,6 +142,8 @@ function decodeMessageValue(
         referencedMessage === undefined
     )
         return undefined
+    const thread = value.thread === undefined ? undefined : decodeThread(value.thread)
+    if (value.thread !== undefined && thread === undefined) return undefined
     if (!construct) return true
     return Object.freeze({
         id: value.id,
@@ -170,6 +173,7 @@ function decodeMessageValue(
         ...(messageReference.value === undefined ? {} : { messageReference: messageReference.value }),
         ...(messageSnapshots.value === undefined ? {} : { messageSnapshots: messageSnapshots.value }),
         ...(referencedMessage.value === undefined ? {} : { referencedMessage: referencedMessage.value }),
+        ...(!selected("thread") || thread === undefined ? {} : { thread }),
         author: author as MessageUser,
     })
 }

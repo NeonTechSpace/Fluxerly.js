@@ -19,6 +19,7 @@ import { guildList } from "./guild-lifecycle.js"
 import { auditLogPage } from "./audit-logs.js"
 import { comparePinTimestamps, encodePinsQuery } from "./pins.js"
 import { encodeReactionUsersQuery, resolveReactionEmoji } from "./reactions.js"
+import { readThreadMembers, threadMemberPage } from "./threads.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 interface Page<A> {
@@ -31,7 +32,8 @@ interface Settings {
     readonly pageSize: number
     readonly cursor: string | undefined
     readonly options: MessageOperationOptions
-    readonly withCounts?: boolean
+    /** The traversal's optional boolean query setting, such as withCounts, false when omitted */
+    readonly flag?: boolean
 }
 interface Source<A, E> {
     readonly load: (cursor: string | undefined, limit: number) => Effect.Effect<Page<A>, E>
@@ -160,7 +162,7 @@ function prepare<A, E>(
     defaultSize: number,
     maximumSize: number,
     build: (settings: Settings) => Source<A, E> | InputValidationFailure,
-    supportsCounts = false,
+    flagKey?: "withCounts" | "withMember",
 ): Effect.Effect<Pagination<A, E>, PaginationError> {
     // Only reading and validating the caller query, options and page arguments is marked as application input
     return suspendInput((): Effect.Effect<readonly [Settings, Source<A, E>], PaginationError> => {
@@ -170,7 +172,7 @@ function prepare<A, E>(
         const field = fieldsOnce(query)
         const unsupportedQuery = unsupportedKeyFailure(
             query,
-            ["maxItems", "maxPages", "pageSize", cursorKey, ...(supportsCounts ? ["withCounts"] : [])],
+            ["maxItems", "maxPages", "pageSize", cursorKey, ...(flagKey === undefined ? [] : [flagKey])],
             "query",
             "the iteration query",
         )
@@ -221,10 +223,10 @@ function prepare<A, E>(
             return invalid(
                 inputValidationFailure(`query.${cursorKey}`, "type", `Iteration ${cursorKey} cursor must be a string`),
             )
-        const withCounts = supportsCounts ? field("withCounts") : undefined
-        if (withCounts !== undefined && typeof withCounts !== "boolean")
+        const flag = flagKey === undefined ? undefined : field(flagKey)
+        if (flag !== undefined && typeof flag !== "boolean")
             return invalid(
-                inputValidationFailure("query.withCounts", "type", "The query option withCounts must be a boolean"),
+                inputValidationFailure(`query.${flagKey}`, "type", `The query option ${flagKey} must be a boolean`),
             )
         const settings = {
             maxItems,
@@ -232,7 +234,7 @@ function prepare<A, E>(
             pageSize,
             cursor,
             options: timeout === undefined ? {} : { timeoutMs: timeout },
-            ...(supportsCounts ? { withCounts: withCounts === true } : {}),
+            ...(flagKey === undefined ? {} : { flag: flag === true }),
         }
         const source = build(settings)
         return source instanceof InputValidationFailure ? invalid(source) : Effect.succeed([settings, source] as const)
@@ -282,6 +284,44 @@ export const memberPagination = <M extends MessageCore = Message>(
         }
     })
 
+export const threadMemberPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
+    threadId: string,
+    query: unknown,
+    options?: MessageOperationOptions,
+) =>
+    prepare(
+        owner,
+        "threads.iterateMembers",
+        query,
+        options,
+        "after",
+        100,
+        100,
+        (settings) => {
+            const pageQuery = (cursor: string | undefined, limit: number) => ({
+                ...cursorQuery("after", cursor, limit),
+                ...(settings.flag ? { withMember: true } : {}),
+            })
+            const validated = threadMemberPage(threadId, pageQuery(settings.cursor, settings.pageSize))
+            if (validated instanceof InputValidationFailure) return validated
+            // One consumption reads the thread's community at most once, for its first withMember page
+            const resolved: { guildId?: string } = {}
+            return {
+                load: (cursor, limit) =>
+                    readThreadMembers(
+                        owner,
+                        "threads.fetchMembers",
+                        threadId,
+                        () => threadMemberPage(threadId, pageQuery(cursor, limit)),
+                        settings.options,
+                        resolved,
+                    ).pipe(Effect.map((items) => ({ items, next: items.at(-1)?.userId ?? null }))),
+            }
+        },
+        "withMember",
+    )
+
 export const guildPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     query: unknown,
@@ -298,7 +338,7 @@ export const guildPagination = <M extends MessageCore = Message>(
         (settings) => {
             const pageQuery = (cursor: string | undefined, limit: number) => ({
                 ...cursorQuery("after", cursor, limit),
-                ...(settings.withCounts ? { withCounts: true } : {}),
+                ...(settings.flag ? { withCounts: true } : {}),
             })
             const validated = guildList(pageQuery(settings.cursor, settings.pageSize))
             if (validated instanceof InputValidationFailure) return validated
@@ -317,7 +357,7 @@ export const guildPagination = <M extends MessageCore = Message>(
                         ),
             }
         },
-        true,
+        "withCounts",
     )
 
 export const reactionUserPagination = <M extends MessageCore = Message>(

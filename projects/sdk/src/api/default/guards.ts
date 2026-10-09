@@ -2,16 +2,17 @@ import type { DefaultPrefixCommandContext, DefaultPrefixCommandGuard } from "#sd
 import type { PermissionName } from "#sdk/helpers"
 import type { Message, MessageCore } from "#sdk/messages"
 import type { GuildRole } from "#sdk/guilds"
+import { isThreadChannel } from "#sdk/channels"
 import {
     applicationOwners,
+    cachedPermissionChannel,
+    fetchedPermissionChannel,
     guardDenials,
     inGuild,
     missingPermissions,
     notPrivateChannel,
     ownerIds as validOwnerIds,
     permissionNames,
-    readChannelOverwrites,
-    withKnownOverwrites,
 } from "#sdk/internal/command-guards"
 import { orThrow } from "./results.js"
 
@@ -81,8 +82,12 @@ export interface DefaultGuards {
      * what is missing, at most once each per invocation, then applies permissions.calculate.
      * A cached channel without its overwrite list is read again instead of being treated as having no overwrites.
      * A channel read that Fluxer answers without an overwrite list has no channel overwrites, so the member's role
-     * permissions decide. A channel of a type this SDK version does not know, such as a thread, can take its permissions
-     * from elsewhere, so a read of one without an overwrite list denies the command rather than guessing.
+     * permissions decide.
+     * In a thread, the guard also reads the thread's parent channel the same way, cache first, and decides as Fluxer
+     * does: From the parent channel's permissions, with SendMessages granted exactly when SendMessagesInThreads is.
+     * It does not check whether the member can see a private thread or whether the thread is archived or locked.
+     * A channel of a type this SDK version does not know can take its permissions from elsewhere, so a read of one
+     * without an overwrite list denies the command rather than guessing.
      * A failed read fails the command, which is reported with the command name.
      * The decision does not guarantee that Fluxer allows a later action
      */
@@ -157,8 +162,12 @@ async function memberPermissions<M extends MessageCore>(
     const roles = cached.every((role): role is GuildRole => role !== undefined)
         ? cached
         : orThrow(await client.roles.fetchAll(guildId, options))
-    const channel =
-        withKnownOverwrites(client.channels.get(message.channelId)) ??
-        readChannelOverwrites(orThrow(await client.channels.fetch(message.channelId, options)))
-    return channel && client.permissions.calculate({ guild, member, roles, channel })
+    const readChannel = async (channelId: string) =>
+        cachedPermissionChannel(client.channels.get(channelId)) ??
+        fetchedPermissionChannel(orThrow(await client.channels.fetch(channelId, options)))
+    const channel = await readChannel(message.channelId)
+    if (!isThreadChannel(channel)) return channel && client.permissions.calculate({ guild, member, roles, channel })
+    // A thread takes its permissions from its parent channel
+    const parentChannel = await readChannel(channel.parentId)
+    return parentChannel && client.permissions.calculate({ guild, member, roles, channel, parentChannel })
 }

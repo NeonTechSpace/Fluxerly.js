@@ -48,6 +48,7 @@ import { type Stickers } from "./stickers.js"
 import { type Discovery } from "./discovery.js"
 import { type Guilds } from "./guilds.js"
 import { type Channels } from "./channels.js"
+import { type Threads } from "./threads.js"
 import { type Members } from "./members.js"
 import { type PermissionHelpers } from "./permissions.js"
 import { type Roles } from "./roles.js"
@@ -176,6 +177,10 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Read or change community channels and optionally look up cached channel data
      */
     readonly channels: Channels
+    /**
+     * Create threads and forum posts, change, list and search threads, and manage thread members
+     */
+    readonly threads: Threads<M>
     /**
      * Read, moderate and ban community members and change their assigned roles
      */
@@ -595,6 +600,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
             discovery: namespaces.discovery,
             guilds: namespaces.guilds,
             channels: namespaces.channels,
+            threads: namespaces.threads,
             members: namespaces.members,
             permissions: namespaces.permissions,
             roles: namespaces.roles,

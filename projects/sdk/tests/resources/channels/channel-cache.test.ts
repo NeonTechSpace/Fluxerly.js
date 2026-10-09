@@ -114,3 +114,33 @@ test("only an uncontested authoritative guild list reconciles absent channel sna
     expect(cache.get(retained.id)).toBeUndefined()
     expect(cache.get(update.id)).toBe(update)
 })
+
+test("a mutation confined to one thread evicts only that thread, while another mutation clears every channel", () => {
+    const cache = makeCache({ maxEntries: 4, maxBytes: 100_000, maxAgeMs: null })
+    const parent = channel("10")
+    const thread = channel("30", { type: 11, parentId: "10" } as Partial<GuildChannel>)
+    const fill = () => {
+        complete(cache, parent, { channelId: parent.id, guildId: parent.guildId })
+        complete(cache, thread, { channelId: thread.id, guildId: thread.guildId })
+    }
+
+    fill()
+    const edit = cache.begin({ channelId: thread.id, mutation: true, thread: true })
+    cache.complete(edit, undefined)
+    cache.end(edit, true)
+    expect(cache.get(thread.id)).toBeUndefined()
+    expect(cache.get(parent.id)).toBe(parent)
+
+    // A dispatched thread mutation that fails can still have applied, so it evicts the same single thread
+    fill()
+    const failed = cache.begin({ channelId: thread.id, mutation: true, thread: true })
+    cache.end(failed, true)
+    expect(cache.get(thread.id)).toBeUndefined()
+    expect(cache.get(parent.id)).toBe(parent)
+
+    fill()
+    const channelEdit = cache.begin({ channelId: thread.id, mutation: true })
+    cache.complete(channelEdit, undefined)
+    cache.end(channelEdit, true)
+    expect(cache.get(parent.id)).toBeUndefined()
+})

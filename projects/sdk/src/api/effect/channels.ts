@@ -12,6 +12,9 @@ import type {
     ChannelOperationFailure,
     ChannelOperationOptions,
     ChannelAuditOperationOptions,
+    ForumTagInput,
+    GuildForumChannel,
+    GuildMediaChannel,
 } from "#sdk/channels"
 
 /** Read or change community channels and permission overrides, or request gateway member counts.
@@ -26,7 +29,7 @@ import type {
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
  *
  * Sending any channel write clears the enabled channel cache. Input failures before dispatch leave it unchanged. The SDK does not fetch channels automatically after a write.
- * The follow, create, edit, delete, reorder and permission-overwrite mutations accept ChannelAuditOperationOptions. Read operations reject auditReason
+ * The follow, create, edit, delete, reorder, permission-overwrite and forum-tag mutations accept ChannelAuditOperationOptions. Read operations reject auditReason
  *
  * Operation inputs are copied when the Effect executes and later caller mutations are not observed. Permission bits are bigint values encoded as decimal JSON strings.
  * Fluxer enforces channel permissions and grant restrictions. Targeted overwrite operations require ManageRoles for role and member targets
@@ -94,6 +97,8 @@ export interface Channels {
     /**
      * Look up a community channel in the enabled cache, without an HTTP request or a connection.
      * The result is undefined when caching is disabled or the entry is absent, expired or evicted.
+     * The result can be a thread, forum channel or media channel, so compare type or use isThreadChannel before reading
+     * fields that only some shapes have.
      * A hit may be stale and becomes more recently used without extending expiry.
      * Use fetch for a remote read.
      * An invalid ID is misuse: The default API throws ChannelOperationError with reason input and the native API dies with it.
@@ -102,6 +107,8 @@ export interface Channels {
     get(channelId: string): Effect.Effect<GuildChannel | undefined>
     /**
      * Fetch a community channel by decimal ID and return a frozen snapshot.
+     * The ID can name a thread or a forum post, which returns a thread shape, so compare type or use isThreadChannel
+     * before reading fields that only some shapes have. A thread has no permission overwrites of its own.
      * A private-channel response fails with a typed response error.
      * Permission overwrites describe explicit settings, not inherited or effective permissions.
      * This neither connects the gateway nor populates a complete community-channel list
@@ -110,6 +117,7 @@ export interface Channels {
     /**
      * Fetch the community channels currently visible to the bot, without pagination.
      * The returned list is a point-in-time snapshot, not a subscription or completeness guarantee.
+     * It never includes threads, which Fluxer lists separately: Use threads.fetchActive for the active ones.
      * No members, roles, private channels or missing overwrite targets are fetched
      */
     fetchAll(
@@ -127,6 +135,15 @@ export interface Channels {
      * The application manages the created channel afterward.
      * After an unknown outcome, use fetchAll before deciding whether to create again.
      * The result does not confirm gateway delivery
+     *
+     * ChannelType.Forum and ChannelType.Media create a channel that holds posts instead of messages. Besides the shared
+     * settings, they accept availableTags, defaultReactionEmoji, defaultSortOrder, defaultTagSetting, flags and the two
+     * thread defaults, and a forum channel also accepts defaultForumLayout. Text and announcement channels accept only
+     * the thread defaults defaultAutoArchiveMinutes and defaultThreadRateLimitPerUser. A setting that the channel type
+     * does not accept fails locally.
+     * Fluxer rejects forum and media channels in a community where threads are not active, and ignores the two thread
+     * defaults on text and announcement channels there. The result of a forum or media creation lists the stored tags,
+     * whose IDs Fluxer assigns
      *
      * @example
      * ```ts
@@ -157,7 +174,11 @@ export interface Channels {
      * This call does not await gateway delivery or follower removal.
      * Omitted permissionOverwrites keeps the old list, and [] clears it.
      * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
-     * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in
+     * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in.
+     * The thread defaults and the forum settings apply to the channel types named on each field. The SDK cannot see the
+     * channel's type, so Fluxer ignores a setting that does not belong to it. The availableTags list replaces every tag
+     * of a forum or media channel, so channels.createForumTag, editForumTag and deleteForumTag are the safer way to
+     * change one tag. Pass a received channel's availableTags back to keep all its tags
      */
     edit(
         channelId: string,
@@ -211,4 +232,47 @@ export interface Channels {
         targetId: string,
         options?: ChannelAuditOperationOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
+    /**
+     * Add one tag to a forum or media channel and return the frozen updated channel.
+     * Fluxer requires ManageChannels, assigns the tag's ID, and rejects a tag whose name another tag of the channel
+     * already uses, a custom emoji that the community does not have, and a channel that already has 20 tags. Find the new
+     * tag by name in the result's availableTags.
+     * Fluxer applies the tag like a channel edit, so it emits a Channel Update and an audit-log entry.
+     * The SDK reads nothing first, so a channel that is not a forum or media channel fails with Fluxer's rejection.
+     * After an unknown outcome, fetch the channel before adding the tag again, because the name is already taken when
+     * the first attempt applied
+     */
+    createForumTag(
+        channelId: string,
+        input: ForumTagInput,
+        options?: ChannelAuditOperationOptions,
+    ): Effect.Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure>
+    /**
+     * Replace one tag of a forum or media channel and return the frozen updated channel.
+     * This is a full replacement: A moderated value or emoji that the input leaves out becomes false or none instead of
+     * keeping its old value, so read the tag first to change only one of its settings.
+     * The tag keeps its ID and the posts that carry it.
+     * Fluxer requires ManageChannels and rejects a tag ID that the channel does not have, a name that another tag
+     * already uses, and a change that would leave a channel with ChannelFlags.RequireTag without a tag that is not moderated.
+     * The call is otherwise an availableTags edit, as createForumTag describes
+     */
+    editForumTag(
+        channelId: string,
+        tagId: string,
+        input: ForumTagInput,
+        options?: ChannelAuditOperationOptions,
+    ): Effect.Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure>
+    /**
+     * Delete one tag from a forum or media channel and return the frozen updated channel.
+     * Posts that carried the tag stop showing it.
+     * Fluxer requires ManageChannels and rejects a tag ID that the channel does not have, which includes a tag that an
+     * earlier call already deleted, and the deletion of the last tag that is not moderated while the channel has
+     * ChannelFlags.RequireTag.
+     * The call is otherwise an availableTags edit, as createForumTag describes
+     */
+    deleteForumTag(
+        channelId: string,
+        tagId: string,
+        options?: ChannelAuditOperationOptions,
+    ): Effect.Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure>
 }

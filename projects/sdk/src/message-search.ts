@@ -1,3 +1,4 @@
+import type { GuildThreadChannel } from "./channels.js"
 import type { OperationOptions } from "./client.js"
 import type { MessageOperationOptions, Message, MessageCore } from "./messages.js"
 import type { PaginationQuery } from "./pagination.js"
@@ -160,8 +161,12 @@ export interface MessageSearchResultsPage<M extends MessageCore = Message> {
     readonly indexing: false
     /** Indexed message snapshots using the client's messageFields selection, without extra fetches or cache writes */
     readonly messages: readonly M[]
-    /** Exactly one channel snapshot per distinct channel in messages, without extras, private recipient lists or permission data */
+    /** One channel snapshot per distinct channel in messages that is not a thread, without extras, private recipient lists or permission data */
     readonly channels: readonly MessageSearchChannel[]
+    /** One thread snapshot per distinct thread in messages, with membership set on each thread the bot has joined.
+     * Each message's channelId names exactly one entry of channels or threads. These snapshots never enter the channel cache
+     */
+    readonly threads: readonly GuildThreadChannel[]
     /** Indexed match count observed with this response, not a stable count for a multi-page run */
     readonly total: number
     /** Page capacity Fluxer reported for this response, not necessarily the number of returned messages */

@@ -436,6 +436,54 @@ export type {
     ChannelOperationOptions,
     ChannelAuditOperationOptions,
 } from "./channels.js"
+export { ChannelFlags, ForumLayout, ForumSortOrder, ThreadAutoArchiveMinutes, isThreadChannel } from "./channels.js"
+export type {
+    GuildThreadChannelBase,
+    GuildAnnouncementThreadChannel,
+    GuildPublicThreadChannel,
+    GuildPrivateThreadChannel,
+    GuildThreadChannel,
+    ThreadMembership,
+    ThreadMember,
+    GuildForumChannelBase,
+    GuildForumChannel,
+    GuildMediaChannel,
+    ForumTag,
+    ForumDefaultReaction,
+} from "./channels.js"
+// Threads: The client.threads namespace with its inputs, results and options
+export type { Threads } from "./api/effect/threads.js"
+export type {
+    ThreadCreate,
+    ThreadFromMessageCreate,
+    ForumPostMessage,
+    ForumPostCreate,
+    ForumPost,
+    ThreadEdit,
+    ArchivedThreadScope,
+    ArchivedThreadQuery,
+    ArchivedThreadPage,
+    ThreadSearchQuery,
+    ThreadSearchIndexingPage,
+    ThreadSearchResultsPage,
+    ThreadSearchPage,
+    ThreadMemberQuery,
+    ThreadMemberPageQuery,
+    ThreadMemberIterationQuery,
+} from "./threads.js"
+// Forum channels and webhook threads: Forum channel and tag inputs and webhook thread options
+export type {
+    ThreadParentDefaults,
+    ForumTagInput,
+    ForumDefaultReactionInput,
+    ForumChannelCreateBase,
+    ForumChannelCreate,
+    MediaChannelCreate,
+} from "./channels.js"
+export type { WebhookForumPostOptions, WebhookMessageOperationOptions } from "./webhooks.js"
+// Thread events: Payloads of the thread gateway events
+export type { ThreadCreateEvent, ThreadDeletion, ThreadListSync, ThreadMembersUpdate } from "./events.js"
+// Thread permissions: Permission inputs for threads
 export { GuildOperationError, Permissions } from "./guilds.js"
 export type {
     Guild,

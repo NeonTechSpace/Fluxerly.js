@@ -69,6 +69,34 @@ test("gateway audit entries with thread or later-added actions arrive with their
     await settle(client.shutdown())
 })
 
+// Fluxer 4749eb7f records forum tags and the default reaction as objects, which once made the dispatch malformed
+test("gateway audit entries for forum channels arrive with their forum change values", async () => {
+    const server = await fixture()
+    const client = defaultApi()
+    const audits = client.subscribe("guildAuditLogEntryCreate")
+    await settle(client.connect())
+    const tag = { id: "60", name: "solved", moderated: false, emoji_id: null, emoji_name: "✅" }
+    server.dispatch(
+        "GUILD_AUDIT_LOG_ENTRY_CREATE",
+        audit({
+            action_type: AuditLogActions.ChannelUpdate,
+            changes: [
+                { key: "available_tags", old_value: [], new_value: [tag] },
+                { key: "default_reaction_emoji", new_value: { emoji_id: "61", emoji_name: null } },
+            ],
+        }),
+    )
+    expect((await settle(audits.next()))!.changes).toEqual([
+        {
+            key: "available_tags",
+            oldValue: [],
+            newValue: [{ id: "60", name: "solved", moderated: false, emojiId: null, emojiName: "✅" }],
+        },
+        { key: "default_reaction_emoji", newValue: { emojiId: "61", emojiName: null } },
+    ])
+    await settle(client.shutdown())
+})
+
 test("default administrative subscriptions project full provider results without cache work", async () => {
     const server = await fixture()
     const client = defaultApi()

@@ -1,7 +1,7 @@
 ---
 title: React to events and collect replies
 navTitle: Events & collectors
-description: Handle gateway events, detect community joins, wait for one event and collect replies or reactions for a limited time
+description: Handle gateway events, detect community joins, follow threads, wait for one event and collect replies or reactions for a limited time
 ---
 
 Fluxer sends live [events](/docs/{{version}}/glossary/#event), such as new messages, community joins and reactions, over the [gateway](/docs/{{version}}/glossary/#gateway) connection. A [handler](/docs/{{version}}/glossary/#handler) registered for an event name runs each time that event arrives. In a `runBot` bot, handlers go in the `events` option, as the [last section](/docs/{{version}}/events-and-collectors/#wire-it-up) shows
@@ -44,6 +44,32 @@ Pass the signal to SDK operations inside the handler so they stop with it. To ru
 A handler runs one event at a time by default, and later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead
 
 To handle several events at a time and still keep related events in order, pass a `partition` option. The value `"channel"` keys each event by its channel, `"guild"` by its community, and a function returns a key of its own. Events with different keys run side by side, up to eight at a time unless `concurrency` says otherwise, while events with the same key run one after another in the order they arrived
+
+</details>
+
+## Follow threads
+
+Five events report [threads](/docs/{{version}}/threads/). The `threadCreate` event arrives when a thread is created and also when the bot joins or is added to an existing thread, so check `isNewlyCreated` to react only to new threads
+
+```ts
+import type { Client } from "@neontechspace/fluxerly"
+
+export function welcomeNewThreads(client: Client) {
+    return client.on("threadCreate", (thread) =>
+        thread.isNewlyCreated ? client.messages.send(thread.id, `Welcome to ${thread.name}`) : undefined,
+    )
+}
+```
+
+The other four are `threadUpdate`, with the thread after a change such as a rename, archive or lock, `threadDelete`, with the deleted thread's ID and parent, `threadListSync`, with the bot's active threads after Fluxer replaced them for a community or some of its channels, and `threadMembersUpdate`, with the accounts that joined or left a thread
+
+Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no `threadDelete` for them. To notice that, handle `guildChannelDelete` and treat every thread whose `parentId` is the deleted channel as gone
+
+<details>
+<summary>What do thread events change in the cache?</summary>
+
+With `cache.channels` enabled, thread create and update events store the thread, a thread deletion removes it and a thread list replaces the cached threads it covers. A community's snapshot at startup also fills the cache with its active threads. When the bot's own membership of a thread changes, the SDK removes that cached thread, because its `membership` field would be out of date.
+Fluxer does not replay thread lists after a lost connection, so a resumed connection also removes its communities' cached threads. The [message cache](/docs/{{version}}/history-and-cache/#limit-the-message-cache) removes a deleted thread's messages
 
 </details>
 

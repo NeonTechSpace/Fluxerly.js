@@ -82,8 +82,20 @@ import type {
     ChannelFollowInput,
     ChannelOperationOptions,
     ChannelPosition,
+    ForumTagInput,
     PermissionOverwrite,
 } from "#sdk/channels"
+import type {
+    ArchivedThreadQuery,
+    ForumPostCreate,
+    ThreadCreate,
+    ThreadEdit,
+    ThreadFromMessageCreate,
+    ThreadMemberIterationQuery,
+    ThreadMemberPageQuery,
+    ThreadMemberQuery,
+    ThreadSearchQuery,
+} from "#sdk/threads"
 import type { MemberSearchIterationLimits, MemberSearchQuery } from "#sdk/member-search"
 import type { PermissionInput, PermissionTarget } from "#sdk/permissions"
 import type { Attachment, AttachmentDownloadOptions, AttachmentRefreshOptions } from "#sdk/attachments"
@@ -96,6 +108,7 @@ import {
     memberPagination,
     pinPagination,
     reactionUserPagination,
+    threadMemberPagination,
     type Pagination,
 } from "#sdk/internal/pagination"
 import { applicationCurrent } from "#sdk/internal/application"
@@ -109,6 +122,9 @@ import {
     channelFollowerStats,
     channelList,
     channelReorder,
+    forumTagCreate,
+    forumTagDelete,
+    forumTagEdit,
     permissionRemove,
     permissionSet,
 } from "#sdk/internal/channels"
@@ -149,6 +165,18 @@ import {
     roleSetHoistPositions,
 } from "#sdk/internal/guilds"
 import { inviteCreate, inviteDelete, inviteFetch, inviteList } from "#sdk/internal/invites"
+import {
+    fetchThreadMember,
+    fetchThreadMembers,
+    threadActive,
+    threadArchived,
+    threadCreate,
+    threadCreateFromMessage,
+    threadEdit,
+    threadMembership,
+    threadPost,
+    threadSearch,
+} from "#sdk/internal/threads"
 import { searchMemberPagination, searchMembers } from "#sdk/internal/member-search-workflow"
 import {
     guildBan,
@@ -593,6 +621,26 @@ function defineOperations<M extends MessageCore>() {
                         options,
                     ),
             ),
+            createForumTag: op(
+                2,
+                (owner: Owner, channelId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions) =>
+                    owner.channel("channels.createForumTag", () => forumTagCreate(channelId, input), options),
+            ),
+            editForumTag: op(
+                3,
+                (
+                    owner: Owner,
+                    channelId: string,
+                    tagId: string,
+                    input: ForumTagInput,
+                    options?: ChannelAuditOperationOptions,
+                ) => owner.channel("channels.editForumTag", () => forumTagEdit(channelId, tagId, input), options),
+            ),
+            deleteForumTag: op(
+                2,
+                (owner: Owner, channelId: string, tagId: string, options?: ChannelAuditOperationOptions) =>
+                    owner.channel("channels.deleteForumTag", () => forumTagDelete(channelId, tagId), options),
+            ),
         },
         members: {
             iterateChunks: custom("stream", defaultMemberChunks<M>, nativeMemberChunks<M>),
@@ -739,6 +787,83 @@ function defineOperations<M extends MessageCore>() {
                     positions: readonly RolePosition[],
                     options?: GuildAuditOperationOptions,
                 ) => owner.guild("roles.reorder", () => roleReorder(guildId, positions), options),
+            ),
+        },
+        threads: {
+            create: op(
+                2,
+                (owner: Owner, channelId: string, input: ThreadCreate, options?: ChannelAuditOperationOptions) =>
+                    owner.channel("threads.create", () => threadCreate(channelId, input), options),
+            ),
+            createFromMessage: op(
+                2,
+                (
+                    owner: Owner,
+                    message: MessageReference,
+                    input: ThreadFromMessageCreate,
+                    options?: ChannelAuditOperationOptions,
+                ) => owner.channel("threads.createFromMessage", () => threadCreateFromMessage(message, input), options),
+            ),
+            createPost: op(
+                2,
+                (owner: Owner, channelId: string, input: ForumPostCreate, options?: ChannelAuditOperationOptions) =>
+                    owner.channel(
+                        "threads.createPost",
+                        () => threadPost(channelId, input, owner.decodeMessage),
+                        options,
+                    ),
+            ),
+            edit: op(2, (owner: Owner, threadId: string, input: ThreadEdit, options?: ChannelAuditOperationOptions) =>
+                owner.channel("threads.edit", () => threadEdit(threadId, input), options),
+            ),
+            fetchActive: op(1, (owner: Owner, guildId: string, options?: ChannelOperationOptions) =>
+                owner.channel("threads.fetchActive", () => threadActive(guildId), options),
+            ),
+            fetchArchived: op(
+                2,
+                (owner: Owner, channelId: string, query?: ArchivedThreadQuery, options?: ChannelOperationOptions) =>
+                    owner.channel("threads.fetchArchived", () => threadArchived(channelId, query), options),
+            ),
+            search: op(
+                2,
+                (owner: Owner, channelId: string, query?: ThreadSearchQuery, options?: ChannelOperationOptions) =>
+                    owner.channel("threads.search", () => threadSearch(channelId, query, owner.decodeMessage), options),
+            ),
+            join: op(1, (owner: Owner, threadId: string, options?: ChannelOperationOptions) =>
+                owner.channel("threads.join", () => threadMembership(threadId, undefined, "PUT"), options),
+            ),
+            leave: op(1, (owner: Owner, threadId: string, options?: ChannelOperationOptions) =>
+                owner.channel("threads.leave", () => threadMembership(threadId, undefined, "DELETE"), options),
+            ),
+            addMember: op(2, (owner: Owner, threadId: string, userId: string, options?: ChannelOperationOptions) =>
+                owner.channel("threads.addMember", () => threadMembership(threadId, userId, "PUT"), options),
+            ),
+            removeMember: op(2, (owner: Owner, threadId: string, userId: string, options?: ChannelOperationOptions) =>
+                owner.channel("threads.removeMember", () => threadMembership(threadId, userId, "DELETE"), options),
+            ),
+            fetchMember: op(
+                3,
+                (
+                    owner: Owner,
+                    threadId: string,
+                    userId: string,
+                    query?: ThreadMemberQuery,
+                    options?: ChannelOperationOptions,
+                ) => fetchThreadMember(owner, threadId, userId, query, options),
+            ),
+            fetchMembers: op(
+                2,
+                (owner: Owner, threadId: string, query?: ThreadMemberPageQuery, options?: ChannelOperationOptions) =>
+                    fetchThreadMembers(owner, threadId, query, options),
+            ),
+            iterateMembers: page(
+                2,
+                (
+                    owner: Owner,
+                    threadId: string,
+                    query: ThreadMemberIterationQuery,
+                    options?: ChannelOperationOptions,
+                ) => threadMemberPagination(owner, threadId, query, options),
             ),
         },
         attachments: {

@@ -107,7 +107,7 @@ const partitionedConcurrency = 8
 
 /** Events whose own ID is the community they describe */
 const guildSelfEvents: ReadonlySet<EventName> = new Set(["guildCreate", "guildUpdate", "guildDelete"])
-/** Events whose own ID is the channel they describe */
+/** Events whose own ID is the channel they describe, a thread being a channel */
 const channelSelfEvents: ReadonlySet<EventName> = new Set([
     "guildChannelCreate",
     "guildChannelUpdate",
@@ -115,19 +115,34 @@ const channelSelfEvents: ReadonlySet<EventName> = new Set([
     "directMessageCreate",
     "directMessageUpdate",
     "directMessageDelete",
+    "threadCreate",
+    "threadUpdate",
+    "threadDelete",
 ])
 
 /**
  * The partition key of one event. The guild partition uses the community ID, else the channel ID, so direct messages are
- * ordered per conversation, and the channel partition uses the channel ID, else the community ID. An event with neither
- * uses the empty key, shared by all such events. A function's undefined also selects the empty key
+ * ordered per conversation, and the channel partition uses the channel ID, else the community ID. A thread member
+ * change's channel is its thread. An event with neither uses the empty key, shared by all such events. A function's
+ * undefined also selects the empty key
  */
 function partitionKey(partition: NonNullable<Limits["partition"]>, event: EventName, payload: unknown): unknown {
     if (typeof partition === "function") return partition(payload as never)
-    const value = payload as { readonly id?: unknown; readonly guildId?: unknown; readonly channelId?: unknown }
+    const value = payload as {
+        readonly id?: unknown
+        readonly guildId?: unknown
+        readonly channelId?: unknown
+        readonly threadId?: unknown
+    }
     const guild = typeof value.guildId === "string" ? value.guildId : guildSelfEvents.has(event) ? value.id : undefined
     const channel =
-        typeof value.channelId === "string" ? value.channelId : channelSelfEvents.has(event) ? value.id : undefined
+        typeof value.channelId === "string"
+            ? value.channelId
+            : typeof value.threadId === "string"
+              ? value.threadId
+              : channelSelfEvents.has(event)
+                ? value.id
+                : undefined
     const key = partition === "guild" ? (guild ?? channel) : (channel ?? guild)
     return typeof key === "string" ? key : undefined
 }
@@ -692,6 +707,11 @@ export class EventBus<M extends MessageCore = Message> {
         guildChannelUpdate: new Set(),
         guildChannelDelete: new Set(),
         guildChannelUpdateBulk: new Set(),
+        threadCreate: new Set(),
+        threadUpdate: new Set(),
+        threadDelete: new Set(),
+        threadListSync: new Set(),
+        threadMembersUpdate: new Set(),
         channelPinsUpdate: new Set(),
         guildMemberAdd: new Set(),
         guildMemberUpdate: new Set(),

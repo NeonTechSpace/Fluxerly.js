@@ -49,7 +49,7 @@ export interface Guild {
     readonly verificationLevel?: GuildVerificationLevel
     /** Two-factor requirement for moderation permissions, omission means unavailable.
      * While it is GuildMfaLevels.Elevated, Fluxer rejects operations that need Administrator, BanMembers,
-     * KickMembers, ManageChannels, ManageGuild, ManageMessages, ManageRoles, ManageWebhooks or ModerateMembers
+     * KickMembers, ManageChannels, ManageGuild, ManageMessages, ManageRoles, ManageThreads, ManageWebhooks or ModerateMembers
      * with HTTP 400 and apiError.code twoFactorRequired, unless the bot owns the community or the account that owns
      * its application has two-factor authentication enabled. The SDK does not know that account's enrolment,
      * so an elevated level signals a possible rejection rather than a certain one
@@ -586,6 +586,11 @@ export interface GuildListSummary extends Guild {
     readonly approximateMemberCount?: number
     /** Provider-supplied approximate presence count when withCounts was requested and Fluxer could obtain it */
     readonly approximatePresenceCount?: number
+    /** Whether Fluxer reports that threads, forum channels and media channels are available to the caller in this
+     * community. Fluxer marks only available communities, so false also covers a list that never marks any, such as
+     * one read with an OAuth access token
+     */
+    readonly threadsActive: boolean
 }
 
 /**
@@ -906,8 +911,20 @@ export const Permissions: Readonly<{
     ManageWebhooks: bigint
     /** Edit or delete custom emoji and stickers created by other members */
     ManageExpressions: bigint
+    /** Archive, lock, rename and delete threads, see every private thread and act in a locked thread.
+     * Guild.mfaLevel describes when an elevated MFA level makes Fluxer reject its use
+     */
+    ManageThreads: bigint
+    /** Start a public thread or an announcement thread */
+    CreatePublicThreads: bigint
+    /** Start a private thread in a text channel */
+    CreatePrivateThreads: bigint
     /** Use custom stickers owned by other communities */
     UseExternalStickers: bigint
+    /** Send messages in threads and add other members to them. In a thread, Fluxer uses this permission in place of
+     * SendMessages
+     */
+    SendMessagesInThreads: bigint
     /** Apply member timeouts that temporarily restrict messaging, reactions and voice participation */
     ModerateMembers: bigint
     /** Upload custom emoji and stickers and manage the member's own creations */
@@ -951,7 +968,11 @@ export const Permissions: Readonly<{
     ManageRoles: 1n << 28n,
     ManageWebhooks: 1n << 29n,
     ManageExpressions: 1n << 30n,
+    ManageThreads: 1n << 34n,
+    CreatePublicThreads: 1n << 35n,
+    CreatePrivateThreads: 1n << 36n,
     UseExternalStickers: 1n << 37n,
+    SendMessagesInThreads: 1n << 38n,
     ModerateMembers: 1n << 40n,
     CreateExpressions: 1n << 43n,
     PinMessages: 1n << 51n,

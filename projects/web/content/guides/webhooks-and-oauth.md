@@ -1,7 +1,7 @@
 ---
 title: Send webhook messages and authorize users
 navTitle: Webhooks & OAuth
-description: Send messages through a webhook and use the OAuth code grant with PKCE to get a user's consent
+description: Send messages through a webhook, including into threads and forum channels, and use the OAuth code grant with PKCE to get a user's consent
 ---
 
 Fluxerly works with three kinds of credentials. A bot token runs the bot: It reads community resources and receives gateway events. A [webhook](/docs/{{version}}/glossary/#webhook) token lets an application post and manage that webhook's messages in its channel, without a bot. [OAuth](/docs/{{version}}/glossary/#oauth) lets an application ask a user for consent to access their account data
@@ -62,6 +62,39 @@ export function sendWebhookMessageWithEffect(id: string, token: string, content:
 ```
 
 Keep this helper inside the application runtime shown in [the Effect bot guide](/docs/{{version}}/effect-first-bot/). The scope owns only this webhook client and leaves any bot client with its existing owner
+
+## Post into threads and forum channels
+
+A webhook posts into its own channel by default. To reach a [thread](/docs/{{version}}/threads/) of that channel, including a forum post, set `threadId` on the message. To start a new post in a forum or media channel instead, set `threadName`, and optionally `appliedTagIds`
+
+```ts
+import type { WebhookClient } from "@neontechspace/fluxerly"
+
+export async function announceRelease(webhook: WebhookClient, version: string, tagIds: string[]) {
+    // The result is the first message of the new post, and its channelId is the post's ID
+    const first = await webhook.send({
+        content: `Release ${version} is out`,
+        threadName: `Release ${version}`,
+        appliedTagIds: tagIds,
+    })
+    if (first.isErr()) return first
+    return await webhook.send({ content: "Notes follow in this thread", threadId: first.value.channelId })
+}
+```
+
+A webhook that belongs to a forum or media channel must use exactly one of `threadName` and `threadId` on every message, and Fluxer rejects a message with neither. A webhook in a text channel needs neither, and Fluxer rejects `threadName` there. The SDK checks the combinations that it can see before any request: `threadName` and `threadId` cannot be combined, `appliedTagIds` needs `threadName`, and a reply or forward cannot start a post, because the new post holds no earlier message. A post takes at most five tags. Fluxer rejects an unknown tag, a `moderated` tag (a webhook cannot manage threads) and a post without a tag in a channel that requires one
+
+The `fetchMessage`, `editMessage` and `deleteMessage` methods look in the webhook's channel unless their options carry the `threadId` of the thread that holds the message
+
+```ts
+import type { WebhookClient } from "@neontechspace/fluxerly"
+
+export async function reviseThreadNote(webhook: WebhookClient, messageId: string, threadId: string) {
+    return await webhook.editMessage(messageId, "Notes moved to the wiki", { threadId })
+}
+```
+
+Fluxer rejects a thread that belongs to another channel. Where threads are not active for the community, Fluxer can ignore `threadId` and post into the channel itself, which `threadsActive` on `guilds.fetchPage` reveals beforehand. The bot client's `rest.request` method refuses webhook token routes, so these options are the only way to reach a thread through a webhook
 
 ## Create a user-consent URL
 

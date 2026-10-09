@@ -453,6 +453,12 @@ export const logCodes = {
         meaning: "A dispatch failed validation and was skipped. The failing field is in fields.field",
         action: "Report it if Fluxer's payloads changed, and include the field",
     },
+    "gateway.threadSkipped": {
+        levels: ["warn"],
+        meaning:
+            "A thread in a community snapshot failed validation, so the channel cache does not hold it. The failing entry is in fields.field",
+        action: "Report it if Fluxer's payloads changed, and include the field",
+    },
     "gateway.unknownDispatch": {
         levels: ["debug"],
         meaning: "A dispatch type that this SDK version does not handle was ignored",

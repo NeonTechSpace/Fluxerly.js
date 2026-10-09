@@ -1,22 +1,26 @@
 /**
- * Optional channel cache: ID-keyed guild-channel observations with client-wide limits and in-flight guards.
+ * Optional channel cache: ID-keyed guild-channel and thread observations with client-wide limits and in-flight guards.
  * Invariant: The cache never decides effective permissions. Dispatched mutations invalidate channel snapshots and pending channel
  * reads because category and ordering changes can affect descendants, and a rejected multi-entry reorder does not establish
- * rollback. Bulk gateway observations invalidate their guild rather than keeping permissions Fluxer may still be copying, and
- * create or delete events can be visibility changes, not proof of remote creation or deletion. Every applied store, removal and
- * whole-cache clear is recorded to the client's change hub, a replacement counting as one store. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ * rollback. A mutation confined to one thread invalidates only that thread, which has no descendants or sibling order.
+ * Bulk gateway observations invalidate their guild rather than keeping permissions Fluxer may still be copying, and
+ * create or delete events can be visibility changes, not proof of remote creation or deletion. A deleted or hidden channel
+ * takes its cached threads, because Fluxer sends no thread deletion for them, and a full channel list never removes
+ * threads, which it does not include. Every applied store, removal and whole-cache clear is recorded to the client's change
+ * hub, a replacement counting as one store. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import { isDeepStrictEqual } from "node:util"
 import type { ResourceCacheSettings } from "#sdk/cache"
 import type { CacheDiagnostic } from "#sdk/client"
-import type { GuildChannel } from "#sdk/channels"
+import { isThreadChannel, type GuildChannel, type GuildThreadChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
 import { retentionAge } from "./retention-age.js"
-import { decodeGuildChannels } from "./channels.js"
+import { decodeGuildChannels } from "./channel-decode.js"
 import { identifier, record } from "./decode/primitives.js"
+import { decodeSnapshotThreads, threadParentTypes } from "./thread-events.js"
 
 export type ChannelCacheRequest = {
     readonly channelId?: string
@@ -24,6 +28,11 @@ export type ChannelCacheRequest = {
     readonly mutation?: boolean
     /** A complete, authoritative guild list that may reconcile absent channel snapshots */
     readonly replace?: boolean
+    /**
+     * Marks a mutation confined to the thread named by channelId, or to a new thread when channelId is absent. A thread
+     * has no descendants or sibling order, so the change affects no other channel snapshot
+     */
+    readonly thread?: boolean
 }
 
 export type ChannelCacheGuard = ChannelCacheRequest & {
@@ -53,6 +62,8 @@ const overlaps = (left: ChannelCacheRequest, right: ChannelCacheRequest) => {
 const matches = (request: ChannelCacheRequest, channel: GuildChannel) =>
     (request.channelId === undefined || request.channelId === channel.id) &&
     (request.guildId === undefined || request.guildId === channel.guildId)
+
+const notThread = (channel: GuildChannel) => !isThreadChannel(channel)
 
 /** One client's bounded guild-channel observations and in-flight guards, never a guild inventory or permission authority */
 export class ChannelCache {
@@ -88,6 +99,11 @@ export class ChannelCache {
         this.#entries.delete(channelId)
         this.#entries.set(channelId, entry)
         return entry.value
+    }
+
+    /** Whether an unexpired observation of this channel is retained, without making it less likely to be removed */
+    holds(channelId: string): boolean {
+        return this.#peek(channelId) !== undefined
     }
 
     diagnostics(): CacheDiagnostic {
@@ -146,10 +162,8 @@ export class ChannelCache {
     complete(guard: ChannelCacheGuard, result: unknown) {
         guard.success = true
         if (this.#closed) return
-        // A dispatched channel mutation can reorder or move category descendants, even when its route names one ID.
-        // Keep this cost local to channels: Clear their snapshots and invalidate their guards, never other resource caches
         if (guard.mutation) {
-            this.gap()
+            this.#mutated(guard)
             return
         }
         if (guard.generation !== this.#generation || guard.gapped) return
@@ -160,8 +174,9 @@ export class ChannelCache {
                 : Array.isArray(result)
                   ? (result as readonly GuildChannel[])
                   : [result as GuildChannel]
-        // Only a conflict-free full guild list can prove absence. CHANNEL_UPDATE_BULK is never passed as replace
-        if (guard.replace && !guard.invalid) this.#evict(selection(guard), guard)
+        // Only a conflict-free full guild list can prove absence. CHANNEL_UPDATE_BULK is never passed as replace. Fluxer
+        // never lists threads with a guild's channels, so the list proves nothing about them
+        if (guard.replace && !guard.invalid) this.#evict(selection(guard), guard, notThread)
         for (const value of values) {
             if (guard.invalid) {
                 const entry = this.#peek(value.id)
@@ -181,7 +196,7 @@ export class ChannelCache {
     end(guard: ChannelCacheGuard, dispatched: boolean) {
         // A dispatched write can partially apply a category subtree or ordering before a later rejection. Do not let an
         // ID-only route retain unrelated stale channels. This deliberately clears only this channel cache and its guards
-        if (!guard.success && guard.mutation && dispatched && !this.#closed) this.gap()
+        if (!guard.success && guard.mutation && dispatched && !this.#closed) this.#mutated(guard)
         this.#requests.delete(guard)
     }
 
@@ -196,27 +211,83 @@ export class ChannelCache {
             // the rest of the guild, so evict every affected channel rather than caching a partial reconciliation
             if (channel.type === categoryType && event !== "guildChannelCreate")
                 this.#evict({ guildId: channel.guildId })
-            else if (event === "guildChannelDelete") this.#evict({ channelId: channel.id, guildId: channel.guildId })
-            else this.#observe(channel)
+            else if (event === "guildChannelDelete") {
+                this.#evict({ channelId: channel.id, guildId: channel.guildId })
+                // A deleted or hidden parent takes its threads, and Fluxer sends no THREAD_DELETE for them. The guild-wide
+                // request also stops ID-only reads in flight, which can name one of those threads
+                if (threadParentTypes.has(channel.type))
+                    this.#evict(
+                        { guildId: channel.guildId },
+                        undefined,
+                        (candidate) => isThreadChannel(candidate) && candidate.parentId === channel.id,
+                    )
+            } else this.#observe(channel)
+        } else if (event === "threadCreate") {
+            // isNewlyCreated describes the event, not the thread
+            const { isNewlyCreated: _isNewlyCreated, ...thread } = value as EventMap["threadCreate"]
+            this.#observe(Object.freeze(thread) as GuildThreadChannel)
+        } else if (event === "threadUpdate") this.#observe(value as EventMap["threadUpdate"])
+        else if (event === "threadDelete") {
+            const deletion = value as EventMap["threadDelete"]
+            this.#evict({ channelId: deletion.id, guildId: deletion.guildId })
+        } else if (event === "threadListSync") {
+            const sync = value as EventMap["threadListSync"]
+            const parents = sync.parentIds === undefined ? undefined : new Set(sync.parentIds)
+            this.#evict(
+                { guildId: sync.guildId },
+                undefined,
+                (candidate) => isThreadChannel(candidate) && (parents === undefined || parents.has(candidate.parentId)),
+            )
+            for (const thread of sync.threads) this.#observe(thread)
         }
         this.#schedule()
     }
 
-    guildEvent(event: string, value: unknown) {
+    /** Evict one thread, such as one whose cached membership of the bot is no longer current. An unknown guild matches any */
+    evictThread(threadId: string, guildId: string | undefined) {
         if (this.#closed) return
+        this.#evict(guildId === undefined ? { channelId: threadId } : { channelId: threadId, guildId })
+        this.#schedule()
+    }
+
+    /**
+     * Evict the cached threads of the affected guilds once a shard resumed. Fluxer does not replay THREAD_LIST_SYNC,
+     * so a thread observed before the Resume completed may no longer be visible. Reads in flight for those guilds, and
+     * ID-only reads, which can name a thread, cannot store an answer that may predate the Resume
+     */
+    dropThreads(affects: (guildId: string | null | undefined) => boolean) {
+        if (this.#closed) return
+        for (const guard of this.#requests)
+            if (guard.guildId === undefined || affects(guard.guildId)) guard.invalid = true
+        for (const entry of this.#entries.values())
+            if (isThreadChannel(entry.value) && affects(entry.value.guildId)) this.#remove(entry)
+        this.#schedule()
+    }
+
+    /**
+     * Apply a raw guild lifecycle body. GUILD_CREATE replaces the guild's channels and threads, decoding its threads one
+     * at a time, and the field paths of the threads it left out as malformed are returned for the caller to log
+     */
+    guildEvent(event: string, value: unknown): readonly string[] {
+        if (this.#closed) return []
         if (!record(value) || !identifier(value.id)) {
             this.gap()
-            return
+            return []
         }
+        let skipped: readonly string[] = []
         // Removal or lost guild visibility invalidates observations but does not establish physical deletion
         if (event === "GUILD_DELETE") this.#evict({ guildId: value.id })
         else if (event === "GUILD_CREATE") {
-            // The snapshot lists every channel the bot can view, so it replaces this guild's channels.
-            // An unavailable guild or a malformed list leaves none
+            // The snapshot lists every channel and active thread the bot can view, so it replaces this guild's channels
+            // and threads. An unavailable guild or a malformed channel list leaves no channels
             this.#evict({ guildId: value.id })
             for (const channel of decodeGuildChannels(value.channels, value.id) ?? []) this.#observe(channel)
+            const snapshot = decodeSnapshotThreads(value, value.id)
+            for (const thread of snapshot.threads) this.#observe(thread)
+            skipped = snapshot.skipped
         }
         this.#schedule()
+        return skipped
     }
 
     gap(affects?: (guildId: string | null | undefined) => boolean) {
@@ -275,14 +346,27 @@ export class ChannelCache {
         for (const guard of this.#requests) if (guard !== except && overlaps(request, guard)) guard.invalid = true
     }
 
-    #evict(request: ChannelCacheRequest, except?: ChannelCacheGuard) {
+    /**
+     * Apply a dispatched mutation. One confined to a thread evicts only that thread, and creating a new thread evicts
+     * nothing. Any other can reorder or move category descendants, even when its route names one ID, so it clears every
+     * channel snapshot and invalidates every channel guard, never other resource caches
+     */
+    #mutated(guard: ChannelCacheGuard) {
+        if (!guard.thread) return this.gap()
+        if (guard.channelId !== undefined) this.#evict(selection(guard), guard)
+        this.#schedule()
+    }
+
+    /** Remove the retained channels the request selects, narrowed to those that only accepts when it is given */
+    #evict(request: ChannelCacheRequest, except?: ChannelCacheGuard, only?: (channel: GuildChannel) => boolean) {
         this.#invalidate(request, except)
+        const selected = (channel: GuildChannel) => matches(request, channel) && (only === undefined || only(channel))
         if (request.channelId !== undefined) {
             const entry = this.#entries.get(request.channelId)
-            if (entry && matches(request, entry.value)) this.#remove(entry)
+            if (entry && selected(entry.value)) this.#remove(entry)
             return
         }
-        for (const entry of this.#entries.values()) if (matches(request, entry.value)) this.#remove(entry)
+        for (const entry of this.#entries.values()) if (selected(entry.value)) this.#remove(entry)
     }
 
     #observe(channel: GuildChannel, except?: ChannelCacheGuard) {

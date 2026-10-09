@@ -13,6 +13,7 @@ import type {
     MessageSearchPage,
     MessageSearchQuery,
 } from "#sdk/message-search"
+import { decodeThreadList } from "./channel-decode.js"
 import { decodeMessage } from "./message.js"
 import { identifier, integerInRange as integer, record, snapshotArray } from "./decode/primitives.js"
 import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
@@ -447,6 +448,16 @@ export function decodeMessageSearchPage(
         channelIds.add(decoded.id)
         channels.push(decoded)
     }
+    // Fluxer lists the channel of a hit inside a thread in threads, with the bot's memberships of those threads beside it
+    const threads = decodeThreadList(
+        value.threads === undefined ? [] : value.threads,
+        value.members === undefined ? [] : value.members,
+    )
+    if (!threads) return undefined
+    for (const thread of threads) {
+        if (channelIds.has(thread.id)) return undefined
+        channelIds.add(thread.id)
+    }
     const messageChannelIds = new Set(messages.map((message) => message.channelId))
     if (
         messageChannelIds.size !== channelIds.size ||
@@ -457,6 +468,7 @@ export function decodeMessageSearchPage(
         indexing: false,
         messages: Object.freeze(messages),
         channels: Object.freeze(channels),
+        threads,
         total: value.total,
         hitsPerPage: value.hits_per_page,
         page: value.page,

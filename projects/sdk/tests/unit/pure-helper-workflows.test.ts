@@ -44,6 +44,15 @@ for (const [mode, api] of [
         expect(Object.isFrozen(inspection.names)).toBe(true)
     })
 
+    // Fluxer 4749eb7f ThreadPermissionFlags: Inspection once reported these bits as unknown and names rejected them
+    test(`${mode}: names the thread permission bits`, () => {
+        const threadBits = (1n << 34n) | (1n << 35n) | (1n << 36n) | (1n << 38n)
+        const names = ["ManageThreads", "CreatePublicThreads", "CreatePrivateThreads", "SendMessagesInThreads"] as const
+        expect(api.permissionBits.from(names)).toBe(threadBits)
+        expect(api.permissionBits.inspect(threadBits)).toEqual({ names, unknownBits: 0n })
+        expect(api.guards.requirePermissions(["SendMessagesInThreads"])).toBeTypeOf("function")
+    })
+
     test(`${mode}: validates every permission name and unsigned-64-bit input without leaking rejected values`, () => {
         for (const names of [["ManageRoles", "secret-invalid-name"], ["toString"], Array(1), null]) {
             for (const operation of [

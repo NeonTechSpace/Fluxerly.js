@@ -254,6 +254,32 @@ export type WebhookMessageOptions = {
     readonly username?: string
     /** Override the avatar for this message only. Use an HTTP(S) URL without credentials, at most 8,192 characters, fetched by Fluxer */
     readonly avatarUrl?: string
+    /** Decimal ID of a thread in the webhook's channel, sent as the thread_id query parameter so the message goes to
+     * that thread instead of the channel. Fluxer rejects a thread that belongs to another channel, and a forum or media
+     * channel needs either this or threadName. It cannot be combined with threadName
+     */
+    readonly threadId?: string
+}
+
+/**
+ * Settings for starting a new post in a forum or media channel through a webhook.
+ * The webhook must belong to that forum or media channel, and Fluxer rejects threadName for any other channel.
+ * Set them only on a new message, not on a reply or forward
+ *
+ * @category Invites and webhooks
+ */
+export interface WebhookForumPostOptions {
+    /** Name of the new post, 1–100 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
+     * trimming. The original string is sent unchanged. The message becomes the first message of the new post, and the
+     * result is that message, whose channelId is the new post's ID. Fluxer needs this or threadId to place a message in
+     * a forum or media channel, and it cannot be combined with threadId
+     */
+    readonly threadName?: string
+    /** IDs of the tags to apply to the new post, at most 5. This needs threadName. Fluxer rejects an ID that the channel
+     * does not have, a moderated tag because a webhook cannot manage threads, and a post with no tag when the channel
+     * has ChannelFlags.RequireTag
+     */
+    readonly appliedTagIds?: readonly string[]
 }
 
 /**
@@ -265,11 +291,17 @@ export type WebhookMessageOptions = {
  * Fluxer rejects missing or cross-channel reply/forward targets. New messages do not require the destination channel ID.
  * Fluxer never sends a webhook message as text-to-speech, so a tts property fails with reason input before dispatch, like any other unknown property
  *
+ * To post into a thread, set threadId. To start a new post in a forum or media channel, set threadName and optionally
+ * appliedTagIds on a new message. A webhook in a forum or media channel needs one of threadId and threadName, and the
+ * SDK rejects a message that sets both. A reply or forward cannot start a post, because the new post holds no message
+ * to refer to, so threadName with a messageReference fails before dispatch
+ *
  * @category Invites and webhooks
  */
 export type WebhookMessageInput =
     | (MessageBody &
-          WebhookMessageOptions & {
+          WebhookMessageOptions &
+          WebhookForumPostOptions & {
               /** Reply to this existing message, or omit the reference to send an independent message */
               readonly messageReference?: WebhookReplyReference
           })
@@ -311,6 +343,27 @@ export interface WebhookMessageEdit {
     /** Which mentions in the edited message may notify people. Notifications are disabled by default for this edit */
     readonly allowedMentions?: AllowedMentions
 }
+
+/**
+ * Request settings for fetching, editing or deleting a message that a webhook client sent
+ *
+ * @category Options
+ */
+export interface WebhookMessageOperationOptions extends MessageOperationOptions {
+    /** Decimal ID of the thread that holds the message, sent as the thread_id query parameter. Set it for a message in
+     * a thread, because Fluxer looks in the webhook's channel otherwise and answers that the message is unknown.
+     * Fluxer rejects a thread that belongs to another channel
+     */
+    readonly threadId?: string
+}
+
+/**
+ * Request settings for fetching, editing or deleting a webhook message in the default API. An AbortSignal cancels this
+ * request, not the webhook client
+ *
+ * @category Options
+ */
+export interface DefaultWebhookMessageOperationOptions extends WebhookMessageOperationOptions, OperationOptions {}
 
 /**
  * Request settings for a bot client's webhook management, including an optional audit-log explanation

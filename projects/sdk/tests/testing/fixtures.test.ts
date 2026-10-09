@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 import { snowflakes } from "../../src/index.js"
 import { createFixtures, fixtures } from "../../src/testing.js"
-import { decodeChannelEvent } from "../../src/internal/channels.js"
+import { decodeChannelEvent, decodeThread } from "../../src/internal/channel-decode.js"
 import { decodeGuild, decodeGuildEvent, decodeGuildLifecycleEvent, decodeMember } from "../../src/internal/guilds.js"
 import { decodeMessage } from "../../src/internal/message.js"
 import { decodeUser } from "../../src/internal/users.js"
@@ -31,6 +31,25 @@ test("every fixture builder produces a wire payload the SDK's real decoders acce
         guildId: ids.guild,
         type: 0,
     })
+    expect(decodeThread(wire(set.thread()))).toMatchObject({
+        type: 11,
+        guildId: ids.guild,
+        parentId: ids.channel,
+        ownerId: ids.user,
+        archived: false,
+    })
+    // A private thread needs invitable, which the builder adds to its default metadata
+    expect(decodeThread(wire(set.thread({ type: 12 })))).toMatchObject({ type: 12, invitable: true })
+    expect(decodeChannelEvent("CHANNEL_CREATE", wire(set.forumChannel()))).toMatchObject({
+        type: 15,
+        guildId: ids.guild,
+        availableTags: [],
+        defaultForumLayout: 0,
+    })
+    const media = wire(set.forumChannel({ type: 16 }))
+    expect(media).not.toHaveProperty("default_forum_layout")
+    expect(decodeChannelEvent("CHANNEL_CREATE", media)).toMatchObject({ type: 16, defaultTagSetting: "match_some" })
+    expect(set.guildCreate().threads).toEqual([])
     const role = set.role({ permissions: String(1n << 40n) })
     expect(decodeGuildEvent("GUILD_ROLE_CREATE", wire({ guild_id: ids.guild, role }))).toMatchObject({
         id: role.id,

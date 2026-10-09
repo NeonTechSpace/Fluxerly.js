@@ -150,6 +150,7 @@
         "test:live:voice-controls:default": "pnpm run build && node tests/live/voice-controls.js default",
         "test:live:voice-controls:effect": "pnpm run build && node tests/live/voice-controls.js effect",
         "test:live:channels": "pnpm run build && node tests/live/messages.js default --channels && node tests/live/messages.js effect --channels",
+        "test:live:threads": "pnpm run build && node tests/live/threads.js default && node tests/live/threads.js effect",
         "test:live:history": "pnpm run build && node tests/live/messages.js default --history && node tests/live/messages.js effect --history",
         "test:live:search": "pnpm run build && node tests/live/messages.js default --search && node tests/live/messages.js effect --search",
         "test:live:pagination": "pnpm run build && node tests/live/messages.js default --pagination && node tests/live/messages.js effect --pagination",

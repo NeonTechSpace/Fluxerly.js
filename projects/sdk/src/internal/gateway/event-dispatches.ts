@@ -36,6 +36,11 @@ const eventDispatchMap = {
     guildChannelUpdate: ["CHANNEL_UPDATE"],
     guildChannelDelete: ["CHANNEL_DELETE"],
     guildChannelUpdateBulk: ["CHANNEL_UPDATE_BULK"],
+    threadCreate: ["THREAD_CREATE"],
+    threadUpdate: ["THREAD_UPDATE"],
+    threadDelete: ["THREAD_DELETE"],
+    threadListSync: ["THREAD_LIST_SYNC"],
+    threadMembersUpdate: ["THREAD_MEMBERS_UPDATE"],
     channelPinsUpdate: ["CHANNEL_PINS_UPDATE"],
     guildMemberAdd: ["GUILD_MEMBER_ADD"],
     guildMemberUpdate: ["GUILD_MEMBER_UPDATE"],
@@ -108,7 +113,15 @@ export type FilterCacheKind =
 
 /** Dispatch types each enabled cache category reads to stay consistent with Fluxer */
 const cacheDispatchTypes: Readonly<Record<FilterCacheKind, readonly string[]>> = Object.freeze({
-    messages: ["MESSAGE_CREATE", "MESSAGE_UPDATE", "MESSAGE_DELETE", "MESSAGE_DELETE_BULK", "CHANNEL_DELETE"],
+    // THREAD_DELETE removes a deleted thread's messages, and CHANNEL_DELETE those of a channel and of its threads
+    messages: [
+        "MESSAGE_CREATE",
+        "MESSAGE_UPDATE",
+        "MESSAGE_DELETE",
+        "MESSAGE_DELETE_BULK",
+        "CHANNEL_DELETE",
+        "THREAD_DELETE",
+    ],
     guilds: ["GUILD_UPDATE"],
     members: [
         "GUILD_MEMBER_ADD",
@@ -119,7 +132,20 @@ const cacheDispatchTypes: Readonly<Record<FilterCacheKind, readonly string[]>> =
         "GUILD_ROLE_DELETE",
     ],
     roles: ["GUILD_ROLE_CREATE", "GUILD_ROLE_UPDATE", "GUILD_ROLE_UPDATE_BULK", "GUILD_ROLE_DELETE"],
-    channels: ["CHANNEL_CREATE", "CHANNEL_UPDATE", "CHANNEL_DELETE", "CHANNEL_UPDATE_BULK"],
+    // The channel cache also holds threads. THREAD_MEMBER_UPDATE has no public event, so it is never filtered
+    // automatically, and listing it here keeps an explicit ignored list from dropping it
+    channels: [
+        "CHANNEL_CREATE",
+        "CHANNEL_UPDATE",
+        "CHANNEL_DELETE",
+        "CHANNEL_UPDATE_BULK",
+        "THREAD_CREATE",
+        "THREAD_UPDATE",
+        "THREAD_DELETE",
+        "THREAD_LIST_SYNC",
+        "THREAD_MEMBERS_UPDATE",
+        "THREAD_MEMBER_UPDATE",
+    ],
     users: ["USER_UPDATE", "GUILD_MEMBER_UPDATE"],
     directMessages: [
         "CHANNEL_CREATE",

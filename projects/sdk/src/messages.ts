@@ -2,6 +2,7 @@ import type { OperationOptions } from "./client.js"
 import type { Embed, EmbedInput } from "./embeds.js"
 import type { EmbedBuilder } from "./builders.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
+import type { GuildThreadChannel } from "./channels.js"
 
 /** Identify a message by its channel ID and message ID.
  * Pass this plain object to message operations without fetching the message first.
@@ -131,6 +132,10 @@ export interface Message extends MessageReference {
      * Reading this field performs no request
      */
     readonly referencedMessage?: ReferencedMessage | null
+    /** The thread started from this message, as observed when Fluxer supplied the message. Fluxer includes it only
+     * while the thread exists, on a message with MessageFlags.HasThread. Reading this field performs no request
+     */
+    readonly thread?: GuildThreadChannel
     /** Partial account identity supplied as the author, without profile lookup or account methods.
      * Webhook and deleted-user authors remain partial MessageUser values and must not be treated as complete User objects
      */
@@ -394,6 +399,12 @@ export const MessageFlags: Readonly<{
      * Fluxer replaces the copy's content with "[Original message deleted]" and clears attachments, embeds and stickers
      */
     readonly SourceMessageDeleted: 8
+    /** Server-managed bit on a message that a thread was started from. Its thread field describes that thread while it exists */
+    readonly HasThread: 32
+    /** Server-managed bit on a message in a thread that mentions a role, when Fluxer could not add every member of
+     * that role to the thread
+     */
+    readonly FailedToMentionSomeRolesInThread: 256
     /** Writable bit that suppresses push and desktop notifications */
     readonly SuppressNotifications: 4096
     /** Bit that marks a voice message. Message and webhook send and edit operations reject it before dispatch */
@@ -403,6 +414,8 @@ export const MessageFlags: Readonly<{
     IsCrosspost: 2,
     SuppressEmbeds: 4,
     SourceMessageDeleted: 8,
+    HasThread: 32,
+    FailedToMentionSomeRolesInThread: 256,
     SuppressNotifications: 4096,
     VoiceMessage: 8192,
 } as const)
@@ -415,13 +428,13 @@ export const MessageFlags: Readonly<{
 export const MessageType: Readonly<{
     /** A regular message */
     readonly Default: 0
-    /** A notice that a user was added to a group conversation */
+    /** A notice that a user was added to a group conversation or a thread */
     readonly RecipientAdd: 1
-    /** A notice that a user was removed from a group conversation */
+    /** A notice that a user was removed from a group conversation or a thread */
     readonly RecipientRemove: 2
     /** A call in a private conversation */
     readonly Call: 3
-    /** A notice that the conversation's name changed */
+    /** A notice that a group conversation or thread was renamed */
     readonly ChannelNameChange: 4
     /** A notice that the conversation's icon changed */
     readonly ChannelIconChange: 5
@@ -433,8 +446,17 @@ export const MessageType: Readonly<{
      * Its messageReference identifies the followed channel without a source message ID
      */
     readonly ChannelFollowAdd: 12
+    /** A notice in a text or announcement channel that a public or announcement thread was started there.
+     * Its content is the thread name, its author started the thread, and its messageReference names the thread
+     * without a message ID
+     */
+    readonly ThreadCreated: 18
     /** A reply to another message, whose messageReference names the target */
     readonly Reply: 19
+    /** The first message of a thread started from a message. Its messageReference names that message, and
+     * referencedMessage holds it, or null once it is deleted. Fluxer builds it on read and never stores it
+     */
+    readonly ThreadStarterMessage: 21
 }> = Object.freeze({
     Default: 0,
     RecipientAdd: 1,
@@ -445,7 +467,9 @@ export const MessageType: Readonly<{
     ChannelPinnedMessage: 6,
     UserJoin: 7,
     ChannelFollowAdd: 12,
+    ThreadCreated: 18,
     Reply: 19,
+    ThreadStarterMessage: 21,
 } as const)
 
 /**

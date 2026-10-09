@@ -21,6 +21,7 @@ export const clientNamespaces = Object.freeze(
         { type: "Emojis", member: "emojis" },
         { type: "Stickers", member: "stickers" },
         { type: "Channels", member: "channels" },
+        { type: "Threads", member: "threads", typeArguments: "<M>" },
         { type: "Members", member: "members" },
         { type: "Attachments", member: "attachments" },
         { type: "Messages", member: "messages", typeArguments: "<M>" },

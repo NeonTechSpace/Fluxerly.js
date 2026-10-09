@@ -20,7 +20,14 @@ import {
     guildEvents,
     guildLifecycleEvents,
 } from "../guilds.js"
-import { decodeChannelEvent, channelEvents } from "../channels.js"
+import { decodeChannelEvent, channelEvents, decodeThread } from "../channel-decode.js"
+import {
+    decodeOwnThreadMemberUpdate,
+    decodeThreadCreate,
+    decodeThreadDeletion,
+    decodeThreadListSync,
+    decodeThreadMembersUpdate,
+} from "../thread-events.js"
 import { decodeExpressionUpdate } from "../expressions.js"
 import { decodeInviteDelete, decodeInviteMetadata } from "../invites.js"
 import { decodeAuditLogEntry } from "../audit-logs.js"
@@ -256,13 +263,32 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         decode: (body) => decodeInviteDelete(body),
         project: (invite, sinks) => sinks.emit("inviteDelete", invite),
     }),
-    // Threads have no typed events yet. These two only drop cached observations of the changed or deleted thread
-    ...Object.fromEntries(
-        ["THREAD_UPDATE", "THREAD_DELETE"].map((type) => [
-            type,
-            entry({ rawCache: guildCache, decode: () => ignored, project: () => undefined }),
-        ]),
-    ),
+    THREAD_CREATE: entry({
+        decode: decodeThreadCreate,
+        project: (thread, sinks) => sinks.emit("threadCreate", thread),
+    }),
+    THREAD_UPDATE: entry({
+        decode: (body) => decodeThread(body),
+        project: (thread, sinks) => sinks.emit("threadUpdate", thread),
+    }),
+    THREAD_DELETE: entry({
+        decode: decodeThreadDeletion,
+        project: (deletion, sinks) => sinks.emit("threadDelete", deletion),
+    }),
+    THREAD_LIST_SYNC: entry({
+        decode: decodeThreadListSync,
+        project: (sync, sinks) => sinks.emit("threadListSync", sync),
+    }),
+    THREAD_MEMBERS_UPDATE: entry({
+        decode: decodeThreadMembersUpdate,
+        project: (update, sinks) => sinks.emit("threadMembersUpdate", update),
+    }),
+    // The bot's own thread membership changed. No public event carries it, so only the channel cache reads it
+    THREAD_MEMBER_UPDATE: entry({
+        decode: decodeOwnThreadMemberUpdate,
+        cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
+        project: () => undefined,
+    }),
     GUILD_AUDIT_LOG_ENTRY_CREATE: entry({
         decode: decodeAuditLogEntryCreate,
         project: (audit, sinks) => sinks.emit("guildAuditLogEntryCreate", audit),

@@ -5,6 +5,7 @@
  * a cache older than the event it is handling. A skipped dispatch clears every entry it could have changed.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
+import type { GuildChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
 import type { MessageCore } from "#sdk/messages"
 import type { MessageCache } from "../cache.js"
@@ -12,6 +13,8 @@ import type { ChannelCache } from "../channel-cache.js"
 import { identifier, record } from "../decode/primitives.js"
 import { isMessageEvent } from "../events.js"
 import type { GuildCache } from "../guild-cache.js"
+import type { ClientLogger } from "../logging.js"
+import { threadParentTypes } from "../thread-events.js"
 import type { UserCache } from "../user-cache.js"
 
 /** The caches one client owns. Only the user cache is always present */
@@ -20,6 +23,10 @@ export interface ClientCaches<M extends MessageCore> {
     readonly resources: GuildCache | undefined
     readonly channelCache: ChannelCache | undefined
     readonly userCache: UserCache
+    /** Records threads that a community snapshot carried in a malformed form */
+    readonly logging: ClientLogger
+    /** The bot account ID once READY or a self read supplied it, which tells whether a thread member change is the bot's */
+    readonly botUserId: string | undefined
 }
 
 /** Clear every cache without closing it */
@@ -64,33 +71,64 @@ export function applyEvent<M extends MessageCore, K extends EventName>(
         userCache.invalidate("directMessages", typeof id === "string" ? id : undefined)
     }
     if (event === "directMessageDelete" && "id" in message) cache?.deleteChannel(message.id)
-    if (event === "guildChannelDelete" && "id" in message) cache?.deleteChannel(message.id)
+    if (event === "guildChannelDelete" || event === "threadDelete" || event === "threadMembersUpdate")
+        applyThreadEffects(caches, event, message)
     if (isMessageEvent<typeof event, M>(event, message)) cache?.observe(message)
     else if ("ids" in message) {
         for (const id of message.ids) cache?.delete({ id, channelId: message.channelId })
     } else if (event === "messageDelete" && "id" in message && "channelId" in message) cache?.delete(message)
 }
 
-/** Raw guild lifecycle, expression and thread intake, or undefined when no cache can use it */
+/** Apply a channel deletion's or thread event's effects on cached messages and on the bot's cached thread memberships */
+function applyThreadEffects<M extends MessageCore>(
+    caches: ClientCaches<M>,
+    event: "guildChannelDelete" | "threadDelete" | "threadMembersUpdate",
+    message: EventMap<M>[EventName],
+) {
+    const { cache, channelCache } = caches
+    if (event === "guildChannelDelete") {
+        const channel = message as GuildChannel
+        cache?.deleteChannel(channel.id)
+        // Fluxer deletes a parent's threads without THREAD_DELETE, and a message does not record its thread's parent.
+        // The channel cache already evicted the parent's threads, so every channel it still holds is placed elsewhere
+        if (threadParentTypes.has(channel.type))
+            cache?.deleteUnplaced(channel.guildId, (channelId) => channelCache?.holds(channelId) === true)
+    } else if (event === "threadDelete") cache?.deleteChannel((message as EventMap["threadDelete"]).id)
+    else {
+        const update = message as EventMap["threadMembersUpdate"]
+        const self = caches.botUserId
+        // The cached thread carries the bot's membership, so a change that may be the bot's makes it stale
+        const named =
+            self === undefined
+                ? update.added.length > 0 || update.removedUserIds.length > 0
+                : update.added.some((member) => member.userId === self) || update.removedUserIds.includes(self)
+        if (named) channelCache?.evictThread(update.threadId, update.guildId)
+    }
+}
+
+/** Raw guild lifecycle, expression and own thread membership intake, or undefined when no cache can use it */
 export function guildIntake<M extends MessageCore>(
     caches: ClientCaches<M>,
 ): ((event: string, value: unknown) => void) | undefined {
-    const { cache, resources, channelCache } = caches
+    const { cache, resources, channelCache, logging } = caches
     if (!resources && !channelCache && !cache) return undefined
     return (event, value) => {
-        if (event === "THREAD_UPDATE" || event === "THREAD_DELETE") {
-            // Without typed threads, a changed thread is evicted rather than updated, and a deleted one takes its messages
-            const id = record(value) && identifier(value.id) ? value.id : undefined
-            if (id === undefined) channelCache?.gap()
-            else channelCache?.delete(id)
-            if (event === "THREAD_DELETE") {
-                if (id === undefined) cache?.gap()
-                else cache?.deleteChannel(id)
-            }
+        if (event === "THREAD_MEMBER_UPDATE") {
+            // The dispatch table validated the body first. A cached thread carries the bot's membership, now stale
+            if (record(value) && identifier(value.id) && identifier(value.guild_id))
+                channelCache?.evictThread(value.id, value.guild_id)
             return
         }
         resources?.guildEvent(event, value)
-        if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE") channelCache?.guildEvent(event, value)
+        if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE")
+            for (const field of channelCache?.guildEvent(event, value) ?? [])
+                logging.log({
+                    level: "warn",
+                    category: "gateway",
+                    code: "gateway.threadSkipped",
+                    message: `Skipped a thread in a ${event} dispatch because its data did not match the expected shape at ${field}. The channel cache does not hold it, and handlers still receive the community`,
+                    fields: { dispatch: event, guildId: (value as { id: string }).id, field },
+                })
         if (event === "GUILD_DELETE")
             cache?.gap((guildId) => guildId === undefined || (record(value) && value.id === guildId))
     }
@@ -132,6 +170,10 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
         userCache.invalidate("users")
         return
     }
+    if (type.startsWith("THREAD_")) {
+        invalidateThreadDispatch(caches, type, value)
+        return
+    }
     if (type === "GUILD_MEMBER_UPDATE") {
         const userId = value && record(value.user) && identifier(value.user.id) ? value.user.id : undefined
         userCache.invalidate("users", userId)
@@ -160,4 +202,27 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
         return
     }
     clearCaches(caches)
+}
+
+/**
+ * Clear what a skipped thread dispatch could have changed: Only cached threads, and for a deletion also the thread's
+ * messages. THREAD_LIST_SYNC names its guild in guild_id, and each other type also names its thread in id
+ */
+function invalidateThreadDispatch<M extends MessageCore>(
+    caches: ClientCaches<M>,
+    type: string,
+    value: Record<string, unknown> | undefined,
+) {
+    const { cache, channelCache } = caches
+    const guildId = value && identifier(value.guild_id) ? value.guild_id : undefined
+    const threadId = type !== "THREAD_LIST_SYNC" && value && identifier(value.id) ? value.id : undefined
+    const affects =
+        guildId === undefined
+            ? undefined
+            : (candidate: string | null | undefined) => candidate === undefined || candidate === guildId
+    if (threadId !== undefined) channelCache?.evictThread(threadId, guildId)
+    else channelCache?.gap(affects)
+    if (type !== "THREAD_DELETE") return
+    if (threadId !== undefined) cache?.deleteChannel(threadId)
+    else cache?.gap(affects)
 }

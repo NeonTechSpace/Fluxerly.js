@@ -1,24 +1,32 @@
 /**
- * Guild channel operations: Request validation and projection of REST and gateway channel data.
+ * Guild channel operations: Request validation and encoding, with REST and gateway channel data projected by
+ * [channel decoding](/projects/sdk/src/internal/channel-decode.ts).
  * Invariant: Guild and channel routes use separate rate-limit groups while sharing global limits and cleanup, omitted permission
  * overwrites stay distinct from an explicit empty list through input encoding, and channel deletion or visibility loss evicts
  * related cached messages without synthesizing message events or changing collector completion. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import {
+    ChannelFlags,
     ChannelType,
+    ForumLayout,
+    ForumSortOrder,
+    ThreadAutoArchiveMinutes,
     type ChannelCreate,
     type ChannelEdit,
     type ChannelFollowInput,
     type ChannelFollowerStats,
     type FollowedChannel,
+    type ForumTagInput,
     type ChannelPosition,
     type GuildChannel,
-    type GuildChannelUpdateBulk,
+    type GuildForumChannel,
+    type GuildMediaChannel,
     type PermissionOverwrite,
 } from "#sdk/channels"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
-import { timestamp } from "./decode/timestamp.js"
+import type { EncodedBody } from "./attachments.js"
+import { decodeGuildChannel, decodeGuildChannels, url } from "./channel-decode.js"
+import { count as nonNegativeInt32, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
 import { channelName, normalizedText, rawText } from "./field-text.js"
 
 /** Validated request description, with the shared REST owner retaining admission, cleanup and rate state */
@@ -28,190 +36,69 @@ export interface ChannelRequest<A> {
     readonly bucket: string
     readonly path: string
     readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE"
-    readonly status: 200 | 204
+    readonly status: 200 | 201 | 204
     readonly json?: string
+    /** A JSON body with attachment files, sent inline as multipart form data instead of json */
+    readonly body?: EncodedBody
     /** Allows the shared REST owner to validate and send an operation audit reason */
     readonly audited?: true
     /** Private client capabilities required for one explicit provider-gated replacement */
     readonly features?: readonly string[]
     readonly decode: (value: unknown) => A | undefined
-    /** Cache ownership hints consumed by the channel cache owner */
+    /** Decodes an HTTP 202 response, for a route that answers 202 instead of status while its result is not ready */
+    readonly accepted?: (value: unknown) => A | undefined
+    /**
+     * Cache ownership hints consumed by the channel cache owner. Only a mutation, whose result the cache never stores, or
+     * a request whose result is one channel or a list of channels may carry them
+     */
     readonly cache?: {
         readonly channelId?: string
         readonly guildId?: string
         readonly mutation?: boolean
         readonly replace?: boolean
+        /**
+         * The result is one thread or a list of threads. A mutation changes only the thread named by channelId, or
+         * creates a thread when channelId is absent
+         */
+        readonly thread?: boolean
     }
 }
 
 type ChannelValidationResult<A> = ChannelRequest<A> | InputValidationFailure
 
-const maxUnsignedPermission = 18_446_744_073_709_551_615n
 const maxWritablePermission = 9_223_372_036_854_775_807n
 const maxRequestBytes = 4_194_304
 
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
-const unsignedPermission = (value: unknown): value is bigint =>
-    typeof value === "bigint" && value >= 0n && value <= maxUnsignedPermission
 const writablePermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
-
-export const channelEvents = {
-    CHANNEL_CREATE: "guildChannelCreate",
-    CHANNEL_UPDATE: "guildChannelUpdate",
-    CHANNEL_DELETE: "guildChannelDelete",
-    CHANNEL_UPDATE_BULK: "guildChannelUpdateBulk",
-} as const
-
-function decodeOverwrite(value: unknown): PermissionOverwrite | undefined {
-    if (
-        !record(value) ||
-        !identifier(value.id) ||
-        (value.type !== 0 && value.type !== 1) ||
-        typeof value.allow !== "string" ||
-        typeof value.deny !== "string" ||
-        !/^(0|[1-9][0-9]{0,19})$/.test(value.allow) ||
-        !/^(0|[1-9][0-9]{0,19})$/.test(value.deny)
-    )
-        return undefined
-    const allow = BigInt(value.allow)
-    const deny = BigInt(value.deny)
-    if (!unsignedPermission(allow) || !unsignedPermission(deny)) return undefined
-    return Object.freeze({ id: value.id, type: value.type === 0 ? "role" : "member", allow, deny })
-}
-
-function decodeOverwrites(value: unknown): readonly PermissionOverwrite[] | undefined {
-    if (!Array.isArray(value)) return undefined
-    const overwrites: PermissionOverwrite[] = []
-    const ids = new Set<string>()
-    for (const item of value) {
-        const overwrite = decodeOverwrite(item)
-        if (!overwrite || ids.has(overwrite.id)) return undefined
-        ids.add(overwrite.id)
-        overwrites.push(overwrite)
-    }
-    return Object.freeze(overwrites)
-}
-
-/** ChannelType numbers this SDK version decodes into a type-specific shape, and any other number becomes "unknown" */
-const knownChannelTypes: ReadonlySet<number> = new Set(Object.values(ChannelType))
-
-/** Decode a complete guild-channel response, with private channels and malformed payloads returning undefined */
-function decodeGuildChannel(value: unknown): GuildChannel | undefined {
-    if (
-        !record(value) ||
-        !identifier(value.id) ||
-        !identifier(value.guild_id) ||
-        !nonNegativeInt32(value.type) ||
-        (value.name !== undefined && typeof value.name !== "string") ||
-        (value.topic !== undefined && !nullableText(value.topic)) ||
-        (value.url !== undefined && value.url !== null && !url(value.url)) ||
-        (value.position !== undefined && !int32(value.position)) ||
-        (value.parent_id !== undefined && !nullableIdentifier(value.parent_id)) ||
-        (value.bitrate !== undefined && value.bitrate !== null && !int32(value.bitrate)) ||
-        (value.user_limit !== undefined && value.user_limit !== null && !int32(value.user_limit)) ||
-        (value.voice_connection_limit !== undefined &&
-            value.voice_connection_limit !== null &&
-            !int32(value.voice_connection_limit)) ||
-        (value.rtc_region !== undefined && !nullableText(value.rtc_region)) ||
-        (value.last_message_id !== undefined && !nullableIdentifier(value.last_message_id)) ||
-        (value.last_pin_timestamp !== undefined &&
-            value.last_pin_timestamp !== null &&
-            !timestamp(value.last_pin_timestamp)) ||
-        (value.nsfw !== undefined && typeof value.nsfw !== "boolean") ||
-        (value.nsfw_override !== undefined &&
-            value.nsfw_override !== null &&
-            typeof value.nsfw_override !== "boolean") ||
-        (value.content_warning_level !== undefined &&
-            value.content_warning_level !== 0 &&
-            value.content_warning_level !== 1) ||
-        (value.content_warning_text !== undefined &&
-            value.content_warning_text !== null &&
-            !text(value.content_warning_text, 0, 200)) ||
-        (value.rate_limit_per_user !== undefined && !int32(value.rate_limit_per_user))
-    )
-        return undefined
-    const permissionOverwrites =
-        value.permission_overwrites === undefined ? undefined : decodeOverwrites(value.permission_overwrites)
-    if (value.permission_overwrites !== undefined && permissionOverwrites === undefined) return undefined
-    return Object.freeze({
-        id: value.id,
-        guildId: value.guild_id,
-        // An unknown number keeps its value in rawType, so a ChannelType comparison can never match this shape
-        ...(knownChannelTypes.has(value.type)
-            ? { type: value.type as (typeof ChannelType)[keyof typeof ChannelType] }
-            : { type: "unknown" as const, rawType: value.type }),
-        ...(value.name === undefined ? {} : { name: value.name }),
-        ...(value.topic === undefined ? {} : { topic: value.topic as string | null }),
-        ...(value.url === undefined ? {} : { url: value.url as string | null }),
-        ...(value.position === undefined ? {} : { position: value.position }),
-        ...(value.parent_id === undefined ? {} : { parentId: value.parent_id as string | null }),
-        ...(value.bitrate === undefined ? {} : { bitrate: value.bitrate as number | null }),
-        ...(value.user_limit === undefined ? {} : { userLimit: value.user_limit as number | null }),
-        ...(value.voice_connection_limit === undefined
-            ? {}
-            : { voiceConnectionLimit: value.voice_connection_limit as number | null }),
-        ...(value.rtc_region === undefined ? {} : { rtcRegion: value.rtc_region as string | null }),
-        ...(value.last_message_id === undefined ? {} : { lastMessageId: value.last_message_id as string | null }),
-        ...(value.last_pin_timestamp === undefined
-            ? {}
-            : { lastPinTimestamp: value.last_pin_timestamp as string | null }),
-        ...(permissionOverwrites === undefined ? {} : { permissionOverwrites }),
-        ...(value.nsfw === undefined ? {} : { nsfw: value.nsfw }),
-        ...(value.nsfw_override === undefined ? {} : { nsfwOverride: value.nsfw_override as boolean | null }),
-        ...(value.content_warning_level === undefined ? {} : { contentWarningLevel: value.content_warning_level }),
-        ...(value.content_warning_text === undefined
-            ? {}
-            : { contentWarningText: value.content_warning_text as string | null }),
-        ...(value.rate_limit_per_user === undefined ? {} : { rateLimitPerUser: value.rate_limit_per_user }),
-    })
-}
-
-export function decodeGuildChannels(value: unknown, guildId: string): readonly GuildChannel[] | undefined {
-    if (!Array.isArray(value)) return undefined
-    const channels: GuildChannel[] = []
-    const ids = new Set<string>()
-    for (const item of value) {
-        const channel = decodeGuildChannel(item)
-        if (!channel || channel.guildId !== guildId || ids.has(channel.id)) return undefined
-        ids.add(channel.id)
-        channels.push(channel)
-    }
-    return Object.freeze(channels)
-}
-
-/** Decode only guild-scoped channel events, with private-channel events intentionally returning undefined */
-export function decodeChannelEvent(event: keyof typeof channelEvents, value: unknown) {
-    if (event !== "CHANNEL_UPDATE_BULK") return decodeGuildChannel(value)
-    if (!record(value) || !identifier(value.guild_id)) return undefined
-    const channels = decodeGuildChannels(value.channels, value.guild_id)
-    return channels === undefined
-        ? undefined
-        : Object.freeze({ guildId: value.guild_id, channels } satisfies GuildChannelUpdateBulk)
-}
-
-function text(value: unknown, minimum: number, maximum: number): value is string {
-    // oxlint-disable-next-line typescript/no-misused-spread -- length limits count Unicode code points
-    return typeof value === "string" && [...value].length >= minimum && [...value].length <= maximum
-}
-
-function url(value: unknown): value is string {
-    if (typeof value !== "string" || value.length === 0) return false
-    try {
-        new URL(value)
-        return true
-    } catch {
-        // allow-silent: An unparsable URL is reported as invalid input by the caller
-        return false
-    }
-}
 
 function nullableValue(value: unknown, guard: (candidate: unknown) => boolean): boolean {
     return value === null || guard(value)
 }
 
+const threadDefaultKeys = ["defaultAutoArchiveMinutes", "defaultThreadRateLimitPerUser"]
+const forumSettingKeys = ["availableTags", "defaultReactionEmoji", "defaultSortOrder", "defaultTagSetting", "flags"]
+/** Fluxer's limit on the tags of one forum or media channel */
+const maxForumTags = 20
+const forumTopicMaxLength = 4096
+const textTopicMaxLength = 1024
+const threadAutoArchiveValues: readonly unknown[] = Object.values(ThreadAutoArchiveMinutes)
+const forumSortOrderValues: readonly unknown[] = Object.values(ForumSortOrder)
+const forumLayoutValues: readonly unknown[] = Object.values(ForumLayout)
+const forumFlagBits = ChannelFlags.RequireTag
+const mediaFlagBits = ChannelFlags.RequireTag | ChannelFlags.HideMediaDownloadOptions
+
 function validateOptionalFields(input: Record<string, unknown>, create: boolean): true | InputValidationFailure {
+    // A created channel's type selects which thread and forum settings it can have. An edit cannot tell the type of
+    // the channel, so it accepts every setting and leaves the type check to Fluxer
+    const type = input.type
+    const threadParent =
+        type === ChannelType.Text ||
+        type === ChannelType.Announcement ||
+        type === ChannelType.Forum ||
+        type === ChannelType.Media
+    const forumParent = type === ChannelType.Forum || type === ChannelType.Media
     const allowed = create
         ? [
               "type",
@@ -228,6 +115,9 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
               "contentWarningLevel",
               "contentWarningText",
               "rateLimitPerUser",
+              ...(threadParent ? threadDefaultKeys : []),
+              ...(forumParent ? forumSettingKeys : []),
+              ...(type === ChannelType.Forum ? ["defaultForumLayout"] : []),
           ]
         : [
               "type",
@@ -244,6 +134,9 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
               "rateLimitPerUser",
               "permissionOverwrites",
               "rtcRegion",
+              ...threadDefaultKeys,
+              ...forumSettingKeys,
+              "defaultForumLayout",
           ]
     const unsupported = unsupportedKeyFailure(
         input,
@@ -252,11 +145,20 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         create ? "the channel create input" : "the channel edit input",
     )
     if (unsupported) return unsupported
-    if (create && input.type !== 0 && input.type !== 2 && input.type !== 4 && input.type !== 5 && input.type !== 998)
+    if (
+        create &&
+        type !== 0 &&
+        type !== 2 &&
+        type !== 4 &&
+        type !== 5 &&
+        type !== ChannelType.Forum &&
+        type !== ChannelType.Media &&
+        type !== 998
+    )
         return inputValidationFailure(
             "type",
             "allowedValue",
-            "Channel type must be 0 (Text), 2 (Voice), 4 (Category), 5 (Announcement), or 998 (Link)",
+            "Channel type must be 0 (Text), 2 (Voice), 4 (Category), 5 (Announcement), 15 (Forum), 16 (Media), or 998 (Link)",
         )
     if (
         !create &&
@@ -277,11 +179,17 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
             "length",
             "Channel name must contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
         )
-    if (input.topic !== undefined && !nullableValue(input.topic, (candidate) => normalizedText(candidate, 1, 1024)))
+    // Forum and media channels allow a longer topic. An edit cannot tell the channel's type, so Fluxer checks the
+    // text limit there
+    const topicMaxLength = forumParent || !create ? forumTopicMaxLength : textTopicMaxLength
+    if (
+        input.topic !== undefined &&
+        !nullableValue(input.topic, (candidate) => normalizedText(candidate, 1, topicMaxLength))
+    )
         return inputValidationFailure(
             "topic",
             "length",
-            "Channel topic must be null or contain 1 through 1,024 UTF-16 code units after Fluxer's normalization",
+            `Channel topic must be null or contain 1 through ${topicMaxLength.toLocaleString("en-US")} UTF-16 code units after Fluxer's normalization`,
         )
     if (input.url !== undefined && !nullableValue(input.url, url))
         return inputValidationFailure("url", "format", "Channel URL must be null or a valid absolute URL")
@@ -354,7 +262,181 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
             "length",
             "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
         )
+    if (
+        input.defaultAutoArchiveMinutes !== undefined &&
+        !nullableValue(input.defaultAutoArchiveMinutes, (candidate) => threadAutoArchiveValues.includes(candidate))
+    )
+        return inputValidationFailure(
+            "defaultAutoArchiveMinutes",
+            "allowedValue",
+            "Channel defaultAutoArchiveMinutes must be null, or 60, 1440, 4320 or 10080 minutes",
+        )
+    if (
+        input.defaultThreadRateLimitPerUser !== undefined &&
+        !nullableValue(
+            input.defaultThreadRateLimitPerUser,
+            (candidate) => int32(candidate) && candidate >= 0 && candidate <= 21_600,
+        )
+    )
+        return inputValidationFailure(
+            "defaultThreadRateLimitPerUser",
+            "range",
+            "Channel defaultThreadRateLimitPerUser must be null or an integer from 0 through 21,600 seconds",
+        )
+    if (
+        input.defaultSortOrder !== undefined &&
+        !nullableValue(input.defaultSortOrder, (candidate) => forumSortOrderValues.includes(candidate))
+    )
+        return inputValidationFailure(
+            "defaultSortOrder",
+            "allowedValue",
+            "Channel defaultSortOrder must be null, 0 (latest activity) or 1 (creation time)",
+        )
+    if (
+        input.defaultForumLayout !== undefined &&
+        !nullableValue(input.defaultForumLayout, (candidate) => forumLayoutValues.includes(candidate))
+    )
+        return inputValidationFailure(
+            "defaultForumLayout",
+            "allowedValue",
+            "Channel defaultForumLayout must be null, 0 (default), 1 (list) or 2 (grid)",
+        )
+    if (
+        input.defaultTagSetting !== undefined &&
+        input.defaultTagSetting !== null &&
+        input.defaultTagSetting !== "match_some" &&
+        input.defaultTagSetting !== "match_all"
+    )
+        return inputValidationFailure(
+            "defaultTagSetting",
+            "allowedValue",
+            'Channel defaultTagSetting must be null, "match_some" or "match_all"',
+        )
+    if (input.flags !== undefined) {
+        // A created forum channel can set only the bits that its own type allows. An edit accepts the bits of either
+        // type, because Fluxer checks them against the channel it edits
+        const settable = create && type === ChannelType.Forum ? forumFlagBits : mediaFlagBits
+        if (!int32(input.flags) || input.flags < 0 || (input.flags & ~settable) !== 0)
+            return inputValidationFailure(
+                "flags",
+                "allowedValue",
+                create && type === ChannelType.Forum
+                    ? "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag on a forum channel"
+                    : "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag or ChannelFlags.HideMediaDownloadOptions",
+            )
+    }
     return true
+}
+
+/**
+ * Encode one forum tag, reading each field once. The `listed` argument is true for an entry of a channel's tag list, and allowId is
+ * false where an ID is certain to fail, which is the tag list of a new channel because it has no tags. The single-tag
+ * routes accept an ID so that a received tag is valid input, and their callers keep it out of the body
+ */
+function encodeForumTag(
+    value: unknown,
+    listed: boolean,
+    allowId: boolean,
+): Record<string, string | boolean | null> | InputValidationFailure {
+    const container = listed ? "availableTags[]" : "input"
+    const field = (name: string) => (listed ? `availableTags[].${name}` : name)
+    if (!record(value)) return inputValidationFailure(container, "type", "A forum tag must be an object")
+    const unsupported = unsupportedKeyFailure(
+        value,
+        allowId ? ["id", "name", "moderated", "emojiId", "emojiName"] : ["name", "moderated", "emojiId", "emojiName"],
+        container,
+        listed ? "a forum tag list entry" : "the forum tag input",
+    )
+    if (unsupported) return unsupported
+    const read = fieldsOnce(value)
+    const id = read("id")
+    const name = read("name")
+    const moderated = read("moderated")
+    const emojiId = read("emojiId")
+    const emojiName = read("emojiName")
+    if (id !== undefined && !identifier(id))
+        return inputValidationFailure(field("id"), "format", "Forum tag IDs must be decimal strings")
+    if (name === undefined) return inputValidationFailure(field("name"), "required", "A forum tag needs a name")
+    if (!normalizedText(name, 1, 50))
+        return inputValidationFailure(
+            field("name"),
+            "length",
+            "Forum tag name must contain 1 through 50 UTF-16 code units after Fluxer's normalization",
+        )
+    if (moderated !== undefined && typeof moderated !== "boolean")
+        return inputValidationFailure(field("moderated"), "type", "Forum tag moderated must be boolean")
+    const emoji = encodeEmoji(emojiId, emojiName, field, container)
+    if (emoji instanceof InputValidationFailure) return emoji
+    return {
+        ...(id === undefined ? {} : { id }),
+        name,
+        ...(moderated === undefined ? {} : { moderated }),
+        ...emoji,
+    }
+}
+
+/** Validate and encode the emoji pair of a forum tag or a default reaction, where at most one of the two may be set */
+function encodeEmoji(
+    emojiId: unknown,
+    emojiName: unknown,
+    path: (field: string) => string,
+    container: string,
+): Record<string, string | null> | InputValidationFailure {
+    if (emojiId !== undefined && !nullableIdentifier(emojiId))
+        return inputValidationFailure(path("emojiId"), "format", "Emoji IDs must be null or decimal strings")
+    if (emojiName !== undefined && !(emojiName === null || normalizedText(emojiName, 1, 64)))
+        return inputValidationFailure(
+            path("emojiName"),
+            "length",
+            "An emoji name must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
+        )
+    if (emojiId != null && emojiName != null)
+        return inputValidationFailure(container, "relationship", "Set at most one of emojiId and emojiName")
+    return {
+        ...(emojiId === undefined ? {} : { emoji_id: emojiId }),
+        ...(emojiName === undefined ? {} : { emoji_name: emojiName }),
+    }
+}
+
+function encodeForumTags(
+    value: unknown,
+    allowId: boolean,
+): readonly Record<string, string | boolean | null>[] | InputValidationFailure {
+    if (!Array.isArray(value))
+        return inputValidationFailure("availableTags", "type", "Forum channel availableTags must be an array")
+    if (value.length > maxForumTags)
+        return inputValidationFailure("availableTags", "length", "A forum channel can have at most 20 tags")
+    const tags: Array<Record<string, string | boolean | null>> = []
+    for (const item of value) {
+        const tag = encodeForumTag(item, true, allowId)
+        if (tag instanceof InputValidationFailure) return tag
+        tags.push(tag)
+    }
+    return tags
+}
+
+function encodeDefaultReaction(value: unknown): Record<string, string | null> | null | InputValidationFailure {
+    if (value === null) return null
+    if (!record(value))
+        return inputValidationFailure(
+            "defaultReactionEmoji",
+            "type",
+            "Channel defaultReactionEmoji must be null or an object",
+        )
+    const unsupported = unsupportedKeyFailure(
+        value,
+        ["emojiId", "emojiName"],
+        "defaultReactionEmoji",
+        "the default reaction",
+    )
+    if (unsupported) return unsupported
+    const read = fieldsOnce(value)
+    return encodeEmoji(
+        read("emojiId"),
+        read("emojiName"),
+        (field) => `defaultReactionEmoji.${field}`,
+        "defaultReactionEmoji",
+    )
 }
 
 function encodeOverwrites(value: unknown): readonly Record<string, string | number>[] | InputValidationFailure {
@@ -420,6 +502,11 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
     const permissionOverwrites =
         input.permissionOverwrites === undefined ? undefined : encodeOverwrites(input.permissionOverwrites)
     if (permissionOverwrites instanceof InputValidationFailure) return permissionOverwrites
+    const availableTags = input.availableTags === undefined ? undefined : encodeForumTags(input.availableTags, !create)
+    if (availableTags instanceof InputValidationFailure) return availableTags
+    const defaultReaction =
+        input.defaultReactionEmoji === undefined ? undefined : encodeDefaultReaction(input.defaultReactionEmoji)
+    if (defaultReaction instanceof InputValidationFailure) return defaultReaction
     const body = {
         ...(input.type === undefined ? {} : { type: input.type }),
         ...(input.name === undefined ? {} : { name: input.name }),
@@ -436,6 +523,18 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
         ...(input.contentWarningText === undefined ? {} : { content_warning_text: input.contentWarningText }),
         ...(input.rateLimitPerUser === undefined ? {} : { rate_limit_per_user: input.rateLimitPerUser }),
         ...(!create && input.rtcRegion !== undefined ? { rtc_region: input.rtcRegion } : {}),
+        ...(input.defaultAutoArchiveMinutes === undefined
+            ? {}
+            : { default_auto_archive_duration: input.defaultAutoArchiveMinutes }),
+        ...(input.defaultThreadRateLimitPerUser === undefined
+            ? {}
+            : { default_thread_rate_limit_per_user: input.defaultThreadRateLimitPerUser }),
+        ...(availableTags === undefined ? {} : { available_tags: availableTags }),
+        ...(defaultReaction === undefined ? {} : { default_reaction_emoji: defaultReaction }),
+        ...(input.defaultSortOrder === undefined ? {} : { default_sort_order: input.defaultSortOrder }),
+        ...(input.defaultForumLayout === undefined ? {} : { default_forum_layout: input.defaultForumLayout }),
+        ...(input.defaultTagSetting === undefined ? {} : { default_tag_setting: input.defaultTagSetting }),
+        ...(input.flags === undefined ? {} : { flags: input.flags }),
     }
     const json = JSON.stringify(body)
     if (json === "{}") return inputValidationFailure("input", "required", "Channel edit must contain a change")
@@ -556,6 +655,72 @@ export function channelEdit(channelId: string, input: ChannelEdit): ChannelValid
             return channel?.id === channelId ? channel : undefined
         },
     }
+}
+
+function forumTagRequest(
+    channelId: string,
+    tagId: string | undefined,
+    method: "POST" | "PUT" | "DELETE",
+    json?: string,
+): ChannelRequest<GuildForumChannel | GuildMediaChannel> {
+    return {
+        majorId: channelId,
+        bucket: "channel:forum_tags",
+        audited: true,
+        path: tagId === undefined ? `/channels/${channelId}/tags` : `/channels/${channelId}/tags/${tagId}`,
+        method,
+        status: 200,
+        ...(json === undefined ? {} : { json }),
+        cache: { channelId, mutation: true },
+        // Fluxer answers with the updated channel, so any other shape is a malformed response
+        decode: (value) => {
+            const channel = decodeGuildChannel(value)
+            return channel?.id === channelId &&
+                (channel.type === ChannelType.Forum || channel.type === ChannelType.Media)
+                ? channel
+                : undefined
+        },
+    }
+}
+
+export function forumTagCreate(
+    channelId: string,
+    input: ForumTagInput,
+): ChannelValidationResult<GuildForumChannel | GuildMediaChannel> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    const tag = encodeForumTag(input, false, true)
+    if (tag instanceof InputValidationFailure) return tag
+    // Fluxer assigns the ID of a new tag, so a received tag's own ID is dropped instead of sent
+    const { id: _ignored, ...body } = tag
+    return forumTagRequest(channelId, undefined, "POST", JSON.stringify(body))
+}
+
+export function forumTagEdit(
+    channelId: string,
+    tagId: string,
+    input: ForumTagInput,
+): ChannelValidationResult<GuildForumChannel | GuildMediaChannel> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (!identifier(tagId)) return inputValidationFailure("tagId", "format", "Forum tag IDs must be decimal strings")
+    const tag = encodeForumTag(input, false, true)
+    if (tag instanceof InputValidationFailure) return tag
+    // The route names the tag, and Fluxer would ignore another ID in the body, so a different one is a mistake
+    const { id, ...body } = tag
+    if (id !== undefined && id !== tagId)
+        return inputValidationFailure("id", "relationship", "A forum tag's id must equal the tagId argument")
+    return forumTagRequest(channelId, tagId, "PUT", JSON.stringify(body))
+}
+
+export function forumTagDelete(
+    channelId: string,
+    tagId: string,
+): ChannelValidationResult<GuildForumChannel | GuildMediaChannel> {
+    if (!identifier(channelId))
+        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (!identifier(tagId)) return inputValidationFailure("tagId", "format", "Forum tag IDs must be decimal strings")
+    return forumTagRequest(channelId, tagId, "DELETE")
 }
 
 export function channelDelete(channelId: string): ChannelValidationResult<void> {

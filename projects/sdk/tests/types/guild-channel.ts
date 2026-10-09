@@ -3,11 +3,15 @@
 // type "unknown", so it never survives a known-type comparison and a switch on type is exhaustive
 import {
     ChannelType,
+    isThreadChannel,
     type AnnouncementChannelCreate,
     type ChannelCreate,
     type ChannelEdit,
     type GuildAnnouncementChannel,
     type GuildCategoryChannel,
+    type GuildForumChannel,
+    type GuildMediaChannel,
+    type GuildThreadChannel,
     type GuildTextChannelBase,
     type GuildChannel,
     type GuildLinkChannel,
@@ -80,6 +84,23 @@ export function describeChannel(channel: GuildChannel): string {
             const link: GuildLinkChannel = channel
             return `link ${link.url ?? ""}`
         }
+        case ChannelType.AnnouncementThread:
+        case ChannelType.PublicThread:
+        case ChannelType.PrivateThread: {
+            const thread: GuildThreadChannel = channel
+            const parentId: string = thread.parentId
+            return `thread ${thread.name} in ${parentId}`
+        }
+        case ChannelType.Forum: {
+            const forum: GuildForumChannel = channel
+            return `forum ${forum.defaultForumLayout ?? ""}`
+        }
+        case ChannelType.Media: {
+            const media: GuildMediaChannel = channel
+            // @ts-expect-error Only a forum channel has a layout setting
+            void media.defaultForumLayout
+            return `media ${media.availableTags?.length ?? 0}`
+        }
         case "unknown": {
             const unknown: GuildUnknownChannel = channel
             return `unknown ${unknown.rawType}`
@@ -89,6 +110,23 @@ export function describeChannel(channel: GuildChannel): string {
             return exhausted
         }
     }
+}
+
+/** isThreadChannel narrows to the thread union, whose type-specific fields need a further type comparison */
+export function threadFields(channel: GuildChannel) {
+    if (!isThreadChannel(channel)) {
+        // @ts-expect-error Only a thread has an owner
+        void channel.ownerId
+        return undefined
+    }
+    const thread: GuildThreadChannel = channel
+    // @ts-expect-error invitable exists only on a private thread
+    void thread.invitable
+    // @ts-expect-error appliedTagIds exists only on a public thread
+    void thread.appliedTagIds
+    const invitable = thread.type === ChannelType.PrivateThread ? thread.invitable : undefined
+    const tags = thread.type === ChannelType.PublicThread ? thread.appliedTagIds : undefined
+    return [thread.archived, thread.autoArchiveMinutes, thread.membership?.joinedAt, invitable, tags] as const
 }
 
 /** A channel type outside the known constants keeps its Fluxer number in rawType and every optional field */

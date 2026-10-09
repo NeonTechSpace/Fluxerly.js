@@ -20,8 +20,11 @@ function decodeGuildListSummary(value: unknown): GuildListSummary | undefined {
     if (value.permissions !== undefined && !unsigned64(value.permissions)) return undefined
     if (value.approximate_member_count !== undefined && !count(value.approximate_member_count)) return undefined
     if (value.approximate_presence_count !== undefined && !count(value.approximate_presence_count)) return undefined
+    // Fluxer sends threads_active only as true, on communities where the caller can use threads
+    if (value.threads_active !== undefined && typeof value.threads_active !== "boolean") return undefined
     return Object.freeze({
         ...guild,
+        threadsActive: value.threads_active === true,
         ...(value.permissions === undefined ? {} : { permissions: BigInt(value.permissions) }),
         ...(value.approximate_member_count === undefined
             ? {}

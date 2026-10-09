@@ -71,6 +71,7 @@ export {
     fixtureToken,
     type Fixtures,
     type WireChannel,
+    type WireForumChannel,
     type WireGuild,
     type WireGuildCreate,
     type WireGuildCreateOverrides,
@@ -78,6 +79,7 @@ export {
     type WireMessage,
     type WireOverrides,
     type WireRole,
+    type WireThread,
     type WireUser,
 } from "./internal/testing/fixtures.js"
 export type {

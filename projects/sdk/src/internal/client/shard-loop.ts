@@ -6,7 +6,8 @@
  * A successful Resume replays every retained dispatch after the session's sequence. Fluxer refuses the Resume with
  * INVALID_SESSION instead when it dropped a needed dispatch (the replay floor in fluxer_gateway session_lifecycle.erl at
  * fluxerapp/fluxer commit 858a2d9e2b987330edd81711bb53e4f7edc0bbcc), so guild caches survive a successful Resume and are
- * released only when the next handshake is a new session.
+ * released only when the next handshake is a new session. Cached threads are the exception: Fluxer never replays
+ * THREAD_LIST_SYNC, so the client drops a resumed shard's threads.
  * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
 import * as Cause from "effect/Cause"
@@ -97,6 +98,8 @@ export interface ShardLoopHost<M extends MessageCore> {
     readonly reshard?: (shardId: number) => true | string
     /** Note that this shard resumed a session loaded from the session store, so its guild caches start empty */
     readonly restored?: (shardId: number) => void
+    /** Note that this shard resumed a session, after Fluxer replayed the missed dispatches it retained */
+    readonly resumed?: (shardId: number) => void
 }
 
 /** One loop's inputs */
@@ -357,6 +360,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                             attempt: attempts,
                             fields: { mode: readyMode, shards: plan.totalShards },
                         })
+                        if (readyMode === "resume") host.resumed?.(shard.shardId)
                         if (readyMode === "resume" && restoredSession) host.restored?.(shard.shardId)
                         // REST reads stored during the outage may be stale, and a new session replays nothing
                         if ((established || restoredSession) && readyMode === "identify")

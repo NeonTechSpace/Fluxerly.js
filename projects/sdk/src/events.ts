@@ -5,6 +5,7 @@ import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval, ReactionTarget } from "./reactions.js"
 import type { InviteMetadata } from "./invites.js"
 import type { AuditLogEntry } from "./audit-logs.js"
+import type { GuildThreadChannel, ThreadMember } from "./channels.js"
 
 /** Notice that the webhooks in a channel changed.
  * No webhook details or token are included. Fetch the current set explicitly if needed.
@@ -169,7 +170,9 @@ export interface GuildLifecycleEvents {
     /** Community data became available, including startup hydration, recovery and joins.
      * Use isNewJoin for the provider's join distinction, subject to GuildCreate's gateway-support and replay limits.
      * Before delivery, fills the enabled community, role, emoji, sticker and channel caches from the snapshot, replacing this
-     * community's earlier roles, emojis, stickers and channels. Members are not retained, because the snapshot lists only a few
+     * community's earlier roles, emojis, stickers, channels and threads. The channel cache takes the active threads the
+     * bot can view, and a malformed thread is left out with a gateway.threadSkipped Warn record.
+     * Members are not retained, because the snapshot lists only a few
      */
     readonly guildCreate: GuildCreate
     /** Current community configuration, not previous-and-current values or a patch to merge */
@@ -389,6 +392,79 @@ export interface CallDelete {
 }
 
 /**
+ * A thread that was created or that the bot was added to, with whether it was just created.
+ * Fluxer also sends this event to the bot when it joins or is added to an existing thread, then with isNewlyCreated
+ * false. The bot's own membership is in membership when the bot is a member
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ *
+ * export function greetNewThreads(client: Client) {
+ *     return client.on("threadCreate", (thread) =>
+ *         thread.isNewlyCreated ? client.messages.send(thread.id, `Welcome to ${thread.name}`) : undefined,
+ *     )
+ * }
+ * ```
+ *
+ * @category Events and collectors
+ */
+export type ThreadCreateEvent = GuildThreadChannel & {
+    /** True when the thread was just created, false when the bot joined or was added to an existing thread */
+    readonly isNewlyCreated: boolean
+}
+
+/**
+ * Identity of a deleted thread, without its former settings or messages.
+ * Deleting a parent channel deletes its threads without this event
+ *
+ * @category Events and collectors
+ */
+export interface ThreadDeletion {
+    /** Decimal ID of the deleted thread */
+    readonly id: string
+    /** Community that held the thread */
+    readonly guildId: string
+    /** Channel that held the thread */
+    readonly parentId: string
+    /** Type of the deleted thread */
+    readonly type: GuildThreadChannel["type"]
+}
+
+/**
+ * The bot's complete set of active threads in a community, or in some of its channels, as Fluxer replaced it.
+ * Fluxer sends it when the bot gains access to channels with active threads, and when a community reloads its thread
+ * state. It is never replayed on Resume
+ *
+ * @category Events and collectors
+ */
+export interface ThreadListSync {
+    /** Community whose threads were replaced */
+    readonly guildId: string
+    /** Channels whose threads were replaced. Absent when the list replaces every thread in the community */
+    readonly parentIds?: readonly string[]
+    /** Every active thread the bot can view in the replaced scope, each with the bot's membership when it is a member */
+    readonly threads: readonly GuildThreadChannel[]
+}
+
+/**
+ * Accounts that joined or left one thread, including the bot itself
+ *
+ * @category Events and collectors
+ */
+export interface ThreadMembersUpdate {
+    /** Decimal ID of the thread */
+    readonly threadId: string
+    /** Community that holds the thread */
+    readonly guildId: string
+    /** Approximate number of thread members after the change, capped at 50 */
+    readonly memberCount: number
+    /** Members who joined, each with their community membership when Fluxer has one for the account. Empty when none joined */
+    readonly added: readonly ThreadMember[]
+    /** Decimal IDs of the accounts that left. Empty when none left */
+    readonly removedUserIds: readonly string[]
+}
+
+/**
  * Delivery details for one event, passed to on handlers and event middleware.
  * The object is frozen and describes how this client received the event, not Fluxer state
  *
@@ -503,7 +579,11 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      */
     readonly guildChannelUpdate: import("./channels.js").GuildChannel
     /** A community channel was deleted or became invisible. Evicts its cached messages, without generating message deletion events.
-     * Evicts its enabled channel-cache entry. A category deletion invalidates all channels cached for that community
+     * Evicts its enabled channel-cache entry. A category deletion invalidates all channels cached for that community.
+     * Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no threadDelete
+     * for them. The channel cache then evicts the threads whose parentId is this channel, and the message cache evicts
+     * the messages of every channel in this community that the channel cache does not hold outside those threads,
+     * including messages without community context. Without the channel cache that is every message of the community
      */
     readonly guildChannelDelete: import("./channels.js").GuildChannel
     /** Visible community-channel updates grouped into one batch, without individual guildChannelUpdate events.
@@ -511,6 +591,28 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Invalidates the enabled channel cache for this community
      */
     readonly guildChannelUpdateBulk: import("./channels.js").GuildChannelUpdateBulk
+    /** A thread was created, or the bot joined or was added to an existing thread, as isNewlyCreated tells.
+     * Stores the thread, without isNewlyCreated, in the enabled channel cache
+     */
+    readonly threadCreate: ThreadCreateEvent
+    /** Current thread data after a change such as a rename, archive or lock, without previous values.
+     * Fluxer leaves the bot's membership out of this event. Replaces the thread's enabled channel-cache observation
+     */
+    readonly threadUpdate: GuildThreadChannel
+    /** A thread was deleted. Evicts it from the enabled channel cache and evicts its cached messages, without
+     * generating message deletion events. Deleting a parent channel deletes its threads without this event
+     */
+    readonly threadDelete: ThreadDeletion
+    /** The bot's active threads in a community, or in some of its channels, were replaced. Before delivery, the enabled
+     * channel cache evicts its threads in that scope and stores the listed ones. Fluxer never replays this event on Resume,
+     * so a resumed shard's cached threads are evicted instead
+     */
+    readonly threadListSync: ThreadListSync
+    /** Accounts joined or left a thread. When the bot is one of them, or before the bot's account ID is known, the
+     * enabled channel cache evicts the thread, because its membership changed. Otherwise the cached memberCount is not
+     * updated
+     */
+    readonly threadMembersUpdate: ThreadMembersUpdate
     /** A community role creation observation, not an initial enumeration of roles. Updates the enabled role-cache observation */
     readonly guildRoleCreate: import("./guilds.js").GuildRole
     /** Current role data, without previous values. Updates the enabled role-cache observation */

@@ -52,6 +52,13 @@ function describeChannel(channel: GuildChannel): string {
             return `${name}: category`
         case ChannelType.Link:
             return `${name}: link to ${channel.url ?? "an unknown address"}`
+        case ChannelType.Forum:
+        case ChannelType.Media:
+            return `${name}: posts with ${channel.availableTags?.length ?? 0} tags`
+        case ChannelType.AnnouncementThread:
+        case ChannelType.PublicThread:
+        case ChannelType.PrivateThread:
+            return `${name}: thread in ${channel.parentId}`
         case "unknown":
             console.warn(`Channel ${channel.id} has type ${channel.rawType}, which this SDK version does not know`)
             return `${name}: unsupported type ${channel.rawType}`
@@ -67,6 +74,8 @@ export async function listChannels(client: Client, guildId: string) {
 The helper returns a Result with one line for each channel the bot can see. A channel type that Fluxer adds later, which this SDK version does not know yet, arrives with `type` set to `"unknown"` and the number Fluxer sent in `rawType`. Handling the `"unknown"` case makes the `switch` complete, so TypeScript can check that every case returns a value
 
 Announcement channels have the same topic and message fields as text channels. See [announcement channels](/docs/{{version}}/announcement-channels/) to create or convert one, publish a message and follow it from a text channel in the same community or another one
+
+Threads, forum channels and media channels have their own types as well. See [threads](/docs/{{version}}/threads/) and [forum channels](/docs/{{version}}/forum-channels/) for their fields
 
 ## Read the member verification level
 
@@ -87,10 +96,13 @@ export function hasManageRoles(client: Client, input: PermissionInput) {
 
 The helper returns `true` or `false` from the supplied data. It throws `GuildOperationError` with reason `input` if that data is inconsistent or incomplete
 
+A thread has no permission overwrites of its own, because Fluxer calculates its permissions in its parent channel. To check a thread, supply the thread as `channel` and its parent channel as `parentChannel`. The calculation then uses the parent's overwrites and grants `SendMessages` exactly when `SendMessagesInThreads` is granted, as Fluxer does. A thread without its parent, or with another channel as `parentChannel`, fails with reason `input`. The [`permissions.fetch`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#fetch) method reads the parent itself when its `channelId` names a thread
+
 <details>
 <summary>What does a calculated permission not cover?</summary>
 
 The [`permissions.calculate`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#calculate) method makes no request and reads no cache. Its result does not establish channel visibility, role hierarchy, multi-factor authentication requirements, application authorization or Fluxer's final decision.
+In a thread, the result also does not show whether the member can see a private thread, which Fluxer allows only to its members and to members who can manage threads, or whether the thread is archived or locked.
 For prefix commands, the `guards.requirePermissions` guard in the [commands guide](/docs/{{version}}/commands/) performs this check from cached or fetched data
 
 </details>
@@ -164,7 +176,7 @@ The `fetchCanManage` method fetches fresh community, member and role data for ea
 
 ## Communities that require two-factor authentication
 
-A community owner can require two-factor authentication ([MFA](/docs/{{version}}/glossary/#mfa)) for moderation. In such a community, only the owner and accounts with two-factor authentication enabled can use `Administrator`, `BanMembers`, `KickMembers`, `ManageChannels`, `ManageGuild`, `ManageMessages`, `ManageRoles`, `ManageWebhooks` and `ModerateMembers`. That covers kicks, bans, timeouts, role changes, deleting other people's messages and changes to channels, webhooks and community settings
+A community owner can require two-factor authentication ([MFA](/docs/{{version}}/glossary/#mfa)) for moderation. In such a community, only the owner and accounts with two-factor authentication enabled can use `Administrator`, `BanMembers`, `KickMembers`, `ManageChannels`, `ManageGuild`, `ManageMessages`, `ManageRoles`, `ManageThreads`, `ManageWebhooks` and `ModerateMembers`. That covers kicks, bans, timeouts, role changes, deleting other people's messages, moderating threads and changes to channels, webhooks and community settings
 
 A bot cannot enable two-factor authentication itself. Its account follows the account that owns its application, so the bot can act in these communities only when that owner account has two-factor authentication enabled, or when the bot owns the community
 

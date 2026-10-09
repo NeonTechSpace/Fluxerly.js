@@ -345,7 +345,10 @@ try {
     // A ceiling about a fifth above the current size catches accidental duplication, such as embedded map sources.
     // Raise it deliberately when the SDK itself grows
     const unpackedBytes = stagedFiles.reduce((total, file) => total + file.size, 0)
-    assert.ok(unpackedBytes <= 10_000_000, `The npm package unpacks to ${unpackedBytes} bytes, above the 10 MB ceiling`)
+    assert.ok(
+        unpackedBytes <= 12_500_000,
+        `The npm package unpacks to ${unpackedBytes} bytes, above the 12.5 MB ceiling`,
+    )
     for (const entry of ["index", "effect", "testing", "effect-testing", "cache", "application", "sharding"]) {
         for (const extension of ["js", "js.map", "d.ts", "d.ts.map"]) {
             assert.ok(files.includes(`dist/${entry}.${extension}`))

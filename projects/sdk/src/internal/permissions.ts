@@ -4,9 +4,10 @@
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Effect from "effect/Effect"
+import { isThreadChannel } from "#sdk/channels"
 import type { ChannelOperationFailure, GuildChannel, PermissionOverwrite } from "#sdk/channels"
 import type { GuildOperationFailure, GuildOperationOptions } from "#sdk/guilds"
-import { GuildOperationError } from "#sdk/guilds"
+import { GuildOperationError, Permissions } from "#sdk/guilds"
 import { composedStepFacts } from "#sdk/api-errors"
 import type { PermissionInput, PermissionTarget } from "#sdk/permissions"
 import { channelFetch } from "./channels.js"
@@ -32,7 +33,9 @@ interface ValidatedInput {
     readonly guild: PermissionGuild
     readonly member: PermissionMember
     readonly roles: ReadonlyMap<string, PermissionRole>
+    /** The target channel, or a thread's parent channel when inThread is set */
     readonly channel: PermissionChannel | undefined
+    readonly inThread: boolean
 }
 
 interface PermissionGuild {
@@ -129,6 +132,65 @@ function validateChannel(value: unknown, guildId: string): PermissionChannel | u
     return { id, guildId, permissionOverwrites: decoded }
 }
 
+/** The parent channel ID of a thread in the guild, or undefined when the thread's guild or IDs are invalid */
+function threadParentId(value: unknown, guildId: string): string | undefined {
+    if (!record(value) || value.guildId !== guildId || !identifier(value.id)) return undefined
+    const parentId = value.parentId
+    return identifier(parentId) ? parentId : undefined
+}
+
+function validateChannels(
+    channelInput: unknown,
+    parentInput: unknown,
+    guildId: string,
+): Pick<ValidatedInput, "channel" | "inThread"> | InputValidationFailure {
+    if (channelInput === undefined || !isThreadChannel(channelInput as GuildChannel)) {
+        if (parentInput !== undefined)
+            return inputValidationFailure(
+                "input.parentChannel",
+                "relationship",
+                "Permission parentChannel is supported only when channel is a thread",
+            )
+        if (channelInput === undefined) return { channel: undefined, inThread: false }
+        const channel = validateChannel(channelInput, guildId)
+        if (!channel)
+            return inputValidationFailure(
+                "input.channel",
+                "format",
+                "Permission channel must match the guild and contain unique valid role or member overwrites",
+            )
+        return { channel, inThread: false }
+    }
+    // A thread has no overwrites of its own, so Fluxer calculates its permissions in the parent channel
+    const parentId = threadParentId(channelInput, guildId)
+    if (parentId === undefined)
+        return inputValidationFailure(
+            "input.channel",
+            "format",
+            "Permission thread must match the guild and contain decimal thread and parent channel IDs",
+        )
+    if (parentInput === undefined)
+        return inputValidationFailure(
+            "input.parentChannel",
+            "required",
+            "Permission parentChannel is required when channel is a thread, because a thread takes its parent's permissions",
+        )
+    const parent = validateChannel(parentInput, guildId)
+    if (!parent)
+        return inputValidationFailure(
+            "input.parentChannel",
+            "format",
+            "Permission parentChannel must match the guild and contain unique valid role or member overwrites",
+        )
+    if (parent.id !== parentId)
+        return inputValidationFailure(
+            "input.parentChannel",
+            "relationship",
+            "Permission parentChannel must be the channel that the thread's parentId names",
+        )
+    return { channel: parent, inThread: true }
+}
+
 function validateInput(value: unknown): ValidatedInput | InputValidationFailure {
     if (!record(value)) return inputValidationFailure("input", "type", "Permission input must be an object")
     const guildInput = value.guild
@@ -158,23 +220,25 @@ function validateInput(value: unknown): ValidatedInput | InputValidationFailure 
             "format",
             "Permission roles must be unique same-guild roles with unsigned 64-bit permissions and cover the member roles",
         )
-    const channelInput = value.channel
-    const channel = channelInput === undefined ? undefined : validateChannel(channelInput, guild.id)
-    if (channelInput !== undefined && !channel)
-        return inputValidationFailure(
-            "input.channel",
-            "format",
-            "Permission channel must match the guild and contain unique valid role or member overwrites",
-        )
-    return { guild, member, roles, channel }
+    const channels = validateChannels(value.channel, value.parentChannel, guild.id)
+    if (channels instanceof InputValidationFailure) return channels
+    return { guild, member, roles, ...channels }
 }
 
 function applyOverwrite(permissions: bigint, overwrite: PermissionOverwrite): bigint {
     return (permissions & ~overwrite.deny) | overwrite.allow
 }
 
+/** Fluxer's thread rule: SendMessages in a thread follows SendMessagesInThreads in its parent, whichever way it is set */
+function threadPermissions(parentPermissions: bigint): bigint {
+    const withoutSend = parentPermissions & ~Permissions.SendMessages
+    return (parentPermissions & Permissions.SendMessagesInThreads) === Permissions.SendMessagesInThreads
+        ? withoutSend | Permissions.SendMessages
+        : withoutSend
+}
+
 function calculate(input: ValidatedInput): bigint {
-    const { guild, member, roles, channel } = input
+    const { guild, member, roles, channel, inThread } = input
     if (member.userId === guild.ownerId) return allPermissions
 
     let permissions = roles.get(guild.id)!.permissions
@@ -200,10 +264,14 @@ function calculate(input: ValidatedInput): bigint {
         if (overwrite.type === "member" && overwrite.id === member.userId)
             permissions = applyOverwrite(permissions, overwrite)
 
-    return permissions
+    return inThread ? threadPermissions(permissions) : permissions
 }
 
-/** Calculates Fluxer's raw guild or explicit-channel permission bitfield from one validated local snapshot */
+/**
+ * Calculates Fluxer's raw guild, explicit-channel or thread permission bitfield from one validated local snapshot.
+ * A thread is calculated in its parent channel, matching upstream threadViewPermissions in
+ * packages/constants/src/ThreadPermissionUtils.ts at 4749eb7f
+ */
 export function calculatePermissions(input: PermissionInput): Effect.Effect<bigint, GuildOperationError> {
     // Only reading the caller input is marked, so a fault in the calculation stays an SDK fault
     return suspendMarked(() => {
@@ -284,7 +352,8 @@ function remoteCalculationFailure(error: GuildOperationError): GuildOperationErr
 }
 
 /**
- * Fetches independent guild, member, role, and optional channel observations, then calculates their raw bitfield
+ * Fetches independent guild, member, role, and optional channel observations, then calculates their raw bitfield.
+ * A thread channel adds a read of its parent channel, whose permissions the thread takes
  *
  * This always reads remotely without consulting local caches. Its deadline covers the whole composition, but the
  * resulting observations are not transactional and do not establish access, hierarchy, timeouts, or action success
@@ -327,11 +396,21 @@ export function fetchPermissions(
                 channel = yield* owner.channel("channels.fetch", () => channelFetch(channelId), channelOptions)
             }
 
+            // A thread takes its permissions from its parent channel, read under the same deadline
+            let parentChannel: GuildChannel | undefined
+            if (isThreadChannel(channel)) {
+                const parentId = channel.parentId
+                const parentOptions = requestOptions()
+                if (!parentOptions) return yield* timedOut()
+                parentChannel = yield* owner.channel("channels.fetch", () => channelFetch(parentId), parentOptions)
+            }
+
             return yield* calculatePermissions({
                 guild,
                 member,
                 roles,
                 ...(channel === undefined ? {} : { channel }),
+                ...(parentChannel === undefined ? {} : { parentChannel }),
             }).pipe(Effect.mapError(remoteCalculationFailure))
         })
     })

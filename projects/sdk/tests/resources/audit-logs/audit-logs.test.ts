@@ -140,6 +140,68 @@ test("keeps thread and later-added action numbers in user-filtered pages, and fi
     }
 })
 
+// Fluxer 4749eb7f: serializeThreadParentForAudit records available_tags and default_reaction_emoji as objects, which
+// once failed the whole page, and GuildAuditLogListResponse lists the targeted threads beside the entries
+const forumChanges = [
+    {
+        key: "available_tags",
+        new_value: [
+            { id: "60", name: "solved", moderated: false, emoji_id: null, emoji_name: "✅" },
+            { id: "61", name: "staff", moderated: true, emoji_id: "62", emoji_name: null },
+        ],
+    },
+    { key: "default_reaction_emoji", new_value: { emoji_id: null, emoji_name: "👍" } },
+    { key: "default_tag_setting", new_value: "match_some" },
+]
+const auditThread = (extra: Record<string, unknown> = {}) => ({
+    id: "70",
+    type: 12,
+    guild_id: "20",
+    parent_id: "40",
+    owner_id: "30",
+    name: "moderation",
+    thread_metadata: {
+        archived: true,
+        auto_archive_duration: 60,
+        archive_timestamp: "2026-10-02T00:00:00.000Z",
+        locked: true,
+        invitable: false,
+        create_timestamp: "2026-10-01T00:00:00.000Z",
+    },
+    ...extra,
+})
+
+test("reads forum change values and the targeted threads of a page", () => {
+    const request = validRequest(auditLogPage("20", { userId: "30" }))
+    const forumEntry = entry({ action_type: AuditLogActions.ChannelCreate, options: undefined, changes: forumChanges })
+    const result = request.decode({ ...page([forumEntry]), threads: [auditThread()] })!
+    expect(result.entries[0]!.changes).toEqual([
+        {
+            key: "available_tags",
+            newValue: [
+                { id: "60", name: "solved", moderated: false, emojiId: null, emojiName: "✅" },
+                { id: "61", name: "staff", moderated: true, emojiId: "62", emojiName: null },
+            ],
+        },
+        { key: "default_reaction_emoji", newValue: { emojiId: null, emojiName: "👍" } },
+        { key: "default_tag_setting", newValue: "match_some" },
+    ])
+    expect(result.threads).toEqual([
+        expect.objectContaining({ id: "70", type: 12, parentId: "40", archived: true, locked: true, invitable: false }),
+    ])
+    expect(Object.isFrozen(result.threads) && Object.isFrozen(result.threads[0])).toBe(true)
+    // Fluxer leaves the list out for callers that cannot see threads
+    expect(request.decode(page())!.threads).toEqual([])
+    for (const malformed of [
+        { ...page(), threads: [auditThread({ guild_id: "21" })] },
+        { ...page(), threads: [auditThread(), auditThread()] },
+        { ...page(), threads: [auditThread({ owner_id: undefined })] },
+        page([entry({ changes: [{ key: "available_tags", new_value: [{ id: "60", name: "solved" }] }] })]),
+        page([entry({ changes: [{ key: "default_reaction_emoji", new_value: { emoji_id: 5, emoji_name: null } }] })]),
+    ])
+        expect(request.decode(malformed)).toBeUndefined()
+})
+
 test("projects complete frozen, token-free audit-log pages and preserves a non-snowflake target", () => {
     const request = validRequest(auditLogPage("20", { userId: "30" }))
     const result = request.decode(page())!

@@ -322,6 +322,78 @@ test("guild, user and webhook resource bindings stay separate, including nested 
     }
 })
 
+// Fluxer 4749eb7f: ChannelRateLimitConfig and GuildRateLimitConfig give every thread, thread member and forum post route
+// a bucket that is enforced per channel or community. A thread is a channel, so thread-member routes use the thread's ID
+test("thread, thread member and forum post buckets stay separate per channel or community", () => {
+    for (const [template, method, firstPath, secondPath] of [
+        ["channel:thread:create::channel_id", "POST", "/channels/20/threads", "/channels/21/threads"],
+        [
+            "channel:thread:create::channel_id",
+            "POST",
+            "/channels/20/messages/9/threads",
+            "/channels/21/messages/9/threads",
+        ],
+        ["guild:threads:active::guild_id", "GET", "/guilds/20/threads/active", "/guilds/21/threads/active"],
+        [
+            "channel:threads:archived:list::channel_id",
+            "GET",
+            "/channels/20/threads/archived/public?limit=50",
+            "/channels/21/threads/archived/public?limit=50",
+        ],
+        [
+            "channel:threads:search::channel_id",
+            "GET",
+            "/channels/20/threads/search?name=a",
+            "/channels/21/threads/search?name=a",
+        ],
+        [
+            "channel:thread:member:put::channel_id",
+            "PUT",
+            "/channels/20/thread-members/@me",
+            "/channels/21/thread-members/@me",
+        ],
+        [
+            "channel:thread:member:put::channel_id",
+            "PUT",
+            "/channels/20/thread-members/40",
+            "/channels/21/thread-members/40",
+        ],
+        [
+            "channel:thread:member:delete::channel_id",
+            "DELETE",
+            "/channels/20/thread-members/40",
+            "/channels/21/thread-members/40",
+        ],
+        [
+            "channel:thread:member:get::channel_id",
+            "GET",
+            "/channels/20/thread-members/40",
+            "/channels/21/thread-members/40",
+        ],
+        [
+            "channel:thread:members:list::channel_id",
+            "GET",
+            "/channels/20/thread-members?limit=100",
+            "/channels/21/thread-members?limit=100",
+        ],
+        [
+            "channel:thread:member:settings::channel_id",
+            "PATCH",
+            "/channels/20/thread-members/@me/settings",
+            "/channels/21/thread-members/@me/settings",
+        ],
+        ["channel:post_data::channel_id", "POST", "/channels/20/post-data", "/channels/21/post-data"],
+    ] as const) {
+        const state = new RateLimits()
+        const first = rateRoute(method, firstPath, "20")
+        const second = rateRoute(method, secondPath, "21")
+        state.observe(state.begin(first), limited(template, 0), 0)
+        state.observe(state.begin(second), limited(template, 10), 0)
+        expect(state.wait(first.key, 1)).toBe(1000)
+        expect(state.wait(second.key, 1)).toBe(0)
+    }
+})
+
 test("older responses cannot remap a newer bucket or reopen exhausted capacity", () => {
     const state = new RateLimits(),
         route = channelRoute("20")

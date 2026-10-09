@@ -231,8 +231,19 @@ test.each(modes)("%s rejects every server-managed flag before send or edit dispa
     expect(MessageFlags.IsCrosspost).toBe(2)
     expect(MessageFlags.SourceMessageDeleted).toBe(8)
     expect(MessageFlags.VoiceMessage).toBe(8192)
+    // Fluxer 4749eb7f ServerMessageFlags and MessageTypes
+    expect(MessageFlags.HasThread).toBe(32)
+    expect(MessageFlags.FailedToMentionSomeRolesInThread).toBe(256)
     expect(MessageType.ChannelFollowAdd).toBe(12)
-    for (const flag of [MessageFlags.Crossposted, MessageFlags.IsCrosspost, MessageFlags.SourceMessageDeleted]) {
+    expect(MessageType.ThreadCreated).toBe(18)
+    expect(MessageType.ThreadStarterMessage).toBe(21)
+    for (const flag of [
+        MessageFlags.Crossposted,
+        MessageFlags.IsCrosspost,
+        MessageFlags.SourceMessageDeleted,
+        MessageFlags.HasThread,
+        MessageFlags.FailedToMentionSomeRolesInThread,
+    ]) {
         for (const flags of [flag, flag | MessageFlags.SuppressEmbeds]) {
             expect(
                 await expectErr(testClient.client.messages.send("20", { content: "Not sent", flags })),

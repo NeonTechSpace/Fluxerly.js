@@ -93,6 +93,8 @@ export const checkClasses = Object.freeze({
     "sharding.js": { "": sdkWork("read-only") },
     "supervisor.js": { "": sdkWork("read-only") },
     "text-validation.js": { "": sdkWork("test-owned") },
+    // Guild-wide reads are filtered to its own channels, and only this check creates threads
+    "threads.js": { "": sdkWork("test-owned") },
     "typing-interactive.js": { "": manual("shared-state") },
     "users.js": {
         "": manual("shared-state"),

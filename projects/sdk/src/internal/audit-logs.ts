@@ -14,6 +14,8 @@ import type {
     AuditLogWebhook,
 } from "#sdk/audit-logs"
 import { AuditLogActions } from "#sdk/audit-logs"
+import type { ForumTag } from "#sdk/channels"
+import { decodeForumDefaultReaction, decodeForumTag, decodeThread } from "./channel-decode.js"
 import { decodeUser } from "./users.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
@@ -33,9 +35,19 @@ function changeValue(value: unknown): AuditLogChangeValue | undefined {
         if (value.every((item) => typeof item === "string")) return Object.freeze([...value] as string[])
         if (value.every((item) => typeof item === "number" && Number.isFinite(item)))
             return Object.freeze([...value] as number[])
-        return undefined
+        // A forum or media channel change records available_tags as tag objects
+        const tags: ForumTag[] = []
+        for (const item of value) {
+            const tag = decodeForumTag(item)
+            if (!tag) return undefined
+            tags.push(tag)
+        }
+        return Object.freeze(tags)
     }
-    if (!record(value) || !Array.isArray(value.added) || !Array.isArray(value.removed)) return undefined
+    if (!record(value)) return undefined
+    // A forum or media channel change records default_reaction_emoji as an object of its two emoji fields
+    if ("emoji_id" in value || "emoji_name" in value) return decodeForumDefaultReaction(value)
+    if (!Array.isArray(value.added) || !Array.isArray(value.removed)) return undefined
     if (
         !value.added.every((item) => typeof item === "string") ||
         !value.removed.every((item) => typeof item === "string")
@@ -253,10 +265,12 @@ function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFai
     }
 }
 
-function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery): AuditLogPage | undefined {
+function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery, guildId: string): AuditLogPage | undefined {
     if (!record(value) || !Array.isArray(value.audit_log_entries) || value.audit_log_entries.length > query.limit)
         return undefined
-    if (!Array.isArray(value.users) || !Array.isArray(value.webhooks)) return undefined
+    // Fluxer lists the threads that thread actions target, and leaves the list out for callers that cannot see threads
+    const threadValues = value.threads === undefined ? [] : value.threads
+    if (!Array.isArray(value.users) || !Array.isArray(value.webhooks) || !Array.isArray(threadValues)) return undefined
     const entries: AuditLogEntry[] = []
     let previous = query.before === undefined ? undefined : BigInt(query.before)
     for (const source of value.audit_log_entries) {
@@ -288,10 +302,19 @@ function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery): AuditL
         webhookIds.add(item.id)
         webhooks.push(item)
     }
+    const threads = []
+    const threadIds = new Set<string>()
+    for (const source of threadValues) {
+        const thread = decodeThread(source)
+        if (!thread || thread.guildId !== guildId || threadIds.has(thread.id)) return undefined
+        threadIds.add(thread.id)
+        threads.push(thread)
+    }
     return Object.freeze({
         entries: Object.freeze(entries),
         users: Object.freeze(users),
         webhooks: Object.freeze(webhooks),
+        threads: Object.freeze(threads),
     })
 }
 
@@ -306,6 +329,6 @@ export function auditLogPage(guildId: string, query?: unknown): GuildRequest<Aud
         path: `/guilds/${guildId}/audit-logs?${encoded.params}`,
         method: "GET",
         status: 200,
-        decode: (value) => decodeAuditLogPage(value, encoded),
+        decode: (value) => decodeAuditLogPage(value, encoded, guildId),
     }
 }

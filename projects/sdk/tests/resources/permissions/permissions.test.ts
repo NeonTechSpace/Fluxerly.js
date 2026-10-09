@@ -3,14 +3,17 @@ import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
+    ChannelType,
     createClient,
     GuildOperationError,
     Permissions,
     type ClientOptions,
     type DefaultGuildOperationOptions,
+    type GuildPublicThreadChannel,
     type PermissionInput,
     type PermissionTarget,
 } from "../../../src/index.js"
+import { fixtures } from "../../../src/testing.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
@@ -386,6 +389,169 @@ test.each(modes)("%s permission fetch awaits request cleanup on cancellation", a
     }
 })
 
+// Fluxer 4749eb7f: threadViewPermissions in packages/constants/src/ThreadPermissionUtils.ts calculates a thread in its
+// parent channel, then sets SendMessages exactly when SendMessagesInThreads is set. The gateway's
+// guild_thread_permissions:alias_permissions applies the same rule
+const thread = (overrides: Partial<GuildPublicThreadChannel> = {}): GuildPublicThreadChannel => ({
+    id: "60",
+    guildId: "20",
+    type: ChannelType.PublicThread,
+    parentId: "50",
+    ownerId: "30",
+    name: "fixture-thread",
+    archived: false,
+    locked: false,
+    autoArchiveMinutes: 4320,
+    archiveTimestamp: "2026-10-01T00:00:00.000Z",
+    createdAt: "2026-10-01T00:00:00.000Z",
+    ...overrides,
+})
+const { ViewChannel, SendMessages, SendMessagesInThreads } = Permissions
+
+test.each(modes)(
+    "%s calculates a thread in its parent channel with SendMessages following SendMessagesInThreads",
+    async (mode) => {
+        const api = await setup(mode)
+        const community = (roleBits: bigint) => ({
+            guild: guild(),
+            member: member(),
+            roles: [role("20", ViewChannel), role("40", roleBits)],
+        })
+        const inThread = (roleBits: bigint, overwrites: Parameters<typeof channel>[0] = []): PermissionInput => ({
+            ...community(roleBits),
+            channel: thread(),
+            parentChannel: channel(overwrites),
+        })
+
+        // SendMessagesInThreads alone lets the member send in the thread, though not in the parent channel itself
+        expect(api.calculate(inThread(SendMessagesInThreads))).toBe(ViewChannel | SendMessagesInThreads | SendMessages)
+        // A parent that denies SendMessagesInThreads removes sending in its threads, while the parent keeps SendMessages
+        const sender = SendMessages | SendMessagesInThreads
+        const denyInThreads = [{ id: "40", type: "role" as const, allow: 0n, deny: SendMessagesInThreads }]
+        expect(api.calculate(inThread(sender, denyInThreads))).toBe(ViewChannel)
+        expect(api.calculate({ ...community(sender), channel: channel(denyInThreads) })).toBe(
+            ViewChannel | SendMessages,
+        )
+        // Fluxer ignores any overwrites on the thread itself, so only the parent's apply
+        const hiding = [{ id: "20", type: "role" as const, allow: 0n, deny: ViewChannel }]
+        expect(api.calculate({ ...inThread(sender), channel: thread({ permissionOverwrites: hiding }) })).toBe(
+            ViewChannel | sender,
+        )
+
+        // The owner and Administrator keep every bit, even where the parent denies everything
+        const denyAll = [{ id: "20", type: "role" as const, allow: 0n, deny: allPermissions }]
+        expect(api.calculate({ ...inThread(0n, denyAll), guild: guild("30") })).toBe(allPermissions)
+        expect(api.calculate(inThread(Permissions.Administrator, denyAll))).toBe(allPermissions)
+    },
+)
+
+test.each(modes)("%s rejects a thread without its own parent channel", async (mode) => {
+    const api = await setup(mode)
+    const { channel: _channel, ...community } = input()
+    const base = { ...community, channel: thread(), parentChannel: channel() }
+    const failures: [unknown, string, string][] = [
+        [{ ...community, channel: thread() }, "input.parentChannel", "required"],
+        [{ ...base, parentChannel: { ...channel(), id: "51" } }, "input.parentChannel", "relationship"],
+        [{ ...base, parentChannel: { ...channel(), guildId: "21" } }, "input.parentChannel", "format"],
+        [{ ...base, parentChannel: { id: "50", guildId: "20", type: 0 } }, "input.parentChannel", "format"],
+        [{ ...base, channel: thread({ guildId: "21" }) }, "input.channel", "format"],
+        // A parent channel beside a channel that is not a thread, or without any channel, would be silently ignored
+        [{ ...base, channel: channel() }, "input.parentChannel", "relationship"],
+        [{ ...community, parentChannel: channel() }, "input.parentChannel", "relationship"],
+    ]
+    for (const [value, path, constraint] of failures)
+        expect(() => api.calculate(value as PermissionInput)).toThrow(
+            expect.objectContaining({
+                operation: "permissions.calculate",
+                reason: "input",
+                inputValidation: expect.objectContaining({ path, constraint }),
+            }),
+        )
+})
+
+test.each(modes)(
+    "%s fetches a thread's parent channel after the thread and calculates the thread rule",
+    async (mode) => {
+        const calls: string[] = []
+        rest(async (url) => {
+            const path = new URL(url).pathname
+            calls.push(path)
+            if (path.endsWith("/guilds/20")) return Response.json(wireGuild())
+            if (path.endsWith("/members/30")) return Response.json(wireMember())
+            if (path.endsWith("/roles"))
+                return Response.json([
+                    wireRole("20", ViewChannel),
+                    wireRole("40", SendMessages | SendMessagesInThreads),
+                ])
+            if (path.endsWith("/channels/60")) return Response.json(wireThread())
+            if (path.endsWith("/channels/50"))
+                return Response.json(
+                    wireChannel([{ id: "40", type: 0, allow: "0", deny: String(SendMessagesInThreads) }]),
+                )
+            throw Error(`Unexpected request ${path}`)
+        })
+        const api = await setup(mode)
+        expect(await api.fetch({ ...target, channelId: "60" })).toBe(ViewChannel)
+        expect(calls).toEqual([
+            "/v1/guilds/20",
+            "/v1/guilds/20/members/30",
+            "/v1/guilds/20/roles",
+            "/v1/channels/60",
+            "/v1/channels/50",
+        ])
+    },
+)
+
+test.each(modes)("%s gives a thread's parent read only the shared deadline remainder", async (mode) => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "performance", "setTimeout", "clearTimeout"] })
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() =>
+        BigInt(Math.floor(performance.now() * 1_000_000)),
+    )
+    const threadRead = Promise.withResolvers<void>()
+    const parentRead = Promise.withResolvers<void>()
+    let parentAborted = false
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        if (path.endsWith("/guilds/20")) return Response.json(wireGuild())
+        if (path.endsWith("/members/30")) return Response.json(wireMember())
+        if (path.endsWith("/roles")) return Response.json([wireRole("20", 0n), wireRole("40", 0n)])
+        if (path.endsWith("/channels/60")) {
+            threadRead.resolve()
+            await new Promise((resolve) => setTimeout(resolve, 40))
+            return Response.json(wireThread())
+        }
+        if (!path.endsWith("/channels/50")) throw Error(`Unexpected request ${path}`)
+        parentRead.resolve()
+        return new Promise<Response>((_resolve, reject) => {
+            ;(init.signal as AbortSignal).addEventListener(
+                "abort",
+                () => {
+                    parentAborted = true
+                    reject(new DOMException("Timed out", "AbortError"))
+                },
+                { once: true },
+            )
+        })
+    })
+    const api = await setup(mode)
+    const pending = api.fetch({ ...target, channelId: "60" }, { timeoutMs: 50 }).then(
+        () => undefined,
+        (error) => error,
+    )
+    await threadRead.promise
+    await vi.advanceTimersByTimeAsync(40)
+    await parentRead.promise
+    // The parent read has 10 ms left of the 50 ms deadline, not a deadline of its own
+    await vi.advanceTimersByTimeAsync(11)
+    expect(parentAborted).toBe(true)
+    expect(await pending).toMatchObject({
+        _tag: "ChannelOperationError",
+        operation: "channels.fetch",
+        reason: "timeout",
+    })
+})
+
+const wireThread = () => fixtures.thread({ id: "60", guild_id: "20", parent_id: "50", owner_id: "30" })
 const wireGuild = () => ({ id: "20", owner_id: "99", name: "fixture", features: [], icon: null })
 const wireMember = () => ({
     user: { id: "30", username: "fixture", bot: true },

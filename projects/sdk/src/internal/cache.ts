@@ -4,6 +4,8 @@
  * see them, retained data and conflict metadata stay bounded, and pre-gap observations are cleared even after session resumption.
  * A gap on a guild with a known shard invalidates only that shard's data, private-conversation data belongs to shard zero, and
  * unknown ownership stays conservative, including channel-only in-flight reads, without an unbounded channel-to-guild index.
+ * A deleted thread parent removes the messages of every channel in its guild that the channel cache cannot place, because
+ * Fluxer deletes the parent's threads without thread deletion events and messages do not record their thread's parent.
  * Pre-gap requests neither repopulate invalid snapshots nor evict healthy post-gap observations on late completion. A callback
  * that throws or returns an invalid value is reported with kind cache and the message IDs, and neither retention nor reporting
  * failure changes a successful REST result or event delivery. Every applied store, removal and whole-cache clear is recorded
@@ -243,6 +245,23 @@ export class MessageCache<M extends MessageCore = Message> {
         for (const request of this.#requests) if (request.channel === channelId) request.invalid = true
         for (const entry of this.#entries.values())
             if (entry.message.channelId === channelId) this.#remove(entry.message)
+        this.#schedule()
+    }
+
+    /**
+     * Remove the messages a deleted thread parent can have taken with its threads: Those in this guild, or without guild
+     * context, whose channel held does not place. Reads of such channels already in flight cannot restore them
+     */
+    deleteUnplaced(guildId: string, held: (channelId: string) => boolean) {
+        if (this.#closed) return
+        // Queued REST calls have captured this generation but may not have registered a per-request guard yet
+        this.#generation++
+        for (const request of this.#requests) if (!held(request.channel)) request.invalid = true
+        for (const entry of this.#entries.values()) {
+            const message = entry.message
+            if ((message.guildId === undefined || message.guildId === guildId) && !held(message.channelId))
+                this.#remove(message)
+        }
         this.#schedule()
     }
 

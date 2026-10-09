@@ -5,6 +5,7 @@ import {
     type WebhookMessageEdit,
     type WebhookClientOptions,
     type WebhookOperationFailure,
+    type WebhookMessageOperationOptions,
 } from "#sdk/webhooks"
 import {
     makeWebhookClient,
@@ -12,7 +13,8 @@ import {
     webhookTokenEdit,
     webhookTokenDelete,
     webhookSend,
-    webhookMessage,
+    webhookMessageFetch,
+    webhookMessageEdit,
     webhookMessageDelete,
 } from "#sdk/internal/webhooks"
 import * as Effect from "effect/Effect"
@@ -81,6 +83,10 @@ export interface WebhookClient {
      * Reply references can include files.
      * Forward references preserve only the source snapshot and reject new content or uploads
      *
+     * Set threadId to post into an existing thread. In a forum or media channel, set threadName, with optional
+     * appliedTagIds, to start a new post instead. The result is then the post's first message, whose channelId is the
+     * new post's ID. See WebhookMessageInput for the rules that the SDK checks before dispatch
+     *
      * Each attachment supplies data bytes, a sized Blob or File source, or a finite stream with its exact size.
      * Metadata and data bytes are copied when execution starts, before waiting.
      * File and stream sources are read when the multipart upload begins, without copying or spooling.
@@ -101,9 +107,13 @@ export interface WebhookClient {
     ): Effect.Effect<Message, WebhookOperationFailure>
     /**
      * Fetch a message authored by this webhook in its current channel, using a decimal message ID.
+     * For a message in a thread, including a forum post, set options.threadId to the thread's ID.
      * Eligible transient read failures have bounded retries
      */
-    fetchMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<Message, WebhookOperationFailure>
+    fetchMessage(
+        messageId: string,
+        options?: WebhookMessageOperationOptions,
+    ): Effect.Effect<Message, WebhookOperationFailure>
     /**
      * Change this webhook's message and return its updated snapshot.
      * A plain string replaces only the text, as shorthand for `{ content }`.
@@ -112,19 +122,24 @@ export interface WebhookClient {
      * A flags-only edit replaces only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications, and 0 clears them.
      * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed.
      * Those bits and VoiceMessage fail locally before dispatch.
-     * Embed input cannot resolve existing file references
+     * Embed input cannot resolve existing file references.
+     * For a message in a thread, including a forum post, set options.threadId to the thread's ID
      */
     editMessage(
         messageId: string,
         input: WebhookMessageEdit | string,
-        options?: MessageOperationOptions,
+        options?: WebhookMessageOperationOptions,
     ): Effect.Effect<Message, WebhookOperationFailure>
     /**
      * Delete this webhook's message, succeeding with no value after HTTP 204.
+     * For a message in a thread, including a forum post, set options.threadId to the thread's ID.
      * Success does not prove it previously existed.
      * A failure with an unknown outcome can follow a completed deletion
      */
-    deleteMessage(messageId: string, options?: MessageOperationOptions): Effect.Effect<void, WebhookOperationFailure>
+    deleteMessage(
+        messageId: string,
+        options?: WebhookMessageOperationOptions,
+    ): Effect.Effect<void, WebhookOperationFailure>
     /**
      * Permanently stop this local client, reject new work, cancel active work and await transport cleanup.
      * The client's token reference is released, but the remote webhook and caller-held credentials remain.
@@ -179,12 +194,12 @@ export function createWebhookClient(options: WebhookClientOptions): Effect.Effec
                 owner.run("webhooks.deleteToken", () => webhookTokenDelete(owner.id), options),
             send: (input: WebhookMessageInput | string, options?: MessageOperationOptions) =>
                 owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
-            fetchMessage: (id: string, options?: MessageOperationOptions) =>
-                owner.run("webhooks.fetchMessage", () => webhookMessage(owner.id, id, "GET"), options),
-            editMessage: (id: string, input: WebhookMessageEdit | string, options?: MessageOperationOptions) =>
-                owner.run("webhooks.editMessage", () => webhookMessage(owner.id, id, "PATCH", input), options),
-            deleteMessage: (id: string, options?: MessageOperationOptions) =>
-                owner.run("webhooks.deleteMessage", () => webhookMessageDelete(owner.id, id), options),
+            fetchMessage: (id: string, options?: WebhookMessageOperationOptions) =>
+                owner.run("webhooks.fetchMessage", () => webhookMessageFetch(owner.id, id, options), options),
+            editMessage: (id: string, input: WebhookMessageEdit | string, options?: WebhookMessageOperationOptions) =>
+                owner.run("webhooks.editMessage", () => webhookMessageEdit(owner.id, id, input, options), options),
+            deleteMessage: (id: string, options?: WebhookMessageOperationOptions) =>
+                owner.run("webhooks.deleteMessage", () => webhookMessageDelete(owner.id, id, options), options),
             shutdown: () => owner.shutdown(),
         })
     })

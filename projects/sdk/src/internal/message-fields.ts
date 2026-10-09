@@ -37,6 +37,7 @@ const fields: Record<MessageField, true> = {
     messageReference: true,
     messageSnapshots: true,
     referencedMessage: true,
+    thread: true,
 }
 
 /** Snapshot public field names once, without retaining the caller's array or constructing message data */

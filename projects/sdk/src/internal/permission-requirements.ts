@@ -1,8 +1,9 @@
 /**
  * Permissions that Fluxer checks for SDK operations, behind details.requiredPermissions and the missing-permission hint.
- * Invariant: Every entry comes from Fluxer's own permission check at fluxerapp/fluxer commit
- * a95172bf88da26dd877255ceee139bf84e6799fa, the commit pinned in the
- * [upstream manifest](/projects/release/upstream/manifest.json). Source references are relative to fluxer_api/src/api.
+ * Invariant: Every entry comes from Fluxer's own permission check in fluxerapp/fluxer. Entries that name no other commit
+ * come from a95172bf88da26dd877255ceee139bf84e6799fa, and the forum tag and threads.* entries come from the commit
+ * 4749eb7f866ceba0c9622014a9824900d5be8172 that their comments name. Source references are relative to
+ * fluxer_api/src/api.
  * An operation whose rejection the source does not tie to one set of permissions has no entry and keeps the generic hint.
  * Channel-authenticated routes first check View Channel in channel/services/BaseChannelAuthService.ts:213 and reject
  * it with MISSING_PERMISSIONS, so their entries include it.
@@ -77,6 +78,11 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
         ["ViewChannel", "ManageWebhooks"],
         "Fluxer checks View Channel in both channels and Manage Webhooks in the destination",
     ),
+    // Upstream 4749eb7f, channel/services/ChannelRequestService.ts:164-171, where the three tag routes in
+    // channel/controllers/ForumController.ts check Manage Channels before changing the channel's tags
+    "channels.createForumTag": requires("channel", ["ViewChannel", "ManageChannels"]),
+    "channels.editForumTag": requires("channel", ["ViewChannel", "ManageChannels"]),
+    "channels.deleteForumTag": requires("channel", ["ViewChannel", "ManageChannels"]),
     // webhook/WebhookService.ts:197-204, 614-634
     "webhooks.create": requires("guildAndChannel", ["ViewChannel", "ManageWebhooks"]),
     // webhook/WebhookService.ts:177-184
@@ -278,6 +284,55 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     clearReaction: requires("channel", ["ViewChannel", "ManageMessages"]),
     // channel/services/MessageInteractionService.ts:273, channel/services/interaction/MessageReactionService.ts:347
     clearReactions: requires("channel", ["ViewChannel", "ManageMessages"]),
+    // The threads.* entries come from fluxerapp/fluxer commit 4749eb7f866ceba0c9622014a9824900d5be8172, where paths
+    // starting with packages/ are relative to the repository root. Fluxer reads a thread's permissions in its parent
+    // channel, and a thread it cannot view fails with MISSING_ACCESS instead, so thread-targeted entries leave out
+    // View Channel. Join, leave, fetchActive and member reads have no entry because none of their checks fails with
+    // MISSING_PERMISSIONS.
+    // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadCreationService.ts:378,
+    // packages/constants/src/ThreadPermissionUtils.ts:214-231
+    "threads.create": requires(
+        "channel",
+        ["ViewChannel", "CreatePublicThreads"],
+        "A private thread needs Create Private Threads instead",
+    ),
+    // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadCreationService.ts:120, 378,
+    // packages/constants/src/ThreadPermissionUtils.ts:222-225
+    "threads.createFromMessage": requires("channel", ["ViewChannel", "CreatePublicThreads", "ReadMessageHistory"]),
+    // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadCreationService.ts:228, 236,
+    // channel/services/message/MessageSendService.ts:254-298
+    "threads.createPost": requires(
+        "channel",
+        ["ViewChannel", "SendMessages"],
+        "Embeds in the first message also need Embed Links, and files need Attach Files",
+    ),
+    // channel/services/thread/ThreadModifyService.ts:137, packages/constants/src/ThreadPermissionUtils.ts:124-158
+    "threads.edit": requires(
+        "channel",
+        ["ManageThreads"],
+        "The thread's creator needs it only to unlock the thread or change rateLimitPerUser, pinned or moderated tags, and every change in a locked thread needs it",
+    ),
+    // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadListService.ts:144,
+    // packages/constants/src/ThreadPermissionUtils.ts:233-241
+    "threads.fetchArchived": requires(
+        "channel",
+        ["ViewChannel", "ReadMessageHistory"],
+        "Listing private archived threads also needs Manage Threads",
+    ),
+    // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadForumService.ts:217
+    "threads.search": requires("channel", ["ViewChannel", "ReadMessageHistory"]),
+    // channel/services/thread/ThreadMemberService.ts:80, packages/constants/src/ThreadPermissionUtils.ts:179-193
+    "threads.addMember": requires(
+        "channel",
+        ["SendMessagesInThreads"],
+        "Adding to a private thread that is not invitable also needs Manage Threads, unless the added member has it",
+    ),
+    // channel/services/thread/ThreadMemberService.ts:105, packages/constants/src/ThreadPermissionUtils.ts:195-201
+    "threads.removeMember": requires(
+        "channel",
+        ["ManageThreads"],
+        "The creator of a private thread can remove its members without it",
+    ),
 }
 
 /** What Fluxer requires for an operation, or undefined when its permission checks are not tied to one set */

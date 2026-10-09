@@ -265,6 +265,97 @@ test.each(modes)("%s projects nameless DM channels and enforces numbered page bo
     })
 })
 
+const searchThread = (id = "50") => ({
+    id,
+    type: 11,
+    guild_id: "40",
+    parent_id: "20",
+    owner_id: "30",
+    name: "release thread",
+    last_message_id: "11",
+    last_pin_timestamp: null,
+    rate_limit_per_user: 0,
+    flags: 0,
+    thread_metadata: {
+        archived: false,
+        auto_archive_duration: 1440,
+        archive_timestamp: "2026-10-01T00:00:00.000Z",
+        locked: false,
+        create_timestamp: "2026-10-01T00:00:00.000Z",
+    },
+    message_count: 1,
+    total_message_sent: 1,
+    member_count: 1,
+})
+const searchMembership = (id = "50") => ({ id, user_id: "30", join_timestamp: "2026-10-02T00:00:00.000Z", flags: 1 })
+
+// Fluxer lists the channel of a thread hit in threads, not channels, with the bot's memberships in members
+test.each(modes)("%s keeps thread hits and returns their threads with the bot's membership", async (mode) => {
+    const client = await setup(mode)
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json(
+            page([wire("10"), { ...wire("11"), channel_id: "50" }], {
+                threads: [searchThread()],
+                members: [searchMembership()],
+            }),
+        ),
+    )
+    const result = await settle(client.messages.search({ guildId: "40" }))
+    if (result.indexing) throw new Error("Expected result page")
+    expect(result.messages.map((message) => [message.id, message.channelId])).toEqual([
+        ["10", "20"],
+        ["11", "50"],
+    ])
+    expect(result.channels).toEqual([{ id: "20", guildId: "40", name: "general", type: 0 }])
+    expect(result.threads).toEqual([
+        expect.objectContaining({
+            id: "50",
+            type: 11,
+            parentId: "20",
+            name: "release thread",
+            autoArchiveMinutes: 1440,
+            membership: { joinedAt: "2026-10-02T00:00:00.000Z", flags: 1 },
+        }),
+    ])
+    expect(Object.isFrozen(result.threads) && Object.isFrozen(result.threads[0])).toBe(true)
+})
+
+// Each hit's channel must appear exactly once across channels and threads, and each membership must name a listed thread
+test.each(modes)("%s rejects pages whose threads do not match their hits or memberships", async (mode) => {
+    const client = await setup(mode)
+    const malformed = [
+        // A thread listed again among the channels
+        page([wire("10"), { ...wire("11"), channel_id: "50" }], {
+            channels: [
+                { id: "20", guild_id: "40", name: "general", type: 0 },
+                { id: "50", guild_id: "40", name: "release thread", type: 11 },
+            ],
+            threads: [searchThread()],
+        }),
+        // A thread hit whose thread is missing
+        page([wire("10"), { ...wire("11"), channel_id: "50" }]),
+        // A listed thread that no hit belongs to
+        page([wire("10")], { threads: [searchThread()] }),
+        // A membership naming a thread the page does not list
+        page([wire("10"), { ...wire("11"), channel_id: "50" }], {
+            threads: [searchThread()],
+            members: [searchMembership("51")],
+        }),
+        // A thread without its required metadata
+        page([wire("10"), { ...wire("11"), channel_id: "50" }], {
+            threads: [{ ...searchThread(), thread_metadata: undefined }],
+        }),
+    ]
+    let index = 0
+    stubFetchWithHostedDiscovery(async () => Response.json(malformed[index++]))
+    for (const _ of malformed)
+        await expect(settle(client.messages.search({ guildId: "40" }))).rejects.toMatchObject({
+            operation: "search",
+            reason: "response",
+        })
+    expect(index).toBe(malformed.length)
+})
+
 test.each(modes)(
     "%s keeps uncertain search POST failures single-attempt while honoring confirmed rate limits",
     async (mode) => {

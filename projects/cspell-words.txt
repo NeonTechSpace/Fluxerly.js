@@ -28,6 +28,7 @@ crossposted
 crossposting
 crossposts
 instatus
+invitable
 joinability
 llms
 pkce
@@ -38,6 +39,9 @@ rrggbb
 slowmode
 tempban
 toggleable
+unarchive
+unarchived
+unarchives
 undeafen
 unban
 

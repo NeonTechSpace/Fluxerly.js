@@ -54,7 +54,8 @@ export interface CacheChange {
  * When capacity is full, the least recently used snapshot is removed first.
  * Expired entries, overlapping reads and lost gateway connections can make a lookup miss.
  * A connection gap clears affected users and direct messages even if the session resumes. Community-scoped snapshots stay
- * while the session resumes and are cleared when a new session starts. Responses started before the gap are not stored.
+ * while the session resumes and are cleared when a new session starts, except cached threads, which a completed Resume
+ * clears. Responses started before the gap are not stored.
  * Shutdown releases the SDK's copies, not copies still held by the application
  *
  * @category Caching
@@ -107,7 +108,10 @@ export interface ResourceCacheSettings<T = unknown> {
  * If a newer read or change overlaps a pending response, that response cannot add or renew a snapshot.
  * It can remove a different saved copy but may leave an identical copy in place
  *
- * Channel deletion or visibility loss removes that channel's snapshots.
+ * Channel deletion or visibility loss removes that channel's snapshots, and a thread deletion its thread's snapshots.
+ * Fluxer deletes a text, announcement, forum or media channel's threads with it and sends no thread deletion events,
+ * so that deletion also removes the snapshots of every channel in its community, or without community context, that
+ * the channel cache does not hold, which without the channel cache means all of them.
  * Batch deletion evicts selected messages after dispatch even on rejection.
  * These operations also stop older responses from entering the cache, including some pending reads of other resources
  *

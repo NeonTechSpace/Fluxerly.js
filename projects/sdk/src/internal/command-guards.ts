@@ -2,12 +2,12 @@
  * Built-in command guard rules shared by both API styles: Deny reasons, owner and permission-name validation, the
  * application owner behind ownerOnly without IDs, the private-channel confirmation behind dmOnly and the cache-first
  * permission reads behind requirePermissions.
- * Invariant: Guards read at most the guild, member, roles and channel once per invocation, using enabled caches before
- * a request, never allow on an unconfirmed channel kind, and never retain a decision. The only retained read is the
- * application owner ID, kept per client after its first successful read
+ * Invariant: Guards read at most the guild, member, roles, channel and a thread's parent channel once per invocation,
+ * using enabled caches before a request, never allow on an unconfirmed channel kind, and never retain a decision. The
+ * only retained read is the application owner ID, kept per client after its first successful read
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import type { GuildChannel } from "#sdk/channels"
+import { isThreadChannel, type GuildChannel } from "#sdk/channels"
 import { ConfigurationError } from "#sdk/errors"
 import { Permissions } from "#sdk/guilds"
 import type { PermissionName } from "#sdk/helpers"
@@ -74,21 +74,23 @@ export const notPrivateChannel = (error: unknown): boolean =>
     error instanceof UserOperationError && error.reason === "response"
 
 /**
- * A channel observation usable for permission calculation, or undefined when it lacks its overwrite list.
- * A cached channel without overwrites is read again, because calculating without unknown overwrites could grant a
- * permission that the channel denies
+ * A cached channel observation usable for permission calculation, or undefined when it must be read.
+ * A thread needs only its parent ID, because it takes its permissions from its parent channel, which is read
+ * separately. A cached channel without its overwrite list is read again, because calculating without unknown overwrites
+ * could grant a permission that the channel denies
  */
-export const withKnownOverwrites = (channel: GuildChannel | undefined): GuildChannel | undefined =>
-    channel?.permissionOverwrites === undefined ? undefined : channel
+export const cachedPermissionChannel = (channel: GuildChannel | undefined): GuildChannel | undefined =>
+    isThreadChannel(channel) || channel?.permissionOverwrites !== undefined ? channel : undefined
 
 /**
  * A freshly read channel prepared for permission calculation, or undefined when its permissions cannot be confirmed.
- * Fluxer's own response is authoritative for a known channel type, so a read without an overwrite list has no channel
+ * A thread is used as read, because its permissions come from its parent channel. Fluxer's own response is
+ * authoritative for a channel that holds its own overwrites, so a read without an overwrite list has no channel
  * overwrites and the member's role permissions apply unchanged. A channel of a type this SDK version does not know may
- * take its permissions from elsewhere, as a thread takes its parent's, so a missing list there leaves them unknown
+ * take its permissions from elsewhere, so a missing list there leaves them unknown
  */
-export const readChannelOverwrites = (channel: GuildChannel): GuildChannel | undefined => {
-    if (channel.permissionOverwrites !== undefined) return channel
+export const fetchedPermissionChannel = (channel: GuildChannel): GuildChannel | undefined => {
+    if (isThreadChannel(channel) || channel.permissionOverwrites !== undefined) return channel
     if (channel.type === "unknown") return undefined
     return Object.freeze({ ...channel, permissionOverwrites: Object.freeze([]) }) as GuildChannel
 }

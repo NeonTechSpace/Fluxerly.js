@@ -166,6 +166,128 @@ export interface WireChannel {
 }
 
 /**
+ * A thread in the wire shape of thread reads, thread lists and THREAD_CREATE and THREAD_UPDATE
+ *
+ * @category Testing
+ */
+export interface WireThread {
+    /** Thread snowflake ID */
+    readonly id: string
+    /** Guild ID */
+    readonly guild_id: string
+    /** Thread type: 10 announcement, 11 public or 12 private */
+    readonly type: number
+    /** ID of the text, announcement, forum or media channel holding the thread */
+    readonly parent_id: string
+    /** ID of the user or webhook that created the thread */
+    readonly owner_id: string
+    /** Thread name */
+    readonly name: string
+    /** Latest message ID, or null when the thread has none */
+    readonly last_message_id: string | null
+    /** Latest pin time, or null when nothing was pinned */
+    readonly last_pin_timestamp: string | null
+    /** Slow-mode interval in seconds */
+    readonly rate_limit_per_user: number
+    /** Channel flag bits, where 2 pins a forum post */
+    readonly flags: number
+    /** Archive and lock state */
+    readonly thread_metadata: {
+        /** Whether the thread is archived */
+        readonly archived: boolean
+        /** Inactivity period in minutes before Fluxer archives the thread */
+        readonly auto_archive_duration: number
+        /** ISO 8601 time the archive state last changed */
+        readonly archive_timestamp: string
+        /** Whether only thread moderators can act in the thread */
+        readonly locked: boolean
+        /** Whether members may invite others, present only on a private thread */
+        readonly invitable?: boolean
+        /** ISO 8601 creation time */
+        readonly create_timestamp: string
+    }
+    /** Messages in the thread */
+    readonly message_count: number
+    /** Messages ever sent in the thread */
+    readonly total_message_sent: number
+    /** Thread member count, capped at 50 */
+    readonly member_count: number
+    /** IDs of the tags applied to a forum or media post */
+    readonly applied_tags?: readonly string[]
+    /** The bot's own membership, present when the bot joined the thread */
+    readonly member?: {
+        /** ISO 8601 time the bot last joined */
+        readonly join_timestamp: string
+        /** Thread member flag bits */
+        readonly flags: number
+    }
+}
+
+/**
+ * A forum or media channel in the wire shape of channel reads and channel events
+ *
+ * @category Testing
+ */
+export interface WireForumChannel {
+    /** Channel snowflake ID */
+    readonly id: string
+    /** Guild ID */
+    readonly guild_id: string
+    /** Channel type, 15 for a forum channel or 16 for a media channel */
+    readonly type: number
+    /** Channel name */
+    readonly name: string
+    /** Posting guidelines, or null when unset */
+    readonly topic: string | null
+    /** Sorting position */
+    readonly position: number
+    /** Parent category ID, or null when uncategorized */
+    readonly parent_id: string | null
+    /** Whether the channel is marked NSFW */
+    readonly nsfw: boolean
+    /** Delay in seconds between one member's posts */
+    readonly rate_limit_per_user: number
+    /** Newest post ID, or null when the channel never had one */
+    readonly last_message_id: string | null
+    /** Latest pin time, or null */
+    readonly last_pin_timestamp: string | null
+    /** Role and member permission overwrites */
+    readonly permission_overwrites: readonly unknown[]
+    /** Channel flag bits, where 16 requires a tag on every post */
+    readonly flags: number
+    /** Tags that posts can carry */
+    readonly available_tags: readonly {
+        /** Tag snowflake ID */
+        readonly id: string
+        /** Tag name */
+        readonly name: string
+        /** Whether only thread moderators can apply the tag */
+        readonly moderated: boolean
+        /** Custom emoji ID, or null */
+        readonly emoji_id: string | null
+        /** Unicode emoji, or null */
+        readonly emoji_name: string | null
+    }[]
+    /** Reaction suggested on each post, or null when unset */
+    readonly default_reaction_emoji: {
+        /** Custom emoji ID, or null for a Unicode emoji */
+        readonly emoji_id: string | null
+        /** Unicode emoji, or null for a custom emoji */
+        readonly emoji_name: string | null
+    } | null
+    /** Default post order, or null when unset */
+    readonly default_sort_order: number | null
+    /** Default post layout, present only on a forum channel */
+    readonly default_forum_layout?: number
+    /** Default tag matching of a post search */
+    readonly default_tag_setting: string
+    /** Stored default auto-archive period in minutes, or null when unset */
+    readonly default_auto_archive_duration: number | null
+    /** Slow-mode interval in seconds that new posts copy */
+    readonly default_thread_rate_limit_per_user: number
+}
+
+/**
  * A community membership in the wire shape of GUILD_MEMBER_ADD and GUILD_MEMBER_UPDATE.
  * Member reads return the same fields without guild_id, and the SDK ignores that extra field there
  *
@@ -197,7 +319,7 @@ export interface WireMember {
 }
 
 /**
- * A complete GUILD_CREATE dispatch body: The community ready object with its roles, channels and members
+ * A complete GUILD_CREATE dispatch body: The community ready object with its roles, channels, threads and members
  *
  * @category Testing
  */
@@ -208,8 +330,10 @@ export interface WireGuildCreate {
     readonly properties: WireGuild
     /** Every role, including the everyone role */
     readonly roles: readonly WireRole[]
-    /** Channels the bot can view */
-    readonly channels: readonly WireChannel[]
+    /** Channels the bot can view, including forum and media channels */
+    readonly channels: readonly (WireChannel | WireForumChannel)[]
+    /** Active threads the bot can view, each with member when the bot joined it */
+    readonly threads: readonly WireThread[]
     /** Community emojis */
     readonly emojis: readonly unknown[]
     /** Community stickers */
@@ -319,6 +443,17 @@ export interface Fixtures {
     guildCreate(overrides?: WireGuildCreateOverrides): WireGuildCreate
     /** Build a community text channel, by default the default channel in the default community */
     channel(overrides?: WireOverrides<WireChannel>): WireChannel
+    /**
+     * Build a public thread with a new ID in the default channel, started by the default author, active and without
+     * the bot's membership. Pass type 12 for a private thread, whose default metadata then includes invitable, or a
+     * member field to describe the bot's membership
+     */
+    thread(overrides?: WireOverrides<WireThread>): WireThread
+    /**
+     * Build a forum channel with a new ID in the default community, without tags. Pass type 16 for a media channel,
+     * which then leaves out default_forum_layout as Fluxer does
+     */
+    forumChannel(overrides?: WireOverrides<WireForumChannel>): WireForumChannel
     /** Build a role with a new ID in the default community's role list, without permissions */
     role(overrides?: WireOverrides<WireRole>): WireRole
     /** Build a membership of the default author in the default community, carrying guild_id as member events do */
@@ -414,6 +549,61 @@ export function createFixtures(): Fixtures {
             },
             overrides,
         )
+    const thread = (overrides?: WireOverrides<WireThread>): WireThread => {
+        const isPrivate = overrides?.type === 12
+        return merge<WireThread>(
+            {
+                id: nextId(),
+                guild_id: ids.guild,
+                type: 11,
+                parent_id: ids.channel,
+                owner_id: ids.user,
+                name: "fixture-thread",
+                last_message_id: null,
+                last_pin_timestamp: null,
+                rate_limit_per_user: 0,
+                flags: 0,
+                thread_metadata: {
+                    archived: false,
+                    auto_archive_duration: 4320,
+                    archive_timestamp: fixtureTimestamp,
+                    locked: false,
+                    ...(isPrivate ? { invitable: true } : {}),
+                    create_timestamp: fixtureTimestamp,
+                },
+                message_count: 0,
+                total_message_sent: 0,
+                member_count: 1,
+            },
+            overrides,
+        )
+    }
+    const forumChannel = (overrides?: WireOverrides<WireForumChannel>): WireForumChannel =>
+        merge<WireForumChannel>(
+            {
+                id: nextId(),
+                guild_id: ids.guild,
+                type: 15,
+                name: "fixture-forum",
+                topic: null,
+                position: 1,
+                parent_id: null,
+                nsfw: false,
+                rate_limit_per_user: 0,
+                last_message_id: null,
+                last_pin_timestamp: null,
+                permission_overwrites: [],
+                flags: 0,
+                available_tags: [],
+                default_reaction_emoji: null,
+                default_sort_order: null,
+                ...(overrides?.type === 16 ? {} : { default_forum_layout: 0 }),
+                default_tag_setting: "match_some",
+                default_auto_archive_duration: null,
+                default_thread_rate_limit_per_user: 0,
+            },
+            overrides,
+        )
     const role = (overrides?: WireOverrides<WireRole>): WireRole =>
         merge<WireRole>(
             {
@@ -456,6 +646,7 @@ export function createFixtures(): Fixtures {
                 properties,
                 roles: [role({ id: properties.id, name: "@everyone", position: 0 })],
                 channels: [channel({ guild_id: properties.id })],
+                threads: [],
                 emojis: [],
                 stickers: [],
                 members: [botMember],
@@ -492,7 +683,20 @@ export function createFixtures(): Fixtures {
             },
             overrides,
         )
-    return Object.freeze({ ids, nextId, user, botUser, guild, guildCreate, channel, role, member, message })
+    return Object.freeze({
+        ids,
+        nextId,
+        user,
+        botUser,
+        guild,
+        guildCreate,
+        channel,
+        thread,
+        forumChannel,
+        role,
+        member,
+        message,
+    })
 }
 
 /**

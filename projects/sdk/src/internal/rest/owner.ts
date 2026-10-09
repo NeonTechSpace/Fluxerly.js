@@ -1361,6 +1361,7 @@ export class RestOwner<M extends MessageCore = Message> {
             const audit = input.audited ? auditSettings(options) : undefined
             if (audit instanceof InputValidationFailure) return Effect.fail(inputFailure(audit.detail))
             const acceptedOptions = input.audited ? [...operationOptionKeys, "auditReason"] : operationOptionKeys
+            const accepted = input.accepted
             return this.#execute(
                 token,
                 {
@@ -1372,10 +1373,16 @@ export class RestOwner<M extends MessageCore = Message> {
                     ...(input.features === undefined ? {} : { features: input.features }),
                     path: input.path,
                     method: input.method,
-                    status: input.status,
-                    body: input.json === undefined ? undefined : { json: input.json, files: [] },
+                    // A route that can also answer 202 has its status checked here instead
+                    ...(accepted === undefined ? { status: input.status } : {}),
+                    body: input.body ?? (input.json === undefined ? undefined : { json: input.json, files: [] }),
+                    // Presigned uploads rewrite top-level attachments, while a forum post nests them in its message
+                    ...(input.body?.files.length ? { inlineAttachments: true as const } : {}),
                     decode: async (response, _instance, signal) => {
                         if (input.status === 204) return undefined as A
+                        if (accepted !== undefined && response.status === 202)
+                            return readDecoded(response, signal, (value) => accepted(value))
+                        if (response.status !== input.status) throw responseFailure(response, "status")
                         return readDecoded(response, signal, (value) => input.decode(value))
                     },
                 },
@@ -1462,7 +1469,9 @@ export class RestOwner<M extends MessageCore = Message> {
             const acceptedOptions =
                 input.method !== "GET" && !input.tokenAuth
                     ? [...operationOptionKeys, "auditReason"]
-                    : operationOptionKeys
+                    : input.threadOption
+                      ? [...operationOptionKeys, "threadId"]
+                      : operationOptionKeys
             return this.#execute(
                 token,
                 {

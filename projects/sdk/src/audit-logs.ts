@@ -1,3 +1,4 @@
+import type { ForumDefaultReaction, ForumTag, GuildThreadChannel } from "./channels.js"
 import type { PaginationQuery } from "./pagination.js"
 import type { User } from "./users.js"
 
@@ -143,13 +144,22 @@ export interface AuditLogPermissionsDiff {
     readonly removed: readonly string[]
 }
 
-/**
- * A JSON value recorded as a setting before or after an audit-log change
+/** A value recorded as a setting before or after an audit-log change.
+ * The forum shapes come from forum and media channel changes: The available_tags key records ForumTag values, and
+ * default_reaction_emoji records a ForumDefaultReaction
  *
  * @category Guilds and members
  */
 export type AuditLogChangeValue =
-    string | number | boolean | null | readonly string[] | readonly number[] | AuditLogPermissionsDiff
+    | string
+    | number
+    | boolean
+    | null
+    | readonly string[]
+    | readonly number[]
+    | AuditLogPermissionsDiff
+    | readonly ForumTag[]
+    | ForumDefaultReaction
 
 /** Before-and-after information for one field recorded by an audit entry.
  * Inspect key to identify the setting, then oldValue and newValue for the recorded values.
@@ -252,9 +262,9 @@ export interface AuditLogWebhook {
     readonly avatarHash?: string | null
 }
 
-/** One filtered page of administrative records, with public user and token-free webhook details used by that page.
+/** One filtered page of administrative records, with public user, token-free webhook and thread details used by that page.
  * Match an entry's userId against users when Fluxer supplied that account. The related resources describe this page only.
- * They do not update the cache or list every community user and webhook
+ * They do not update the cache or list every community user, webhook and thread
  *
  * @category Guilds and members
  */
@@ -265,6 +275,10 @@ export interface AuditLogPage {
     readonly users: readonly User[]
     /** Token-free webhook snapshots referenced by this page */
     readonly webhooks: readonly AuditLogWebhook[]
+    /** Snapshots of the threads that this page's thread actions target and that still exist, without a cache write.
+     * Match an entry's targetId against their IDs. Empty when Fluxer listed none
+     */
+    readonly threads: readonly GuildThreadChannel[]
 }
 
 /**
