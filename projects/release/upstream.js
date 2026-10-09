@@ -699,8 +699,11 @@ function githubHeaders(accept) {
 
 const encodePath = (/** @type {string} */ path) => path.split("/").map(encodeURIComponent).join("/")
 
-/** @type {Source} */
-const githubSource = {
+/**
+ * Reads upstream files through GitHub, also used by the SDK's OpenAPI example generator
+ * @type {Source}
+ */
+export const githubSource = {
     async resolveCommit(repository, branch) {
         const url = `https://api.github.com/repos/${repository}/commits/${encodeURIComponent(branch)}`
         return (await download(url, githubHeaders("application/vnd.github.sha"))).toString("utf8").trim()

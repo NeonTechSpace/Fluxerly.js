@@ -1,0 +1,149 @@
+[
+    {
+        "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+        "property": "type",
+        "values": [10, 11, 12],
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadMappers.ts, mapThreadToResponse, which serializes created and listed threads, maps a thread channel"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [0, 2, 4, 5, 10, 11, 12, 15, 16, 998] },
+        "property": "guild_id",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/ChannelMappers.ts and services/thread/ThreadMappers.ts, every community channel and thread is serialized with the guild_id of its community"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [0, 2, 4, 5, 15, 16, 998] },
+        "property": "name",
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/ChannelMappers.ts, serializeGuildChannelFields sends name as channel.name ?? undefined, so a community channel never has a null name"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [1, 3, 999] },
+        "property": "guild_id",
+        "absent": true,
+        "evidence": "In fluxer_api/src/api/channel/ChannelMappers.ts, the DM, group DM and personal notes serializers send no guild_id"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [1] },
+        "property": "recipients",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/ChannelMappers.ts, addDMRecipients lists the other recipient of every DM"
+    },
+    {
+        "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+        "property": "guild_id",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts, storeThread writes the parent's guild_id on every thread, which ThreadMappers.ts sends"
+    },
+    {
+        "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+        "property": "parent_id",
+        "required": true,
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts, storeThread writes parent_id on every thread, which ThreadMappers.ts always sends"
+    },
+    {
+        "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+        "property": "owner_id",
+        "required": true,
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts, storeThread writes owner_id on every thread, which ThreadMappers.ts always sends"
+    },
+    {
+        "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+        "property": "name",
+        "required": true,
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts, storeThread writes the required thread name, which ThreadMappers.ts always sends"
+    },
+    {
+        "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+        "property": "thread_metadata",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadMappers.ts, mapThreadToResponse always sends thread_metadata"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [10, 11, 12] },
+        "property": "parent_id",
+        "required": true,
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/services/ChannelRequestService.ts, a thread is serialized by mapThreadToResponse, and ThreadCreationService.ts writes parent_id on every thread"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [10, 11, 12] },
+        "property": "owner_id",
+        "required": true,
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/services/ChannelRequestService.ts, a thread is serialized by mapThreadToResponse, and ThreadCreationService.ts writes owner_id on every thread"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [10, 11, 12] },
+        "property": "name",
+        "required": true,
+        "notNull": true,
+        "evidence": "In fluxer_api/src/api/channel/services/ChannelRequestService.ts, a thread is serialized by mapThreadToResponse, and ThreadCreationService.ts writes the required thread name"
+    },
+    {
+        "schema": "ChannelResponse",
+        "when": { "type": [10, 11, 12] },
+        "property": "thread_metadata",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/services/ChannelRequestService.ts, a thread is serialized by mapThreadToResponse, which always sends thread_metadata"
+    },
+    {
+        "schema": "ThreadMetadataResponse",
+        "when": { "type": [12] },
+        "property": "invitable",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadMappers.ts, mapThreadToResponse sends invitable for every private thread"
+    },
+    {
+        "schema": "ThreadMemberResponse",
+        "property": "user_id",
+        "required": true,
+        "evidence": "In fluxer_api/src/api/channel/services/thread/ThreadMappers.ts, mapThreadMemberToResponse sends user_id unless withIds is false, which no caller passes"
+    },
+    {
+        "schema": "GuildMemberResponse",
+        "property": "accent_color",
+        "values": [0, 16777215],
+        "evidence": "In packages/schema/src/domains/guild/GuildRequestSchemas.ts, members set accent_color only as a ColorType from 0 through 16777215"
+    },
+    {
+        "schema": "MessageSearchResultsResponse",
+        "property": "hits_per_page",
+        "values": [1, 25],
+        "evidence": "In fluxer_api/src/api/search/GlobalSearchService.ts, hits_per_page echoes the request, which packages/schema/src/domains/message/MessageRequestSchemas.ts limits to 1 through 25"
+    },
+    {
+        "schema": "MessageSearchResultsResponse",
+        "property": "page",
+        "values": [1, 400],
+        "evidence": "In fluxer_api/src/api/search/GlobalSearchService.ts, page echoes the request, which packages/schema/src/domains/message/MessageRequestSchemas.ts limits to 1 through 400"
+    },
+    {
+        "schema": "GuildMemberSearchResponse",
+        "property": "total_result_count",
+        "values": [0, 9007199254740991],
+        "evidence": "In fluxer_api/src/api/guild/controllers/GuildMemberSearchController.ts, total_result_count is the search engine's hit count, which is never negative"
+    },
+    {
+        "schema": "GuildMemberSearchResult",
+        "property": "discriminator",
+        "values": ["0000", "9999"],
+        "evidence": "In fluxer_api/src/api/search/guild_member/GuildMemberSearchSerializer.ts, the discriminator is padded to four digits"
+    },
+    {
+        "schema": "GuildMemberSearchResult",
+        "property": "joined_at",
+        "values": [0, 9007199254740991],
+        "evidence": "In fluxer_api/src/api/search/guild_member/GuildMemberSearchSerializer.ts, joined_at is stored as whole seconds since the epoch"
+    }
+]
