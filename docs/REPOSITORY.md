@@ -119,6 +119,9 @@ Local networking checks use owned loopback fixtures, not Fluxer credentials or l
 
 Local SDK test runs use half the available threads, at most four, because they share the machine with other work. CI runners use every thread. Test files that start child processes run as a second stage with one worker fewer, so their child processes cannot saturate the host. An explicit `VITEST_MAX_WORKERS` value sets the limit for local investigation without skipping tests or changing their deadlines
 
+The [wire fuzz check](/projects/sdk/tests/client/wire-fuzz.test.ts) sends seeded mutations of valid Fluxer payloads through REST reads and gateway dispatches of both APIs, with a small fixed case count in `pnpm check`.
+For a deeper local run, `FLUXERLY_FUZZ_ITERATIONS` sets the cases per target and API. A failure names its seed, and `FLUXERLY_FUZZ_SEED` with at least as many cases replays it, for example `FLUXERLY_FUZZ_SEED=7 FLUXERLY_FUZZ_ITERATIONS=3000 pnpm exec vitest run tests/client/wire-fuzz.test.ts --maxWorkers=1` from `projects/sdk/`
+
 When changing runtime compatibility, run the packed-consumer check on the SDK manifest's `engines.node` minimum as well as the development runtime.
 Use `pnpm --filter @neontechspace/fluxerly test:package` after building with the development runtime.
 The check reports its actual Node version and uses that executable for its isolated consumers.
