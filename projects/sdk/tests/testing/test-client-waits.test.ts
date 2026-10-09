@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Scope } from "effect"
+import { Cause, Effect, Exit, Scheduler, Scope } from "effect"
 import { describe, expect, onTestFinished, test, vi } from "vitest"
 import { ClientClosedError, type LogRecord } from "../../src/index.js"
 import {
@@ -371,4 +371,51 @@ describe.each(modes)("%s test client waits", (mode) => {
         await driver.idle()
         expect(handled).toEqual(["hello"])
     })
+})
+
+/** A scheduler that holds every task until release, so a fiber started under it cannot run before the test allows it */
+function heldScheduler() {
+    const held: (() => void)[] = []
+    let released = false
+    const scheduler: Scheduler.Scheduler = {
+        executionMode: "async",
+        shouldYield: () => false,
+        makeDispatcher: () => ({
+            scheduleTask: (task) => (released ? setImmediate(task) : held.push(task)),
+            flush: () => undefined,
+        }),
+    }
+    return {
+        scheduler,
+        release: () => {
+            released = true
+            for (const task of held.splice(0)) setImmediate(task)
+        },
+    }
+}
+
+test("native idle waits for received events whose handler has not started yet", async () => {
+    // Native handler work runs on the registering caller's scheduler. Between invocations no handler is running, and
+    // idle settled then although received events still waited, so a test could assert before its handler ran
+    const scope = Scope.makeUnsafe()
+    const held = heldScheduler()
+    onTestFinished(() => {
+        // A failed assertion leaves the handler held, which would keep shutdown waiting for it
+        held.release()
+        return unwrap(Scope.close(scope, Exit.void))
+    })
+    const test = await Effect.runPromise(createNativeTestClient().pipe(Scope.provide(scope)))
+    const handled: string[] = []
+    await Effect.runPromise(
+        test.client
+            .on("messageCreate", (message) => Effect.sync(() => void handled.push(message.content)))
+            .pipe(Effect.provideService(Scheduler.Scheduler, held.scheduler), Scope.provide(scope)),
+    )
+    await unwrap(test.ready())
+    await unwrap(test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "hello" })))
+    await expect(unwrap(test.idle({ timeoutMs: 50 }))).rejects.toBeInstanceOf(TestTimeoutError)
+    expect(handled).toEqual([])
+    held.release()
+    await unwrap(test.idle())
+    expect(handled).toEqual(["hello"])
 })

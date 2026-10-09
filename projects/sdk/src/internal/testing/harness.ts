@@ -28,10 +28,14 @@ const levels: readonly LogThreshold[] = ["trace", "debug", "info", "warn", "erro
 /** Consecutive quiet event loop turns after which idle treats the client as settled */
 const idleTurns = 3
 
-/** The work in progress that idle waits for: The client's diagnostics and its scheduled task runs in progress */
+/**
+ * The work in progress that idle waits for: The client's diagnostics, its scheduled task runs in progress and its
+ * handler invocations, including received events still waiting for a handler that has not started
+ */
 export interface TestClientWork {
     readonly diagnostics: ClientDiagnostics
     readonly runningTasks: number
+    readonly pendingHandlers: number
 }
 
 /**
@@ -212,9 +216,11 @@ export class TestHarness {
             const {
                 diagnostics: { events, rest, gatewayRequests },
                 runningTasks,
+                pendingHandlers,
             } = work()
             return (
                 events.activeHandlers +
+                    pendingHandlers +
                     rest.activeRequests +
                     rest.queuedRequests +
                     gatewayRequests.activeRequests +

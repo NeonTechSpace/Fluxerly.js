@@ -256,9 +256,10 @@ export interface TestClient<M extends MessageCore = Message> {
      */
     failures(): readonly LogRecord[]
     /**
-     * Succeed once the client has settled: No event handler, command or client.schedule task run is running, no REST
-     * request is queued or waiting for its test response, and no new log record, request or gateway command appeared for
-     * a few event loop turns. Run it after emit to assert that the bot did nothing, or before inspecting results.
+     * Succeed once the client has settled: No event handler or command is running or has a received event waiting for
+     * it, no client.schedule task run is running, no REST request is queued or waiting for its test response, and no new
+     * log record, request or gateway command appeared for a few event loop turns. Run it after emit to assert that the
+     * bot did nothing, or before inspecting results.
      * Open waits and collectors do not count as work, and onError hooks are not awaited. A scheduled task waiting for its
      * time does not count either, so advance the clock that drives the client's timers to run it.
      * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
@@ -313,9 +314,17 @@ export function createTestClient<E = never, R = never, const F extends MessageFi
     return openTestClient(options).pipe(Effect.map(({ test }) => test))
 }
 
-/** The client's work in progress that idle and say wait for, including scheduled task runs */
+/** The client's work in progress that idle and say wait for, including scheduled task runs and queued handler events */
 function clientWork(client: { diagnostics(): TestClientWork["diagnostics"] }): () => TestClientWork {
-    return () => ({ diagnostics: client.diagnostics(), runningTasks: clientServices(client)?.tasks.running ?? 0 })
+    return () => {
+        const services = clientServices(client)
+        const handlers = services?.events.drainState()
+        return {
+            diagnostics: client.diagnostics(),
+            runningTasks: services?.tasks.running ?? 0,
+            pendingHandlers: handlers === undefined ? 0 : handlers.running + handlers.waiting,
+        }
+    }
 }
 
 /** Create a native test client together with the harness that createTestBot also drives */
