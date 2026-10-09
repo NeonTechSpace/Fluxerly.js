@@ -566,7 +566,7 @@ test("native command feedback preserves caller context and does not execute reje
     ])
 })
 
-test("quoted parsing splits quoted and escaped arguments and rejects an unterminated quote or trailing escape", () => {
+test("quoted parsing splits quoted and escaped arguments and rejects an unterminated quote or trailing escape with a reason", () => {
     const parsed = commands.parseQuoted({
         message: {} as never,
         prefix: "!",
@@ -577,8 +577,15 @@ test("quoted parsing splits quoted and escaped arguments and rejects an untermin
         rawArgs: 'one "two words" \'three words\' four\\ five ""',
         args: ["one", "two words", "three words", "four five", ""],
     })
-    expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: 'run "unterminated' })).toBeUndefined()
-    expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: "run trailing\\" })).toBeUndefined()
+    const double = commands.parseQuoted({ message: {} as never, prefix: "!", source: 'run "unterminated' })
+    const single = commands.parseQuoted({ message: {} as never, prefix: "!", source: "run 'unterminated" })
+    const escape = commands.parseQuoted({ message: {} as never, prefix: "!", source: "run trailing\\" })
+    // A rejection explains the mistake and has no command to run. Each mistake gets its own explanation
+    for (const rejected of [double, single, escape]) expect(rejected).toEqual({ reason: expect.any(String) })
+    expect(new Set([double, single, escape].map((rejected) => (rejected as { reason: string }).reason)).size).toBe(3)
+    // Text that cannot be a command is still a plain decline, so chat that happens to start with the prefix gets no reason
+    expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: "  " })).toBeUndefined()
+    expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: '"not a name' })).toBeUndefined()
 })
 
 test("default unmatched feedback receives frozen outcomes after dynamic prefix matching without bot or chat noise", async () => {

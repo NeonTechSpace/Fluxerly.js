@@ -14,6 +14,7 @@ import type {
     PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
+    PrefixCommandParseRejection,
     PrefixCommandParsing,
     PrefixCommandRejection,
     PrefixCommandRegistrationOptions,
@@ -261,11 +262,17 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
             ...grouped,
         })
         const parsed = this.#options.parse === undefined ? defaultParse(input) : this.#options.parse(input)
-        if (parsed === undefined)
+        if (parsed === undefined || isParseRejection(parsed)) {
+            const reason = parsed === undefined ? undefined : copyParseRejection(parsed)
             return Object.freeze({
                 prefix,
-                unmatched: Object.freeze({ _tag: "CommandParserRejected", ...grouped }),
+                unmatched: Object.freeze({
+                    _tag: "CommandParserRejected",
+                    ...(reason === undefined ? {} : { reason }),
+                    ...grouped,
+                }),
             })
+        }
         const parse = copyParse(parsed)
         const definition = this.#definitions.get(this.lookupKey(parent, parse.name))
         if (definition === undefined) {
@@ -792,11 +799,17 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
             yield* active()
             const suggestion =
                 resolved.unmatched._tag === "CommandUnknownName" ? resolved.unmatched.suggestion : undefined
+            const detail =
+                resolved.unmatched._tag === "CommandMissingSubcommand"
+                    ? ` (${resolved.unmatched.path.join(" ")})`
+                    : resolved.unmatched._tag === "CommandParserRejected" && resolved.unmatched.reason !== undefined
+                      ? ` (${resolved.unmatched.reason})`
+                      : ""
             adapter.logger?.drop("unmatchedCommands", {
                 level: "debug",
                 category: "commands",
                 code: "commands.unmatched",
-                message: `${unmatchedText[resolved.unmatched._tag]}${resolved.unmatched._tag === "CommandMissingSubcommand" ? ` (${resolved.unmatched.path.join(" ")})` : ""}${suggestion === undefined ? "" : `. The closest command is ${suggestion}`}${adapter.unmatched === undefined ? "" : ". The onUnmatched callback was called"}`,
+                message: `${unmatchedText[resolved.unmatched._tag]}${detail}${suggestion === undefined ? "" : `. The closest command is ${suggestion}`}${adapter.unmatched === undefined ? "" : ". The onUnmatched callback was called"}`,
                 fields: {
                     reason: resolved.unmatched._tag,
                     messageId: message.id,
@@ -1117,6 +1130,19 @@ export function copyCommandGroupPath(value: unknown, field: "command" | "help"):
 /** Exact canonical path comparison, independent of alias matching policy */
 export function sameCommandPath(left: readonly string[], right: readonly string[]): boolean {
     return left.length === right.length && left.every((name, index) => name === right[index])
+}
+
+/** A parser result with a reason and no name, which declines the text with an explanation instead of naming a command */
+function isParseRejection(value: unknown): value is PrefixCommandParseRejection {
+    return typeof value === "object" && value !== null && "reason" in value && !("name" in value)
+}
+
+function copyParseRejection(value: PrefixCommandParseRejection): string {
+    validateObjectShape(value, ["reason"], "parser", "parser rejection")
+    const reason = value.reason
+    if (typeof reason !== "string" || reason.length === 0)
+        throw new ConfigurationError("parser", "A parser rejection must have a nonempty string reason")
+    return reason
 }
 
 function copyParse(value: PrefixCommandParse): PrefixCommandParse {

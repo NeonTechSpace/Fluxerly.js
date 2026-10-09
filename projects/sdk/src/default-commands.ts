@@ -11,6 +11,7 @@ import type {
     PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
+    PrefixCommandParseRejection,
     PrefixCommandRejection,
     PrefixCommandRegistrationOptions,
     PrefixCommandUnmatched,
@@ -219,8 +220,9 @@ export type DefaultPrefixCommandRejectionFeedback<M extends MessageCore = Messag
 export interface DefaultPrefixCommandsOptions<M extends MessageCore = Message> extends PrefixCommandsOptions<M> {
     /**
      * Handle parser declines, unknown names and groups without a subcommand, optionally sending feedback.
-     * An unknown name carries a `suggestion` when a registered name is close.
+     * An unknown name carries a `suggestion` when a registered name is close, and a parser decline carries a `reason` when the parser explained a syntax mistake, such as an unclosed quote from `commands.parseQuoted`.
      * Return normally or a promise that completes the work. The router does not interpret a successful return value or send a response.
+     * The callback runs for every such message and anyone can cause that, so a reply sent from it needs the application's own limit, and in a channel shared with other bots the prefix may belong to a command of another bot.
      * Throws, rejected promises and returned Err results use the attachment's `onError` reporting, without retry.
      * Not called for ignored bots or messages without a matching prefix
      */
@@ -473,10 +475,12 @@ export interface DefaultCommands {
     /**
      * Split a suffix using single or double quotes and backslash escapes, retaining original argument text in `rawArgs`.
      * Use as `create({ prefix: "!", parse: commands.parseQuoted })` to opt in instead of the whitespace-only default.
-     * Returns undefined for empty input, invalid names, unclosed quotes or trailing escapes. Empty quotes produce an empty token.
+     * Returns undefined for empty input or invalid names, and a `PrefixCommandParseRejection` with a fixed `reason` for an unclosed quote or a trailing escape, which `onUnmatched` receives. Empty quotes produce an empty token.
      * Runs synchronously without client or network work
      */
-    parseQuoted<M extends MessageCore = Message>(input: PrefixCommandParseInput<M>): PrefixCommandParse | undefined
+    parseQuoted<M extends MessageCore = Message>(
+        input: PrefixCommandParseInput<M>,
+    ): PrefixCommandParse | PrefixCommandParseRejection | undefined
     /**
      * Create an empty in-memory cooldown store with a default limit of 10,000 keys, to share one store between routers.
      * An optional positive safe integer `maxEntries` changes that limit. A full store makes room rather than refusing a

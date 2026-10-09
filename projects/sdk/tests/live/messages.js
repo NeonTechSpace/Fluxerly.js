@@ -388,7 +388,8 @@ async function verifyOptionalTools(ops, channelId, botId) {
         const malformed = await ops.send({ content: `${prefix}${commandName} "unterminated` })
         await waitForCondition(() => unmatchedReplies.length === 2, "Parser-rejection feedback deadline")
         assert.equal(unmatched[1].messageId, malformed.id)
-        assert.deepEqual(unmatched[1].outcome, { _tag: "CommandParserRejected" })
+        assert.equal(unmatched[1].outcome._tag, "CommandParserRejected")
+        assert.equal(typeof unmatched[1].outcome.reason, "string")
         for (const [index, command] of [unknown, malformed].entries()) {
             const readback = await api("GET", `/channels/${channelId}/messages/${unmatchedReplies[index].id}`)
             assert.equal(readback.status, 200)

@@ -369,6 +369,7 @@ export type {
     PrefixCommandMetadata,
     PrefixCommandParse,
     PrefixCommandParseInput,
+    PrefixCommandParseRejection,
     PrefixCommandPrefix,
     PrefixCommandRejection,
     PrefixCommandUnmatched,

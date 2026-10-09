@@ -561,7 +561,8 @@ export const logCodes = {
     },
     "commands.unmatched": {
         levels: ["debug"],
-        meaning: "A message with the command prefix matched no command. The closest command is in fields.suggestion",
+        meaning:
+            "A message with the command prefix did not run a command. fields.reason holds the cause: an unknown name (the closest command is in fields.suggestion), a group without a subcommand or text the parser rejected, whose explanation the message gives",
     },
     "commands.middlewareStopped": {
         levels: ["debug"],

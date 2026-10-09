@@ -10,6 +10,7 @@ import type {
     PrefixCommandGuardResult,
     PrefixCommandParse,
     PrefixCommandParseInput,
+    PrefixCommandParseRejection,
     PrefixCommandParsing,
     PrefixCommandPrefixValue,
     PrefixCommandRejection,
@@ -225,7 +226,8 @@ export interface NativePrefixCommandsOptions<
     readonly use?: readonly NativePrefixCommandMiddleware<E, R, M>[]
     /**
      * Return an Effect that handles a parser decline, unknown name or group without a subcommand.
-     * An unknown name carries a `suggestion` when a registered name is close.
+     * An unknown name carries a `suggestion` when a registered name is close, and a parser decline carries a `reason` when the parser explained a syntax mistake, such as an unclosed quote from `commands.parseQuoted`.
+     * The Effect runs for every such message and anyone can cause that, so a reply sent from it needs the application's own limit, and in a channel shared with other bots the prefix may belong to a command of another bot.
      * Runs in the attachment's captured Effect context and follows subscription interruption, with its success value discarded.
      * Failures and defects use attachment `onError` reporting, without retry or automatic replies.
      * Not called for ignored bot messages or messages without a matching prefix.
@@ -572,9 +574,11 @@ export interface NativeCommands {
     /**
      * Synchronously split a suffix with single or double quotes and backslash escapes, preserving original argument text in `rawArgs`.
      * Select with `create({ prefix: "!", parse: commands.parseQuoted })`, since the default splits only on whitespace.
-     * Returns undefined for empty input, invalid names, unclosed quotes or trailing escapes. Empty quotes produce an empty token
+     * Returns undefined for empty input or invalid names, and a `PrefixCommandParseRejection` with a fixed `reason` for an unclosed quote or a trailing escape, which `onUnmatched` receives. Empty quotes produce an empty token
      */
-    parseQuoted<M extends MessageCore = Message>(input: PrefixCommandParseInput<M>): PrefixCommandParse | undefined
+    parseQuoted<M extends MessageCore = Message>(
+        input: PrefixCommandParseInput<M>,
+    ): PrefixCommandParse | PrefixCommandParseRejection | undefined
     /**
      * Create a fresh in-memory cooldown store.
      * Defaults to 10,000 retained keys, or the supplied positive safe integer `maxEntries`. A full store makes room rather

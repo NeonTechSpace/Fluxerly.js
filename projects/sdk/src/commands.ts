@@ -146,8 +146,13 @@ export type PrefixCommandUnmatched =
           readonly path?: readonly string[]
       }
     | {
-          /** The parser returned undefined, for example for prefix-only input. No custom-parser rejection reason is inferred */
+          /** The parser returned undefined, for example for prefix-only input, or reported a syntax mistake with a `reason` */
           readonly _tag: "CommandParserRejected"
+          /**
+           * The parser's explanation of the syntax mistake, suitable for a reply, such as the quoted parser's note about a quote that never closes.
+           * Absent when the parser returned undefined, which is also the result for ordinary chat that merely starts with the prefix
+           */
+          readonly reason?: string
           /** Registered parent group names already consumed before the parser declined. Absent at root */
           readonly path?: readonly string[]
       }
@@ -208,17 +213,33 @@ export interface PrefixCommandParse {
 }
 
 /**
+ * A parser result that reports a syntax mistake in text that was meant as a command, such as a quote that never closes.
+ * Return it instead of undefined so `onUnmatched` receives the explanation as `reason` of `CommandParserRejected`.
+ * The router sends nothing by itself, so the application decides whether to turn the reason into a reply.
+ * The router passes the reason on unchanged and logs it at Debug, so keep it fixed text that is safe to show in a channel and leaves the sender's input out.
+ * Return undefined instead when the text is probably not a command, such as ordinary chat that begins with the prefix
+ *
+ * @category Commands
+ */
+export interface PrefixCommandParseRejection {
+    /** Nonempty explanation, such as `A double quote was opened but never closed`. Any other value is reported as a parser failure */
+    readonly reason: string
+}
+
+/**
  * Split arguments while keeping quoted words together, such as `repeat "hello world" 3`.
  * Single and double quotes delimit text, and a backslash escapes the next character inside or outside quotes.
  * Quotes and escapes are removed from `args`, but `rawArgs` retains the text after command-name separator whitespace.
  * Empty quotes produce an empty token, which a text argument descriptor rejects.
- * Returns undefined for empty input, invalid command names, unclosed quotes or a trailing backslash.
+ * Returns undefined for empty input or an invalid command name.
+ * For a quote that never closes or a trailing backslash, it returns a `PrefixCommandParseRejection` with a fixed `reason`, which `onUnmatched` receives.
+ * An apostrophe in plain text opens a quote too, so `say don't` is rejected unless it is escaped as `don\'t`.
  * This synchronous helper does not inspect the message or change the router's whitespace-only default.
  * Use the public `commands.parseQuoted` helper as the router's `parse` option to opt in
  */
 export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
     input: PrefixCommandParseInput<M>,
-): PrefixCommandParse | undefined {
+): PrefixCommandParse | PrefixCommandParseRejection | undefined {
     const source = input.source.trimStart()
     if (source.length === 0) return undefined
     const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(source)
@@ -232,7 +253,7 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
     for (let index = 0; index < rawArgs.length; index += 1) {
         const character = rawArgs[index]!
         if (character === "\\") {
-            if (index + 1 === rawArgs.length) return undefined
+            if (index + 1 === rawArgs.length) return { reason: "A backslash at the end has nothing to escape" }
             current += rawArgs[index + 1]!
             started = true
             index += 1
@@ -253,7 +274,8 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
             started = true
         }
     }
-    if (quote !== undefined) return undefined
+    if (quote !== undefined)
+        return { reason: `A ${quote === '"' ? "double" : "single"} quote was opened but never closed` }
     if (started) args.push(current)
     return { name, rawArgs, args }
 }
@@ -291,10 +313,11 @@ export interface PrefixCommandParsing<M extends MessageCore = Message> {
      * Groups are consumed first using fixed whitespace separators, then this parser runs once on the remaining command text.
      * A custom parser cannot enter another group by returning its name.
      * Return undefined to decline parsing and call optional `onUnmatched` feedback.
+     * Return a `PrefixCommandParseRejection` instead to decline with a `reason` that `onUnmatched` receives, as `commands.parseQuoted` does for an unclosed quote.
      * A group with no following name reports `CommandMissingSubcommand` without calling the parser.
      * Throws and malformed results use the attached subscription's error reporting, with no automatic response or retry
      */
-    readonly parse?: (input: PrefixCommandParseInput<M>) => PrefixCommandParse | undefined
+    readonly parse?: (input: PrefixCommandParseInput<M>) => PrefixCommandParse | PrefixCommandParseRejection | undefined
     /** Skip messages whose author has `isBot` set, before prefix resolution. Defaults to true */
     readonly ignoreBots?: boolean
     /** Require matching letter case for command and group names and aliases. Defaults to false. This does not change prefix or argument matching */

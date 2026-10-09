@@ -47,7 +47,7 @@ Commands keep the order of the object's own string keys. Omit `arguments` to rec
 
 ## Convert arguments before execution
 
-The router converts the words after the command name into typed values before running it. This bot accepts `!greet "Ada Lovelace"` and `!remind 10m Stretch`. The quoted parser treats a quoted name as one argument
+The router converts the words after the command name into typed values before running it. By default it splits the text on whitespace and keeps quote characters, so `!greet "Ada Lovelace"` arrives as the two words `"Ada` and `Lovelace"`. The option `parse: commands.parseQuoted` opts in to quoting: Single or double quotes keep words together and are removed from the argument, and a backslash writes the next character literally. This bot uses it to accept `!greet "Ada Lovelace"` and `!remind 10m Stretch`
 
 ```ts
 import { commands, runBot } from "@neontechspace/fluxerly"
@@ -102,6 +102,44 @@ A `member` argument produces a `{ guildId, userId }` reference in the message's 
 
 </details>
 
+## Reply to messages that do not run a command
+
+A message that starts with the prefix but runs no command is ignored by default. Pass `onUnmatched` to tell the sender why. Its second parameter names the cause in `_tag`:
+
+- `CommandUnknownName` for a name that is not registered. Its `suggestion` names the closest registered command when one is similar
+- `CommandMissingSubcommand` for a group such as `admin` typed without a subcommand. Its `path` names the group
+- `CommandParserRejected` when the parser could not read the text. With `commands.parseQuoted`, its `reason` explains a quote that never closes or a backslash at the end. The `reason` is absent when the text is not a command at all, such as `!` alone
+
+This bot answers a syntax mistake with the parser's own explanation. Without the callback, `!greet "Ada` is ignored
+
+```ts
+import { commands, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        parse: commands.parseQuoted,
+        onUnmatched: ({ reply }, unmatched) => {
+            if (unmatched._tag !== "CommandParserRejected" || unmatched.reason === undefined) return undefined
+            return reply(unmatched.reason)
+        },
+        commands: {
+            greet: {
+                arguments: { name: { type: "text" } },
+                execute: ({ values, reply }) => reply(`Hello, ${values.name}!`),
+            },
+        },
+    },
+})
+```
+
+The router never replies to these messages by itself. The callback runs for every one of them and anyone can cause that, so an application that replies should limit how often. A channel may also hold other bots with the same prefix, so reply to an unknown name or a syntax mistake only when this bot should answer for that prefix. A custom `parse` function can give its own explanation by returning `{ reason: "Separate the words with spaces" }` instead of `undefined`. The reason reaches `onUnmatched` unchanged, so it should be fixed text that leaves the sender's input out
+
+An apostrophe in plain text opens a quote for `commands.parseQuoted`, so `!say don't` is rejected as an unclosed single quote. Write `don\'t` or use double quotes around the text
+
+Each unmatched message is also logged at Debug with the code `commands.unmatched` and the fields `reason`, `messageId`, `channelId` and, when there is one, `suggestion`. The `reason` field holds the `_tag`, and for a rejected parse the log message ends with the parser's explanation
+
 ## Guard, limit and wrap commands
 
 A [guard](/docs/{{version}}/glossary/#guard) decides whether a matched command may run. A [cooldown](/docs/{{version}}/glossary/#cooldown) limits how often each user, channel or community can run it. [Middleware](/docs/{{version}}/glossary/#middleware) wraps every command, for example to measure how long it takes
@@ -134,8 +172,7 @@ await runBot({
 })
 ```
 
-Here `!purge` runs only in a community, for a member with the Manage Messages permission, and at most once every 30 seconds in each channel. With `mentionPrefix`, a mention of the bot also works as a prefix. An unknown command name is ignored unless `onUnmatched` handles it, and its `suggestion` names the closest registered command when one is similar.
-Each unmatched message is logged at Debug with the code `commands.unmatched` and the fields `reason`, `messageId`, `channelId` and, when there is one, `suggestion`
+Here `!purge` runs only in a community, for a member with the Manage Messages permission, and at most once every 30 seconds in each channel. With `mentionPrefix`, a mention of the bot also works as a prefix
 
 Only messages a person typed can run commands. Messages from bots are skipped by default, and the notices Fluxer posts with text of its own never run commands. For example, a thread named `!ping` makes Fluxer post a notice containing that name, and it does not run `!ping`
 
