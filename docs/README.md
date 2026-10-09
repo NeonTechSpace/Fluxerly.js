@@ -29,6 +29,19 @@
 >
 > Issues and pull requests are maintainer-only until the first Stable release. The [contribution guide](/CONTRIBUTING.md) and submission templates are prepared for that release, without opening public access now
 
+## Why Fluxerly was built
+
+I write software both as my job and for the love of it. I had wanted to build my own bot SDK for a while, and at some point I stopped playing with the thought and started doing it
+
+Over the years, software I used and libraries I built on kept changing under me. Sooner or later an update lowered the quality or the work slowed down, and I paid for it along with everyone else who used them
+
+I wanted something for myself that I know I can rely on. With the knowledge to build it, it felt like the right moment to start realizing my dreams
+
+Since AI has made code cheap and I strive for quality, I chose to make it usable for everybody. So Fluxerly is a Fluxer-native SDK instead of a Discord-compatible layer. It follows modern developer standards and is made for developers of every size, whether you code with or without AI
+
+**Neonsy**<br>
+NeonTechSpace
+
 ## What Fluxerly includes
 
 Fluxerly is built for developers at every skill level, from a first bot in one file to large bots that need full control
