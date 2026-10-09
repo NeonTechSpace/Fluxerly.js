@@ -134,7 +134,9 @@ export interface GatewaySessionOptions<M extends MessageCore> {
     /** Lend the paced gateway.send path to the client once ready, and withdraw it when the session ends */
     readonly application?:
         | {
-              readonly attach: (submit: (op: number, d: unknown) => Effect.Effect<void, SubmitFailure>) => void
+              readonly attach: (
+                  submit: (op: number, d: unknown, sent?: () => void) => Effect.Effect<void, SubmitFailure>,
+              ) => void
               readonly detach: () => void
           }
         | undefined

@@ -186,6 +186,8 @@ Unknown keys in supervisor creation, assignment, restart, Identify and child-run
 
 To resume sessions across a deploy, give each child the [session store](/docs/{{version}}/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` is the only sharding setting a child accepts
 
+The SDK limits member requests for each client separately. Fluxer accepts 12 member requests per bot account in 10 seconds across all processes and drops the rest without an answer, so a dropped request ends with reason `timeout` after its deadline. When several children request members, keep their combined rate under that limit
+
 <details>
 <summary>Choose the plan yourself</summary>
 

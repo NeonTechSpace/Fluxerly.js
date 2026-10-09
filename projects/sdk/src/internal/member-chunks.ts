@@ -1,5 +1,8 @@
 /**
  * Member chunk streams: One active guild member request per client with bounded unread batches.
+ * Admission: Fluxer silently discards member requests past 12 per account in a rolling 10-second window, so the client
+ * refuses a request that would be its 13th sent in the last 11 seconds instead of letting it time out. Only requests that
+ * reached the socket count. Separate processes and other accounts' requests in a busy community are not tracked.
  * Invariant: A stream fails only for a connection gap on its shard or client closure, releases local intake on failure, and
  * publishes no cache or event data. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
@@ -23,6 +26,11 @@ import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
+
+/** Member requests Fluxer accepts per account in its rolling 10-second window */
+const memberRequestLimit = 12
+/** Fluxer's window plus one second, so network and processing delay cannot leave Fluxer counting a request the client has stopped counting */
+const memberRequestWindowMs = 11_000
 
 interface Settings {
     readonly guildId: string
@@ -386,7 +394,11 @@ export class MemberChunkSource {
     }
 }
 
-type Sender = (payload: Readonly<Record<string, unknown>>, nonce: string) => InternalSubmission
+type Sender = (
+    payload: Readonly<Record<string, unknown>>,
+    nonce: string,
+    settled?: (sent: boolean) => void,
+) => InternalSubmission
 
 /** One admitted member stream per connection, sharing four local slots with count requests */
 export class MemberChunkOwner {
@@ -394,6 +406,11 @@ export class MemberChunkOwner {
     #active: MemberChunkSource | undefined
     #activeShard: number | undefined
     #closed = false
+    /**
+     * Times this client's member requests reached a socket, oldest first. Each append keeps only the latest
+     * memberRequestLimit within memberRequestWindowMs, the only ones that decide admission, and admission prunes again
+     */
+    #sentAt: number[] = []
 
     constructor(
         private readonly budget: GatewayRequestBudget,
@@ -421,6 +438,13 @@ export class MemberChunkOwner {
     receive(value: unknown, bytes: number) {
         if (record(value) && typeof value.nonce === "string" && value.nonce === this.#active?.nonce)
             this.#active.receive(value, bytes)
+    }
+    /** Count a member request handed to a socket, by this owner or by gateway.send, which Fluxer limits together */
+    countSent() {
+        const now = this.logical.now()
+        this.#sentAt.push(now)
+        while (this.#sentAt.length > memberRequestLimit || this.#sentAt[0]! <= now - memberRequestWindowMs)
+            this.#sentAt.shift()
     }
     rateLimited(value: unknown) {
         if (
@@ -450,6 +474,15 @@ export class MemberChunkOwner {
             const sender = shardId === undefined ? undefined : this.#senders.get(shardId)
             if (!sender) return yield* Effect.fail(new MemberChunkError({ reason: "notConnected" }))
             if (this.#active) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
+            const now = this.logical.now()
+            while (this.#sentAt.length > 0 && this.#sentAt[0]! <= now - memberRequestWindowMs) this.#sentAt.shift()
+            if (this.#sentAt.length >= memberRequestLimit)
+                return yield* Effect.fail(
+                    new MemberChunkError({
+                        reason: "rateLimit",
+                        retryAfterMs: Math.max(1, Math.ceil(this.#sentAt[0]! + memberRequestWindowMs - now)),
+                    }),
+                )
             const release = this.budget.acquire()
             if (!release) return yield* Effect.fail(new MemberChunkError({ reason: "busy" }))
             let source: MemberChunkSource | undefined
@@ -467,7 +500,10 @@ export class MemberChunkOwner {
                 this.#active = source
                 this.#activeShard = shardId
                 source.start()
-                const submission = sender(config.payload, source.nonce)
+                // A request withdrawn before transmission never reaches Fluxer, so only a sent one counts
+                const submission = sender(config.payload, source.nonce, (sent) => {
+                    if (sent) this.countSent()
+                })
                 if (typeof submission === "string") {
                     const error = new MemberChunkError({ reason: submission === "busy" ? "busy" : "connectionLost" })
                     source.fail(error)

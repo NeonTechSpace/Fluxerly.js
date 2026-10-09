@@ -101,8 +101,11 @@ export type PacedSend = (op: number, d: unknown, settled?: (sent: boolean) => vo
 export interface CommandPacer {
     /** Send now or queue within the bounded internal budget. The owner may withdraw or replace unsent work */
     readonly send: PacedSend
-    /** Queue one gateway.send command. Succeeds once the socket took the frame. Interruption withdraws an unsent command */
-    readonly submit: (op: number, d: unknown) => Effect.Effect<void, SubmitFailure>
+    /**
+     * Queue one gateway.send command. Succeeds once the socket took the frame, and calls sent at that moment, even if
+     * the caller is interrupted before it resumes. Interruption withdraws an unsent command
+     */
+    readonly submit: (op: number, d: unknown, sent?: () => void) => Effect.Effect<void, SubmitFailure>
     /** Background loop that sends queued commands as the rolling budget frees. Fork it in the session scope */
     readonly run: Effect.Effect<never>
     /** Stop accepting commands and abandon queued ones, failing waiting submissions with closed */
@@ -216,7 +219,7 @@ export function commandPacer(options: {
                 },
             }
         },
-        submit: (op, d) =>
+        submit: (op, d, sent) =>
             Effect.suspend(() => {
                 if (closed) return Effect.fail("closed" as const)
                 if (pendingApplication >= maxPendingApplicationCommands) return Effect.fail("busy" as const)
@@ -224,7 +227,10 @@ export function commandPacer(options: {
                 const item: PendingCommand = {
                     op,
                     d,
-                    settled: (sent) => Deferred.doneUnsafe(done, Effect.succeed(sent)),
+                    settled: (taken) => {
+                        if (taken) sent?.()
+                        Deferred.doneUnsafe(done, Effect.succeed(taken))
+                    },
                     application: true,
                     pending: true,
                 }
@@ -268,7 +274,11 @@ export interface GatewayCommands {
         settled?: (sent: boolean) => void,
     ) => InternalSubmission
     readonly guildCounts: (guildIds: readonly string[], nonce: string) => InternalSubmission
-    readonly memberChunks: (payload: Readonly<Record<string, unknown>>, nonce: string) => InternalSubmission
+    readonly memberChunks: (
+        payload: Readonly<Record<string, unknown>>,
+        nonce: string,
+        settled?: (sent: boolean) => void,
+    ) => InternalSubmission
     readonly channelMemberCounts: (guildId: string, channelIds: readonly string[], nonce: string) => InternalSubmission
 }
 
@@ -311,7 +321,7 @@ export function gatewayCommands(
         presence: (update, settled) => paced(Opcode.presenceUpdate, update, settled),
         memberSubscriptions: (subscriptions, settled) => paced(Opcode.memberSubscriptions, subscriptions, settled),
         guildCounts: (guildIds, nonce) => paced(Opcode.requestGuildCounts, { guild_ids: guildIds, nonce }),
-        memberChunks: (payload, nonce) => paced(Opcode.requestGuildMembers, { ...payload, nonce }),
+        memberChunks: (payload, nonce, settled) => paced(Opcode.requestGuildMembers, { ...payload, nonce }, settled),
         channelMemberCounts: (guildId, channelIds, nonce) =>
             paced(Opcode.requestChannelMemberCounts, { guild_id: guildId, channel_ids: channelIds, nonce }),
     }

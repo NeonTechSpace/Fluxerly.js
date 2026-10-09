@@ -81,6 +81,7 @@ export interface MemberChunk {
 /** Set how long a member stream can run and how many unread bytes it can hold.
  * The SDK checks and copies these settings when consumption starts, not when the iterator or native Stream is created.
  * One client admits one member stream across its local shards, sharing four request slots with count calls.
+ * It sends at most 12 member requests in any 11 seconds, keeping under Fluxer's limit of 12 per account in 10 seconds.
  * Ending the stream early releases the SDK's local request slot but cannot stop work Fluxer has already started
  *
  * @category Guilds and members
@@ -123,18 +124,21 @@ export class MemberChunkError extends FluxerlyError {
      * The reason busy means a member stream is already running, shared request capacity is full, or the shard's internal command queue is full.
      * The reason response means malformed or out-of-order batches, and overflow means the unread byte budget was exceeded.
      * The reason timeout means the complete response missed its deadline, and connectionLost means its shard lost the connection.
-     * The reason rateLimit means Fluxer confirmed a request rate limit
+     * The reason rateLimit means the request is over a Fluxer member request limit.
+     * Either Fluxer refused a repeated full-list request, or this client already sent 12 member requests in the last 11 seconds and the SDK did not send this one
      */
     readonly reason:
         "input" | "notConnected" | "busy" | "response" | "overflow" | "timeout" | "connectionLost" | "rateLimit"
-    /** Fluxer's confirmed retry delay in milliseconds for rateLimit, otherwise null. The SDK never retries automatically */
+    /** Milliseconds to wait before the next member request for rateLimit, otherwise null.
+     * It comes from Fluxer's answer or from the SDK's count of this client's recent requests. The SDK never retries automatically
+     */
     readonly retryAfterMs: number | null
 
     /** Describe a member-stream failure. Construction sends no request and does not stop or resend a stream */
     constructor(options: {
         /** Failure category, as described on the reason field */
         readonly reason: MemberChunkError["reason"]
-        /** Fluxer's confirmed retry delay in milliseconds for rateLimit. Defaults to null */
+        /** Milliseconds to wait before the next member request for rateLimit. Defaults to null */
         readonly retryAfterMs?: number | null | undefined
         /** Safe local input detail. It never retains rejected values, credentials, or Fluxer data, and names an unsupported key only when it looks like a field name. Defaults to null */
         readonly inputValidation?: InputValidationDetail | null | undefined
@@ -148,19 +152,29 @@ export class MemberChunkError extends FluxerlyError {
                 operation: "request",
                 reason,
                 outcome: reason === "input" ? "notDispatched" : "unknown",
-                inputExplanation: inputValidation?.explanation ?? null,
+                // The general rateLimit text says Fluxer refused the request, which is untrue when the SDK withheld it
+                inputExplanation:
+                    inputValidation?.explanation ??
+                    (reason === "rateLimit"
+                        ? "The request is over a Fluxer limit on how often members can be requested"
+                        : null),
                 retryAfterMs,
                 facts: { read: true },
             }),
             {
                 code: `memberChunks.${reason}`,
-                hint: operationFailureHint({
-                    reason,
-                    outcome: reason === "input" ? "notDispatched" : "unknown",
-                    retryAfterMs,
-                    read: true,
-                    inputPath: inputValidation?.path ?? null,
-                }),
+                hint:
+                    reason === "rateLimit"
+                        ? retryAfterMs === null
+                            ? "Wait before requesting members again"
+                            : `Wait at least ${retryAfterMs} ms before requesting members again`
+                        : operationFailureHint({
+                              reason,
+                              outcome: reason === "input" ? "notDispatched" : "unknown",
+                              retryAfterMs,
+                              read: true,
+                              inputPath: inputValidation?.path ?? null,
+                          }),
                 cause: options.cause,
                 details: operationDetails({ reason, retryAfterMs }),
             },

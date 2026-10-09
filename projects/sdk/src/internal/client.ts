@@ -37,7 +37,7 @@ import {
 import { guildList } from "./guild-lifecycle.js"
 import type { IdentifyFields } from "./gateway/commands.js"
 import { automaticIgnoredEvents, suppressedRegistrations } from "./gateway/event-dispatches.js"
-import { maxClientPayloadBytes, reservedClientOpcodes } from "./protocol/gateway.js"
+import { maxClientPayloadBytes, Opcode, reservedClientOpcodes } from "./protocol/gateway.js"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { replyInput, snapshotReference } from "./message.js"
 import { identifier, record } from "./decode/primitives.js"
@@ -1221,7 +1221,10 @@ export class ClientOwner<M extends MessageCore = Message> {
             if (!shard) return Effect.fail(new GatewaySendError({ reason: "notOwned", shardId, opcode: op }))
             if (shard.state !== "Connected" || shard.submit === undefined)
                 return Effect.fail(new GatewaySendError({ reason: "notReady", shardId, opcode: op }))
-            return shard.submit(op, JSON.parse(encoded)).pipe(
+            // Fluxer limits raw member requests together with members.iterateChunks, so one counts there too, from the
+            // moment the socket takes it, because a caller interrupted before it resumes cannot withdraw a sent frame
+            const sent = op === Opcode.requestGuildMembers ? () => this.memberChunks.countSent() : undefined
+            return shard.submit(op, JSON.parse(encoded), sent).pipe(
                 Effect.mapError(
                     (reason) =>
                         new GatewaySendError({

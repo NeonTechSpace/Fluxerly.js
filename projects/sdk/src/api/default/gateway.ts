@@ -23,6 +23,8 @@ export interface GatewayCommands {
      * Heartbeats, Identify and Resume are never delayed. At most 500 gateway.send commands may wait per shard, and
      * further submissions fail with reason busy until transmission or cancellation releases queue capacity.
      * Completion means the frame was handed to the connection, not that Fluxer received or accepted it.
+     * A sent Request Guild Members command, opcode 8, counts toward the 12 member requests that members.iterateChunks
+     * allows this client in any 11 seconds, but this method never refuses one for that limit.
      * Fluxer answers an opcode it does not define, missing data or invalid command fields with close code 4001 or 4002.
      * The SDK treats both as permanent, so the client ends. Data must match Fluxer's command schema exactly.
      * Observe any reply through the raw event, which receives every dispatch the session accepts.

@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import type { Client } from "../../src/index.js"
 import type { Client as NativeClient } from "../../src/effect.js"
 import { Opcode } from "../../src/internal/protocol/gateway.js"
-import { describeBothApis, setup } from "../support/both-apis.js"
+import { describeBothApis, setup, type FixtureClientOptions } from "../support/both-apis.js"
 import { outcome, sdkClock } from "../support/client-clock.js"
 import { startGatewayServer } from "../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
@@ -17,11 +17,11 @@ afterEach(() => {
 
 type AnyClient = Client | NativeClient
 
-async function connected(mode: "default" | "native") {
+async function connected(mode: "default" | "native", options?: FixtureClientOptions) {
     const clock = sdkClock()
     const server = await startGatewayServer({ heartbeatIntervalMs: 600_000 })
     stubFetchWithHostedDiscovery(async () => Response.json({}))
-    const client = await setup(mode)
+    const client = await setup(mode, options)
     await settle((client as Client).connect())
     return { clock, server, client }
 }
@@ -173,33 +173,36 @@ describeBothApis("public gateway command queue", (mode) => {
         }
     }
 
+    /** Start one member stream and settle its first pull into a value, typed error or interruption */
+    function memberStream(
+        client: AnyClient,
+        timeoutMs: number,
+    ): { result: Promise<unknown>; cancel: () => Promise<void> } {
+        if (mode === "default") {
+            const abort = new AbortController()
+            const iterator = (client as Client).members
+                .iterateChunks("40", { all: true }, { timeoutMs, signal: abort.signal })
+                [Symbol.asyncIterator]()
+            return {
+                result: iterator
+                    .next()
+                    .then((entry) =>
+                        !entry.done && entry.value.isErr() ? { error: entry.value.error } : { value: entry },
+                    ),
+                cancel: async () => abort.abort(),
+            }
+        }
+        return launch(
+            Stream.runDrain((client as NativeClient).members.iterateChunks("40", { all: true }, { timeoutMs })),
+            new AbortController(),
+        )
+    }
+
     for (const ending of ["cancellation", "deadline"] as const) {
         test(`withdraws unsent member chunk commands after ${ending}`, async () => {
             const { clock, server, client } = await connected(mode)
             await saturate(client, server)
-            let result: Promise<unknown>
-            let cancel: () => Promise<void>
-            if (mode === "default") {
-                const abort = new AbortController()
-                const iterator = (client as Client).members
-                    .iterateChunks("40", { all: true }, { timeoutMs: 1_000, signal: abort.signal })
-                    [Symbol.asyncIterator]()
-                result = iterator
-                    .next()
-                    .then((entry) =>
-                        !entry.done && entry.value.isErr() ? { error: entry.value.error } : { value: entry },
-                    )
-                cancel = async () => abort.abort()
-            } else {
-                const started = launch(
-                    Stream.runDrain(
-                        (client as NativeClient).members.iterateChunks("40", { all: true }, { timeoutMs: 1_000 }),
-                    ),
-                    new AbortController(),
-                )
-                result = started.result
-                cancel = started.cancel
-            }
+            const { result, cancel } = memberStream(client, 1_000)
             await clock.waiting(60_000)
             if (ending === "cancellation") await cancel()
             else await clock.advance(1_000)
@@ -215,6 +218,67 @@ describeBothApis("public gateway command queue", (mode) => {
             expect(server.commandsWithOp(Opcode.requestGuildMembers)).toEqual([])
         })
     }
+
+    test("counts only member requests that reached the socket toward Fluxer's member request limit", async () => {
+        // Catches: Counting requests withdrawn before Fluxer saw them refused the 13th with rateLimit although none was sent
+        const { clock, server, client } = await connected(mode)
+        await saturate(client, server)
+        for (let index = 0; index < 13; index++) {
+            const { result } = memberStream(client, 100)
+            // A timeout proves the stream was admitted and queued, and expiry withdraws its unsent request.
+            // A refused stream settles at once rather than starting its deadline
+            await Promise.race([result, clock.waiting(100)])
+            await clock.advance(100)
+            expect(await result).toMatchObject({ error: { _tag: "MemberChunkError", reason: "timeout" } })
+        }
+        await clock.advance(60_000)
+        await drained(client, server)
+        expect(server.commandsWithOp(Opcode.requestGuildMembers)).toEqual([])
+    })
+
+    test("counts a raw member request cancelled after the socket took it toward Fluxer's member request limit", async () => {
+        // Catches: A raw member request from gateway.send was counted only once its caller resumed, so a send cancelled
+        // between transmission and that resumption went uncounted and a later member stream past Fluxer's limit was sent
+        const cancels: (() => unknown)[] = []
+        const { clock, server, client } = await connected(mode, {
+            logging: {
+                categories: { gateway: "debug" },
+                // Cancel each raw member request at the moment the socket took it, before its caller resumes
+                sink: (record) => {
+                    if (record.code === "gateway.commandSent" && record.fields?.opcode === Opcode.requestGuildMembers)
+                        void cancels.shift()?.()
+                },
+            },
+        })
+        await saturate(client, server)
+        const sends = Array.from({ length: 12 }, (_, index) => {
+            const abort = new AbortController()
+            const data = { guild_id: "40", query: "", limit: 0, nonce: `raw${index}` }
+            const send = launch<unknown, unknown>(
+                (client as Client).gateway.send(
+                    0,
+                    Opcode.requestGuildMembers,
+                    data,
+                    mode === "default" ? { signal: abort.signal } : undefined,
+                ),
+                abort,
+            )
+            cancels.push(send.cancel)
+            return send.result
+        })
+        await clock.waiting(60_000)
+        await clock.advance(60_000)
+        for (const result of await Promise.all(sends))
+            expect(result).toMatchObject(
+                mode === "default" ? { error: { _tag: "CancelledError" } } : { interrupted: true },
+            )
+        expect(server.commandsWithOp(Opcode.requestGuildMembers)).toHaveLength(12)
+        const { result } = memberStream(client, 100)
+        // A refused stream settles at once, and an admitted one starts its deadline instead
+        await Promise.race([result, clock.waiting(100)])
+        await clock.advance(100)
+        expect(await result).toMatchObject({ error: { _tag: "MemberChunkError", reason: "rateLimit" } })
+    })
 
     test("withdraws a cleared member presence selection before it reaches the socket", async () => {
         const { clock, server, client } = await connected(mode)

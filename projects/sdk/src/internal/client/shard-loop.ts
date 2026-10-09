@@ -57,7 +57,7 @@ export interface ShardRuntime {
     recovery: { phase: "startup" | "recovery"; attempt: number; retryDelayMs: number | null } | null
     session: Session
     /** Paced gateway.send path of the current ready session, or undefined while the shard is not ready */
-    submit: ((op: number, d: unknown) => Effect.Effect<void, SubmitFailure>) | undefined
+    submit: ((op: number, d: unknown, sent?: () => void) => Effect.Effect<void, SubmitFailure>) | undefined
     /** Gateway URL this shard's sessions use, known after discovery and recorded in saved session snapshots */
     gatewayUrl: string | undefined
 }

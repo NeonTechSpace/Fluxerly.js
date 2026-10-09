@@ -9,6 +9,7 @@ import {
 } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { sdkClock } from "../../support/client-clock.js"
 import { monotonicClock, waitUntil } from "../../support/clock.js"
 import { startHostedLoopback } from "../../support/instance.js"
 import { wsTarget } from "../../support/ws-redirect.js"
@@ -492,6 +493,91 @@ for (const mode of modes) {
         f.dispatch("RATE_LIMITED", { opcode: 8, retry_after: 1.25, meta: { guild_id: "20", nonce: fresh.nonce } })
         expect(await outcome).toMatchObject({ reason: "rateLimit", retryAfterMs: 1_250 })
         expect(f.requestCount()).toBe(2)
+    })
+
+    test(`${mode} refuses a 13th member request in Fluxer's window at once instead of sending one Fluxer drops`, async () => {
+        // Catches: Fluxer silently discards member requests past 12 per account in 10 seconds, so a 13th request sent
+        // anyway waited out its whole timeout and failed with reason timeout
+        const clock = sdkClock()
+        const f = await fixture(mode)
+        let sent = 0
+        const lookup = async () => {
+            const next = f.iterate({ userIds: ["30"] }).next()
+            f.chunk((await f.request(++sent)).nonce)
+            expect((await next).value!.members[0]!.userId).toBe("30")
+        }
+        // A request that reaches the server instead of being refused would wait for an answer that never comes
+        const refusal = () =>
+            Promise.race([
+                f
+                    .iterate({ userIds: ["30"] })
+                    .next()
+                    .catch((error: unknown) => error),
+                f.request(sent + 1).then(() => "sent to Fluxer"),
+            ])
+        await lookup()
+        await clock.advance(5_000)
+        for (let index = 0; index < 11; index++) await lookup()
+        expect(await refusal()).toMatchObject({
+            _tag: "MemberChunkError",
+            reason: "rateLimit",
+            code: "memberChunks.rateLimit",
+            retryAfterMs: 6_000,
+        })
+        // The window rolls: Only the oldest request's slot frees, 11 seconds after it was sent
+        await clock.advance(5_999)
+        expect(await refusal()).toMatchObject({ reason: "rateLimit", retryAfterMs: 1 })
+        await clock.advance(1)
+        await lookup()
+        expect(await refusal()).toMatchObject({ reason: "rateLimit", retryAfterMs: 5_000 })
+        expect(f.requestCount()).toBe(13)
+    })
+
+    test(`${mode} counts member requests sent through gateway.send toward the same window`, async () => {
+        // Catches: Raw Request Guild Members commands bypassed the count, so a later iterateChunks request past Fluxer's
+        // limit was sent anyway and waited out its whole timeout
+        sdkClock()
+        const f = await fixture(mode)
+        for (let index = 0; index < 12; index++) {
+            const data = { guild_id: "20", query: "", limit: 0, nonce: `raw${index}` }
+            if (f.defaultApi) expect((await f.defaultApi.gateway.send(0, 8, data)).isOk()).toBe(true)
+            else await Effect.runPromise(f.native!.gateway.send(0, 8, data))
+        }
+        await f.request(12)
+        const refusal = await Promise.race([
+            f
+                .iterate({ userIds: ["30"] })
+                .next()
+                .catch((error: unknown) => error),
+            f.request(13).then(() => "sent to Fluxer"),
+        ])
+        expect(refusal).toMatchObject({ reason: "rateLimit", retryAfterMs: 11_000 })
+        expect(f.requestCount()).toBe(12)
+    })
+
+    test(`${mode} waits for the 12th latest of more than 12 raw member requests, not the oldest`, async () => {
+        // Catches: Raw sends were kept unpruned, so with 13 in the window a refusal reported the wait until the oldest
+        // left, and a request retried after that wait still found 12 in the window
+        const clock = sdkClock()
+        const f = await fixture(mode)
+        const raw = async (index: number) => {
+            const data = { guild_id: "20", query: "", limit: 0, nonce: `raw${index}` }
+            if (f.defaultApi) expect((await f.defaultApi.gateway.send(0, 8, data)).isOk()).toBe(true)
+            else await Effect.runPromise(f.native!.gateway.send(0, 8, data))
+        }
+        await raw(0)
+        await clock.advance(1_000)
+        for (let index = 1; index <= 12; index++) await raw(index)
+        await f.request(13)
+        const refusal = await Promise.race([
+            f
+                .iterate({ userIds: ["30"] })
+                .next()
+                .catch((error: unknown) => error),
+            f.request(14).then(() => "sent to Fluxer"),
+        ])
+        expect(refusal).toMatchObject({ reason: "rateLimit", retryAfterMs: 11_000 })
+        expect(f.requestCount()).toBe(13)
     })
 
     test(`${mode} rejects an incomplete response on deadline, cancellation, gap and closure without resend`, async () => {
