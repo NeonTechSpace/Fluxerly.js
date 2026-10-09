@@ -524,6 +524,11 @@ try {
                     template !== "js",
                     "Only the TypeScript starters' next steps install the Node.js types",
                 )
+                assert.equal(
+                    initOutput.includes("typescript@7"),
+                    template !== "js",
+                    "Only the TypeScript starters' next steps install TypeScript",
+                )
                 assert.throws(
                     () => run(process.execPath, [cli, ...initArguments], starter, 120_000, initEnvironment),
                     (error) => error.status === 1 && /already exist.*wrote nothing/.test(error.stderr),
@@ -534,19 +539,22 @@ try {
                 if (template === "effect") dependencies.push(`effect@${effectVersion}`)
                 packageManager(["add", ...dependencies, "--prefer-offline", "--ignore-scripts"], starter)
                 if (template !== "js") {
-                    // The pinned SDK types keep this check reproducible where the printed step takes the latest
+                    // The pinned SDK types and compiler keep this check reproducible where the printed step takes
+                    // the latest
                     packageManager(
                         [
                             "add",
                             "--save-dev",
                             `@types/node@${manifest.devDependencies["@types/node"]}`,
+                            `typescript@${manifest.devDependencies.typescript}`,
                             "--prefer-offline",
                             "--ignore-scripts",
                         ],
                         starter,
                     )
-                    // The editor's check of the generated tsconfig.json passes without changes
-                    run(process.execPath, [compiler, "-p", "tsconfig.json"], starter)
+                    // The generated check script runs the compiler on the generated tsconfig.json and passes without
+                    // changes
+                    packageManager(["run", "check"], starter)
                 }
                 // node --test passes when it finds no test file, so the report must show the generated test passing
                 assert.match(packageManager(["test"], starter), /^(?:#|ℹ) pass 1$/m)

@@ -11,7 +11,13 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { emitKeypressEvents, type Key } from "node:readline"
 import { createInterface } from "node:readline/promises"
-import { StarterConflictError, starterTemplates, writeStarterProject, type StarterTemplate } from "./starter-project.js"
+import {
+    StarterConflictError,
+    starterTemplates,
+    writeStarterProject,
+    type StarterResult,
+    type StarterTemplate,
+} from "./starter-project.js"
 
 /** The streams init talks through. Their isTTY flags decide whether it asks, and raw mode decides how */
 interface InitStreams {
@@ -159,17 +165,21 @@ export function detectPackageManager(userAgent: string | undefined): PackageMana
     return name === "pnpm" || name === "bun" ? name : "npm"
 }
 
+// The test and start scripts have a short form in every manager, while any other script needs the run command
 const managers = {
-    npm: { add: "install", exact: "--save-exact", dev: "--save-dev", run: "npm" },
-    pnpm: { add: "add", exact: "--save-exact", dev: "--save-dev", run: "pnpm" },
+    npm: { add: "install", exact: "--save-exact", dev: "--save-dev", run: "npm", check: "npm run check" },
+    pnpm: { add: "add", exact: "--save-exact", dev: "--save-dev", run: "pnpm", check: "pnpm run check" },
     // bun test is Bun's own test runner, so the package's scripts run through bun run
-    bun: { add: "add", exact: "--exact", dev: "--dev", run: "bun run" },
+    bun: { add: "add", exact: "--exact", dev: "--dev", run: "bun run", check: "bun run check" },
 }
 const installed = {
     js: "the SDK",
-    ts: "the SDK and the Node.js types",
-    effect: "the SDK, Effect and the Node.js types",
+    ts: "the SDK, TypeScript and the Node.js types",
+    effect: "the SDK, Effect, TypeScript and the Node.js types",
 }
+
+// Where the token and the invite are explained, under the address that the SDK's other documentation links use
+const createBotGuide = "https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/"
 
 /** The SDK release that init installs, read from its own package.json */
 interface SdkRelease {
@@ -190,10 +200,11 @@ function installCommands(
     // The lowest Effect release in the SDK's peer range, which the documentation recommends and the SDK is tested
     // against
     const effect = [manager, add, `effect@${peerDependencies.effect.replace(/^\^/, "")}`]
-    // The editor and TypeScript read the SDK's types, which use the Node.js types
-    const nodeTypes = [manager, add, dev, "@types/node"]
+    // The check script runs TypeScript 7, the version that the SDK documents as required, and the SDK's types use the
+    // Node.js types
+    const typeTools = [manager, add, dev, "@types/node", "typescript@7"]
     if (template === "js") return [sdk]
-    return template === "ts" ? [sdk, nodeTypes] : [sdk, effect, nodeTypes]
+    return template === "ts" ? [sdk, typeTools] : [sdk, effect, typeTools]
 }
 
 /** Runs a command in `cwd` with the terminal's standard streams, and resolves whether it ran and succeeded */
@@ -224,13 +235,14 @@ export interface InitEnvironment extends InitStreams {
 }
 
 function nextSteps(manager: PackageManager, template: StarterTemplate, install?: readonly (readonly string[])[]) {
-    const { run } = managers[manager]
+    const { run, check } = managers[manager]
     const steps = [
         ...(install
             ? [[`Install ${installed[template]}:`, ...install.map((args) => `   ${args.join(" ")}`)].join("\n")]
             : []),
-        "Set FLUXER_BOT_TOKEN in .env to the bot's token",
+        `Set FLUXER_BOT_TOKEN in .env to the bot's token and invite the bot to a community. Both are explained at\n   ${createBotGuide}`,
         `Check the bot without a token: ${run} test`,
+        ...(template === "js" ? [] : [`Check the types: ${check}`]),
         `Start the bot: ${run} start`,
     ]
     return ["", "Next steps:", ...steps.map((step, index) => `${index + 1}. ${step}`)].join("\n")
@@ -251,18 +263,25 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
         return 1
     }
 
-    let written: readonly string[]
+    let result: StarterResult
     try {
-        written = writeStarterProject(project, packageRoot, template)
+        result = writeStarterProject(project, packageRoot, template)
     } catch (error) {
         if (!(error instanceof StarterConflictError)) throw error
         errorOutput.write(
-            `${error.message}, so fluxerly init wrote nothing. Run it in an empty folder, or move these files away first\n`,
+            `${error.message}, so fluxerly init wrote nothing. Run it in a folder without them, or move these files away first\n`,
         )
         return 1
     }
+    const { written, ignored } = result
     print(`Created ${written.join(", ")}`)
     if (!written.includes(".env")) print("Kept the existing .env")
+    if (!written.includes(".gitignore"))
+        print(
+            ignored.length > 0
+                ? `Added ${ignored.join(" and ")} to the existing .gitignore`
+                : "Kept the existing .gitignore, which already ignores node_modules and .env",
+        )
 
     const manager = detectPackageManager(environment.userAgent)
     const release = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as SdkRelease

@@ -254,6 +254,8 @@ const flags = {
     bun: ["add", "--exact", "--dev"],
 }
 const scripts = { npm: "npm", pnpm: "pnpm", bun: "bun run" }
+// Only test and start have a short form, so the check script needs the run command in every manager
+const checkScripts = { npm: "npm run check", pnpm: "pnpm run check", bun: "bun run check" }
 
 /** The install commands each starter needs, as the printed steps have always named them */
 function expectedInstall(manager: PackageManager, template: "js" | "ts" | "effect") {
@@ -264,13 +266,14 @@ function expectedInstall(manager: PackageManager, template: "js" | "ts" | "effec
         `@neontechspace/fluxerly@${release.version}`,
     ]
     const effectArgs = [add!, `effect@${release.peerDependencies.effect.replace(/^\^/, "")}`]
-    const nodeTypesArgs = [add!, dev!, "@types/node"]
+    // The check script needs the compiler, at the TypeScript major that the documentation requires
+    const typeToolsArgs = [add!, dev!, "@types/node", "typescript@7"]
     const all =
         template === "js"
             ? [sdkArgs]
             : template === "ts"
-              ? [sdkArgs, nodeTypesArgs]
-              : [sdkArgs, effectArgs, nodeTypesArgs]
+              ? [sdkArgs, typeToolsArgs]
+              : [sdkArgs, effectArgs, typeToolsArgs]
     return all.map((args) => ({ command: manager, args }))
 }
 
@@ -286,6 +289,10 @@ test.each(
     )
     expect(result.printed).toContain(`Check the bot without a token: ${scripts[manager]} test`)
     expect(result.printed).toContain(`Start the bot: ${scripts[manager]} start`)
+    // Only a TypeScript starter has the check script, which a manager runs only through its run command
+    expect(result.printed.includes(`Check the types: ${checkScripts[manager]}`)).toBe(template !== "js")
+    // The next steps link the guide that explains the token and the invite
+    expect(result.printed).toMatch(/https:\/\/\S+\/docs\/latest\/create-a-bot\/(?:\s|$)/)
     // The install already ran, so the next steps do not repeat it
     expect(result.printed).not.toContain("@neontechspace/fluxerly@")
     expect(result.errors).toBe("")
@@ -305,6 +312,31 @@ test("an existing .env does not stop init and keeps its token", async () => {
     expect(readFileSync(join(project, ".env"), "utf8")).toBe("FLUXER_BOT_TOKEN=own-token\n")
     expect(printed).toContain("Kept the existing .env")
     expect(commands).toHaveLength(1)
+})
+
+// Create a bot has the reader save the token in .env and ignore it in .gitignore before the quick start runs init
+test("a folder with the .env and .gitignore from the token guide does not stop init", async () => {
+    const { outcome, project, commands, printed, errors } = await init(["--template", "ts"], undefined, {
+        existing: { ".env": "FLUXER_BOT_TOKEN=own-token\n", ".gitignore": ".env\n" },
+    })
+    expect(outcome).toBe(0)
+    expect(errors).toBe("")
+    expect(commands).toHaveLength(2)
+    expect(readFileSync(join(project, ".env"), "utf8")).toBe("FLUXER_BOT_TOKEN=own-token\n")
+    // Only the missing line is added, so the reader's own file stays as written
+    expect(readFileSync(join(project, ".gitignore"), "utf8")).toBe(".env\nnode_modules\n")
+    expect(readdirSync(project)).toContain("bot.ts")
+    expect(printed).toContain("node_modules")
+    expect(printed).toContain("existing .gitignore")
+})
+
+test("an existing .gitignore that has the starter's lines is kept as it is", async () => {
+    const { outcome, project, printed } = await init(["--template", "js"], undefined, {
+        existing: { ".gitignore": "node_modules\n.env\ndist\n" },
+    })
+    expect(outcome).toBe(0)
+    expect(readFileSync(join(project, ".gitignore"), "utf8")).toBe("node_modules\n.env\ndist\n")
+    expect(printed).toContain("existing .gitignore")
 })
 
 test("a failed install keeps the written files, prints the install commands and exits with 1", async () => {

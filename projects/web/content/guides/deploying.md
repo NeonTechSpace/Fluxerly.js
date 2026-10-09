@@ -4,7 +4,7 @@ navTitle: Deploying
 description: Keep a bot running with PM2, systemd or Docker, with the token in the environment and a clean shutdown
 ---
 
-A deployed bot is an ordinary Node.js process. A process manager starts it, passes the token through the environment, restarts it after a crash and stops it with a signal: SIGINT under PM2 and SIGTERM under systemd and Docker. A bot started with `runBot` handles both signals by default, closes the connection cleanly and lets the process exit
+A deployed bot is an ordinary Node.js process. A process manager starts it, passes the token through the environment, restarts it after a crash and stops it with a signal: SIGINT under PM2 and SIGTERM under systemd and Docker. A bot started with the default API's `runBot` handles both signals by default, closes the connection cleanly and lets the process exit. The native Effect `runBot` handles them only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` already interrupts the program on both signals
 
 ## Prepare the bot
 
@@ -12,7 +12,7 @@ Every setup below expects the same project:
 
 - Node.js 24.15 or newer on the server or in the image
 - The `"type": "module"` field in `package.json`, because the SDK is ESM-only
-- A bot started with `runBot`, which stops cleanly on SIGINT and SIGTERM unless `processSignals` is `false`
+- A bot started with `runBot`. The default API stops cleanly on SIGINT and SIGTERM unless `processSignals` is `false`. The native Effect API does so only when `processSignals` is `true`, and otherwise relies on its launcher to stop the program on those signals
 - The token read from `process.env.FLUXER_BOT_TOKEN`, never written in a source file, committed to version control or copied into an image
 - No extra exit handling: When a failure stops the bot, `runBot` sets `process.exitCode` to 1, so the process manager can tell a crash from a normal stop
 
@@ -32,7 +32,7 @@ For TypeScript, run `bot.ts` instead of `bot.js`. Node.js 24 runs TypeScript fil
 
 ## What happens on shutdown
 
-Unless `processSignals` is `false`, the SDK listens for SIGINT and SIGTERM and for no other signals. When the process receives one of them, the SDK logs the signal and shuts the bot down:
+In the default API, unless `processSignals` is `false`, the SDK listens for SIGINT and SIGTERM and for no other signals. The native Effect `runBot` listens only with `processSignals: true`, so enable it when nothing else handles the signals and a drained stop is wanted. Without it, a launcher such as `NodeRuntime.runMain` interrupts the program instead, which skips the drain below, and with no launcher Node.js ends the process at once. When the process receives one of the signals, the SDK logs the signal and shuts the bot down:
 
 - Stops accepting new events and gives running handlers and commands, the events already waiting for them and their requests up to 5 seconds to finish. The `drainMs` option of `runBot` changes that time, and `drainMs: 0` skips the wait
 - Signals the handlers still running to stop through their `signal`

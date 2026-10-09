@@ -51,7 +51,7 @@ This bot replies **Pong!** to **!ping**
 
 A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs.
 
-To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in an empty folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. To set up the bot by hand instead:
+To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in the bot's folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. To set up the bot by hand instead:
 
 1. Add `"type": "module"` to the bot project's `package.json`
 2. Install the SDK with `npm install @neontechspace/fluxerly`, `pnpm add @neontechspace/fluxerly` or `bun add @neontechspace/fluxerly`
@@ -79,7 +79,7 @@ await runBot({
 The same code works in JavaScript and TypeScript.
 Run `node --env-file=.env bot.js`, or `node --env-file=.env bot.ts`, then send **!ping** in a channel where the bot can read and reply
 
-To typecheck TypeScript, add `@types/node` and TypeScript 7 as development dependencies and save this `tsconfig.json` next to the bot. Node.js still runs `bot.ts` directly, and TypeScript only checks it:
+To typecheck TypeScript, add `@types/node` and TypeScript 7 as development dependencies and save this `tsconfig.json` next to the bot. Node.js still runs `bot.ts` directly, and TypeScript only checks it. A generated TypeScript project has this setup and a `check` script that runs the compiler:
 
 ```json
 {

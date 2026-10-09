@@ -93,7 +93,7 @@ Keep the application's existing module and TypeScript settings when they work wi
 
 ## Build the bot
 
-- `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup(client, { signal })` callback for other startup work and `onError`. By default it skips messages written by bots and stops cleanly on SIGINT and SIGTERM. Set `ignoreBots: false` or `processSignals: false` to turn either off.
+- `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup(client, { signal })` callback for other startup work and `onError`. By default it skips messages written by bots, and the default API's `runBot` also stops cleanly on SIGINT and SIGTERM. Set `ignoreBots: false` or `processSignals: false` to turn either off. The native Effect `runBot` from `@neontechspace/fluxerly/effect` handles those signals only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` may already handle them.
   It checks every option before creating a client, then connects and resolves only after the bot stopped and SDK cleanup finished. A failure that stops the bot is logged once and sets `process.exitCode` to 1, so `await runBot({...})` needs no try/catch. Pass `reportFailure: false` only when the application handles the returned failure itself
 - For prefix commands, pass `commands: { prefix, commands: { name: { arguments, guard, cooldown, hidden, execute } } }` to `runBot`.
   Guards come from `guards`: `guildOnly()`, `dmOnly()`, `ownerOnly()` for the application's owner, `ownerOnly(ids)` and `requirePermissions(names)`. A cooldown is `{ durationMs, per: "user" | "channel" | "guild" }`.

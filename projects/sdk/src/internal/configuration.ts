@@ -272,7 +272,7 @@ export const missingTokenMessage = "The bot token is missing or empty"
 export function normalizeToken(token: unknown): string | ConfigurationError {
     const missing = () =>
         new ConfigurationError("token", missingTokenMessage, {
-            hint: "Pass the bot token in the token option. In a project created by fluxerly init, copy .env.example to .env and set FLUXER_BOT_TOKEN. Otherwise set the token's environment variable for the process that starts the bot, or start it with node --env-file=.env bot.js. Check that .env is in the current folder and is not saved as .env.txt",
+            hint: "Pass the bot token in the token option. In a project created by fluxerly init, set FLUXER_BOT_TOKEN in the .env file that init wrote. Otherwise set the token's environment variable for the process that starts the bot, or start it with node --env-file=.env bot.js. Check that .env is in the current folder and is not saved as .env.txt",
         })
     if (token === undefined) return missing()
     if (typeof token !== "string")

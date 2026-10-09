@@ -2,17 +2,21 @@
  * Writes a ready-to-run starter bot project for `fluxerly init`, in JavaScript, TypeScript or TypeScript with the
  * native Effect API.
  * Invariant: Existing files are never replaced. A conflict writes nothing, and a failed write removes only the files
- * this run created. The .env copy of .env.example is the exception: An existing .env is kept and is no conflict.
+ * this run created. Two files are no conflict. An existing .env is kept, because it holds the bot's own token, and an
+ * existing .gitignore is kept with only its missing starter lines appended, last, after every other file is written.
  * Each bot's handlers match its shipped starter in examples/starter
  */
 
-import { closeSync, existsSync, openSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { newAgentsFile } from "./agents-section.js"
 
 /** The starters init writes, in the order the prompt offers them */
 export const starterTemplates = ["js", "ts", "effect"] as const
 export type StarterTemplate = (typeof starterTemplates)[number]
+
+/** The lines the starter needs in .gitignore, so the token and the installed packages stay out of version control */
+const ignoredLines = ["node_modules", ".env"]
 
 /** Thrown when a file that init writes already exists. Nothing was written */
 export class StarterConflictError extends Error {
@@ -119,19 +123,25 @@ test("the bot answers !ping with Pong! and ignores other messages", async () => 
 })
 `
 
-// Node.js runs .ts files directly by removing their types, so the scripts need no build step
+// Node.js runs .ts files directly by removing their types, so the scripts need no build step. Removing types checks
+// nothing, so a TypeScript starter also gets a check script that runs the compiler
 const packageJson = (botFile: string) =>
     `${JSON.stringify(
         {
             private: true,
             type: "module",
-            scripts: { start: `node --env-file-if-exists=.env ${botFile}`, test: "node --test" },
+            scripts: {
+                start: `node --env-file-if-exists=.env ${botFile}`,
+                test: "node --test",
+                ...(botFile.endsWith(".ts") ? { check: "tsc" } : {}),
+            },
         },
         null,
         2,
     )}\n`
 
-// TypeScript only checks the code for editors. The last three settings keep it in a form Node.js can run directly
+// TypeScript only checks the code, for editors and the check script. The last three settings keep it in a form Node.js
+// can run directly
 const tsconfig = `${JSON.stringify(
     {
         compilerOptions: {
@@ -154,7 +164,7 @@ function starterFiles(project: string, packageRoot: string, template: StarterTem
     const shared = (): [string, string][] => [
         [".env.example", "FLUXER_BOT_TOKEN=\n"],
         [".env", "FLUXER_BOT_TOKEN=\n"],
-        [".gitignore", "node_modules\n.env\n"],
+        [".gitignore", `${ignoredLines.join("\n")}\n`],
         ["AGENTS.md", newAgentsFile(project, packageRoot)],
     ]
     if (template === "js")
@@ -173,16 +183,40 @@ function starterFiles(project: string, packageRoot: string, template: StarterTem
     ])
 }
 
-/** Write a starter project into `project` and return the written file names, or throw StarterConflictError */
+/** What one run of writeStarterProject changed */
+export interface StarterResult {
+    /** The files this run created, in the order it wrote them */
+    readonly written: readonly string[]
+    /** The lines this run appended to an existing .gitignore. None when it had them all or did not exist */
+    readonly ignored: readonly string[]
+}
+
+/** Append the starter's lines that `file` lacks, keeping its content and line endings, and return the lines added */
+function addMissingIgnoredLines(file: string): readonly string[] {
+    const text = readFileSync(file, "utf8")
+    const present = new Set(text.split(/\r?\n/).map((line) => line.trim()))
+    const missing = ignoredLines.filter((line) => !present.has(line))
+    if (missing.length === 0) return []
+    const lineEnd = text.includes("\r\n") ? "\r\n" : "\n"
+    // A file that ends without a line break gets one first, so the added lines start on their own line
+    const lead = text === "" || text.endsWith("\n") ? "" : lineEnd
+    appendFileSync(file, `${lead}${missing.map((line) => `${line}${lineEnd}`).join("")}`)
+    return missing
+}
+
+/** Write a starter project into `project` and report what changed, or throw StarterConflictError */
 export function writeStarterProject(
     project: string,
     packageRoot: string,
     template: StarterTemplate = "js",
-): readonly string[] {
+): StarterResult {
     const files = starterFiles(project, packageRoot, template)
-    const conflicts = [...files.keys()].filter((name) => name !== ".env" && existsSync(join(project, name)))
+    const conflicts = [...files.keys()].filter(
+        (name) => name !== ".env" && name !== ".gitignore" && existsSync(join(project, name)),
+    )
     if (conflicts.length > 0) throw new StarterConflictError(conflicts)
     const written: string[] = []
+    let ignored: readonly string[] = []
     let current = ""
     try {
         // The wx flag refuses a file that appeared after the check, so a concurrent writer's file is never replaced.
@@ -193,8 +227,10 @@ export function writeStarterProject(
             try {
                 descriptor = openSync(join(project, name), "wx")
             } catch (error) {
-                // An existing .env holds the bot's own token, so it is kept
-                if (name === ".env" && (error as NodeJS.ErrnoException).code === "EEXIST") continue
+                // An existing .env holds the bot's own token, so it is kept. An existing .gitignore is kept too, and
+                // gets its missing lines below
+                const keep = name === ".env" || name === ".gitignore"
+                if (keep && (error as NodeJS.ErrnoException).code === "EEXIST") continue
                 throw error
             }
             written.push(name)
@@ -204,10 +240,12 @@ export function writeStarterProject(
                 closeSync(descriptor)
             }
         }
+        // Last, so a failure above leaves the user's .gitignore as it was
+        if (!written.includes(".gitignore")) ignored = addMissingIgnoredLines(join(project, ".gitignore"))
     } catch (error) {
         for (const name of written) rmSync(join(project, name), { force: true })
         if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new StarterConflictError([current])
         throw error
     }
-    return written
+    return { written, ignored }
 }

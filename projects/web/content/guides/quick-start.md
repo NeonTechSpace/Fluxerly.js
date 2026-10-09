@@ -4,13 +4,19 @@ navTitle: Quick start
 description: Send !ping and receive Pong! from a bot
 ---
 
-Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/), store its token and add it to a community. Fluxerly is tested against Node.js 24.15 or newer
+Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/) and add it to a community. Saving its token can wait, because the project below has a file for it. Fluxerly is tested against Node.js 24.15 or newer
 
-To generate the project instead of following steps 1 and 2, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in a new, empty folder and choose JavaScript, TypeScript or Effect. Adding `--template js`, `--template ts` or `--template effect` skips the question. It writes this bot with a test and prints the remaining steps, including where the token goes
+## Generate the project
+
+Run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in the bot's folder and choose JavaScript, TypeScript or Effect. Adding `--template js`, `--template ts` or `--template effect` skips the question. It writes this bot with a test and an empty `.env` file for the token, installs the SDK and prints the remaining steps, including where to get the token and invite the bot
+
+The folder may already hold the `.env` and `.gitignore` that [Create a bot](/docs/{{version}}/create-a-bot/) describes. The command keeps the `.env` and its token, adds `node_modules` and `.env` to the `.gitignore` when they are missing and leaves the rest of that file as it is. When any other file that the command writes already exists, such as `package.json` or `bot.js`, it stops without writing anything
+
+Then set `FLUXER_BOT_TOKEN` in `.env` and continue with step 3. Steps 1 and 2 set up the same project by hand
 
 ## 1. Install the SDK
 
-Open a terminal in the bot's folder, where `.env` is saved.
+Open a terminal in the bot's folder.
 Create a `package.json` file in that folder:
 
 ```json
@@ -40,7 +46,9 @@ The bot reads its token from `FLUXER_BOT_TOKEN` in the process environment, so t
 
 ## 3. Start it
 
-Start the bot with the token's `.env` file, as [Create a bot](/docs/{{version}}/create-a-bot/) sets up:
+Save the token in a file named `.env` in the bot's folder, as `FLUXER_BOT_TOKEN=paste-the-token-here`. A generated project already has that file, with the value empty. For a project set up by hand, [Create a bot](/docs/{{version}}/create-a-bot/) shows where to find the token and how to keep the file out of version control
+
+Start the bot with the token's `.env` file:
 
 ```command
 {"kind":"run","command":"node --env-file=.env bot.js"}
@@ -104,15 +112,16 @@ A preview marked Unreleased does not have an installable package version yet
 <details>
 <summary>Using TypeScript or Effect?</summary>
 
-Choose TypeScript above to save this example as `bot.ts`. Node.js runs it directly, without a compilation step
+Choose TypeScript above to save this example as `bot.ts`. Node.js runs it directly, without a compilation step, and removes the types without checking them
 
-To typecheck TypeScript with TypeScript 7, install the Node.js types that the SDK's types use:
+A generated TypeScript or Effect project needs no further setup to typecheck. It installs TypeScript 7 and the Node.js types, writes the `tsconfig.json` below and adds a `check` script that runs the compiler, as `npm run check`, `pnpm run check` or `bun run check`.
+To typecheck a project set up by hand, install the Node.js types that the SDK's types use:
 
 ```command
 {"kind":"dev","package":"@types/node"}
 ```
 
-Then add a `tsconfig.json` next to the bot:
+Install `typescript@7` the same way, as another development dependency. Then add a `tsconfig.json` next to the bot:
 
 ```json
 {

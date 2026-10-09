@@ -1720,7 +1720,7 @@ describe.each(["default", "native"] as const)("%s runBot failure reporting", (mo
                     ...(signal === undefined ? {} : { signal }),
                 })
                 expect(failure).toBeInstanceOf(ConfigurationError)
-                expect(failure).toMatchObject({ field: "token", hint: expect.stringContaining(".env.example") })
+                expect(failure).toMatchObject({ field: "token", hint: expect.stringContaining("FLUXER_BOT_TOKEN") })
                 const records = logs.withCode("lifecycle.botFailed")
                 expect(records).toEqual([
                     expect.objectContaining({
