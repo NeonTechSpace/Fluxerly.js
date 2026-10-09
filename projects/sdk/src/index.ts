@@ -266,6 +266,7 @@ export type {
     Embed,
     EmbedChild,
     EmbedAuthor,
+    EmbedProvider,
     EmbedFooter,
     EmbedMedia,
     EmbedField,

@@ -112,7 +112,7 @@ export interface EmbedFieldInput {
 }
 
 /**
- * Author or preview-provider information received with a message. The object is frozen, missing or null server fields become omitted properties
+ * Author information received with a message. The object is frozen, missing or null server fields become omitted properties
  *
  * @category Messages
  */
@@ -125,6 +125,20 @@ export interface EmbedAuthor {
     readonly iconUrl?: string
     /** Icon URL served through Fluxer's media proxy, when supplied */
     readonly proxyIconUrl?: string
+}
+
+/**
+ * Preview-provider information received with a message, such as the site a link preview came from.
+ * Fluxer supplies only a name and a link, so unlike an author, a provider has no icon.
+ * The object is frozen, missing or null server fields become omitted properties
+ *
+ * @category Messages
+ */
+export interface EmbedProvider {
+    /** Server-provided label */
+    readonly name: string
+    /** Destination for the label */
+    readonly url?: string
 }
 
 /**
@@ -213,7 +227,7 @@ export interface EmbedChild {
     /** Frozen named sections in received order */
     readonly fields?: readonly EmbedField[]
     /** Preview provider metadata */
-    readonly provider?: EmbedAuthor
+    readonly provider?: EmbedProvider
     /** Video metadata, not a playable SDK resource */
     readonly video?: EmbedMedia
     /** Audio metadata, not a playable SDK resource */

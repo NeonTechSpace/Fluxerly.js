@@ -306,7 +306,9 @@ for (const prefix of ["", "message_snapshots.0."]) {
             malformed.push([`${embedded}${field}`, []])
             for (const key of field === "footer"
                 ? ["text", "icon_url", "proxy_icon_url"]
-                : ["name", "url", "icon_url", "proxy_icon_url"])
+                : field === "provider"
+                  ? ["name", "url"]
+                  : ["name", "url", "icon_url", "proxy_icon_url"])
                 malformed.push([`${embedded}${field}.${key}`, 1])
         }
         for (const field of ["image", "thumbnail", "video", "audio"]) {

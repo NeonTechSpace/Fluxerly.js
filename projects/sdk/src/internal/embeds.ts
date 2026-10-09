@@ -283,6 +283,10 @@ const outputAuthor: Shape = {
     iconUrl: ["icon_url", string],
     proxyIconUrl: ["proxy_icon_url", string],
 }
+const outputProvider: Shape = {
+    name: ["name", string, true],
+    url: ["url", string],
+}
 const outputFooter: Shape = {
     text: ["text", string, true],
     iconUrl: ["icon_url", string],
@@ -320,7 +324,7 @@ const outputChild: Shape = {
         "fields",
         (value, construct) => list(value, (field, build) => project(field, outputField, build), Infinity, construct),
     ],
-    provider: ["provider", (value, construct) => project(value, outputAuthor, construct)],
+    provider: ["provider", (value, construct) => project(value, outputProvider, construct)],
     video: ["video", (value, construct) => project(value, outputMedia, construct)],
     audio: ["audio", (value, construct) => project(value, outputMedia, construct)],
     html: ["html", string],

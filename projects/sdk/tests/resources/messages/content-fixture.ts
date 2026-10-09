@@ -64,12 +64,7 @@ export const responseEmbed = {
     thumbnail: media,
     video: media,
     audio: media,
-    provider: {
-        name: "Provider",
-        url: "https://example.com",
-        icon_url: "https://example.com/icon",
-        proxy_icon_url: "https://example.com/proxy-icon",
-    },
+    provider: { name: "Provider", url: "https://example.com" },
     html: "<div>Fixture</div>",
     html_width: 640,
     html_height: 480,

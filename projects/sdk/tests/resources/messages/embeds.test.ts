@@ -89,7 +89,7 @@ test.each(modes)(
             type: "future-preview",
             author: { proxyIconUrl: "https://example.com/proxy-author" },
             footer: { proxyIconUrl: "https://example.com/proxy-footer" },
-            provider: { name: "Provider", proxyIconUrl: "https://example.com/proxy-icon" },
+            provider: { name: "Provider", url: "https://example.com" },
             html: "<div>Fixture</div>",
             htmlWidth: 640,
             htmlHeight: 480,
@@ -146,6 +146,35 @@ test.each(modes)(
             await rejectsResponse(api.fetch())
             await rejectsResponse(api.history())
         }
+    },
+)
+
+test.each(modes)(
+    "%s exposes a preview provider as a name and link only, since Fluxer sends no provider icon",
+    async (mode) => {
+        const server = await fixture()
+        const api = await driver(mode)
+        // Fluxer's provider holds a name and URL. Icon fields, which an author has, must not appear on a provider
+        server.set(
+            wire([
+                {
+                    type: "link",
+                    provider: {
+                        name: "Provider",
+                        url: "https://example.com",
+                        icon_url: "https://example.com/icon",
+                        proxy_icon_url: "https://example.com/proxy-icon",
+                    },
+                },
+            ]),
+        )
+        const provider = (await api.fetch()).embeds[0]?.provider
+        expect(provider).toEqual({ name: "Provider", url: "https://example.com" })
+        // @ts-expect-error A provider has no icon, so its type must not offer one
+        void provider?.iconUrl
+
+        server.set(wire([{ type: "link", provider: { name: "Provider", url: null } }]))
+        expect((await api.fetch()).embeds[0]?.provider).toEqual({ name: "Provider" })
     },
 )
 

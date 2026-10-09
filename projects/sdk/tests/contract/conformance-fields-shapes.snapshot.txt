@@ -1238,7 +1238,7 @@ field|shared|Embed.htmlHeight|number | undefined|optional=true|nullable=false
 field|shared|Embed.htmlWidth|number | undefined|optional=true|nullable=false
 field|shared|Embed.image|EmbedMedia | undefined|optional=true|nullable=false
 field|shared|Embed.nsfw|boolean | undefined|optional=true|nullable=false
-field|shared|Embed.provider|EmbedAuthor | undefined|optional=true|nullable=false
+field|shared|Embed.provider|EmbedProvider | undefined|optional=true|nullable=false
 field|shared|Embed.thumbnail|EmbedMedia | undefined|optional=true|nullable=false
 field|shared|Embed.timestamp|string | undefined|optional=true|nullable=false
 field|shared|Embed.title|string | undefined|optional=true|nullable=false
@@ -1275,7 +1275,7 @@ field|shared|EmbedChild.htmlHeight|number | undefined|optional=true|nullable=fal
 field|shared|EmbedChild.htmlWidth|number | undefined|optional=true|nullable=false
 field|shared|EmbedChild.image|EmbedMedia | undefined|optional=true|nullable=false
 field|shared|EmbedChild.nsfw|boolean | undefined|optional=true|nullable=false
-field|shared|EmbedChild.provider|EmbedAuthor | undefined|optional=true|nullable=false
+field|shared|EmbedChild.provider|EmbedProvider | undefined|optional=true|nullable=false
 field|shared|EmbedChild.thumbnail|EmbedMedia | undefined|optional=true|nullable=false
 field|shared|EmbedChild.timestamp|string | undefined|optional=true|nullable=false
 field|shared|EmbedChild.title|string | undefined|optional=true|nullable=false
@@ -1316,6 +1316,8 @@ field|shared|EmbedMedia.url|string|optional=false|nullable=false
 field|shared|EmbedMedia.width|number | undefined|optional=true|nullable=false
 field|shared|EmbedMediaInput.description|string | undefined|optional=true|nullable=false
 field|shared|EmbedMediaInput.url|string|optional=false|nullable=false
+field|shared|EmbedProvider.name|string|optional=false|nullable=false
+field|shared|EmbedProvider.url|string | undefined|optional=true|nullable=false
 field|shared|EmojiCreate.image|string|optional=false|nullable=false
 field|shared|EmojiCreate.name|string|optional=false|nullable=false
 field|shared|EmojiEdit.name|string|optional=false|nullable=false
