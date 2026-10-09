@@ -175,6 +175,8 @@ export interface Channels {
      * Omitted permissionOverwrites keeps the old list, and [] clears it.
      * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in.
+     * On a category, a permissionOverwrites change also writes each child whose overwrites matched the category's old ones, in separate writes.
+     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
      * The thread defaults and the forum settings apply to the channel types named on each field. The SDK cannot see the
      * channel's type, so Fluxer ignores a setting that does not belong to it. The availableTags list replaces every tag
      * of a forum or media channel, so channels.createForumTag, editForumTag and deleteForumTag are the safer way to
@@ -189,6 +191,8 @@ export interface Channels {
      * Delete a community channel, succeeding with no value after HTTP 204.
      * No gateway event is awaited and no prior channel existence is proven.
      * The SDK does not fetch the ID first.
+     * Fluxer deletes the channel's invites, webhooks, attachments and messages, and detaches a category's children, before it deletes the channel itself.
+     * A channel that still exists after a failure may already have lost any of these.
      * A lost response or timeout after dispatch can leave it deleted
      */
     delete(channelId: string, options?: ChannelAuditOperationOptions): Effect.Effect<void, ChannelOperationFailure>
@@ -196,9 +200,11 @@ export interface Channels {
      * Submit community-channel moves, succeeding with no value after HTTP 204.
      * Fluxer applies moves sequentially and may normalize positions.
      * The syncPermissionsOnMove option copies the destination category's overwrites.
+     * Fluxer copies them after each move, so a failed copy leaves that channel moved without them.
      * A bulk channel event can arrive before that copy finishes.
-     * Failures can leave partial movement because this is not a transaction.
-     * Use fetchAll afterward when final order matters.
+     * Failures can leave partial movement because this is not a transaction, and the error does not list the moves that finished.
+     * Use fetchAll afterward when final order matters, and after a failure to read the actual order and parents before sending moves again.
+     * The Communities & permissions guide shows how to keep the failure while reading them.
      * Fluxer currently accepts auditReason on this route without retaining it in an audit entry.
      * No reordered list is invented locally
      */
@@ -213,6 +219,8 @@ export interface Channels {
      * Each mask must be from 0n through 9_223_372_036_854_775_807n, and larger received masks cannot be written unchanged.
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageRoles and uses a feature opt-in to set or clear ViewChannelMembers.
+     * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
+     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
      * No target fetch or inherited-permission calculation is performed
      */
     setPermissionOverwrite(
@@ -225,6 +233,8 @@ export interface Channels {
      * Other overwrites remain unchanged.
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageChannels and ManageRoles.
+     * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
+     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
      * An unknown outcome needs an explicit follow-up read
      */
     removePermissionOverwrite(

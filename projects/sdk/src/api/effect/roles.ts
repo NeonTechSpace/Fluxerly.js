@@ -77,6 +77,8 @@ export interface Roles {
     /**
      * Delete a role and remove its member assignments in Fluxer.
      * The everyone role cannot be deleted.
+     * Fluxer removes the role from each member in separate writes before it deletes the role, and does not roll them back.
+     * A failure can leave the role in place after some members already lost it, so fetch the role and the affected members again before retrying.
      * HTTP 204 succeeds with no value, without proving member-event delivery.
      * Snapshots already returned to the caller remain unchanged
      */

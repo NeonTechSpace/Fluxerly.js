@@ -81,13 +81,19 @@ export async function publishUpdate(client: Client, channelId: string, content: 
     const sent = await client.messages.send(channelId, content)
     if (sent.isErr()) return sent
 
-    return await client.messages.publish(sent.value)
+    const published = await client.messages.publish(sent.value)
+    if (published.isErr()) {
+        console.warn(`Message ${sent.value.id} in channel ${channelId} was sent but not published`)
+    }
+    return published
 }
 ```
 
+A failed send skips publication. A failed publish leaves the sent message posted, so the helper logs its ID and returns the failure unchanged
+
 Fluxer's API and flags call publishing crossposting: `MessageFlags.Crossposted` marks the source and `MessageFlags.IsCrosspost` marks each copy. Completion means Fluxer accepted publication, not that every copy has arrived. A bot that can see a following channel receives each copy as a `messageCreate` event
 
-With the native Effect API, a failed send skips publication:
+With the native Effect API, a failed send skips publication and a failed publish logs the sent message's ID:
 
 ```ts
 import { Effect } from "effect"
@@ -96,7 +102,11 @@ import type { Client } from "@neontechspace/fluxerly/effect"
 export function publishUpdateWithEffect(client: Client, channelId: string, content: string) {
     return Effect.gen(function* () {
         const sent = yield* client.messages.send(channelId, content)
-        return yield* client.messages.publish(sent)
+        return yield* client.messages.publish(sent).pipe(
+            Effect.tapError(() =>
+                Effect.logWarning(`Message ${sent.id} in channel ${channelId} was sent but not published`),
+            ),
+        )
     })
 }
 ```
@@ -110,7 +120,7 @@ Editing the source message updates its published copies later. Deleting the sour
 
 The [messages guide](/docs/{{version}}/messages/#reply-to-a-message-and-check-what-happened) explains which flags sends and edits accept
 
-If sending succeeds but publication fails, the source message stays posted, but these helpers return only the failure and lose the sent ID. When the caller may retry, change the helper to return `sent.value.id` with the failure in the default API, or `sent.id` in the Effect API. Before publishing again, fetch that message and check `MessageFlags.Crossposted`. Do not rerun the whole helper after an [uncertain write](/docs/{{version}}/reliability/), because that can send another source message
+If sending succeeds but publication fails, the source message stays posted, which is why the helpers log its ID. Before publishing again, fetch that message and check `MessageFlags.Crossposted`. Fluxer sets the flag before it finishes the request and clears it only when queuing the copies fails, so a failed publish can still leave the message published. Do not rerun the whole helper after an [uncertain write](/docs/{{version}}/reliability/), because that can send another source message
 
 </details>
 

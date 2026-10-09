@@ -77,6 +77,51 @@ Announcement channels have the same topic and message fields as text channels. S
 
 Threads, forum channels and media channels have their own types as well. See [threads](/docs/{{version}}/threads/) and [forum channels](/docs/{{version}}/forum-channels/) for their fields
 
+## Reorder channels and check the result
+
+A reorder sends a list of moves that Fluxer applies one after another. If a later move fails, the earlier moves stay applied, and the error does not list which ones finished. Keep the failure, then read the channels to see their actual parents and positions before sending any move again
+
+```ts
+import { describeError, type ChannelPosition, type Client } from "@neontechspace/fluxerly"
+
+export async function reorderChannels(client: Client, guildId: string, positions: readonly ChannelPosition[]) {
+    const reordered = await client.channels.reorder(guildId, positions)
+    if (reordered.isOk()) return reordered
+
+    const actual = await client.channels.fetchAll(guildId)
+    if (actual.isErr()) {
+        console.error("Could not read the channels after a failed reorder:", describeError(actual.error))
+    } else {
+        const layout = actual.value.map(({ id, parentId, position }) => ({ id, parentId, position }))
+        console.warn("Reorder failed, channels now:", JSON.stringify(layout))
+    }
+    return reordered
+}
+```
+
+The helper returns the failed Result from `channels.reorder` unchanged and logs the layout that `channels.fetchAll` returns. A failed read is logged as well, and says nothing about whether the moves applied. The list holds the channels the bot can see, without threads. Compare it with the intended layout and send only the moves that are still missing
+
+With the native Effect API, `Effect.tapError` runs the read while the reorder failure stays in the error channel. The read's own failure is caught, so it cannot replace the reorder failure:
+
+```ts
+import { Effect } from "effect"
+import type { ChannelPosition, Client } from "@neontechspace/fluxerly/effect"
+
+export function reorderChannelsWithEffect(client: Client, guildId: string, positions: readonly ChannelPosition[]) {
+    return client.channels.reorder(guildId, positions).pipe(
+        Effect.tapError(() =>
+            client.channels.fetchAll(guildId).pipe(
+                Effect.flatMap(channels => {
+                    const layout = channels.map(({ id, parentId, position }) => ({ id, parentId, position }))
+                    return Effect.logWarning("Reorder failed, channels now", JSON.stringify(layout))
+                }),
+                Effect.catch(error => Effect.logError("Could not read the channels after a failed reorder", error)),
+            ),
+        ),
+    )
+}
+```
+
 ## Read the member verification level
 
 The community's `verificationLevel` describes its member verification policy. The `GuildVerificationLevels` constants range from `None` through `High`. Fluxer retired its phone-verification level, so there is no `VeryHigh` constant. This policy is separate from the [two-factor requirement for moderation](/docs/{{version}}/guilds-and-permissions/#communities-that-require-two-factor-authentication)
