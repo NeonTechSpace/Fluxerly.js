@@ -67,7 +67,7 @@ import {
 } from "./api/effect/bot.js"
 import type { Message, MessageCore, MessageFields, SelectedMessage } from "./messages.js"
 import { createClient, type Client, type ClientOptions } from "./api/effect/client.js"
-import { checkTestOptionKeys, TestHarness } from "./internal/testing/harness.js"
+import { checkTestOptionKeys, TestHarness, type TestClientWork } from "./internal/testing/harness.js"
 import { botOptionKeys } from "./internal/bot-runner.js"
 import { clientServices } from "./internal/client-registry.js"
 import { TestTimeoutError, type UnhandledTestFailuresError } from "./internal/testing/errors.js"
@@ -247,18 +247,20 @@ export interface TestClient<M extends MessageCore = Message> {
     /** The client's running totals, the same as client.diagnostics().counters */
     counters(): ClientCounters
     /**
-     * Error records of failures no application code handled so far, in order, such as an event handler or command
-     * that failed while no onError hook was registered. Assert expected failures here, because shutdown fails for
+     * Error records of failures no application code handled so far, in order, such as an event handler, command or
+     * client.schedule task run that failed while no onError hook was registered, whether the error came from the
+     * application or from a Fluxer rejection. Assert expected failures here, because shutdown fails for
      * unhandled failures that failures() has not returned.
      * Failures are captured whatever the logging level, categories and deduplication, so each one appears here and
      * counts for shutdown even when logs() leaves it out
      */
     failures(): readonly LogRecord[]
     /**
-     * Succeed once the client has settled: No event handler or command is running, no REST request is queued or
-     * waiting for its test response, and no new log record, request or gateway command appeared for a few event loop
-     * turns. Run it after emit to assert that the bot did nothing, or before inspecting results.
-     * Open waits and collectors do not count as work, and onError hooks are not awaited.
+     * Succeed once the client has settled: No event handler, command or client.schedule task run is running, no REST
+     * request is queued or waiting for its test response, and no new log record, request or gateway command appeared for
+     * a few event loop turns. Run it after emit to assert that the bot did nothing, or before inspecting results.
+     * Open waits and collectors do not count as work, and onError hooks are not awaited. A scheduled task waiting for its
+     * time does not count either, so advance the clock that drives the client's timers to run it.
      * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
      * settles. With timeoutMs it fails with TestTimeoutError when the client is still busy after it.
      * It dies with ClientClosedError after shutdown. Invalid options are a defect carrying ConfigurationError.
@@ -311,6 +313,11 @@ export function createTestClient<E = never, R = never, const F extends MessageFi
     return openTestClient(options).pipe(Effect.map(({ test }) => test))
 }
 
+/** The client's work in progress that idle and say wait for, including scheduled task runs */
+function clientWork(client: { diagnostics(): TestClientWork["diagnostics"] }): () => TestClientWork {
+    return () => ({ diagnostics: client.diagnostics(), runningTasks: clientServices(client)?.tasks.running ?? 0 })
+}
+
 /** Create a native test client together with the harness that createTestBot also drives */
 function openTestClient<E, R, F extends MessageFields | undefined>(
     options: TestClientOptions<E, R, F>,
@@ -353,7 +360,7 @@ function openTestClient<E, R, F extends MessageFields | undefined>(
             logs: () => harness.logs(),
             failures: () => harness.failures(),
             idle: (options?: TestWaitOptions) =>
-                testWait((signal) => harness.idle(() => client.diagnostics(), options, signal)),
+                testWait((signal) => harness.idle(clientWork(client), options, signal)),
             counters: () => client.diagnostics().counters,
             shutdown: () =>
                 client.shutdown().pipe(
@@ -579,7 +586,7 @@ export function createTestBot<
             ...test,
             ready: () => setupOnce.pipe(Effect.andThen(test.ready())),
             say: (content: string, sayOptions?: TestSayOptions) =>
-                testWait((signal) => harness.say(() => test.client.diagnostics(), content, sayOptions, signal)),
+                testWait((signal) => harness.say(clientWork(test.client), content, sayOptions, signal)),
         })
     }) as never
 }

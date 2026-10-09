@@ -584,19 +584,38 @@ export interface ShutdownOptions {
      *
      * During the drain the client accepts no new events. New subscriptions and event waits start closed, as after shutdown.
      * Running handlers and commands continue, events already waiting in on handler queues still run, and REST requests
-     * continue, including new ones that handlers send. The connection state stays as it was until the drain ends.
-     * The drain ends as soon as no handler is running or waiting and no REST request is in progress, logging
-     * lifecycle.drained, or when the time runs out. Then shutdown continues as usual and cancels what is left, logging how
-     * many handlers, events and requests it cut off as a lifecycle.drainTimedOut Warn record.
+     * continue, including new ones that handlers send. Scheduled task runs in progress continue, while tasks start no new
+     * run and new tasks are refused. The connection state stays as it was until the drain ends.
+     * The drain ends as soon as no handler or scheduled task is running, no event is waiting and no REST request is in
+     * progress, logging lifecycle.drained, or when the time runs out. Then shutdown continues as usual and cancels what is
+     * left, logging how many handlers, events, tasks and requests it cut off as a lifecycle.drainTimedOut Warn record.
      * Collectors and subscribe subscriptions receive no events during the drain and end with the shutdown.
      * A shutdown call while another is in progress shares that shutdown and its drain.
      *
-     * A default API handler that awaits a draining shutdown of its own client keeps the drain waiting until the time runs
-     * out, so start the shutdown without awaiting it there. A native handler or collector callback that calls shutdown
-     * ends at once, and the drain continues for the other work.
+     * A default API handler or scheduled task that awaits a draining shutdown of its own client keeps the drain waiting
+     * until the time runs out, so start the shutdown without awaiting it there. A native handler, collector callback or
+     * scheduled task that calls shutdown ends at once, and the drain continues for the other work.
      * An invalid value throws ConfigurationError in the default API and dies with it in the Effect API, before shutdown starts
      */
     readonly drainMs?: number
+}
+
+/**
+ * Choose when client.schedule runs a task, in both entry points. Without options the task runs once, as soon as possible
+ *
+ * @category Client and lifecycle
+ */
+export interface ScheduleOptions {
+    /**
+     * Milliseconds before the first run, an integer from 0 through 2,147,483,647.
+     * A repeating task waits intervalMs by default, like an interval timer, and a task that runs once waits 0
+     */
+    readonly delayMs?: number
+    /**
+     * Repeat the task, waiting this many milliseconds after each run ends before the next one starts, an integer from 1
+     * through 2,147,483,647. Runs therefore never overlap. Without it the task runs once
+     */
+    readonly intervalMs?: number
 }
 
 /** Add cancellation to a default-API operation with an AbortController's signal.

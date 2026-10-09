@@ -4,13 +4,13 @@ import type { EventName } from "./events.js"
  * The kind handler is an event or command callback, and overflow is a subscription stopped by a full queue.
  * The kind collector is a message or reaction collector callback, and filter is a collector filter.
  * The kind progress is a message cleanup onProgress callback, cache is a cache maxAgeMs duration callback or a cache.onChange listener,
- * and observer is a state observer.
+ * observer is a state observer and task is one run of a client.schedule task.
  * A failing onError hook is never reported to a hook again: It is logged with the original failure and counted in
  * diagnostics().counters.hookFailures
  *
  * @category Logging and diagnostics
  */
-export type FailureKind = "handler" | "overflow" | "collector" | "filter" | "progress" | "cache" | "observer"
+export type FailureKind = "handler" | "overflow" | "collector" | "filter" | "progress" | "cache" | "observer" | "task"
 
 /**
  * IDs of the message involved in a failure, without its content

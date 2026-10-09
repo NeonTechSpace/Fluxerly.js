@@ -664,6 +664,7 @@ export type {
     ConnectionState,
     OperationSignal,
     OperationOptions,
+    ScheduleOptions,
     ShutdownOptions,
 } from "./client.js"
 export type {
@@ -762,7 +763,7 @@ export type {
 export { GatewaySendError } from "./gateway.js"
 export type { GatewaySendFailure } from "./gateway.js"
 export { createClient } from "./api/default/client.js"
-export type { Client } from "./api/default/client.js"
+export type { Client, ScheduledTask } from "./api/default/client.js"
 export type { Instance, DefaultInstanceResolveOptions } from "./api/default/instance.js"
 export type { Presence } from "./api/default/presence.js"
 export type { CurrentBotApplication } from "./api/default/application.js"

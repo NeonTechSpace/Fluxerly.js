@@ -51,7 +51,7 @@ import { installTestBot, type BotOptions } from "./api/default/bot.js"
 import { clientServices } from "./internal/client-registry.js"
 import type { CommandArgumentSchema } from "./command-arguments.js"
 import { ConfigurationError } from "./errors.js"
-import { checkTestOptionKeys, TestHarness } from "./internal/testing/harness.js"
+import { checkTestOptionKeys, TestHarness, type TestClientWork } from "./internal/testing/harness.js"
 import { botOptionKeys } from "./internal/bot-runner.js"
 import type {
     TestDisconnectOptions,
@@ -169,18 +169,20 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
     /** The client's running totals, the same as client.diagnostics().counters */
     counters(): ClientCounters
     /**
-     * Error records of failures no application code handled so far, in order, such as an event handler or command
-     * that threw or returned a failed Result while no onError hook was registered. Assert expected failures here, because
+     * Error records of failures no application code handled so far, in order, such as an event handler, command or
+     * client.schedule task run that threw or returned a failed Result while no onError hook was registered, whether the
+     * error came from the application or from a Fluxer rejection. Assert expected failures here, because
      * shutdown rejects for unhandled failures that failures() has not returned.
      * Failures are captured whatever the logging level, categories and deduplication, so each one appears here and
      * counts for shutdown even when logs() leaves it out
      */
     failures(): readonly LogRecord[]
     /**
-     * Resolve once the client has settled: No event handler or command is running, no REST request is queued or
-     * waiting for its test response, and no new log record, request or gateway command appeared for a few event loop
-     * turns. Use it after emit to assert that the bot did nothing, or before inspecting results.
-     * Open waits and collectors do not count as work, and onError hooks are not awaited.
+     * Resolve once the client has settled: No event handler, command or client.schedule task run is running, no REST
+     * request is queued or waiting for its test response, and no new log record, request or gateway command appeared for
+     * a few event loop turns. Use it after emit to assert that the bot did nothing, or before inspecting results.
+     * Open waits and collectors do not count as work, and onError hooks are not awaited. A scheduled task waiting for its
+     * time does not count either, so advance the clock that drives the client's timers to run it.
      * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
      * settles. With timeoutMs the promise rejects with TestTimeoutError when the client is still busy after it.
      * It rejects with ClientClosedError after shutdown. Invalid options throw ConfigurationError.
@@ -230,6 +232,11 @@ export function createTestClient<const F extends MessageFields | undefined = und
     return openTestClient(options).test
 }
 
+/** The client's work in progress that idle and say wait for, including scheduled task runs */
+function clientWork(client: { diagnostics(): TestClientWork["diagnostics"] }): () => TestClientWork {
+    return () => ({ diagnostics: client.diagnostics(), runningTasks: clientServices(client)?.tasks.running ?? 0 })
+}
+
 /** Create a test client together with the harness that createTestBot also drives */
 function openTestClient<F extends MessageFields | undefined>(
     options: TestClientOptions<F>,
@@ -264,7 +271,7 @@ function openTestClient<F extends MessageFields | undefined>(
         commands: () => harness.gateway.commands(),
         logs: () => harness.logs(),
         failures: () => harness.failures(),
-        idle: (options?: TestWaitOptions) => harness.idle(() => client.diagnostics(), options),
+        idle: (options?: TestWaitOptions) => harness.idle(clientWork(client), options),
         counters: () => client.diagnostics().counters,
         shutdown,
         [Symbol.asyncDispose]: shutdown,
@@ -402,6 +409,6 @@ export function createTestBot<
         return test.shutdown()
     }
     const say = (content: string, sayOptions?: TestSayOptions) =>
-        harness.say(() => test.client.diagnostics(), content, sayOptions)
+        harness.say(clientWork(test.client), content, sayOptions)
     return Object.freeze({ ...test, ready, say, shutdown, [Symbol.asyncDispose]: shutdown })
 }

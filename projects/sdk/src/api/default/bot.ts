@@ -234,10 +234,12 @@ export interface BotOptions<
     readonly commands?: BotCommandsOptions<SelectedMessage<F>, S>
     /**
      * Startup work after events and commands are registered and before the gateway connects, such as extra subscriptions,
-     * cache warm-up or timers. The bot connects only after a returned promise settles, so no handler runs before setup finishes.
+     * cache warm-up or scheduled tasks. The bot connects only after a returned promise settles, so no handler runs before setup finishes.
+     * Start timers and background work with client.schedule, whose tasks belong to the bot: A requested stop lets their
+     * running work finish within drainMs, every stop cancels the rest, and a failure reaches onError or the log.
      * The signal aborts when the bot begins stopping for any reason, including a requested stop before its drain, a
-     * failure and a stop while setup is still running. Pass it to SDK operations, or listen for its abort event to clear
-     * timers and end background work started here, which the runner does not track or await.
+     * failure and a stop while setup is still running. Pass it to SDK operations, or listen for its abort event to end
+     * other work started here, which the runner does not track or await.
      * A throw, rejection or returned or resolved Err result stops the bot before connecting, and runBot returns an Err
      * ApplicationError whose source is "runBot setup" and whose cause is the original value, such as the
      * GuildOperationError of a failed read. A thrown SdkDefect remains a defect and rejects with SdkDefect.
@@ -274,7 +276,7 @@ export interface BotOptions<
  *
  * @remarks
  * Aborting the optional signal requests a normal stop, not a cancellation Err. A requested stop first stops accepting
- * events and lets running handlers and their requests finish for up to drainMs, default 5,000 ms. Success means the client has
+ * events and lets running handlers, scheduled tasks and their requests finish for up to drainMs, default 5,000 ms. Success means the client has
  * stopped and cleanup has finished. The runner always shuts down its client, including after a failure.
  * If an event or command subscription closes while the bot is still running, the result fails with
  * CriticalWorkerStoppedError. That includes a handler or command router set to overflow "stop" whose queue overflows.

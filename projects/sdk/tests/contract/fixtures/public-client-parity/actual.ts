@@ -45,7 +45,7 @@ export type Paired = {
 
 // These members have deliberately different callback, cancellation or lazy-stream contracts
 type Exceptions = {
-    Client: "observeState" | "on" | "subscribe" | "use"
+    Client: "observeState" | "on" | "schedule" | "subscribe" | "use"
     ClientCache: "onChange"
     Collector: "close"
     Messages: "collect" | "collectReactions" | "keepTyping"

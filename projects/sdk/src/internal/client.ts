@@ -95,6 +95,7 @@ import { defaultTransport, type Transport } from "./transport/index.js"
 import { identifySpacingMs, startupBudgetMs } from "./client/backoff.js"
 import { clearCaches } from "./client/intake.js"
 import { drainWork } from "./client/drain.js"
+import { ScheduledTasks } from "./scheduled-tasks.js"
 import {
     closeAll,
     defectsOnly,
@@ -314,6 +315,8 @@ export class ClientOwner<M extends MessageCore = Message> {
     readonly logging: ClientLogger
     /** Client-wide failure reports, delivered to onError or logged */
     readonly failures: FailureReporter
+    /** Tasks started with client.schedule, which end with this client */
+    readonly tasks: ScheduledTasks
     readonly events = new EventBus<M>(
         () => this.logging,
         () => this.failures,
@@ -384,6 +387,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.memberChunks = new MemberChunkOwner(this.#gatewayRequests, logical, route)
         this.logging = configuration.logging
         this.failures = failures
+        this.tasks = new ScheduledTasks(logical, failures, configuration.logging)
         const reportCache = (error: unknown) => this.failures.report({ kind: "cache", error })
         this.cache = configuration.cache
             ? new MessageCache(
@@ -1674,6 +1678,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return closeAll([
             Effect.exit(this.instance.shutdown()),
             Effect.exit(this.events.shutdown()),
+            Effect.exit(this.tasks.shutdown()),
             Effect.exit(this.rest.shutdown()),
             Effect.exit(this.failures.shutdown()),
             Effect.all(
@@ -2206,6 +2211,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.withFiber((fiber) =>
             this.events.ownsHandler(fiber.id) ||
             this.failures.owns(fiber.id) ||
+            this.tasks.owns(fiber.id) ||
             [...this.#messageCollectors].some((collector) => collector.owns(fiber.id)) ||
             [...this.#reactionCollectors].some((collector) => collector.owns(fiber.id))
                 ? // A native handler cannot join its own cleanup: The client scope owns shutdown and interrupts this caller.
@@ -2229,6 +2235,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                         ? Effect.withFiber((fiber) =>
                               drainWork({
                                   events: owner.events,
+                                  tasks: owner.tasks,
                                   requests: () => owner.rest.inFlight(),
                                   logging: owner.logging,
                                   drainMs,
@@ -2258,6 +2265,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             owner.#setState("Closing")
             owner.events.stop()
             owner.rest.stop()
+            owner.tasks.stop()
             return Effect.gen(function* () {
                 const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
                 const startedAt = Date.now()

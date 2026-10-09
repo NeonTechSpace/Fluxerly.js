@@ -79,6 +79,7 @@ const kindText: Record<FailureKind, string> = {
     progress: "A cleanup progress callback failed",
     cache: "A cache callback failed",
     observer: "A state observer failed",
+    task: "A scheduled task failed",
 }
 
 function subject(report: ReportInput) {
@@ -128,6 +129,7 @@ const categories: Record<FailureKind, LogCategory> = {
     progress: "sdk",
     cache: "cache",
     observer: "lifecycle",
+    task: "lifecycle",
 }
 
 const codes: Record<FailureKind, LogCode> = {
@@ -138,6 +140,7 @@ const codes: Record<FailureKind, LogCode> = {
     progress: "cleanup.progressFailed",
     cache: "cache.policyFailed",
     observer: "lifecycle.observerFailed",
+    task: "lifecycle.taskFailed",
 }
 
 /** Why a report was logged instead of reaching its hook, recorded as fields.reportOutcome */

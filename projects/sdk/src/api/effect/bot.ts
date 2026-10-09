@@ -184,8 +184,10 @@ export type BotOptions<
          * A defect or interruption stops the bot with that cause unchanged. Passed inline to runBot, the Effect's other
          * services are added to the bot's requirements.
          * The Effect runs in the bot's Scope, so its finalizers run and fibers it forks into that Scope are interrupted when
-         * the bot stops, after its client has shut down. The default API instead passes setup an AbortSignal that
-         * aborts when the bot begins stopping
+         * the bot stops, after its client has shut down. A forked fiber's failure is not reported, so start delayed,
+         * repeating and background work with client.schedule instead: A requested stop lets its running work finish
+         * within drainMs, and a failure reaches onError or the log. The default API instead passes setup an AbortSignal
+         * that aborts when the bot begins stopping
          */
         readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, Scope.Scope>
     }
@@ -400,8 +402,8 @@ export function installNativeTestBot(
  * A subscription that closes while the bot runs fails the bot with CriticalWorkerStoppedError. That includes a handler
  * or command router set to overflow "stop" whose queue overflows. The overflow is still reported to onError or logged,
  * and the error names the event and the exceeded capacity, with the EventOverflowError as its cause. Cleanup is awaited.
- * Aborting signal or enabled SIGINT/SIGTERM stops successfully, after running handlers and their requests had up to
- * drainMs, default 5,000 ms, to finish. Fiber interruption remains interruption and does not drain.
+ * Aborting signal or enabled SIGINT/SIGTERM stops successfully, after running handlers, scheduled tasks and their
+ * requests had up to drainMs, default 5,000 ms, to finish. Fiber interruption remains interruption and does not drain.
  * Process signals stay opt-in here, because a launcher such as NodeRuntime.runMain already interrupts the program on
  * SIGINT and SIGTERM. Set processSignals to true only when nothing else handles them and a drained stop is wanted.
  * By default a failure or defect that stops the bot, including misuse and a missing token, is also logged once, with

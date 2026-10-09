@@ -403,6 +403,17 @@ export const logCodes = {
         meaning: "A connection-state observer threw or rejected",
         action: "Fix the observer callback",
     },
+    "lifecycle.taskFailed": {
+        levels: ["debug", "error"],
+        meaning: "One run of a task started with client.schedule threw or failed. A repeating task keeps its schedule",
+        action: "Fix the task, or handle the failure with the client-level onError",
+    },
+    "lifecycle.tasksCancelled": {
+        levels: ["info"],
+        meaning:
+            "Shutdown ended scheduled tasks that still had a run waiting or in progress, so those runs never happened or did not finish. The count is in fields.cancelled, and fields.running counts the runs cut off while in progress",
+        action: "Shut down with drainMs to let running tasks finish first, and keep work that must survive a restart outside the SDK",
+    },
     "lifecycle.stopRequested": { levels: ["info"], meaning: "A stop signal or process signal asked the bot to stop" },
     "lifecycle.botFailed": {
         levels: ["error"],
@@ -414,7 +425,7 @@ export const logCodes = {
     "lifecycle.draining": {
         levels: ["info"],
         meaning:
-            "A shutdown with drainMs stopped accepting new events and waits for running handlers, waiting handler events and REST requests to finish",
+            "A shutdown with drainMs stopped accepting new events and waits for running handlers, waiting handler events, running scheduled tasks and REST requests to finish",
     },
     "lifecycle.drained": {
         levels: ["info"],
@@ -423,8 +434,8 @@ export const logCodes = {
     "lifecycle.drainTimedOut": {
         levels: ["warn"],
         meaning:
-            "The drain time ran out, so shutdown cancels the handlers, waiting events and REST requests that had not finished. The fields name how many",
-        action: "Make handlers finish sooner, or raise drainMs if the process may take longer to stop",
+            "The drain time ran out, so shutdown cancels the handlers, waiting events, scheduled tasks and REST requests that had not finished. The fields name how many",
+        action: "Make handlers and tasks finish sooner, or raise drainMs if the process may take longer to stop",
     },
     "lifecycle.shutdownComplete": {
         levels: ["info"],

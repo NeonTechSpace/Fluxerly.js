@@ -69,15 +69,19 @@ await runBot({
                     delay: { type: "duration", min: 1_000, max: 3_600_000 },
                     note: { type: "text", rest: true },
                 },
-                execute: async ({ values, reply, signal }) => {
-                    await new Promise((resolve) => setTimeout(resolve, values.delay))
-                    if (!signal.aborted) return reply(values.note)
+                execute: ({ client, message, values, reply }) => {
+                    client.schedule((signal) => client.messages.reply(message, values.note, { signal }), {
+                        delayMs: values.delay,
+                    })
+                    return reply("Reminder set")
                 },
             },
         },
     },
 })
 ```
+
+The `remind` command hands the wait to [`client.schedule`](/docs/{{version}}/starter-lifetime/#run-work-later-or-on-a-schedule), so it finishes at once instead of keeping a command slot busy, and the note arrives later as a reply. The bot owns the reminder, so stopping the bot cancels it, and a failed reply goes to the client-level `onError` or the log
 
 In TypeScript, `values.name` is a string and `values.delay` is a number of milliseconds. A missing, invalid or extra argument stops the command before `execute`, and `runBot` answers with the reason and the command's usage, such as `Missing name. Usage: !greet <name>`. That reply is the `onReject: "reply"` default of `runBot`. Set `onReject: "silent"` to send nothing, or pass a function for custom feedback. A router from `commands.create` gives no feedback unless `onReject` is set
 

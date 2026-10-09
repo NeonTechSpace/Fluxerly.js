@@ -6,6 +6,7 @@ import * as Scope from "effect/Scope"
 import { ok, ResultAsync } from "neverthrow"
 import { causeReasons, defectReason, suspendInput } from "#sdk/internal/defects"
 import { shutdownDrainMs } from "#sdk/internal/client/drain"
+import { scheduleTiming } from "#sdk/internal/scheduled-tasks"
 import { promiseHook, throwIfErr } from "#sdk/internal/failures"
 import { fiberRejectionScope, inRejectionScope } from "#sdk/internal/rejection-scope"
 import { registerClientOwner } from "#sdk/internal/client-registry"
@@ -15,6 +16,7 @@ import type {
     ClientOptions,
     ConnectionState,
     OperationOptions,
+    ScheduleOptions,
     ShutdownOptions,
 } from "#sdk/client"
 import {
@@ -297,6 +299,42 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      */
     use(middleware: EventMiddleware<M>): MiddlewareRegistration
     /**
+     * Run a task later, once or repeatedly, as part of this client's lifetime instead of an event handler or command.
+     * Scheduling returns at once, so a handler or command that schedules a task finishes without waiting for it and does
+     * not hold its slot. Without options the task runs once as soon as possible, which suits background work started in
+     * runBot setup. The delay and interval follow the Clock of the client's other timers, and the interval counts from the
+     * end of each run, so runs never overlap
+     *
+     * A failed run is reported with its original error to the client-level onError, else an Error log record with code
+     * lifecycle.taskFailed. A repeating task keeps its schedule after a failed run, so a passing problem such as a network
+     * error does not end it, and a lasting one is reported at every run
+     *
+     * Shutdown cancels the runs that have not started. A draining shutdown, such as a stop requested from runBot, starts no
+     * new run and lets runs in progress finish within its drainMs, and then shutdown cancels what is left.
+     * One lifecycle.tasksCancelled Info record counts the tasks that shutdown ended with a run waiting or in progress.
+     * Tasks are kept in memory only, so a restart forgets them.
+     * Scheduling after shutdown began, including during a drain, is refused with ClientClosedError, and invalid options
+     * are misuse with ConfigurationError
+     *
+     * @remarks
+     * The task receives a signal that aborts when shutdown cancels its run. Return or await its asynchronous work: A throw,
+     * a rejection, or a returned or resolved Err result fails the run. The SDK cannot stop a promise that ignores the signal.
+     * Returns the task's handle synchronously. A task that is not a function and invalid options throw ConfigurationError,
+     * scheduling after shutdown began throws ClientClosedError, and an option getter that throws causes SdkDefect.
+     * A waiting task keeps Node.js running until it ends or closes, or the client shuts down
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function hourlyStatusExample(client: Client, channelId: string) {
+     *     return client.schedule((signal) => client.messages.send(channelId, "Still running", { signal }), {
+     *         intervalMs: 3_600_000,
+     *     })
+     * }
+     * ```
+     */
+    schedule(task: (signal: AbortSignal) => unknown, options?: ScheduleOptions): ScheduledTask
+    /**
      * Receive future events of one type in receive order through a bounded buffer.
      * No history is replayed and bulk events are not split into individual events.
      * Enabled cache changes happen before delivery and remain independent of this subscription and its overflow.
@@ -474,6 +512,19 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
 }
 
 /**
+ * A task started with client.schedule. It ends by itself after its only run, or when the client shuts down
+ *
+ * @category Client and lifecycle
+ */
+export interface ScheduledTask {
+    /**
+     * Cancel every later run. A run in progress continues, and a draining shutdown still waits for it.
+     * The task can close itself from its own run. Repeated calls do nothing
+     */
+    close(): void
+}
+
+/**
  * Create a bot client from a token, initially Disconnected
  *
  * Use `run` or `connect` to receive gateway events. HTTP requests work without connecting.
@@ -586,6 +637,27 @@ export function createClient<const F extends MessageFields | undefined = undefin
             }),
         )
     }
+    const schedule = (task: (signal: AbortSignal) => unknown, options?: ScheduleOptions): ScheduledTask => {
+        if (typeof task !== "function") throw new ConfigurationError("task", "The scheduled task must be a function")
+        let timing: ReturnType<typeof scheduleTiming>
+        try {
+            timing = scheduleTiming(options)
+        } catch (error) {
+            // A throwing option getter is an application fault, reported like other default-API input faults
+            throw new SdkDefect("schedule", [defectReason(error, "application")])
+        }
+        if (timing instanceof ConfigurationError) {
+            Error.captureStackTrace(timing, schedule)
+            throw timing
+        }
+        const run = Effect.tryPromise({
+            try: (signal) => Promise.resolve(task(signal)).then(throwIfErr),
+            // Keep the thrown or rejected value itself for the failure report
+            catch: (error) => error,
+        })
+        const close = owner.tasks.start(run, timing, Effect.runSync(owner.logging.provide(Effect.context<never>())))
+        return Object.freeze({ close })
+    }
     const namespaces = bindDefault(context)
     return registerClientOwner(
         Object.freeze({
@@ -671,6 +743,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 )
                 return Object.freeze({ close: remove, [Symbol.dispose]: remove })
             },
+            schedule,
             subscribe: <K extends EventName>(event: K, options?: EventBufferOptions) =>
                 register(
                     owner.events.open(event, options).pipe(

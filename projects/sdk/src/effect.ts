@@ -615,6 +615,7 @@ export type {
     ConnectionRecoveryOptions,
     ConnectionState,
     OperationSignal,
+    ScheduleOptions,
     ShutdownOptions,
 } from "./client.js"
 export {
@@ -667,7 +668,7 @@ export { commands } from "./api/effect/commands.js"
 export { supervisor } from "./api/effect/supervisor.js"
 export { hierarchy } from "./api/effect/hierarchy.js"
 export { createClient } from "./api/effect/client.js"
-export type { ClientOptions, Client } from "./api/effect/client.js"
+export type { ClientOptions, Client, ScheduledTask } from "./api/effect/client.js"
 export type {
     ReactionCollectorOptions,
     CollectorOptions,

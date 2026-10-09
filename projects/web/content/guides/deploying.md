@@ -34,15 +34,15 @@ For TypeScript, run `bot.ts` instead of `bot.js`. Node.js 24 runs TypeScript fil
 
 In the default API, unless `processSignals` is `false`, the SDK listens for SIGINT and SIGTERM and for no other signals. The native Effect `runBot` listens only with `processSignals: true`, so enable it when nothing else handles the signals and a drained stop is wanted. Without it, a launcher such as `NodeRuntime.runMain` interrupts the program instead, which skips the drain below, and with no launcher Node.js ends the process at once. When the process receives one of the signals, the SDK logs the signal and shuts the bot down:
 
-- Stops accepting new events and gives running handlers and commands, the events already waiting for them and their requests up to 5 seconds to finish. The `drainMs` option of `runBot` changes that time, and `drainMs: 0` skips the wait
-- Signals the handlers still running to stop through their `signal`
+- Stops accepting new events and gives running handlers, commands and scheduled tasks, the events already waiting for them and their requests up to 5 seconds to finish. Scheduled tasks that have not started are cancelled. The `drainMs` option of `runBot` changes that time, and `drainMs: 0` skips the wait
+- Signals the handlers and tasks still running to stop through their `signal`
 - Closes the command router and every event subscription
 - Closes each gateway connection, giving it up to 5 seconds to close normally
 - Saves resumable sessions when a [session store](/docs/{{version}}/sharding/#resume-after-a-restart) is configured. Saves for local shards run in parallel, each with a 5-second timeout
 - Waits for the SDK's own cleanup of sockets, requests and collector callbacks
 - Finally logs `Shutdown complete` with its duration, removes its signal listeners and resolves the `runBot` Result
 
-The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running. After `runBot` resolves, close database connections, timers and servers the application opened. A returned handler Promise and its REST requests get the drain window to finish. Track detached Promises, timers, background jobs and work that needs more than that window, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
+The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running. After `runBot` resolves, close database connections, timers and servers the application opened. A returned handler Promise, a running scheduled task and their REST requests get the drain window to finish. Track detached Promises, timers not started with `client.schedule` and work that needs more than that window, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
 
 Use a 30-second stop timeout before the process manager force-kills the bot. With the default `drainMs`, allow up to 5 seconds for the drain, up to 5 seconds to close gateway connections and up to 5 seconds for parallel session saves when a store is configured, plus time for remaining SDK cleanup and the application's cleanup after `runBot` resolves. Increase the timeout when `drainMs` is larger or application cleanup needs longer. A force-kill before session saves finish can prevent resuming after restart. Each listener handles only the first signal of its kind, so sending the same signal again during shutdown gets Node.js's default handling and usually ends the process at once
 

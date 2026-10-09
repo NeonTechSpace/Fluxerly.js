@@ -6,11 +6,14 @@
 import type * as Effect from "effect/Effect"
 import type { ClientLogger } from "./logging.js"
 import type { FailureReporter } from "./failures.js"
+import type { ScheduledTasks } from "./scheduled-tasks.js"
 
 /** The owner services that optional tools built on the public client need for logging and failure reports */
 export interface ClientServices {
     readonly logging: ClientLogger
     readonly failures: FailureReporter
+    /** Scheduled tasks, whose runs in progress the test kit's idle waits for */
+    readonly tasks: Pick<ScheduledTasks, "running">
     /** The bot account ID for command mention prefixes, or undefined when it cannot be read yet */
     selfUserId(): Effect.Effect<string | undefined>
 }

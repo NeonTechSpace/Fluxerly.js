@@ -1,6 +1,6 @@
 /**
- * Draining shutdown: Stop event intake, then let running handlers, waiting handler events and REST requests finish until
- * a deadline, before shutdown cancels the rest.
+ * Draining shutdown: Stop event intake and new scheduled task runs, then let running handlers, waiting handler events,
+ * running scheduled tasks and REST requests finish until a deadline, before shutdown cancels the rest.
  * Invariant: The drain only waits. It never cancels work itself, so the ordinary shutdown that follows cancels whatever
  * is left, and a drain that ends early changes nothing but the time shutdown starts. Waiting follows progress signals,
  * so an idle client ends the drain at once. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
@@ -13,6 +13,7 @@ import { ConfigurationError } from "#sdk/errors"
 import { record } from "../decode/primitives.js"
 import type { EventBus } from "../events.js"
 import type { ClientLogger } from "../logging.js"
+import type { ScheduledTasks } from "../scheduled-tasks.js"
 import { unsupportedKeyHint } from "../suggest.js"
 import { formatDuration } from "./lifetime.js"
 
@@ -45,6 +46,7 @@ export function shutdownDrainMs(options: unknown): number | ConfigurationError {
 interface DrainWork {
     readonly running: number
     readonly waiting: number
+    readonly tasks: number
     readonly requests: number
 }
 
@@ -56,29 +58,32 @@ function describeWork(work: DrainWork): string {
     const parts = [
         ...(work.running ? [plural(work.running, "running handler", "running handlers")] : []),
         ...(work.waiting ? [plural(work.waiting, "waiting event", "waiting events")] : []),
+        ...(work.tasks ? [plural(work.tasks, "running scheduled task", "running scheduled tasks")] : []),
         ...(work.requests ? [plural(work.requests, "REST request", "REST requests")] : []),
     ]
     return parts.length < 2 ? (parts[0] ?? "no work") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`
 }
 
 /**
- * Seal the event bus, then wait until no handler is running or waiting and no REST request is in flight, or until drainMs
- * passes. Logs the start and the result. Runs with the caller's Clock and never fails
+ * Seal the event bus and scheduled tasks, then wait until no handler or task is running, no event is waiting and no REST
+ * request is in flight, or until drainMs passes. Logs the start and the result. Runs with the caller's Clock and never fails
  */
 export function drainWork(options: {
     readonly events: Pick<EventBus, "seal" | "drainState" | "progress">
+    readonly tasks: Pick<ScheduledTasks, "seal" | "running" | "progress">
     /** Completion signals of the REST operations in flight now */
     readonly requests: () => readonly Deferred.Deferred<void>[]
     readonly logging: ClientLogger
     readonly drainMs: number
     readonly context: Context.Context<never>
 }): Effect.Effect<void> {
-    const { events, requests, logging, drainMs, context } = options
+    const { events, tasks, requests, logging, drainMs, context } = options
     return Effect.suspend(() => {
         events.seal()
-        const work = (): DrainWork => ({ ...events.drainState(), requests: requests().length })
+        tasks.seal()
+        const work = (): DrainWork => ({ ...events.drainState(), tasks: tasks.running, requests: requests().length })
         const initial = work()
-        if (initial.running + initial.waiting + initial.requests === 0) return Effect.void
+        if (initial.running + initial.waiting + initial.tasks + initial.requests === 0) return Effect.void
         const startedAt = Date.now()
         logging.log(
             {
@@ -90,12 +95,17 @@ export function drainWork(options: {
             },
             context,
         )
-        // Handlers can start REST requests and REST responses can let handlers finish, so check both until neither has work
+        // Handlers and tasks can start REST requests and REST responses can let them finish, so check all of them until
+        // none has work
         const settled = Effect.gen(function* () {
             while (true) {
                 const { running, waiting } = events.drainState()
                 if (running + waiting > 0) {
                     yield* events.progress()
+                    continue
+                }
+                if (tasks.running > 0) {
+                    yield* tasks.progress()
                     continue
                 }
                 const inFlight = requests()

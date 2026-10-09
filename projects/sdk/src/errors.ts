@@ -339,6 +339,9 @@ export class ConfigurationError extends FluxerlyError {
             | "middleware"
             | "listener"
             | "next"
+            | "task"
+            | "delayMs"
+            | "intervalMs"
             | "embedField",
         /** Explanation of the accepted setting, without its rejected value */
         message: string,
@@ -401,6 +404,7 @@ export type Operation =
     | "shutdown"
     | "on"
     | "subscribe"
+    | "schedule"
     | "next"
     | "send"
     | "forward"

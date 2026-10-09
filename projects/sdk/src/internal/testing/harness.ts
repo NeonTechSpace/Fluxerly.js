@@ -28,10 +28,16 @@ const levels: readonly LogThreshold[] = ["trace", "debug", "info", "warn", "erro
 /** Consecutive quiet event loop turns after which idle treats the client as settled */
 const idleTurns = 3
 
+/** The work in progress that idle waits for: The client's diagnostics and its scheduled task runs in progress */
+export interface TestClientWork {
+    readonly diagnostics: ClientDiagnostics
+    readonly runningTasks: number
+}
+
 /**
- * Codes the failure reporter logs at Error for a handler, command, callback or onError hook failure, or a subscription
- * stopped by overflow. The reported value can be any error, such as the Fluxer rejection of a failed reply a handler
- * returned, so these records count whatever the error's origin
+ * Codes the failure reporter logs at Error for a handler, command, callback, scheduled task or onError hook failure, or
+ * a subscription stopped by overflow. The reported value can be any error, such as the Fluxer rejection of a failed
+ * reply a handler returned, so these records count whatever the error's origin
  */
 const reportedFailureCodes: ReadonlySet<LogCode> = new Set<LogCode>([
     "events.handlerFailed",
@@ -43,6 +49,7 @@ const reportedFailureCodes: ReadonlySet<LogCode> = new Set<LogCode>([
     "cleanup.progressFailed",
     "cache.policyFailed",
     "lifecycle.observerFailed",
+    "lifecycle.taskFailed",
 ])
 
 /**
@@ -194,20 +201,25 @@ export class TestHarness {
     }
 
     /**
-     * Resolve once the client has no running handler, REST request or unanswered test request and produced no new log
-     * record, request or gateway command for several event loop turns
+     * Resolve once the client has no running handler, scheduled task run, REST request or unanswered test request and
+     * produced no new log record, request or gateway command for several event loop turns. A scheduled task waiting for
+     * its time does not count, so a test advances its clock to run it
      */
-    idle(
-        diagnostics: () => ClientDiagnostics,
-        options: TestWaitOptions | undefined,
-        signal?: AbortSignal,
-    ): Promise<void> {
+    idle(work: () => TestClientWork, options: TestWaitOptions | undefined, signal?: AbortSignal): Promise<void> {
         const timeoutMs = waitTimeout(options)
         if (this.#closed) return Promise.reject(new ClientClosedError())
         const busy = () => {
-            const { events, rest, gatewayRequests } = diagnostics()
+            const {
+                diagnostics: { events, rest, gatewayRequests },
+                runningTasks,
+            } = work()
             return (
-                events.activeHandlers + rest.activeRequests + rest.queuedRequests + gatewayRequests.activeRequests > 0
+                events.activeHandlers +
+                    rest.activeRequests +
+                    rest.queuedRequests +
+                    gatewayRequests.activeRequests +
+                    runningTasks >
+                0
             )
         }
         const activity = () =>
@@ -256,7 +268,7 @@ export class TestHarness {
      * messages the client sent meanwhile. Misuse and emitting before ready throw synchronously, as idle and emit do
      */
     say(
-        diagnostics: () => ClientDiagnostics,
+        work: () => TestClientWork,
         content: string,
         options: TestSayOptions | undefined,
         signal?: AbortSignal,
@@ -273,9 +285,7 @@ export class TestHarness {
         if (this.#closed) return Promise.reject(new ClientClosedError())
         const before = this.http.requests().length
         this.gateway.emit("MESSAGE_CREATE", this.fixtures.message({ ...overrides, content }), undefined)
-        return this.idle(diagnostics, options, signal).then(() =>
-            this.http.sentMessages(this.http.requests().slice(before)),
-        )
+        return this.idle(work, options, signal).then(() => this.http.sentMessages(this.http.requests().slice(before)))
     }
 
     /** Record a test transport event in logs() and in caller sinks, at the caller's thresholds */

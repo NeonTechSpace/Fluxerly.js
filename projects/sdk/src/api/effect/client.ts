@@ -12,12 +12,14 @@ import type {
     ClientOptions as SharedClientOptions,
     ConnectionRecoveryOptions,
     ConnectionState,
+    ScheduleOptions,
     ShutdownOptions,
 } from "#sdk/client"
 import type { MessageCacheOptions } from "#sdk/cache"
 import { ClientClosedError, ConfigurationError, type ConnectError, type ConnectionFailure } from "#sdk/errors"
 import { makeClient } from "#sdk/internal/client"
 import { shutdownDrainMs } from "#sdk/internal/client/drain"
+import { scheduleTiming } from "#sdk/internal/scheduled-tasks"
 import { suspendInput } from "#sdk/internal/defects"
 import { nativeMiddleware, waitForEvent } from "#sdk/internal/events"
 import { EventOverflowError, type EventWaitFailure } from "#sdk/message-errors"
@@ -367,6 +369,47 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
         middleware: EventMiddleware<M, E, R>,
     ): Effect.Effect<MiddlewareRegistration, never, R | Scope.Scope>
     /**
+     * Run a task later, once or repeatedly, as part of this client's lifetime instead of an event handler or command.
+     * Scheduling returns at once, so a handler or command that schedules a task finishes without waiting for it and does
+     * not hold its slot. Without options the task runs once as soon as possible, which suits background work started in
+     * runBot setup. The delay and interval follow the Clock of the client's other timers, and the interval counts from the
+     * end of each run, so runs never overlap
+     *
+     * A failed run is reported with its original error to the client-level onError, else an Error log record with code
+     * lifecycle.taskFailed. A repeating task keeps its schedule after a failed run, so a passing problem such as a network
+     * error does not end it, and a lasting one is reported at every run
+     *
+     * Shutdown cancels the runs that have not started. A draining shutdown, such as a stop requested from runBot, starts no
+     * new run and lets runs in progress finish within its drainMs, and then shutdown cancels what is left.
+     * One lifecycle.tasksCancelled Info record counts the tasks that shutdown ended with a run waiting or in progress.
+     * Tasks are kept in memory only, so a restart forgets them.
+     * Scheduling after shutdown began, including during a drain, is refused with ClientClosedError, and invalid options
+     * are misuse with ConfigurationError
+     *
+     * @remarks
+     * The task is an Effect that runs again for each run, with the services available when this Effect executes and a
+     * Scope of its own for each run, closed when the run ends. The task does not belong to the executing Scope, so a
+     * handler that schedules it can end first. A failed run reports its complete Cause, and a run that interrupts itself
+     * ends the task without a report. Shutdown interrupts a run in progress and awaits its finalizers.
+     * A task that is not an Effect and invalid options are defects carrying ConfigurationError, and scheduling after
+     * shutdown began is a defect carrying ClientClosedError
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export function hourlyStatusExample(client: Client, channelId: string) {
+     *     return client.schedule(client.messages.send(channelId, "Still running").pipe(Effect.asVoid), {
+     *         intervalMs: 3_600_000,
+     *     })
+     * }
+     * ```
+     */
+    schedule<E = never, R = never>(
+        task: Effect.Effect<unknown, E, R>,
+        options?: ScheduleOptions,
+    ): Effect.Effect<ScheduledTask, never, Exclude<R, Scope.Scope>>
+    /**
      * Receive future events of one type in receive order through a bounded buffer.
      * No history is replayed and bulk events are not split into individual events.
      * Enabled cache changes happen before delivery and remain independent of this subscription and its overflow.
@@ -545,6 +588,19 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
 }
 
 /**
+ * A task started with client.schedule. It ends by itself after its only run, or when the client shuts down
+ *
+ * @category Client and lifecycle
+ */
+export interface ScheduledTask {
+    /**
+     * Cancel every later run. A run in progress continues, and a draining shutdown still waits for it.
+     * The task can close itself from its own run. Repeated calls do nothing
+     */
+    close(): Effect.Effect<void>
+}
+
+/**
  * Create a bot client from the supplied token when this Effect executes
  *
  * Use `Effect.scoped` to keep the client open while the bot works and shut it down when the Scope closes.
@@ -559,7 +615,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
  * Closing the scope permanently shuts down the client and releases its credential reference.
  * Cache-error callbacks capture the Effect services available when creation executes.
  * The Effect Clock supplied at creation controls this client's REST queue and deadlines, cache expiry, collectors,
- * presence pacing and gateway lifetime. Supplying a different Clock for a later operation does not replace it.
+ * presence pacing, scheduled task timing and gateway lifetime. Supplying a different Clock for a later operation does not replace it.
  * Operation-specific waits and utilities document which Clock they use. Logging durations never control deadlines
  *
  * **Instance and caching**
@@ -678,6 +734,26 @@ export function openClient<E = never, R = never, const F extends MessageFields |
                         )
                         return Object.freeze({ close: () => Effect.sync(remove) }) satisfies MiddlewareRegistration
                     }),
+                schedule: <E = never, R = never>(task: Effect.Effect<unknown, E, R>, options?: ScheduleOptions) =>
+                    Effect.gen(function* () {
+                        if (!Effect.isEffect(task))
+                            return yield* Effect.die(
+                                new ConfigurationError("task", "The scheduled task must be an Effect"),
+                            )
+                        const timing = yield* suspendInput(() => {
+                            const timing = scheduleTiming(options)
+                            return timing instanceof ConfigurationError ? Effect.die(timing) : Effect.succeed(timing)
+                        })
+                        // The task keeps the services of this Effect, and each run gets a Scope of its own instead
+                        const services = Context.omit(Scope.Scope)(
+                            (yield* Effect.context<R>()) as Context.Context<never>,
+                        )
+                        // Scheduling after shutdown began throws ClientClosedError, which becomes a defect here
+                        const close = yield* Effect.sync(() =>
+                            owner.tasks.start(Effect.scoped(task) as Effect.Effect<unknown, unknown>, timing, services),
+                        )
+                        return Object.freeze({ close: () => Effect.sync(close) }) satisfies ScheduledTask
+                    }) as Effect.Effect<ScheduledTask, never, Exclude<R, Scope.Scope>>,
                 subscribe: <K extends EventName>(event: K, options?: EventBufferOptions) =>
                     // Registration misuse is a defect, while overflow stays the Stream's typed failure
                     owner.events.stream(event, options).pipe(
