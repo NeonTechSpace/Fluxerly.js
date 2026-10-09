@@ -464,12 +464,11 @@ function listChanges(before, after) {
 
 /**
  * Compares the baseline documents and rate-limit buckets with the upstream branch. Only when a hash changed are the
- * baseline copies also read, to describe the difference. Observation mode also signals a changed commit
+ * baseline copies also read, to describe the difference. A new commit that leaves them unchanged is not drift
  * @param {Manifest} manifest
  * @param {Source} source
- * @param {{ compareCommit?: boolean }} [options]
  */
-export async function checkUpstream(manifest, source, { compareCommit = false } = {}) {
+export async function checkUpstream(manifest, source) {
     validateManifest(manifest)
     const commit = await source.resolveCommit(manifest.repository, manifest.branch)
     if (!commitPattern.test(commit)) throw new Error("Upstream branch did not resolve to a commit")
@@ -511,11 +510,7 @@ export async function checkUpstream(manifest, source, { compareCommit = false } 
         repository: manifest.repository,
         pinnedCommit: manifest.commit,
         commit,
-        drift:
-            (compareCommit && commit !== manifest.commit) ||
-            gatewayDocs.changed ||
-            rateLimits.changed ||
-            Object.values(files).some((file) => file.changed),
+        drift: gatewayDocs.changed || rateLimits.changed || Object.values(files).some((file) => file.changed),
         files: Object.fromEntries(
             Object.entries(files).map(([key, { path, pinned, current, changed }]) => [key, { path, pinned, current, changed }]),
         ),
@@ -595,8 +590,9 @@ function surfaceReport(title, { application, userOnly }) {
 /**
  * @param {Awaited<ReturnType<typeof checkUpstream>>} result
  * @param {Pick<Baseline, "kind" | "reason">} [baseline]
+ * @param {Awaited<ReturnType<typeof checkUpstream>>} [sincePin] Comparison of the same upstream commit with the repository pin
  */
-export function renderReport(result, baseline = { kind: "repository-pin" }) {
+export function renderReport(result, baseline = { kind: "repository-pin" }, sincePin) {
     const kind = baseline.kind === "previous-run" ? "Previous run" : "Repository pin"
     const lines = [
         "## Upstream Fluxer drift",
@@ -610,6 +606,29 @@ export function renderReport(result, baseline = { kind: "repository-pin" }) {
         "",
         `Current upstream commit: ${escape(result.commit)}`,
         "",
+        ...changeReport(result),
+    ]
+    if (sincePin)
+        lines.push(
+            "## Since the repository pin",
+            "",
+            sincePin.drift
+                ? "Watched documents differ from the repository pin. This comparison does not fail the check"
+                : "Watched documents match the repository pin",
+            "",
+            `Pinned commit: ${escape(sincePin.pinnedCommit)}`,
+            "",
+            ...changeReport(sincePin),
+        )
+    return lines.join("\n")
+}
+
+/**
+ * Lists the result for each watched document and describes what changed
+ * @param {Awaited<ReturnType<typeof checkUpstream>>} result
+ */
+function changeReport(result) {
+    const lines = [
         `[Commit range](https://github.com/${result.repository}/compare/${result.pinnedCommit}...${result.commit})`,
         "",
         "| Document | Result |",
@@ -652,7 +671,7 @@ export function renderReport(result, baseline = { kind: "repository-pin" }) {
             "",
         )
     }
-    return lines.join("\n")
+    return lines
 }
 
 /**
@@ -783,16 +802,22 @@ export async function runUpstream(args, {
     const options = parseArguments(args)
     const manifest = validateManifest(JSON.parse(await readFile(manifestFile, "utf8")))
     const baseline = await readBaseline(manifest, options.baseline)
-    const result = await checkUpstream(baseline.manifest, source, { compareCommit: options.baseline !== undefined })
+    const result = await checkUpstream(baseline.manifest, source)
     const observed = observation(baseline.manifest, result)
     if (options.update) {
         await writeFile(manifestFile, JSON.stringify(observed, null, 4) + "\n")
         return { exitCode: 0, report: `Pinned ${manifest.repository} at ${result.commit}`, result, baseline }
     }
     if (options.record) await writeFile(options.record, JSON.stringify(observed, null, 4) + "\n")
-    const report = renderReport(result, baseline)
+    // A change since the pin stays visible after the run that signalled it, at the commit the previous-run comparison read
+    const sincePin =
+        baseline.kind === "previous-run"
+            ? await checkUpstream(manifest, { ...source, resolveCommit: async () => result.commit })
+            : undefined
+    const report = renderReport(result, baseline, sincePin)
     if (summaryFile) await appendFile(summaryFile, report + "\n")
-    return { exitCode: result.drift ? 1 : 0, report, result, baseline }
+    // Only the change since the previous run fails, so one upstream change fails one run, not every run until the pin moves
+    return { exitCode: result.drift ? 1 : 0, report, result, baseline, sincePin }
 }
 
 async function main() {

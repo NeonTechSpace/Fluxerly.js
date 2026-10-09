@@ -182,13 +182,12 @@ test("A failed observation becomes the next run's baseline, passes unchanged, an
         rateLimits: { path: limits, sha256: hash("channel:read::channel_id") },
     })
     writeFileSync(files.baselineFile, recordedText)
-    source.reads.length = 0
     const second = await runUpstream(args, { ...files, source })
     assert.equal(second.exitCode, 0)
     assert.equal(second.baseline.kind, "previous-run")
     assert.deepEqual(second.baseline.manifest, recorded, "The next run reads exactly the recorded observation")
     assert.match(second.report, /Baseline: .*previous run/i)
-    assert.ok(source.reads.every((read) => !read.startsWith("a ")), "The repository pin is not used as the previous baseline")
+    assert.equal(second.result.pinnedCommit, current, "The repository pin is not used as the previous baseline")
     assert.equal(readFileSync(files.recordFile, "utf8"), recordedText, "Unchanged upstream is still recorded for artifact renewal")
 
     source.resolveCommit = async () => next
@@ -203,18 +202,45 @@ test("A failed observation becomes the next run's baseline, passes unchanged, an
     assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest)
 })
 
-test("Observation mode signals commit-only changes while local mode still compares document hashes", async (t) => {
+test("A new upstream commit that leaves every watched document unchanged passes in observation mode", async (t) => {
+    // A commit-only change used to fail the daily run although all watched documents were unchanged
     const { manifest, source } = upstream({ [pinned]: document, [current]: document })
     const files = workspace(t, manifest)
     writeFileSync(files.baselineFile, JSON.stringify(manifest))
-    assert.equal((await runUpstream([], { ...files, source })).exitCode, 0)
     const observed = await runUpstream(["--record", files.recordFile, "--baseline", files.baselineFile], { ...files, source })
-    assert.equal(observed.exitCode, 1)
     assert.equal(observed.baseline.kind, "previous-run")
-    assert.ok(Object.values(observed.result.files).every((file) => !file.changed))
-    assert.equal(observed.result.rateLimits.changed, false)
+    assert.equal(observed.result.commit, current)
+    assert.equal(observed.exitCode, 0)
+    assert.equal(JSON.parse(readFileSync(files.recordFile, "utf8")).commit, current, "The new commit still becomes the next baseline")
+})
+
+test("A watched document change stays reported against the repository pin after the run that signalled it", async (t) => {
+    // Each run used to compare only with the previous observation, so a change showed in one red run and was gone from the next
+    const next = "c".repeat(40)
+    const nextDocument = { ...changedDocument, [`${limits}/Channel.ts`]: bucket("channel:read::guild_id") }
+    const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument, [next]: nextDocument })
+    const files = workspace(t, manifest)
+    const args = ["--baseline", files.baselineFile, "--record", files.recordFile]
+    const first = await runUpstream(args, { ...files, source })
+    assert.equal(first.exitCode, 1)
+    assert.equal(first.baseline.kind, "repository-pin")
+    assert.equal(first.sincePin, undefined, "A run that already compared with the pin reports it once")
     writeFileSync(files.baselineFile, readFileSync(files.recordFile, "utf8"))
-    assert.equal((await runUpstream(["--baseline", files.baselineFile], { ...files, source })).exitCode, 0)
+
+    // Upstream moving during the run must not split the report across two commits
+    let resolved = 0
+    source.resolveCommit = async () => (resolved++ ? next : current)
+    const second = await runUpstream(args, { ...files, source })
+    assert.equal(second.exitCode, 0, "Only the change since the previous run fails the check")
+    assert.equal(second.sincePin.pinnedCommit, pinned)
+    assert.equal(second.sincePin.commit, current)
+    assert.equal(second.sincePin.drift, true)
+    assert.deepEqual(second.sincePin.gateway.fields, [{ name: "READY", details: ["~ session_id"] }])
+    assert.equal(second.sincePin.buckets, undefined)
+    assert.ok(second.report.includes(`https://github.com/${manifest.repository}/compare/${pinned}...${current}`))
+    assert.match(second.report, /READY/)
+    assert.ok(readFileSync(files.summaryFile, "utf8").endsWith(second.report + "\n"), "The job summary contains the pin comparison")
+    assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest)
 })
 
 test("The CLI rejects missing paths, repeated arguments and updates mixed with observation mode before upstream reads", async (t) => {

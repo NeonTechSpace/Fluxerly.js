@@ -1,19 +1,19 @@
 {
     "repository": "fluxerapp/fluxer",
     "branch": "main",
-    "commit": "a95172bf88da26dd877255ceee139bf84e6799fa",
+    "commit": "ec681e6061a5f72ca2e6cdd40c379d7cd0d31f3c",
     "files": {
         "openapi": {
             "path": "fluxer_api/src/api/openapi/openapi.json",
-            "sha256": "1f83d3cc3dbc06c72f2496b661f3e7e995a172bf2e754403fb92d303c50bcbd7"
+            "sha256": "b18f9e0c45af6bbe0a8f1724fb712c0570836d56bab4c6c75cd8c07ddcf9881d"
         }
     },
     "gatewayDocs": {
         "path": "fluxer_docs/src/content/docs/gateway",
-        "sha256": "fccff9c51db7881285474fbca70a7125c95ced857560dc441475e9e980f34853"
+        "sha256": "83a7a73ea59785097181fa12f90ca4d3df9d89477e55c1225eec7dc3cb43461f"
     },
     "rateLimits": {
         "path": "fluxer_api/src/api/rate_limit_configs",
-        "sha256": "37b3856dac765c10fcbefacd0562b7843835f96dae584304a28dc87b1b07f169"
+        "sha256": "27e74bbe22c8418023b5a511c8470d9d6f2ca06d9d32f20defee9a4816ccb981"
     }
 }
