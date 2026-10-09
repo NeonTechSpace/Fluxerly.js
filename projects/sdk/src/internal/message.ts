@@ -152,7 +152,7 @@ function decodeMessageValue(
         ...(!selected("tts") || value.tts === undefined ? {} : { tts: value.tts }),
         ...(!selected("createdAt") || value.timestamp === undefined ? {} : { createdAt: value.timestamp }),
         ...(!selected("editedAt") || value.edited_timestamp === undefined ? {} : { editedAt: value.edited_timestamp }),
-        ...(!selected("type") || value.type === undefined ? {} : { type: value.type }),
+        ...(value.type === undefined ? {} : { type: value.type }),
         ...(!selected("flags") || value.flags === undefined ? {} : { flags: value.flags }),
         ...(value.guild_id === undefined ? {} : { guildId: value.guild_id }),
         ...(!selected("mentionedEveryone") || value.mention_everyone === undefined

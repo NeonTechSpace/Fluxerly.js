@@ -88,7 +88,7 @@ async function defects(effect: Effect.Effect<unknown, unknown>): Promise<unknown
 }
 
 const token = "fixture-only-not-a-credential"
-const messageWire = { id: "10", channel_id: "20", content: "!ping", author: { id: "30", username: "fixture" } }
+const messageWire = { id: "10", channel_id: "20", type: 0, content: "!ping", author: { id: "30", username: "fixture" } }
 const signalListeners = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")]
 
 /**

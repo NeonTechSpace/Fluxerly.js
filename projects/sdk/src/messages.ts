@@ -138,12 +138,13 @@ export interface Message extends MessageReference {
 }
 
 /** Message fields available even when messageFields is an empty array.
- * IDs, text and author remain available for message operations, commands and collectors.
- * The guildId is retained when supplied, but remains optional
+ * IDs, text, author and type remain available for message operations, commands and collectors.
+ * Prefix commands read the type to run only for messages a person typed.
+ * The type and guildId are retained when supplied, but remain optional
  *
  * @category Messages
  */
-export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author" | "guildId">
+export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author" | "type" | "guildId">
 
 /** Name of a Message property accepted by the client's messageFields option.
  * Selecting a MessageCore property, which is always kept, does not change the result

@@ -443,6 +443,7 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      * A matched command supplies its canonical command name, even when a guard denies it or middleware stops it.
      * Reported failures produce outcome failure, cancellation produces cancelled, and other completions produce success.
      * A message with no command match still produces an observation without a command name.
+     * Only messages a person typed can run commands. Messages from bots are skipped unless `ignoreBots` is false, and so is every message whose type is neither Default nor Reply, such as the notice Fluxer posts with a new thread's name as its content. A message without a type, which Fluxer never sends, counts as typed.
      * Each attachment dispatches independently, so attaching twice can run the same command twice.
      * Call `subscription.close()` to detach it and signal cancellation, without shutting down the client.
      * The returned `subscription.waitForClose()` observes SDK cleanup, not completion of arbitrary application promises.

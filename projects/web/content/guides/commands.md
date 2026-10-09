@@ -137,6 +137,8 @@ await runBot({
 Here `!purge` runs only in a community, for a member with the Manage Messages permission, and at most once every 30 seconds in each channel. With `mentionPrefix`, a mention of the bot also works as a prefix. An unknown command name is ignored unless `onUnmatched` handles it, and its `suggestion` names the closest registered command when one is similar.
 Each unmatched message is logged at Debug with the code `commands.unmatched` and the fields `reason`, `messageId`, `channelId` and, when there is one, `suggestion`
 
+Only messages a person typed can run commands. Messages from bots are skipped by default, and the notices Fluxer posts with text of its own never run commands. For example, a thread named `!ping` makes Fluxer post a notice containing that name, and it does not run `!ping`
+
 A guard returns `true` to allow the command, `false` to deny it without an automatic reply or `{ deny: "reason" }` to deny it with a reason that `onReject: "reply"` sends. A false verdict stays silent even with the `runBot` reply default, but still counts as a rejection, logs `commands.rejected` at Debug and reaches a custom `onReject` callback. Each built-in guard denies with a specific reason and covers one common check, allowing only:
 
 - Messages sent in a community, with `guards.guildOnly()`

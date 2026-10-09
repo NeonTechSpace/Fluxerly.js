@@ -34,6 +34,8 @@ interface Delivery {
     readonly channelId?: string
     readonly authorId?: string
     readonly isBot?: boolean
+    /** Fluxer's message type, 0 for a regular message when unset */
+    readonly type?: number
 }
 
 /**
@@ -77,6 +79,7 @@ export async function commandFixture(route?: Route) {
                 id: String(++messages),
                 channel_id: from.channelId ?? "20",
                 content,
+                type: from.type ?? 0,
                 author: { id: from.authorId ?? "30", username: "fixture", bot: from.isBot ?? false },
                 ...(from.guildId === undefined ? {} : { guild_id: from.guildId }),
             })

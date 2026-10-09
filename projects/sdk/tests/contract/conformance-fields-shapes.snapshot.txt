@@ -2044,6 +2044,7 @@ field|shared|MessageCore.channelId|string|optional=false|nullable=false
 field|shared|MessageCore.content|string|optional=false|nullable=false
 field|shared|MessageCore.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageCore.id|string|optional=false|nullable=false
+field|shared|MessageCore.type|number | undefined|optional=true|nullable=false
 field|shared|MessageDeletion.authorId|string | undefined|optional=true|nullable=false
 field|shared|MessageDeletion.channelId|string|optional=false|nullable=false
 field|shared|MessageDeletion.content|null | string | undefined|optional=true|nullable=true

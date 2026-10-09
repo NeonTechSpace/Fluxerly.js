@@ -699,6 +699,7 @@ async function verifyFields(ops, channelId) {
         "channelId",
         "content",
         "author",
+        "type",
         "guildId",
         "embeds",
         "messageReference",

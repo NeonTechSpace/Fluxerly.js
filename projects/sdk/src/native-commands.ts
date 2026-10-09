@@ -532,6 +532,7 @@ export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Me
      * A matched command supplies its canonical command name, even when a guard denies it or middleware stops it.
      * Reported failures produce outcome failure, interruption produces cancelled, and other completions produce success.
      * A message with no command match still produces an observation without a command name.
+     * Only messages a person typed can run commands. Messages from bots are skipped unless `ignoreBots` is false, and so is every message whose type is neither Default nor Reply, such as the notice Fluxer posts with a new thread's name as its content. A message without a type, which Fluxer never sends, counts as typed.
      * Each attachment dispatches independently, so duplicate attachments can execute a command twice
      *
      * Run `subscription.close()` or close the registration scope to detach and interrupt handlers, without shutting down the client.

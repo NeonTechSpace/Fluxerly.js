@@ -23,7 +23,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
     /**
      * Choose which optional message fields the application receives.
      * Omit this setting for full Message output.
-     * An empty array keeps id, channelId, content, author and guildId when the response supplies it
+     * An empty array keeps id, channelId, content, author, type and guildId, where the last two are kept when the response supplies them
      *
      * Excluded fields are absent, not undefined or empty arrays, in this client's REST, event, cache and collector results
      *

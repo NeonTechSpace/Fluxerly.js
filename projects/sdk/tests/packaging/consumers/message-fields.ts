@@ -173,7 +173,7 @@ export async function defaultDynamicAndDefault(token: string, fields: readonly M
         // @ts-expect-error Empty tuples expose only always-retained fields
         result.value.embeds
     }
-    createClient({ token, messageFields: ["id", "channelId", "content", "author", "guildId"] })
+    createClient({ token, messageFields: ["id", "channelId", "content", "author", "type", "guildId"] })
     // @ts-expect-error Unknown names are rejected at the public creation boundary
     createClient({ token, messageFields: ["timestamp"] })
     // @ts-expect-error A narrower full-message policy cannot influence field inference

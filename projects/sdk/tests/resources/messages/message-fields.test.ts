@@ -25,7 +25,7 @@ afterEach(() => {
     expect(wsTarget.requested.filter((url) => url !== hostedGateway)).toEqual([])
 })
 const target = { id: "10", channelId: "20" }
-const coreKeys = ["id", "channelId", "content", "author", "guildId"]
+const coreKeys = ["id", "channelId", "content", "author", "type", "guildId"]
 const optionalKeys: MessageField[] = [
     "nonce",
     "webhookId",
@@ -33,7 +33,6 @@ const optionalKeys: MessageField[] = [
     "tts",
     "createdAt",
     "editedAt",
-    "type",
     "flags",
     "mentionedEveryone",
     "embeds",
@@ -175,6 +174,7 @@ function expectProjection(message: MessageCore | undefined | null, fields: reado
         mentionFlags: 2,
     })
     expect(message.guildId).toBe("40")
+    expect(message.type).toBe(19)
     expect(Object.isFrozen(message)).toBe(true)
     expect(Object.isFrozen(message.author)).toBe(true)
     const projected = message as MessageCore & Partial<import("../../../src/index.js").Message>
@@ -556,6 +556,7 @@ test.each(modes)("%s retained cache and collector budgets account for the select
     const core = {
         ...target,
         content: "rich fixture",
+        type: 19,
         guildId: "40",
         author: {
             id: "30",

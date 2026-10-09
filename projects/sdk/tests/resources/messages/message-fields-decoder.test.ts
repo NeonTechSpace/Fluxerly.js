@@ -97,7 +97,7 @@ test("empty and subset selections retain the mandatory core and omit excluded ow
     const full = decodeMessage(value)!
     expect(decodeMessage(value, undefined)).toEqual(full)
     const core = decodeMessage(value, emptySelection)!
-    expect(Reflect.ownKeys(core).sort()).toEqual(["author", "channelId", "content", "guildId", "id"])
+    expect(Reflect.ownKeys(core).sort()).toEqual(["author", "channelId", "content", "guildId", "id", "type"])
     const subset = decodeMessage(value, new Set<MessageField>(["nonce", "embeds", "messageReference"]))!
     expect(Reflect.ownKeys(subset).sort()).toEqual([
         "author",
@@ -108,6 +108,7 @@ test("empty and subset selections retain the mandatory core and omit excluded ow
         "id",
         "messageReference",
         "nonce",
+        "type",
     ])
     for (const key of Reflect.ownKeys(subset))
         expect(subset[key as keyof typeof subset]).toEqual(full[key as keyof typeof full])

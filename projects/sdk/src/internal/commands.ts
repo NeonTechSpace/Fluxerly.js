@@ -26,7 +26,7 @@ import {
 } from "#sdk/internal/command-arguments"
 import { ConfigurationError } from "#sdk/errors"
 import { readCaller } from "./defects.js"
-import type { Message, MessageCore } from "#sdk/messages"
+import { MessageType, type Message, type MessageCore } from "#sdk/messages"
 import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
@@ -109,8 +109,14 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
         return this.#options.mentionPrefix === true
     }
 
-    /** Whether the router skips messages from bots before any prefix work */
+    /**
+     * Whether the router skips a message before any prefix work: One from a bot unless `ignoreBots` is false, or one a person did not type.
+     * Only Default and Reply messages carry typed text. Every other type is a notice Fluxer posts itself, such as a new thread's name, so an allow-list keeps future types out too.
+     * Fluxer always sends a type, so a message without one, such as a hand-written test payload, counts as typed rather than being dropped silently
+     */
     ignores(message: M): boolean {
+        const { type } = message
+        if (type !== undefined && type !== MessageType.Default && type !== MessageType.Reply) return true
         return this.#options.ignoreBots !== false && message.author.isBot === true
     }
 

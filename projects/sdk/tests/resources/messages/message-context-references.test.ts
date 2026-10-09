@@ -94,13 +94,13 @@ function expectContext(
     context: (typeof contexts)[number],
 ) {
     expect(message).toMatchObject({ ...target, guildId: "40", content: "Announcement context" })
+    // The type is part of MessageCore, so a selection never drops it
+    expect(message.type).toBe(context.type)
     if (fields !== undefined) {
         expect(Object.hasOwn(message, "messageReference")).toBe(false)
-        expect(Object.hasOwn(message, "type")).toBe(false)
         expect(Object.hasOwn(message, "flags")).toBe(false)
         return
     }
-    expect(message.type).toBe(context.type)
     expect(message.flags).toBe(context.flags)
     expect(message.messageReference).toEqual({
         channelId: "70",

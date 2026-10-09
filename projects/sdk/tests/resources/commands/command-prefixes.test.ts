@@ -2,7 +2,7 @@ import { Effect } from "effect"
 import { afterEach, describe, expect, test, vi } from "vitest"
 import type { PrefixCommandUnmatched } from "../../../src/index.js"
 import { modes } from "../../support/both-apis.js"
-import { act, attach, commandFixture, connect, createRouter, type RecordedCall } from "./command-fixture.js"
+import { act, attach, barrier, commandFixture, connect, createRouter, type RecordedCall } from "./command-fixture.js"
 
 vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
 
@@ -101,6 +101,56 @@ describe.each(modes)("%s prefixes", (mode) => {
         remote.deliver("!ping")
         await vi.waitFor(() => expect(executed).toEqual(["102"]))
         expect(remote.calls).toEqual([])
+    })
+
+    test("a notice Fluxer posts with text of its own, such as a new thread's name, never runs a command as its author", async () => {
+        const remote = await commandFixture()
+        const connected = await connect(mode)
+        const executed: string[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "ping",
+            execute: ({ message }: { message: { id: string } }) => act(mode, () => void executed.push(message.id)),
+        })
+        const reports = await attach(connected, router)
+
+        // Thread creation posts type 18 with the thread's name as content, authored by the person who created the thread
+        remote.deliver("!ping", { type: 18 })
+        // The thread starter notice, and a type Fluxer might add later, must also stay out
+        remote.deliver("!ping", { type: 21 })
+        remote.deliver("!ping", { type: 200 })
+        remote.deliver("!ping", { type: 0 })
+        remote.deliver("!ping", { type: 19 })
+        await barrier(remote, connected)
+
+        // Handlers run concurrently, and the barrier ends only after every one of them has finished
+        expect(executed.toSorted()).toEqual(["104", "105"])
+        expect(reports).toEqual([])
+    })
+
+    test("a client whose messageFields leave out the type still keeps a thread notice from running a command", async () => {
+        const remote = await commandFixture()
+        // An empty selection keeps only MessageCore. The fixture's connect accepts no selection type, hence the cast
+        const connected = await connect(mode, { messageFields: [] as never })
+        const executed: string[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "ping",
+            execute: ({ message }: { message: { id: string } }) => act(mode, () => void executed.push(message.id)),
+        })
+        const reports = await attach(connected, router)
+
+        remote.deliver("!ping", { type: 18 })
+        remote.deliver("!ping")
+        // A payload without a type, as hand-written tests send, counts as typed instead of being dropped silently
+        remote.dispatch("MESSAGE_CREATE", {
+            id: "150",
+            channel_id: "20",
+            content: "!ping",
+            author: { id: "30", username: "fixture", bot: false },
+        })
+        await barrier(remote, connected)
+
+        expect(executed).toEqual(["102", "150"])
+        expect(reports).toEqual([])
     })
 })
 
