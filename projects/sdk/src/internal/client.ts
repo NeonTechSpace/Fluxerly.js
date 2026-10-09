@@ -179,6 +179,9 @@ const disabledCacheDiagnostic: CacheDiagnostic = Object.freeze({
     accountedBytes: 0,
     maxEntries: null,
     maxBytes: null,
+    hits: 0,
+    misses: 0,
+    evictions: Object.freeze({ capacity: 0, expiry: 0 }),
 })
 const freezeCacheDiagnostic = (diagnostic: CacheDiagnostic | undefined): CacheDiagnostic =>
     diagnostic === undefined
@@ -189,6 +192,12 @@ const freezeCacheDiagnostic = (diagnostic: CacheDiagnostic | undefined): CacheDi
               accountedBytes: diagnostic.accountedBytes,
               maxEntries: diagnostic.maxEntries,
               maxBytes: diagnostic.maxBytes,
+              hits: diagnostic.hits,
+              misses: diagnostic.misses,
+              evictions: Object.freeze({
+                  capacity: diagnostic.evictions.capacity,
+                  expiry: diagnostic.evictions.expiry,
+              }),
           })
 
 const typingRefreshMs = 8_000

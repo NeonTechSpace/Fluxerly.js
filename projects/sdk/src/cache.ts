@@ -44,6 +44,35 @@ export interface CacheChange {
     readonly key: string | null
 }
 
+/**
+ * Bound the work one cache.onChange listener can hold, so a listener that falls behind or never finishes cannot grow memory without limit.
+ * A listener call is unfinished while its returned Promise or Effect is still running. A synchronous listener finishes each
+ * call before the next change, so these bounds never delay or drop its changes.
+ * Invalid values are misuse: The default API throws ConfigurationError, and the native API dies with it
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * // One call at a time, so asynchronous work sees the changes in the order they were applied
+ * export function saveChangesInOrder(client: Client, save: (key: string | null) => Promise<void>) {
+ *     return client.cache.onChange((change) => save(change.key), { concurrency: 1, maxPendingChanges: 1_000 })
+ * }
+ * ```
+ *
+ * @category Caching
+ */
+export interface CacheObserverOptions {
+    /** Maximum unfinished listener calls, a positive safe integer, default 256.
+     * Later changes wait in the order they were applied until a call finishes
+     */
+    readonly concurrency?: number
+    /** Maximum changes waiting for an unfinished call, a positive safe integer, default 256.
+     * A change that arrives while this many wait drops the oldest waiting change, logs a cache.changesDropped Warn with the
+     * observer's id and how many changes it has dropped, and counts the drop in diagnostics().counters.cacheChangesDropped
+     */
+    readonly maxPendingChanges?: number
+}
+
 /** Set memory-only cache bounds for a resource category such as users, communities (the guilds category) or channels.
  * The type parameter is the category's snapshot type, which a maxAgeMs callback receives.
  * Use true or an options object in ClientOptions.cache to enable that category, which is otherwise disabled.

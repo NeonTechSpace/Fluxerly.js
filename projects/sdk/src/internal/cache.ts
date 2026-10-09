@@ -45,6 +45,12 @@ function sameObservation<M extends MessageCore>(retained: M, incoming: M) {
 /** A message's cache change key: Its channel and message IDs */
 const changeKey = (message: MessageReference) => `${message.channelId}:${message.id}`
 
+/** Running lookup and eviction totals of one cache category, copied into its CacheDiagnostic */
+export type CacheStats = { hits: number; misses: number; evictions: { capacity: number; expiry: number } }
+export const cacheStats = (): CacheStats => ({ hits: 0, misses: 0, evictions: { capacity: 0, expiry: 0 } })
+/** A diagnostic copy of the totals, which keep counting after it is taken */
+export const readStats = (stats: CacheStats): CacheStats => ({ ...stats, evictions: { ...stats.evictions } })
+
 /** One client's retained observations and bounded in-flight guards, never a server-state replica */
 export class MessageCache<M extends MessageCore = Message> {
     #entries = new Map<string, Entry<M>>()
@@ -54,6 +60,7 @@ export class MessageCache<M extends MessageCore = Message> {
     #expiry = new ExpiryQueue<Entry<M> & { expires: number }>((entry) => this.#entries.get(entry.message.id) === entry)
     #timer: ExpiryTimer
     #closed = false
+    readonly #stats = cacheStats()
     readonly #limits: { readonly maxEntries: number; readonly maxBytes: number } | undefined
 
     constructor(
@@ -88,6 +95,7 @@ export class MessageCache<M extends MessageCore = Message> {
             accountedBytes: this.#bytes,
             maxEntries: this.#limits?.maxEntries ?? null,
             maxBytes: this.#limits?.maxBytes ?? null,
+            ...readStats(this.#stats),
         }
     }
 
@@ -110,7 +118,11 @@ export class MessageCache<M extends MessageCore = Message> {
 
     get(target: MessageReference): M | undefined {
         const entry = this.#peek(target)
-        if (!entry) return undefined
+        if (!entry) {
+            this.#stats.misses++
+            return undefined
+        }
+        this.#stats.hits++
         this.#entries.delete(target.id)
         this.#entries.set(target.id, entry)
         return entry.message
@@ -121,6 +133,7 @@ export class MessageCache<M extends MessageCore = Message> {
         if (!entry || entry.message.channelId !== target.channelId) return undefined
         if (entry.expires !== null && entry.expires <= this.now()) {
             this.#remove(target)
+            this.#stats.evictions.expiry++
             return undefined
         }
         return entry
@@ -197,6 +210,7 @@ export class MessageCache<M extends MessageCore = Message> {
             while (this.#entries.size >= this.settings.maxEntries || this.#bytes > this.settings.maxBytes - bytes) {
                 const oldest = this.#entries.values().next().value!
                 this.#remove(oldest.message)
+                this.#stats.evictions.capacity++
             }
             const entry: Entry<M> = { message, bytes, expires: age === null ? null : this.now() + age }
             this.#entries.set(message.id, entry)
@@ -284,7 +298,9 @@ export class MessageCache<M extends MessageCore = Message> {
     }
 
     #purge() {
-        this.#expiry.purge(this.now(), (entry) => this.#remove(entry.message))
+        this.#expiry.purge(this.now(), (entry) => {
+            if (this.#remove(entry.message)) this.#stats.evictions.expiry++
+        })
     }
 
     #schedule() {

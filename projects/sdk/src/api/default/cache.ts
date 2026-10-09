@@ -1,4 +1,4 @@
-import type { CacheChange } from "#sdk/cache"
+import type { CacheChange, CacheObserverOptions } from "#sdk/cache"
 import type { CacheEntriesOptions, CachedResources, CacheKind } from "#sdk/client"
 import type { Message, MessageCore } from "#sdk/messages"
 
@@ -9,7 +9,9 @@ import type { Message, MessageCore } from "#sdk/messages"
  * @category Caching
  */
 export interface CacheObserver {
-    /** Stop delivering changes, including changes already recorded but not yet delivered. Listener work already started is not cancelled. Repeated calls do nothing */
+    /** Identifier of this observer, such as cacheChange#3, used in its log records */
+    readonly id: string
+    /** Stop delivering changes, including changes recorded or waiting but not yet delivered. Listener work already started is not cancelled. Repeated calls do nothing */
     close(): void
     /** Close this observer, as `using` does at the end of a block */
     [Symbol.dispose](): void
@@ -76,14 +78,19 @@ export interface ClientCache<M extends MessageCore = Message> {
      * No change is recorded while no listener is registered, and a new listener receives no earlier changes or current contents.
      * Delivery has no ordering relative to event handlers, and listener work never changes a cache result, a REST outcome or event delivery.
      * A failing listener is reported as a cache failure to the client-level onError, or logged at Error, and keeps receiving later changes.
-     * Client shutdown delivers the final clears and then closes every observer.
+     * Client shutdown records its final clears, then closes every observer without waiting for unfinished listener calls.
+     * A listener with a free call receives those clears, and changes still waiting for a busy listener are dropped with a cache.changesDropped Warn.
      * Registering after shutdown returns an observer that never receives a change.
-     * A listener that is not a function is misuse: The default API throws ConfigurationError, and the native API dies with it
+     * A listener that is not a function, or invalid options, is misuse: The default API throws ConfigurationError, and the native API dies with it
      *
      * @remarks
      * Returns the observer synchronously.
      * The listener runs once per change. It fails when it throws, rejects, or returns or resolves an Err result.
-     * A returned promise is not awaited, so asynchronous listener work can overlap and cannot delay later changes
+     * A returned promise is not awaited, so asynchronous listener calls overlap, up to options.concurrency unfinished calls, 256 by default.
+     * Later changes then wait in order, up to options.maxPendingChanges, 256 by default, and a change arriving at that limit
+     * drops the oldest waiting change with a cache.changesDropped Warn.
+     * Waiting changes are discarded when the observer closes.
+     * A throwing options getter throws SdkDefect with code application.defect and the thrown value as its cause
      *
      * @example
      * ```ts
@@ -95,5 +102,5 @@ export interface ClientCache<M extends MessageCore = Message> {
      * }
      * ```
      */
-    onChange(listener: (change: CacheChange) => unknown): CacheObserver
+    onChange(listener: (change: CacheChange) => unknown, options?: CacheObserverOptions): CacheObserver
 }

@@ -21,6 +21,7 @@ import { retentionAge } from "./retention-age.js"
 import { decodeGuildChannels } from "./channel-decode.js"
 import { identifier, record } from "./decode/primitives.js"
 import { decodeSnapshotThreads, threadParentTypes } from "./thread-events.js"
+import { cacheStats, readStats } from "./cache.js"
 
 export type ChannelCacheRequest = {
     readonly channelId?: string
@@ -72,6 +73,7 @@ export class ChannelCache {
     #bytes = 0
     #generation = 0
     #closed = false
+    readonly #stats = cacheStats()
     #expiry = new ExpiryQueue<Entry & { expires: number }>((entry) => this.#entries.get(entry.value.id) === entry)
     #timer: ExpiryTimer
 
@@ -95,7 +97,11 @@ export class ChannelCache {
 
     get(channelId: string): GuildChannel | undefined {
         const entry = this.#peek(channelId)
-        if (!entry) return undefined
+        if (!entry) {
+            this.#stats.misses++
+            return undefined
+        }
+        this.#stats.hits++
         this.#entries.delete(channelId)
         this.#entries.set(channelId, entry)
         return entry.value
@@ -115,6 +121,7 @@ export class ChannelCache {
             accountedBytes: this.#bytes,
             maxEntries: this.settings.maxEntries,
             maxBytes: this.settings.maxBytes,
+            ...readStats(this.#stats),
         }
     }
 
@@ -328,6 +335,7 @@ export class ChannelCache {
         const entry = this.#entries.get(channelId)
         if (entry && entry.expires !== null && entry.expires <= this.now()) {
             this.#remove(entry)
+            this.#stats.evictions.expiry++
             return undefined
         }
         return entry
@@ -394,8 +402,10 @@ export class ChannelCache {
             return
         }
         this.#purge()
-        while (this.#entries.size >= this.settings.maxEntries || this.#bytes > this.settings.maxBytes - bytes)
+        while (this.#entries.size >= this.settings.maxEntries || this.#bytes > this.settings.maxBytes - bytes) {
             this.#remove(this.#entries.values().next().value!)
+            this.#stats.evictions.capacity++
+        }
         const entry: Entry = {
             value: channel,
             bytes,
@@ -408,7 +418,9 @@ export class ChannelCache {
     }
 
     #purge() {
-        this.#expiry.purge(this.now(), (entry) => this.#remove(entry))
+        this.#expiry.purge(this.now(), (entry) => {
+            if (this.#remove(entry)) this.#stats.evictions.expiry++
+        })
     }
 
     #schedule() {

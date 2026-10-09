@@ -104,6 +104,10 @@ describe("default API", () => {
         ["gateway.send", (client, failure) => client.gateway.send(0, 15, throwing("guild_ids", failure))],
         ["rest.request", (client, failure) => client.rest.request(throwing("method", failure))],
         ["cache.entries", (client, failure) => client.cache.entries("messages", throwing("limit", failure))],
+        [
+            "cache.onChange",
+            (client, failure) => client.cache.onChange(() => undefined, throwing("concurrency", failure)),
+        ],
         ["deleteMany", (client, failure) => client.messages.deleteMany("20", throwingArray(failure))],
         ["guilds.fetchCounts", (client, failure) => client.guilds.fetchCounts(throwingArray(failure))],
         [
@@ -213,6 +217,11 @@ describe("native API", () => {
         ["gateway.send", (client, failure) => client.gateway.send(0, 15, throwing("guild_ids", failure))],
         ["rest.request", (client, failure) => client.rest.request(throwing("method", failure))],
         ["cache.entries", (client, failure) => client.cache.entries("messages", throwing("limit", failure))],
+        [
+            "cache.onChange",
+            (client, failure) =>
+                Effect.scoped(client.cache.onChange(() => Effect.void, throwing("maxPendingChanges", failure))),
+        ],
         ["deleteMany", (client, failure) => client.messages.deleteMany("20", throwingArray(failure))],
         ["guilds.fetchCounts", (client, failure) => client.guilds.fetchCounts(throwingArray(failure))],
         ["members.search", (client, failure) => client.members.search("40", throwing("query", failure))],

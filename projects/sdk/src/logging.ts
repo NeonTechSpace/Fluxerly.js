@@ -82,7 +82,7 @@ export interface LogRecord {
     readonly event?: string
     /** Prefix command name that the record concerns */
     readonly command?: string
-    /** Identifier of the event subscription that the record concerns */
+    /** Identifier of the event subscription or cache observer that the record concerns */
     readonly subscriptionId?: string
     /** Elapsed milliseconds for the described work */
     readonly durationMs?: number
@@ -211,6 +211,8 @@ export interface ClientCounters {
          */
         readonly closed: number
     }
+    /** Cache changes not delivered to a cache.onChange listener because its waiting changes reached maxPendingChanges */
+    readonly cacheChangesDropped: number
     /** Gateway messages rejected as invalid protocol data, including skipped malformed dispatches */
     readonly protocolFailures: number
     /** Dispatch types the SDK does not handle */

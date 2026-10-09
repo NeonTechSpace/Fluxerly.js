@@ -1,6 +1,6 @@
 import type * as Effect from "effect/Effect"
 import type * as Scope from "effect/Scope"
-import type { CacheChange } from "#sdk/cache"
+import type { CacheChange, CacheObserverOptions } from "#sdk/cache"
 import type { CacheEntriesOptions, CachedResources, CacheKind } from "#sdk/client"
 import type { Message, MessageCore } from "#sdk/messages"
 
@@ -10,7 +10,9 @@ import type { Message, MessageCore } from "#sdk/messages"
  * @category Caching
  */
 export interface CacheObserver {
-    /** Stop delivering changes, including changes already recorded but not yet delivered, and interrupt running listener work without waiting for it. Repeated calls do nothing */
+    /** Identifier of this observer, such as cacheChange#3, used in its log records */
+    readonly id: string
+    /** Stop delivering changes, including changes recorded or waiting but not yet delivered, and interrupt running listener work without waiting for it. Repeated calls do nothing */
     close(): Effect.Effect<void>
 }
 
@@ -78,15 +80,19 @@ export interface ClientCache<M extends MessageCore = Message> {
      * No change is recorded while no listener is registered, and a new listener receives no earlier changes or current contents.
      * Delivery has no ordering relative to event handlers, and listener work never changes a cache result, a REST outcome or event delivery.
      * A failing listener is reported as a cache failure to the client-level onError, or logged at Error, and keeps receiving later changes.
-     * Client shutdown delivers the final clears and then closes every observer.
+     * Client shutdown records its final clears, then closes every observer without waiting for unfinished listener calls.
+     * A listener with a free call receives those clears, and changes still waiting for a busy listener are dropped with a cache.changesDropped Warn.
      * Registering after shutdown returns an observer that never receives a change.
-     * A listener that is not a function is misuse: The default API throws ConfigurationError, and the native API dies with it
+     * A listener that is not a function, or invalid options, is misuse: The default API throws ConfigurationError, and the native API dies with it
      *
      * @remarks
      * Registration runs when this Effect executes and lasts until observer close, client shutdown or the closing of the executing Scope.
      * Each change starts the listener's Effect in its own fiber with the services available at registration, without awaiting it,
-     * so asynchronous listener work can overlap and cannot delay later changes. Synchronous Effects finish before the next change starts.
-     * A failed or defective listener Effect is reported with its full Cause. Closing the observer interrupts listener fibers still running
+     * so asynchronous listener work overlaps, up to options.concurrency running fibers, 256 by default. Synchronous Effects finish before the next change starts.
+     * Later changes then wait in order, up to options.maxPendingChanges, 256 by default, and a change arriving at that limit
+     * drops the oldest waiting change with a cache.changesDropped Warn.
+     * A failed or defective listener Effect is reported with its full Cause. Closing the observer interrupts listener fibers still running and discards waiting changes.
+     * A throwing options getter dies with the thrown value
      *
      * @example
      * ```ts
@@ -99,5 +105,6 @@ export interface ClientCache<M extends MessageCore = Message> {
      */
     onChange<E = never, R = never>(
         listener: (change: CacheChange) => Effect.Effect<unknown, E, R>,
+        options?: CacheObserverOptions,
     ): Effect.Effect<CacheObserver, never, R | Scope.Scope>
 }

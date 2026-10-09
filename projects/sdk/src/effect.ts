@@ -651,7 +651,7 @@ export type {
     EventInvocation,
     EventInvocationOf,
 } from "./events.js"
-export type { CacheChange } from "./cache.js"
+export type { CacheChange, CacheObserverOptions } from "./cache.js"
 export type { IdentifyCoordinator, SessionSnapshot, SessionStore } from "./sharding.js"
 export { fileSessionStore } from "./sharding.js"
 export type { GatewayOptions } from "./client.js"

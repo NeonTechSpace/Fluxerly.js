@@ -112,14 +112,13 @@ try {
             const weak = await weakSnapshots(cleared)
             cleared.clear()
             const diagnostics = cleared.diagnostics()
-            for (const kind of ["guilds", "members", "roles"])
-                assert.deepEqual(diagnostics.caches[kind], {
-                    configured: true,
-                    retainedEntries: 0,
-                    accountedBytes: 0,
-                    maxEntries: 1000,
-                    maxBytes: 4194304,
-                })
+            for (const kind of ["guilds", "members", "roles"]) {
+                const { configured, retainedEntries, accountedBytes, maxEntries, maxBytes } = diagnostics.caches[kind]
+                assert.deepEqual(
+                    { configured, retainedEntries, accountedBytes, maxEntries, maxBytes },
+                    { configured: true, retainedEntries: 0, accountedBytes: 0, maxEntries: 1000, maxBytes: 4194304 },
+                )
+            }
             await collect(weak)
         } finally {
             await cleared.close()

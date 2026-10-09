@@ -442,8 +442,9 @@ export interface CacheEntriesOptions {
     readonly limit?: number
 }
 
-/** Current snapshot count and accounted bytes for one local cache category.
- * These values measure SDK retention, not how many resources exist remotely or how much process memory is used
+/** Current snapshot count and accounted bytes for one local cache category, with running lookup and eviction totals since the client was created.
+ * These values measure SDK retention, not how many resources exist remotely or how much process memory is used.
+ * A disabled category reports zero for every total
  *
  * @category Caching
  */
@@ -458,6 +459,19 @@ export interface CacheDiagnostic {
     readonly maxEntries: number | null
     /** Configured client-wide accounted-byte bound, or null when this category was disabled */
     readonly maxBytes: number | null
+    /** Local lookups, such as client.messages.get, that returned a snapshot, including lookups the SDK makes itself */
+    readonly hits: number
+    /** Local lookups that found no snapshot, including one that had just expired */
+    readonly misses: number
+    /** Snapshots this category removed on its own, by reason.
+     * Removal by events, writes, cache.delete, clears, connection gaps and shutdown is not counted
+     */
+    readonly evictions: {
+        /** Least recently used snapshots removed to make room within maxEntries or maxBytes */
+        readonly capacity: number
+        /** Snapshots removed because their maxAgeMs passed */
+        readonly expiry: number
+    }
 }
 
 /** Inspect this client's current connection state, occupied request slots and cache usage.

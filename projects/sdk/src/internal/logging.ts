@@ -354,6 +354,7 @@ export class ClientLogger {
         hookFailures: 0,
         reportsDropped: 0,
         eventsDropped: { overflow: 0, malformed: 0, collector: 0, closed: 0 },
+        cacheChangesDropped: 0,
         protocolFailures: 0,
         unknownDispatches: 0,
         unknownOpcodes: 0,

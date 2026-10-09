@@ -11,6 +11,7 @@ import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
 import { retentionAge } from "./retention-age.js"
+import { cacheStats, readStats } from "./cache.js"
 
 export type UserResources = { users: User; directMessages: DirectMessageChannel }
 type Kind = keyof UserResources
@@ -30,6 +31,7 @@ export type UserCacheGuard = {
 export class UserCache {
     #entries = { users: new Map<string, Entry>(), directMessages: new Map<string, Entry>() }
     #bytes = { users: 0, directMessages: 0 }
+    readonly #stats = { users: cacheStats(), directMessages: cacheStats() }
     #collectionEpoch = { users: {}, directMessages: {} }
     #targetEpoch = { users: {}, directMessages: {} }
     // Keep only the latest active guard per ID, with a conservative collection fence if callers exceed the bound
@@ -114,6 +116,8 @@ export class UserCache {
 
     get<K extends Kind>(kind: K, id: string): UserResources[K] | undefined {
         const entry = this.#peek(kind, id)
+        // A disabled kind holds nothing, so its lookups are not counted
+        if (this.settings[kind]) this.#stats[kind][entry ? "hits" : "misses"]++
         if (!entry) return undefined
         this.#entries[kind].delete(id)
         this.#entries[kind].set(id, entry)
@@ -130,6 +134,7 @@ export class UserCache {
             accountedBytes: this.#bytes[kind],
             maxEntries: settings?.maxEntries ?? null,
             maxBytes: settings?.maxBytes ?? null,
+            ...readStats(this.#stats[kind]),
         }
     }
 
@@ -215,6 +220,7 @@ export class UserCache {
         const entry = this.#entries[kind].get(id)
         if (entry && entry.expires !== null && entry.expires <= this.now()) {
             this.#remove(kind, id)
+            this.#stats[kind].evictions.expiry++
             return undefined
         }
         return entry
@@ -254,8 +260,10 @@ export class UserCache {
             return
         }
         const entries = this.#entries[kind]
-        while (entries.size >= settings.maxEntries || this.#bytes[kind] > settings.maxBytes - bytes)
+        while (entries.size >= settings.maxEntries || this.#bytes[kind] > settings.maxBytes - bytes) {
             this.#remove(kind, entries.keys().next().value!)
+            this.#stats[kind].evictions.capacity++
+        }
         const entry: Entry = {
             kind,
             value,
@@ -269,7 +277,9 @@ export class UserCache {
     }
 
     #purge() {
-        this.#expiry.purge(this.now(), (entry) => this.#remove(entry.kind, entry.value.id))
+        this.#expiry.purge(this.now(), (entry) => {
+            if (this.#remove(entry.kind, entry.value.id)) this.#stats[entry.kind].evictions.expiry++
+        })
     }
 
     #schedule() {

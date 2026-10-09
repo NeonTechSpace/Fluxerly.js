@@ -323,6 +323,11 @@ const cases: readonly Case[] = [
         api.members.iterateChunks(guildId, { all: true }, { timeotMs: 1 }),
     ),
     input("cache.entries", "options", "limt", "limit", (api) => api.cache.entries("guilds", { limt: 5 })),
+    input("cache.onChange", "options", "concurency", "concurrency", (api, mode) =>
+        mode === "native"
+            ? Effect.scoped(api.cache.onChange(() => Effect.void, { concurency: 1 }))
+            : api.cache.onChange(() => undefined, { concurency: 1 }),
+    ),
     input("rest.request", "input", "queri", "query", (api) =>
         api.rest.request({ method: "GET", path: "/users/@me", queri: {} }),
     ),

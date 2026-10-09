@@ -256,6 +256,8 @@ export class ConfigurationError extends FluxerlyError {
             | "partition"
             | "maxPendingMessages"
             | "maxPendingBytes"
+            | "maxPendingChanges"
+            | "cacheObserverOptions"
             | "onError"
             | "observe"
             | "cache"

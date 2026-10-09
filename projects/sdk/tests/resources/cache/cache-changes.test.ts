@@ -2,8 +2,8 @@ import { setImmediate as turn } from "node:timers/promises"
 import { Effect, Exit, References, Scope } from "effect"
 import { err } from "neverthrow"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import type { CacheChange } from "../../../src/cache.js"
-import type { Client, FailureReport } from "../../../src/index.js"
+import type { CacheChange, CacheObserverOptions } from "../../../src/cache.js"
+import type { Client, FailureReport, LogRecord } from "../../../src/index.js"
 import type { Client as NativeClient, FailureReport as NativeFailureReport } from "../../../src/effect.js"
 import type { ClientOwner } from "../../../src/internal/client.js"
 import { clientServices } from "../../../src/internal/client-registry.js"
@@ -39,6 +39,7 @@ async function onChange(
     mode: Mode,
     client: AnyClient,
     listener: (change: CacheChange) => void = () => undefined,
+    options?: CacheObserverOptions,
 ): Promise<{ readonly changes: CacheChange[]; close(): Promise<void> }> {
     const changes: CacheChange[] = []
     const record = (change: CacheChange) => {
@@ -46,14 +47,14 @@ async function onChange(
         listener(change)
     }
     if (mode === "default") {
-        const observer = (client as Client).cache.onChange(record)
+        const observer = (client as Client).cache.onChange(record, options)
         return { changes, close: async () => observer.close() }
     }
     const scope = Scope.makeUnsafe()
     onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
     const observer = await Effect.runPromise(
         (client as NativeClient).cache
-            .onChange((change) => Effect.sync(() => record(change)))
+            .onChange((change) => Effect.sync(() => record(change)), options)
             .pipe(Scope.provide(scope)),
     )
     return { changes, close: () => Effect.runPromise(observer.close()) }
@@ -208,6 +209,135 @@ describeBothApis("cache change notifications", (mode) => {
         const late = await onChange(mode, client)
         await late.close()
         expect(late.changes).toEqual([])
+    })
+
+    test("hold at most concurrency unfinished calls and drop the oldest waiting change with a logged, counted Warn", async () => {
+        // Without a bound, a listener that never finishes keeps one unfinished call per change, without limit
+        const records: LogRecord[] = []
+        const client = await setup(mode, {
+            cache: { users: true },
+            logging: { sink: (record) => void records.push(record), dedupe: false },
+        })
+        const started: (string | null)[] = []
+        const releases: (() => void)[] = []
+        const bounds = { concurrency: 2, maxPendingChanges: 3 }
+        let id: string
+        if (mode === "default")
+            id = (client as Client).cache.onChange((change) => {
+                started.push(change.key)
+                return new Promise<void>((resolve) => releases.push(resolve))
+            }, bounds).id
+        else {
+            const scope = Scope.makeUnsafe()
+            onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+            const observer = await Effect.runPromise(
+                (client as NativeClient).cache
+                    .onChange(
+                        (change) =>
+                            Effect.callback<void>((resume) => {
+                                started.push(change.key)
+                                releases.push(() => resume(Effect.void))
+                            }),
+                        bounds,
+                    )
+                    .pipe(Scope.provide(scope)),
+            )
+            id = observer.id
+        }
+        // A synchronous listener finishes each call at once, so the same bounds never delay or drop its changes
+        const synchronous = await onChange(mode, client, undefined, bounds)
+        const keys = ["1", "2", "3", "4", "5", "6", "7"]
+        for (const key of keys) storeUser(client, key)
+        await turn()
+
+        expect(started).toEqual(["1", "2"])
+        expect(synchronous.changes.map((change) => change.key)).toEqual(keys)
+        expect(client.diagnostics().counters.cacheChangesDropped).toBe(2)
+        const dropped = records.filter((record) => record.code === "cache.changesDropped")
+        expect(dropped.map((record) => [record.level, record.subscriptionId, record.fields?.dropped])).toEqual([
+            ["warn", id, 1],
+            ["warn", id, 2],
+        ])
+        // Finished calls start the waiting changes in applied order, without the two oldest that were dropped
+        await vi.waitFor(() => {
+            for (const release of releases.splice(0)) release()
+            expect(started).toEqual(["1", "2", "5", "6", "7"])
+        })
+    })
+
+    test("drop changes still waiting for a busy listener at shutdown with a logged, counted Warn", async () => {
+        // Catches: Shutdown discarded the changes, including its final clear, that waited for an unfinished call
+        // without any record, although a stuck listener must never hold shutdown either
+        const records: LogRecord[] = []
+        const client = await setup(mode, {
+            cache: { users: true },
+            logging: { sink: (record) => void records.push(record), dedupe: false },
+        })
+        const started: (string | null)[] = []
+        const bounds = { concurrency: 1 }
+        let id: string
+        if (mode === "default")
+            id = (client as Client).cache.onChange((change) => {
+                started.push(change.key)
+                return new Promise<void>(() => undefined)
+            }, bounds).id
+        else {
+            const scope = Scope.makeUnsafe()
+            onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+            const observer = await Effect.runPromise(
+                (client as NativeClient).cache
+                    .onChange(
+                        (change) => Effect.sync(() => started.push(change.key)).pipe(Effect.andThen(Effect.never)),
+                        bounds,
+                    )
+                    .pipe(Scope.provide(scope)),
+            )
+            id = observer.id
+        }
+        storeUser(client, "1")
+        storeUser(client, "2")
+        await turn()
+        expect(started).toEqual(["1"])
+        if (mode === "default") expect((await (client as Client).shutdown()).isOk()).toBe(true)
+        else await Effect.runPromise((client as NativeClient).shutdown())
+        await turn()
+        expect(started).toEqual(["1"])
+        // The waiting set of user 2 and shutdown's final clear of users
+        expect(client.diagnostics().counters.cacheChangesDropped).toBe(2)
+        const dropped = records.filter((record) => record.code === "cache.changesDropped")
+        expect(dropped.map((record) => [record.level, record.subscriptionId, record.fields?.dropped])).toEqual([
+            ["warn", id, 2],
+        ])
+    })
+
+    test("reject bounds that would stop or never limit delivery as misuse", async () => {
+        // A zero concurrency would queue every change and never call the listener
+        const client = await setup(mode, { cache: { users: true } })
+        const rejected = async (options: unknown) => {
+            if (mode === "default")
+                try {
+                    ;(client as Client).cache.onChange(() => undefined, options as CacheObserverOptions)
+                } catch (error) {
+                    return error
+                }
+            else {
+                const exit = await Effect.runPromiseExit(
+                    Effect.scoped(
+                        (client as NativeClient).cache.onChange(() => Effect.void, options as CacheObserverOptions),
+                    ),
+                )
+                const reason = Exit.isFailure(exit) ? exit.cause.reasons[0] : undefined
+                if (reason?._tag === "Die") return reason.defect
+            }
+            return expect.fail("Expected misuse")
+        }
+        for (const [options, field] of [
+            [{ concurrency: 0 }, "concurrency"],
+            [{ maxPendingChanges: 1.5 }, "maxPendingChanges"],
+            [{ concurrency: Infinity }, "concurrency"],
+            ["fast", "cacheObserverOptions"],
+        ] as const)
+            expect(await rejected(options)).toMatchObject({ _tag: "ConfigurationError", field })
     })
 
     test("give a new listener only later changes and drop undelivered ones on close", async () => {

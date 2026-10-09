@@ -546,7 +546,7 @@ export const logCodes = {
     "events.refused": {
         levels: ["info"],
         meaning:
-            "A draining shutdown did not deliver events that open subscriptions would have received, because it accepts no new events. The count is in fields.refused and in the eventsDropped.closed counter",
+            "A draining shutdown did not deliver events that open subscriptions or collectors would have received, because it accepts no new events. The count is in fields.refused and in the eventsDropped.closed counter",
     },
     "events.raw": { levels: ["trace"], meaning: "A raw dispatch is being delivered to raw subscribers" },
     "events.registeredAfterShutdown": {
@@ -601,6 +601,12 @@ export const logCodes = {
         levels: ["debug", "error"],
         meaning: "A cache maxAgeMs function or a cache.onChange listener threw or returned an invalid value",
         action: "Fix that function or listener",
+    },
+    "cache.changesDropped": {
+        levels: ["warn"],
+        meaning:
+            "A cache.onChange listener had its maximum number of unfinished calls and waiting changes, so the oldest waiting change was dropped, or the client shut down while changes waited for its unfinished calls, so those were dropped. The record names the observer and how many changes it has dropped",
+        action: "Make the listener finish its calls, or raise its concurrency or maxPendingChanges",
     },
     "cleanup.progressFailed": {
         levels: ["debug", "error"],

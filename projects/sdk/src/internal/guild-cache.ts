@@ -19,6 +19,7 @@ import type { LogicalScheduler } from "./logical-scheduler.js"
 import type { CacheChangeHub } from "./cache-changes.js"
 import { retentionAge } from "./retention-age.js"
 import { identifier, record } from "./decode/primitives.js"
+import { cacheStats, readStats } from "./cache.js"
 
 export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
 export type Resources = {
@@ -65,6 +66,13 @@ export class GuildCache {
         stickers: new Map<string, Entry>(),
     }
     #bytes = { guilds: 0, members: 0, roles: 0, emojis: 0, stickers: 0 }
+    readonly #stats = {
+        guilds: cacheStats(),
+        members: cacheStats(),
+        roles: cacheStats(),
+        emojis: cacheStats(),
+        stickers: cacheStats(),
+    }
     #requests = new Set<ResourceGuard>()
     #generation = 0
     #closed = false
@@ -94,6 +102,8 @@ export class GuildCache {
     get<K extends ResourceKind>(kind: K, guildId: string, id?: string): Resources[K] | undefined {
         const selection = { kind, guildId, ...(id === undefined ? {} : { id }) }
         const entry = this.#peek(selection)
+        // A disabled kind holds nothing, so its lookups are not counted
+        if (this.settings[kind]) this.#stats[kind][entry ? "hits" : "misses"]++
         if (!entry) return undefined
         const entries = this.#entries[kind]
         entries.delete(key(selection))
@@ -111,6 +121,7 @@ export class GuildCache {
             accountedBytes: this.#bytes[kind],
             maxEntries: settings?.maxEntries ?? null,
             maxBytes: settings?.maxBytes ?? null,
+            ...readStats(this.#stats[kind]),
         }
     }
 
@@ -154,6 +165,7 @@ export class GuildCache {
         const entry = this.#entries[selection.kind].get(key(selection))
         if (entry && entry.expires !== null && entry.expires <= this.now()) {
             this.#remove(entry)
+            this.#stats[selection.kind].evictions.expiry++
             return undefined
         }
         return entry
@@ -280,8 +292,10 @@ export class GuildCache {
             return
         }
         this.#purge()
-        while (entries.size >= settings.maxEntries || this.#bytes[kind] > settings.maxBytes - bytes)
+        while (entries.size >= settings.maxEntries || this.#bytes[kind] > settings.maxBytes - bytes) {
             this.#remove(entries.values().next().value!)
+            this.#stats[kind].evictions.capacity++
+        }
         const entry: Entry = {
             selection,
             value,
@@ -355,7 +369,9 @@ export class GuildCache {
     }
 
     #purge() {
-        this.#expiry.purge(this.now(), (entry) => this.#remove(entry))
+        this.#expiry.purge(this.now(), (entry) => {
+            if (this.#remove(entry)) this.#stats[entry.selection.kind].evictions.expiry++
+        })
     }
 
     #schedule() {
