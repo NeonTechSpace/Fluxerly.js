@@ -58,7 +58,8 @@ export interface ErrorInfo {
 }
 
 /** One structured SDK log record, delivered frozen to sinks and printed by the built-in console output.
- * Records never contain tokens, Authorization headers, client secrets or invite codes.
+ * Records never contain tokens, Authorization headers, client secrets, invite codes or the user information of a URL,
+ * such as user:password in https://user:password@host/path.
  * Message payload bodies appear only in explicit unsafe payload mode
  *
  * @category Logging and diagnostics
@@ -166,8 +167,8 @@ export interface LoggingOptions {
      * Payloads can contain private message content, so the SDK prints a Warn banner once, at startup or before the first
      * payload record, whichever comes first, even when the level would hide Warn records.
      * Received REST bodies show at most their first 65,536 bytes.
-     * Tokens, Authorization headers, client secrets, passwords, cookies and invite codes stay masked even in this mode,
-     * including credential-key values in a truncated JSON response
+     * Tokens, Authorization headers, client secrets, passwords, cookies, invite codes and the user information of a URL
+     * stay masked even in this mode, including credential-key values in a truncated JSON response
      */
     readonly unsafe?: {
         /** Must be true to acknowledge that payload bodies can contain private content */

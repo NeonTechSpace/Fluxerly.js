@@ -1,7 +1,7 @@
 /**
  * Credential masking and guarded value descriptions shared by logging, failure reports and error text.
- * Invariant: Tokens, authorization values, client secrets, webhook tokens and invite codes are masked in messages, fields and
- * error text, and describing any value never throws. Implements [SDK contracts: Logging](/docs/SDK-CONTRACTS.md#logging)
+ * Invariant: Tokens, authorization values, client secrets, webhook tokens, invite codes and URL user information are masked in
+ * messages, fields and error text, and describing any value never throws. Implements [SDK contracts: Logging](/docs/SDK-CONTRACTS.md#logging)
  */
 import { inspect } from "node:util"
 
@@ -147,6 +147,10 @@ export function maskText(text: string, secrets: readonly string[] = []): string 
             // OAuth authorization codes travel in query strings, while ordinary code fields stay readable
             .replace(/([?&]code=)[^&\s"'#]+/g, `$1${redacted}`)
             .replace(/(\/webhooks\/\d+\/)[^\s/?#"']+/g, `$1${redacted}`)
+            // A URL's user information, such as user:password in https://user:password@host/path, is hidden whole because
+            // a user name alone can be a credential. The scheme, host and path stay readable. The match cannot leave the
+            // authority, so an @ in a path, query or fragment is kept, and the last @ in the authority ends the user information
+            .replace(/(:\/\/)[^\s/?#"'<>\\]+@/g, `$1${redacted}@`)
             .replace(/((?:fluxer\.gg|\/invites?|\/invite)\/)[A-Za-z0-9-]+/g, `$1${redacted}`)
     )
 }

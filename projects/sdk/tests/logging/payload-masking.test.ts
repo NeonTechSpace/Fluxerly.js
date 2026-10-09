@@ -295,6 +295,66 @@ test.each(modes)("%s unsafe REST payload records hide credentials in non-JSON re
 })
 
 test.each(modes)(
+    "%s unsafe REST payload records hide URL user information and keep the rest of the URL readable",
+    async (mode) => {
+        const payload = await payloadBot(mode, "fixture-canary-client-token-value")
+        const text = { headers: { "content-type": "text/plain" } }
+        const shapes: Record<string, Shape & { readonly init?: ResponseInit }> = {
+            "a user name and password in a string value of a JSON body": {
+                body: {
+                    id: "10",
+                    content: "clone https://url-canary-user:url-canary-pass@git.example.test/team/repo.git",
+                },
+                secrets: ["url-canary-user", "url-canary-pass"],
+                kept: ["https://[redacted]@git.example.test/team/repo.git"],
+            },
+            "a URL inside JSON text that is itself a string value": pasted(
+                '{"remote":"https://url-canary-nested-user:url-canary-nested-pass@git.example.test/team/repo.git","n":1}',
+                ["url-canary-nested-user", "url-canary-nested-pass"],
+                ["https://[redacted]@git.example.test/team/repo.git"],
+            ),
+            "a user name and password in plain response text": {
+                body: "Upstream refused https://url-canary-plain-user:url-canary-plain-pass@proxy.example.test:8080/relay?x=1 twice",
+                init: text,
+                secrets: ["url-canary-plain-user", "url-canary-plain-pass"],
+                kept: ["https://[redacted]@proxy.example.test:8080/relay?x=1 twice"],
+            },
+            "only a user name in plain response text": {
+                body: "see ssh://url-canary-only-user@git.example.test/team/repo.git",
+                init: text,
+                secrets: ["url-canary-only-user"],
+                kept: ["ssh://[redacted]@git.example.test/team/repo.git"],
+            },
+            "only a user name in a string value of a JSON body": pasted(
+                "connect to wss://url-canary-only-token@gw.example.test",
+                ["url-canary-only-token"],
+                ["wss://[redacted]@gw.example.test"],
+            ),
+            "a password that contains an at sign": pasted(
+                "https://url-canary-at-user:url-canary-at-left@url-canary-at-right@host.example.test/path",
+                ["url-canary-at-user", "url-canary-at-left", "url-canary-at-right"],
+                ["https://[redacted]@host.example.test/path"],
+            ),
+            "an at sign after the host stays readable": {
+                body: {
+                    id: "10",
+                    content:
+                        "https://host.example.test/users/@me?contact=ops@example.test#top@x and mail ops@example.test",
+                },
+                secrets: [],
+                kept: ["https://host.example.test/users/@me?contact=ops@example.test#top@x and mail ops@example.test"],
+            },
+        }
+        for (const [name, shape] of Object.entries(shapes)) {
+            const { text: logged } = await payload(shape.body, shape.init)
+            for (const secret of shape.secrets) expect(logged, `${name}: ${secret}`).not.toContain(secret)
+            for (const kept of shape.kept ?? []) expect(logged, `${name}: ${kept}`).toContain(kept)
+            if (shape.secrets.length > 0) expect(logged, name).toContain("[redacted]")
+        }
+    },
+)
+
+test.each(modes)(
     "%s unsafe REST payload records stay bounded and hide credentials in long or deep bodies",
     async (mode) => {
         const payload = await payloadBot(mode, "fixture-canary-client-token-value")
@@ -431,6 +491,48 @@ test.each(modes)("%s failure records mask credentials in messages, cause chains 
         for (const secret of secrets.filter((secret) => secret !== fixtureToken))
             expect(describeError(value), `${name}: ${secret}`).not.toContain(secret)
 })
+
+test.each(modes)(
+    "%s failure records and describeError hide URL user information in messages, causes and thrown strings",
+    async (mode) => {
+        const shapes: Record<string, { value: unknown; secrets: readonly string[]; kept: string }> = {
+            "an Error message with a user name and password": {
+                value: new Error("GET https://err-canary-user:err-canary-pass@api.example.test/v1/items?page=2 failed"),
+                secrets: ["err-canary-user", "err-canary-pass"],
+                kept: "https://[redacted]@api.example.test/v1/items?page=2 failed",
+            },
+            "a cause with only a user name": {
+                value: new Error("outer", {
+                    cause: new Error("proxy refused http://err-canary-proxy-user@proxy.example.test:8080/relay"),
+                }),
+                secrets: ["err-canary-proxy-user"],
+                kept: "http://[redacted]@proxy.example.test:8080/relay",
+            },
+            "a thrown string": {
+                value: "failed: wss://err-canary-string-user:err-canary-string-pass@gw.example.test/socket",
+                secrets: ["err-canary-string-user", "err-canary-string-pass"],
+                kept: "wss://[redacted]@gw.example.test/socket",
+            },
+        }
+        const entries = Object.entries(shapes)
+        const failed = await failureOf(
+            mode,
+            entries.map(([, shape]) => shape.value),
+        )
+        // Every failure is reported, none is dropped or replaced by a different failure
+        expect(failed).toHaveLength(entries.length)
+        const output = JSON.stringify(failed)
+        for (const [name, { value, secrets, kept }] of entries) {
+            const described = describeError(value)
+            for (const secret of secrets) {
+                expect(output, `${name} in a record: ${secret}`).not.toContain(secret)
+                expect(described, `${name} in describeError: ${secret}`).not.toContain(secret)
+            }
+            expect(output, `${name} in a record`).toContain(kept)
+            expect(described, `${name} in describeError`).toContain(kept)
+        }
+    },
+)
 
 test.each(modes)("%s reports a failure whose value cannot be described", async (mode) => {
     const revoked = Proxy.revocable({}, {})

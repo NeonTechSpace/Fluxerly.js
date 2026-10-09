@@ -233,7 +233,7 @@ export function healthSnapshot(client: Client) {
 
 ## Debug payloads safely
 
-The setting `unsafe: { payloads: true }` adds Trace records with gateway and REST payload bodies, for all categories or the listed ones. Payloads can contain private message content, so the client prints a Warn banner once, at startup or before the first payload record, even when the level hides warnings. A category set to `silent` prints no payloads, and a received REST body shows at most its first 64 KiB. Tokens, Authorization headers, client secrets, passwords, cookies and invite codes stay masked even then, including credential-key values in truncated JSON text. Leave it off in production
+The setting `unsafe: { payloads: true }` adds Trace records with gateway and REST payload bodies, for all categories or the listed ones. Payloads can contain private message content, so the client prints a Warn banner once, at startup or before the first payload record, even when the level hides warnings. A category set to `silent` prints no payloads, and a received REST body shows at most its first 64 KiB. Tokens, Authorization headers, client secrets, passwords, cookies, invite codes and the user name and password in a URL such as `https://user:password@host/path` stay masked even then, including credential-key values in truncated JSON text. Leave it off in production
 
 ```ts
 import { createClient } from "@neontechspace/fluxerly"

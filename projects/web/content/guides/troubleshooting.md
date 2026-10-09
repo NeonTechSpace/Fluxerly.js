@@ -146,4 +146,4 @@ Avoid `process.exit()` as a cleanup shortcut. Set `process.exitCode` after appli
 
 ## Keep diagnostics safe and useful
 
-Record the SDK version from the `lifecycle.starting` record, the Node version, the record codes and the output of `describeError`. The SDK masks tokens, Authorization headers, client secrets and invite codes in every record. Message content appears only when unsafe payload logging is switched on, so leave that off when sharing logs
+Record the SDK version from the `lifecycle.starting` record, the Node version, the record codes and the output of `describeError`. The SDK masks tokens, Authorization headers, client secrets, invite codes and the user name and password in URLs in every record. Message content appears only when unsafe payload logging is switched on, so leave that off when sharing logs

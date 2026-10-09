@@ -22,7 +22,8 @@ export interface DescribeErrorOptions {
  * A Cause is described reason by reason, as Failure, Defect or Interrupted, so pass exit.cause directly rather than
  * squashing it first.
  * Credential patterns, such as Authorization values, bare bot tokens, values assigned to keys ending in token or secret,
- * token-shaped Bot or Bearer values and webhook URL tokens, are masked in names, application error codes, messages and stacks.
+ * token-shaped Bot or Bearer values, webhook URL tokens and the user information of a URL, such as user:password in
+ * https://user:password@host/path, are masked in names, application error codes, messages and stacks.
  * A client's own configured token is masked only in that client's log records and failure reports.
  * Use it to print a failed Result, an SdkDefect or a FailureReport's error
  *
