@@ -978,7 +978,9 @@ export class SupervisorOwner {
         if (this.#grantTimer) clearTimeout(this.#grantTimer)
         this.#grantTimer = undefined
         this.#pending = []
-        this.#clearOutstanding()
+        // A granted Identify can still reach Fluxer before its child stops. It stays outstanding until the child reports
+        // it sent or exits, so the larger plan's first Identify keeps the spacing after it
+        if (this.#outstanding?.timer === undefined) this.#clearOutstanding()
         for (const current of this.#slots) {
             if (current.restartTimer) clearTimeout(current.restartTimer)
             current.restartTimer = undefined
@@ -1323,7 +1325,6 @@ export class SupervisorOwner {
         }
         if (
             message.type === "identify" &&
-            this.#resharding === undefined &&
             hasExactKeys(message, ["type", "generation", "requestId", "shardId"]) &&
             safeInteger(message.requestId) &&
             message.requestId >= 0 &&
@@ -1332,6 +1333,8 @@ export class SupervisorOwner {
             slot.ready &&
             slot.configuration.assignment.shardIds.includes(message.shardId)
         ) {
+            // Every child stops during a reshard, so its request stays unanswered until stopping withdraws it
+            if (this.#resharding !== undefined) return
             if (
                 this.#pending.some(
                     (request) =>

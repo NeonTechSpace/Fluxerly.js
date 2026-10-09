@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events"
+import { setImmediate as turn } from "node:timers/promises"
 import { Effect } from "effect"
+import type { ResultAsync } from "neverthrow"
 import { expect, test, vi } from "vitest"
 
 const fork = vi.hoisted(() => vi.fn())
@@ -16,15 +18,16 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { startInstance } from "../../support/instance.js"
 import { captureLogs } from "../../support/log-capture.js"
 import { fakeHostTime, hostTurnsUntil } from "../../support/client-clock.js"
-import { sendJson, type RecordedRequest } from "../../support/rest-server.js"
+import { sendJson, type RecordedRequest, type RouteHandler } from "../../support/rest-server.js"
 
 type Message = { readonly type: string; readonly [key: string]: unknown }
 
 /**
  * A scripted child process: It says hello, finishes configuration when assigned and records every parent message.
+ * It exits at once when asked to stop, unless holdShutdown is set, in which case the test calls exit.
  * The test drives the rest of the protocol through emit
  */
-function scriptedChild(pid: number) {
+function scriptedChild(pid: number, holdShutdown = false) {
     const received: Message[] = []
     const child = Object.assign(new EventEmitter(), {
         pid,
@@ -36,7 +39,7 @@ function scriptedChild(pid: number) {
             received.push(message)
             if (message.type === "assignment")
                 queueMicrotask(() => child.emit("message", { type: "ready", generation: message.generation }))
-            if (message.type === "shutdown") child.exit(0)
+            if (message.type === "shutdown" && !holdShutdown) child.exit(0)
             return true
         },
         kill() {
@@ -59,38 +62,45 @@ function scriptedChild(pid: number) {
 
 type Child = ReturnType<typeof scriptedChild>
 
-function forkScripted() {
+/** Fork scripted children in order. Those whose fork index holdShutdown selects exit only when the test says so */
+function forkScripted(holdShutdown: (index: number) => boolean = () => false) {
     const children: Child[] = []
     fork.mockImplementation(() => {
-        const child = scriptedChild(200 + children.length)
+        const child = scriptedChild(200 + children.length, holdShutdown(children.length))
         children.push(child)
         return child
     })
     return children
 }
 
-/** The same lifecycle in either public API, with Promise results for comparison */
+/** The same lifecycle in either public API, with Promise results that hold the failure or undefined */
 async function managed(mode: Mode, options: SupervisorOptions) {
     if (mode === "default") {
         const created = supervisor.create(options)
+        const failure = async <E>(result: ResultAsync<void, E>) => {
+            const settled = await result
+            return settled.isErr() ? settled.error : undefined
+        }
         return {
-            start: async () => {
-                const result = await created.start()
-                return result.isErr() ? result.error : undefined
-            },
+            start: () => failure(created.start()),
+            waitForClose: () => failure(created.waitForClose()),
+            waitForReady: () => failure(created.waitForReady()),
             shutdown: () => created.shutdown().then(() => undefined),
             status: (): SupervisorStatus => created.status(),
         }
     }
     const created = await Effect.runPromise(nativeSupervisor.create(options))
-    return {
-        start: () =>
-            Effect.runPromise(
-                created.start().pipe(
-                    Effect.flip,
-                    Effect.orElseSucceed(() => undefined),
-                ),
+    const failure = (effect: Effect.Effect<void, unknown>) =>
+        Effect.runPromise(
+            effect.pipe(
+                Effect.flip,
+                Effect.orElseSucceed(() => undefined),
             ),
+        )
+    return {
+        start: () => failure(created.start()),
+        waitForClose: () => failure(created.waitForClose()),
+        waitForReady: () => failure(created.waitForReady()),
         shutdown: () => Effect.runPromise(created.shutdown()),
         status: (): SupervisorStatus => created.status(),
     }
@@ -439,6 +449,33 @@ test.each(modes)(
     },
 )
 
+test("default readiness with a signal whose listener method throws fails as an application defect", async () => {
+    // Catches: A throw from the caller's signal escaped the wait unclassified, or stopped or failed the supervisor
+    try {
+        forkScripted()
+        const created = supervisor.create({ ...base, totalShards: 1, processes: 1, logging: { level: "silent" } })
+        expect((await created.start()).isOk()).toBe(true)
+        const fault = new Error("signal listener failure")
+        const signal = {
+            aborted: false,
+            addEventListener() {
+                throw fault
+            },
+            removeEventListener() {},
+        }
+        const rejection = await created.waitForReady({ signal: signal as never }).then(
+            () => undefined,
+            (error: unknown) => error,
+        )
+        expect(rejection).toMatchObject({ _tag: "SdkDefect", code: "application.defect" })
+        expect((rejection as Error).cause).toBe(fault)
+        expect(created.status().state).toBe("running")
+        expect((await created.shutdown()).isOk()).toBe(true)
+    } finally {
+        fork.mockReset()
+    }
+})
+
 test.each(modes)("%s a diagnostics message without the snapshot's fields is a protocol failure", async (mode) => {
     try {
         const children = forkScripted()
@@ -533,3 +570,200 @@ test.each(modes)("%s a 4011 report under a numeric totalShards restarts only tha
         fork.mockReset()
     }
 })
+
+/** A supervisor with totalShards "auto" over two processes, whose community count the given route answers */
+async function automaticOwner(mode: Mode, count: RouteHandler, options: Partial<SupervisorOptions> = {}) {
+    const { instance, rest } = await startInstance({ routes: { "GET /v1/users/@me/guilds": count } })
+    const owner = await managed(mode, {
+        ...base,
+        totalShards: "auto",
+        processes: 2,
+        token: "fixture-only-not-a-credential",
+        instance: { url: instance, allowInsecure: true },
+        logging: { level: "silent" },
+        ...options,
+    })
+    return { owner, counts: () => rest.requestsTo("GET /v1/users/@me/guilds").length }
+}
+
+const totals = (status: SupervisorStatus) => status.children.map((child) => child.assignment.totalShards)
+
+test.each(modes)("%s an Identify request from an old child during a reshard leaves the move running", async (mode) => {
+    // Catches: An identify message that arrived during an automatic reshard fell through to the protocol failure,
+    // so the supervisor shut down instead of moving to the larger plan
+    try {
+        const children = forkScripted((index) => index === 1)
+        // 2,001 communities need two shards, one per process
+        const { owner } = await automaticOwner(mode, guildPages(2_001))
+        expect(await owner.start()).toBeUndefined()
+        const [reporting, stopping] = children as [Child, Child]
+        reporting.emit("message", { type: "failed", generation: 1, reason: "sharding" })
+        expect(stopping.received.at(-1)).toMatchObject({ type: "shutdown" })
+        // The other child's shard asked to identify before it handled the stop request
+        stopping.emit("message", { type: "identify", generation: 1, requestId: 0, shardId: 1 })
+        expect(owner.status().state).toBe("running")
+        // Stopping withdraws the request
+        stopping.emit("message", { type: "cancel", generation: 1, requestId: 0 })
+        stopping.exit(0)
+        await vi.waitFor(() => expect(totals(owner.status())).toEqual([3, 3]))
+        await vi.waitFor(() => expect(owner.status().children.every((child) => child.state === "running")).toBe(true))
+        expect(stopping.received.some((message) => message.type === "grant")).toBe(false)
+        expect(owner.status().state).toBe("running")
+        await owner.shutdown()
+        expect(await owner.waitForClose()).toBeUndefined()
+    } finally {
+        fork.mockReset()
+    }
+})
+
+test.each(modes)(
+    "%s an Identify that an old child sends during a reshard keeps the full spacing before the larger plan's first",
+    async (mode) => {
+        // Catches: The reshard dropped a granted Identify, so the old child's sent report failed the supervisor, or the
+        // larger plan's first Identify followed that one without the minimum spacing
+        try {
+            const children = forkScripted((index) => index === 1)
+            const { owner } = await automaticOwner(mode, guildPages(2_001))
+            expect(await owner.start()).toBeUndefined()
+            fakeHostTime()
+            const [reporting, sending] = children as [Child, Child]
+            sending.emit("message", { type: "identify", generation: 1, requestId: 0, shardId: 1 })
+            expect(sending.received.at(-1)).toEqual({ type: "grant", generation: 1, requestId: 0 })
+            reporting.emit("message", { type: "failed", generation: 1, reason: "sharding" })
+            // The granted child sends its Identify 400 ms later, while it is already asked to stop
+            await vi.advanceTimersByTimeAsync(400)
+            sending.emit("message", { type: "sent", generation: 1, requestId: 0 })
+            expect(owner.status().state).toBe("running")
+            sending.exit(0)
+            // The loopback count takes real I/O turns but no SDK time. The turn limit only bounds a hung test
+            await hostTurnsUntil(
+                () => children.length === 4 && owner.status().children.every((child) => child.state === "running"),
+                100_000,
+            )
+            const first = children[2]!
+            first.emit("message", { type: "identify", generation: 1, requestId: 0, shardId: 0 })
+            await vi.advanceTimersByTimeAsync(999)
+            expect(first.received.some((message) => message.type === "grant")).toBe(false)
+            await vi.advanceTimersByTimeAsync(1)
+            expect(first.received.at(-1)).toEqual({ type: "grant", generation: 1, requestId: 0 })
+            vi.useRealTimers()
+            await owner.shutdown()
+        } finally {
+            vi.useRealTimers()
+            vi.restoreAllMocks()
+            fork.mockReset()
+        }
+    },
+)
+
+test.each(modes)(
+    "%s a reshard counts again and starts the larger plan only after every old child exited",
+    async (mode) => {
+        // Catches: The move counted again or started new children while an old child was still running, so the old and
+        // new plans overlapped
+        try {
+            const children = forkScripted((index) => index === 1)
+            const { owner, counts } = await automaticOwner(mode, guildPages(2_001))
+            expect(await owner.start()).toBeUndefined()
+            const counted = counts()
+            const [reporting, slow] = children as [Child, Child]
+            const fetches = vi.spyOn(globalThis, "fetch")
+            reporting.emit("message", { type: "failed", generation: 1, reason: "sharding" })
+            expect(reporting.connected).toBe(false)
+            // A count would request the community list within these turns, since it waits on no timer or network first
+            for (let index = 0; index < 100; index++) await turn()
+            expect(fetches).not.toHaveBeenCalled()
+            expect(counts()).toBe(counted)
+            expect(fork).toHaveBeenCalledTimes(2)
+            // The supervisor saw the first child exit and still waits for the second
+            expect(owner.status().children).toMatchObject([
+                { pid: null, state: "closed" },
+                { pid: slow.pid, state: "stopping" },
+            ])
+            slow.exit(0)
+            await vi.waitFor(() => expect(totals(owner.status())).toEqual([3, 3]))
+            expect(counts()).toBeGreaterThan(counted)
+            expect(fork).toHaveBeenCalledTimes(4)
+            await owner.shutdown()
+        } finally {
+            vi.restoreAllMocks()
+            fork.mockReset()
+        }
+    },
+)
+
+/** A community count that answers the first count with one community and later ones as the test chooses */
+function recount(later: RouteHandler): RouteHandler {
+    let calls = 0
+    return (request, response) => {
+        calls += 1
+        return calls === 1 ? guildPages(1)(request, response) : later(request, response)
+    }
+}
+
+test.each(modes)(
+    "%s a failed count after a 4011 closure fails every observer after the old children exit, without new children",
+    async (mode) => {
+        // Catches: A failed recount left start's observers waiting, or the supervisor kept going with no children or
+        // started a plan it could not size
+        try {
+            const children = forkScripted()
+            const { owner } = await automaticOwner(
+                mode,
+                recount((_request, response) => sendJson(response, { code: 0, message: "401: Unauthorized" }, 401)),
+            )
+            expect(await owner.start()).toBeUndefined()
+            // The scripted child never reports Connected, so readiness is still pending
+            const ready = owner.waitForReady()
+            const closed = owner.waitForClose()
+            children[0]!.emit("message", { type: "failed", generation: 1, reason: "sharding" })
+            const failure = await closed
+            expect(failure).toMatchObject({ _tag: "SupervisorError", reason: "shardCount", childId: null })
+            expect((failure as Error).cause).toMatchObject({ _tag: "AuthenticationError" })
+            expect(await ready).toBe(failure)
+            expect(await owner.waitForReady()).toBe(failure)
+            expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
+            expect(fork).toHaveBeenCalledTimes(1)
+            await owner.shutdown()
+            expect(await owner.waitForClose()).toBe(failure)
+        } finally {
+            fork.mockReset()
+        }
+    },
+)
+
+test.each(modes)(
+    "%s shutdown during the count after a 4011 closure cancels it and closes without new children",
+    async (mode) => {
+        // Catches: Shutdown did not interrupt the recount, so it waited for the count or started the larger plan after
+        // shutdown, or left the count's request open
+        try {
+            const children = forkScripted()
+            const entered = Promise.withResolvers<void>()
+            const abandoned = Promise.withResolvers<void>()
+            const { owner } = await automaticOwner(
+                mode,
+                recount((_request, response) => {
+                    // This page never answers, so only shutdown can end the count
+                    response.on("close", () => abandoned.resolve())
+                    entered.resolve()
+                }),
+            )
+            expect(await owner.start()).toBeUndefined()
+            const ready = owner.waitForReady()
+            const closed = owner.waitForClose()
+            children[0]!.emit("message", { type: "failed", generation: 1, reason: "sharding" })
+            await entered.promise
+            await owner.shutdown()
+            expect(await closed).toBeUndefined()
+            expect(await ready).toMatchObject({ _tag: "SupervisorError", reason: "closed" })
+            // The count's client closed its request
+            await abandoned.promise
+            expect(owner.status()).toMatchObject({ state: "closed", children: [{ pid: null, state: "closed" }] })
+            expect(fork).toHaveBeenCalledTimes(1)
+        } finally {
+            fork.mockReset()
+        }
+    },
+    10_000,
+)

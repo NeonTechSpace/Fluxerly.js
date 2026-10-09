@@ -124,8 +124,8 @@ const proof = await fetch(
 )
 if (!proof.ok) throw new Error("Supervisor child loopback proof failed")
 if (droppedSent) {
-    // Keep this test-owned process alive after helper closure so a Closed report cannot substitute for actual exit
-    const exitAfter = performance.now() + 250
-    while (performance.now() < exitAfter)
-        await new Promise((resolve) => setTimeout(resolve, Math.max(1, exitAfter - performance.now())))
+    // Keep this test-owned process alive after helper closure until the test lets it exit, so a Closed report cannot
+    // substitute for actual exit
+    const barrier = await fetch(`${origin.origin}/supervisor-exit-barrier`, { method: "GET", redirect: "error" })
+    if (!barrier.ok) throw new Error("Supervisor child exit barrier failed")
 }

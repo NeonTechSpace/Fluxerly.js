@@ -10,9 +10,28 @@ import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import type { SupervisorAssignmentOptions, SupervisorOptions, SupervisorStatus } from "../../../src/supervisor.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { requireBuiltSdk } from "../../support/built-sdk.js"
+import { realTimeUntil } from "../../support/client-clock.js"
 
 // These tests run the built SDK, so a stale or missing dist fails them before they start
 requireBuiltSdk()
+
+/** Messages the supervisor received from its real children, recorded after its own handler ran */
+const childMessages = vi.hoisted(() => [] as { readonly pid: number | undefined; readonly message: unknown }[])
+
+vi.mock("node:child_process", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:child_process")>()
+    return {
+        ...actual,
+        fork: ((...parameters: Parameters<typeof actual.fork>) => {
+            const child = actual.fork(...parameters)
+            // The supervisor adds its listener right after fork returns, so this one runs after it
+            queueMicrotask(() =>
+                child.on("message", (message: unknown) => childMessages.push({ pid: child.pid, message })),
+            )
+            return child
+        }) as typeof actual.fork,
+    }
+})
 
 type Identify = { readonly at: number; readonly shardId: number }
 type Resume = { readonly at: number }
@@ -64,6 +83,8 @@ async function loopbackGateway({
     let readySends = 0
     let configureReleased = holdConfigureForShard === undefined
     let configureResponse: import("node:http").ServerResponse | undefined
+    let exitResponse: import("node:http").ServerResponse | undefined
+    const exitEntered = Promise.withResolvers<void>()
     const identifies: Identify[] = []
     const resumes: Resume[] = []
     const signals: Signal[] = []
@@ -131,6 +152,19 @@ async function loopbackGateway({
                 return
             }
             configureResponse = response
+            return
+        }
+        if (target.pathname === "/supervisor-exit-barrier") {
+            expect(request.method).toBe("GET")
+            expect(request.headers.authorization).toBeUndefined()
+            if (exitResponse) {
+                response.statusCode = 400
+                response.end()
+                return
+            }
+            // Held until releaseExitBarrier, so the child stays alive after closing its helper
+            exitResponse = response
+            exitEntered.resolve()
             return
         }
         response.statusCode = 404
@@ -231,6 +265,12 @@ async function loopbackGateway({
             configureResponse?.end()
             configureResponse = undefined
         },
+        /** Resolves once a child that dropped its sent report waits to exit */
+        exitEntered: exitEntered.promise,
+        releaseExitBarrier() {
+            exitResponse?.end()
+            exitResponse = undefined
+        },
         async close() {
             if (closed) return
             closed = true
@@ -238,6 +278,11 @@ async function loopbackGateway({
                 configureResponse.statusCode = 503
                 configureResponse.end()
                 configureResponse = undefined
+            }
+            if (exitResponse) {
+                exitResponse.statusCode = 503
+                exitResponse.end()
+                exitResponse = undefined
             }
             for (const socket of gateway.clients) socket.terminate()
             await new Promise<void>((resolve) => gateway.close(() => resolve()))
@@ -1070,10 +1115,14 @@ test.each(modes)(
                 },
             ),
         )
+        // Only the parent's timers are faked, so its acknowledgement deadline and spacing move only when the test
+        // advances them. The children keep real time, and the gateway records the parent's time of each Identify
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] })
         let cleaned = false
         const cleanup = async () => {
             if (cleaned) return
             cleaned = true
+            vi.useRealTimers()
             try {
                 await owner.shutdown()
             } finally {
@@ -1081,11 +1130,12 @@ test.each(modes)(
             }
         }
         onTestFinished(cleanup)
+        const child = (id: string) => owner.status().children.find((current) => current.id === id)!
         try {
             fixture.releaseReady()
             const starting = owner.start()
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(1), { interval: 5 })
-            expect(fixture.identifies[0]!.shardId).toBe(0)
+            await realTimeUntil(() => fixture.identifies.length === 1)
+            expect(fixture.identifies[0]).toEqual({ at: 0, shardId: 0 })
             expect(
                 await Promise.race([
                     fixture.configureEntered,
@@ -1095,43 +1145,38 @@ test.each(modes)(
                 ]),
             ).toBe(1)
             expect(fixture.configureRequests).toEqual([1])
-            expect(owner.status().children.find((child) => child.id === "unacknowledged")).toMatchObject({
-                pid: expect.any(Number),
-                state: "running",
-            })
+            expect(child("unacknowledged")).toMatchObject({ pid: expect.any(Number), state: "running" })
             fixture.releaseConfigureBarrier()
             await starting
-            expect(fixture.identifies).toHaveLength(1)
-            await vi.waitFor(
-                () =>
-                    expect(owner.status().children.find((child) => child.id === "unacknowledged")).toMatchObject({
-                        pid: null,
-                        restarts: 1,
-                        state: "restarting",
-                    }),
-                { interval: 5 },
-            )
-            // The unacknowledged child has exited and its permit is reclaimed, yet the healthy sibling is still held
-            expect(fixture.identifies).toHaveLength(1)
-            await vi.waitFor(() =>
-                expect(fixture.proofs.find((proof) => proof.mode === mode && proof.state === "Closed")).toBeDefined(),
-            )
-            const unacknowledgedClosed = fixture.proofs.find(
-                (proof) => proof.mode === mode && proof.state === "Closed",
-            )!
-            await vi.waitFor(() => expect(fixture.identifies).toHaveLength(2), { interval: 5 })
-            expect(fixture.identifies[1]!.shardId).toBe(1)
-            expect(fixture.malformedGatewayPackets).toEqual([])
-            await vi.waitFor(() =>
-                expect(fixture.signals.filter((signal) => signal.operation === 2 && signal.mode === mode)).toHaveLength(
-                    2,
+            // The healthy sibling asks for a permit while the unacknowledged child still holds it
+            await realTimeUntil(() =>
+                childMessages.some(
+                    ({ pid, message }) =>
+                        pid === child("healthy").pid && record(message) && message.type === "identify",
                 ),
             )
-            const healthyIdentify = fixture.signals.findLast(
-                (signal) => signal.operation === 2 && signal.mode === mode,
-            )!
-            // The child deliberately remains alive for 250 ms after reporting helper closure
-            expect(healthyIdentify.at - unacknowledgedClosed.at).toBeGreaterThanOrEqual(minimumSpacingMs + 250)
+            expect(fixture.identifies).toHaveLength(1)
+            // The permit is reclaimed only at the acknowledgement deadline, by stopping the child that holds it
+            await vi.advanceTimersByTimeAsync(4_999)
+            expect(child("unacknowledged").state).toBe("running")
+            await vi.advanceTimersByTimeAsync(1)
+            expect(child("unacknowledged").state).toBe("stopping")
+            // The child closed its helper and reported Closed, then stays alive until the test lets it exit
+            await fixture.exitEntered
+            expect(fixture.proofs).toContainEqual(expect.objectContaining({ mode, state: "Closed" }))
+            await vi.advanceTimersByTimeAsync(250)
+            expect(child("unacknowledged")).toMatchObject({ pid: expect.any(Number), state: "stopping" })
+            expect(fixture.identifies).toHaveLength(1)
+            fixture.releaseExitBarrier()
+            await realTimeUntil(() => child("unacknowledged").pid === null)
+            expect(child("unacknowledged")).toMatchObject({ restarts: 1, state: "restarting" })
+            // The exit reclaimed the permit, yet the healthy sibling waits the full spacing from that exit
+            expect(fixture.identifies).toHaveLength(1)
+            await vi.advanceTimersToNextTimerAsync()
+            await realTimeUntil(() => fixture.identifies.length === 2)
+            expect(fixture.identifies[1]).toEqual({ at: 5_000 + 250 + minimumSpacingMs, shardId: 1 })
+            expect(fixture.malformedGatewayPackets).toEqual([])
+            vi.useRealTimers()
             await owner.shutdown()
             await owner.waitForClose()
             await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))

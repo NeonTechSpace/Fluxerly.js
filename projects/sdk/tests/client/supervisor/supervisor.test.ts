@@ -9,6 +9,7 @@ import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import { Opcode as GatewayOpcode } from "../../../src/internal/protocol/gateway.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { requireBuiltSdk } from "../../support/built-sdk.js"
+import { realTimeUntil } from "../../support/client-clock.js"
 
 // These tests run the built SDK, so a stale or missing dist fails them before they start
 requireBuiltSdk()
@@ -32,28 +33,58 @@ async function childGateway() {
     return { url: gateway.url, identifies }
 }
 
-test("a delayed child grant cannot compress actual cross-process Identify sends", async () => {
-    const { url, identifies } = await childGateway()
-    const sends: number[] = []
-    const sent = Promise.withResolvers<void>()
-    const reports = createServer((request, response) => {
-        const at = Number(new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("at"))
-        if (!Number.isFinite(at) || at <= 0) {
-            response.writeHead(400).end()
+/** A loopback barrier that holds the first request until release and answers later ones at once */
+async function firstRequestBarrier() {
+    let held: import("node:http").ServerResponse | undefined
+    let released = false
+    const entered = Promise.withResolvers<void>()
+    const server = createServer((_request, response) => {
+        if (released || held) {
+            response.writeHead(204).end()
             return
         }
-        sends.push(at)
-        if (sends.length === 2) sent.resolve()
-        response.writeHead(204).end()
+        held = response
+        entered.resolve()
     })
-    reports.listen(0, "127.0.0.1")
-    await once(reports, "listening")
+    server.listen(0, "127.0.0.1")
+    await once(server, "listening")
     onTestFinished(async () => {
-        reports.closeAllConnections()
-        await new Promise<void>((resolve) => reports.close(() => resolve()))
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
     })
-    const address = reports.address()
-    if (!address || typeof address === "string") throw new Error("Missing Identify send proof address")
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("Missing grant barrier address")
+    return {
+        url: `http://127.0.0.1:${address.port}/`,
+        entered: entered.promise,
+        release() {
+            released = true
+            held?.writeHead(204).end()
+            held = undefined
+        },
+    }
+}
+
+test("a delayed child grant cannot compress actual cross-process Identify sends", async () => {
+    // Catches: The supervisor spaced Identify grants from the grant rather than from the child's report that it sent
+    // the Identify, so a child that sent late moved the next child's Identify closer to its own
+    const minimumSpacingMs = 1_000
+    const { url, identifies } = await childGateway()
+    const barrier = await firstRequestBarrier()
+    // Only the parent's timers are faked, so its spacing moves only when the test advances it. The children keep real
+    // time, and the gateway records the parent's time of each Identify it receives
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] })
+    const fakeSetTimeout = globalThis.setTimeout
+    const armed: number[] = []
+    let watching = false
+    const scheduled = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+        if (watching) armed.push(delay ?? 0)
+        return fakeSetTimeout(callback, delay)
+    }) as typeof setTimeout)
+    const realTimers = () => {
+        scheduled.mockRestore()
+        vi.useRealTimers()
+    }
     const managed = supervisor.create({
         entry: fixture("supervisor-worker.js"),
         totalShards: 2,
@@ -61,25 +92,33 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
             { id: "first", shardIds: [0] },
             { id: "second", shardIds: [1] },
         ],
-        childEnvironment: {
-            FLUXERLY_SUPERVISOR_GATEWAY: url,
-            FLUXERLY_SUPERVISOR_MODE: "delayed",
-            FLUXERLY_SUPERVISOR_SEND_PROOF: `http://127.0.0.1:${address.port}`,
-        },
+        identify: { minimumSpacingMs },
+        childEnvironment: { FLUXERLY_SUPERVISOR_GATEWAY: url, FLUXERLY_SUPERVISOR_GRANT_BARRIER: barrier.url },
     })
     let cleaned = false
     const cleanup = async () => {
         if (cleaned) return
         cleaned = true
+        if (vi.isFakeTimers()) realTimers()
+        barrier.release()
         await managed.shutdown()
     }
     onTestFinished(cleanup)
     try {
         expect((await managed.start()).isOk()).toBe(true)
-        await vi.waitFor(() => expect(identifies).toHaveLength(2), { interval: 5 })
-        await sent.promise
-        sends.sort((left, right) => left - right)
-        expect(sends[1]! - sends[0]!).toBeGreaterThanOrEqual(995)
+        // The first child to ask was granted at once and holds the grant, so its Identify is not sent yet
+        await barrier.entered
+        expect(identifies).toEqual([])
+        await vi.advanceTimersByTimeAsync(400)
+        watching = true
+        barrier.release()
+        // After the held child reports its send, the next grant waits on the parent's only new timer
+        await realTimeUntil(() => armed.length > 0)
+        await vi.advanceTimersByTimeAsync(armed[0]!)
+        await realTimeUntil(() => identifies.length === 2)
+        // The second Identify follows the first actual send, not its grant, by the full spacing
+        expect(identifies).toEqual([400, 400 + minimumSpacingMs])
+        realTimers()
         expect((await managed.shutdown()).isOk()).toBe(true)
         expect((await managed.waitForClose()).isOk()).toBe(true)
     } finally {

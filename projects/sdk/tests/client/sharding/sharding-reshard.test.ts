@@ -53,6 +53,9 @@ async function open(mode: Mode, options: TestClientOptions) {
                 const closed = await test.client.waitForClose()
                 return closed.isErr() ? closed.error : undefined
             },
+            shutdown: async () => {
+                await test.client.shutdown()
+            },
         }
     }
     const scope = Scope.makeUnsafe()
@@ -67,6 +70,7 @@ async function open(mode: Mode, options: TestClientOptions) {
         emit: (type: string, payload: unknown) => Effect.runSync(test.emit(type, payload)),
         disconnect: (shardId: number, code: number) => Effect.runPromise(test.disconnect({ shardId, code })),
         closed: () => Effect.runPromise(Effect.flip(test.client.waitForClose())).catch(() => undefined),
+        shutdown: () => Effect.runPromise(test.client.shutdown()),
     }
 }
 
@@ -219,6 +223,45 @@ describeBothApis("automatic resharding", (mode) => {
             }),
         ])
         expect(logs.withCode("lifecycle.connectionEnded")).toEqual([])
+    })
+
+    test("ends the client with the count's failure when counting again after a 4011 closure fails", async () => {
+        // Catches: A failed recount left waitForClose pending, or the client kept running the old plan or started a new one
+        const driver = await open(mode, { sharding: coordinated })
+        await driver.ready()
+        driver.test.rest.respond("GET /users/@me/guilds", {
+            status: 401,
+            body: { code: 0, message: "401: Unauthorized" },
+        })
+        const closed = driver.closed()
+        await driver.disconnect(0, 4011)
+        expect(await closed).toMatchObject({ _tag: "AuthenticationError" })
+        expect(driver.client.state).toBe("Closed")
+        // Only the first plan's shard ever identified
+        expect(driver.test.commands().filter((command) => command.op === Opcode.identify)).toHaveLength(1)
+        expect(logsWithCode(driver, "lifecycle.resharded")).toEqual([])
+        expect(driver.client.diagnostics().rest.activeRequests).toBe(0)
+    })
+
+    test("shutdown during the count after a 4011 closure ends the move and closes normally", async () => {
+        // Catches: Shutdown waited for the recount, kept its request running, or started the larger plan afterwards
+        const driver = await open(mode, { sharding: coordinated })
+        await driver.ready()
+        const entered = Promise.withResolvers<void>()
+        // The second count never answers, so only shutdown can end it
+        driver.test.rest.respond("GET /users/@me/guilds", () => {
+            entered.resolve()
+            return new Promise<never>(() => {})
+        })
+        const closed = driver.closed()
+        await driver.disconnect(0, 4011)
+        await entered.promise
+        await driver.shutdown()
+        expect(await closed).toBeUndefined()
+        expect(driver.client.state).toBe("Closed")
+        expect(driver.test.commands().filter((command) => command.op === Opcode.identify)).toHaveLength(1)
+        expect(logsWithCode(driver, "lifecycle.resharded")).toEqual([])
+        expect(driver.client.diagnostics().rest.activeRequests).toBe(0)
     })
 
     test("keeps failing clearly with an explicit total", async () => {

@@ -1,4 +1,4 @@
-import { setImmediate as turn } from "node:timers/promises"
+import { setTimeout as realDelay, setImmediate as turn } from "node:timers/promises"
 import { Clock, Duration, Effect, Exit } from "effect"
 import type { ResultAsync } from "neverthrow"
 import { expect, vi } from "vitest"
@@ -98,6 +98,15 @@ export async function hostTurnsUntil(predicate: () => boolean, turns = 10_000): 
         if (count >= turns) throw new Error(`Condition was not reached within ${turns} event-loop turns`)
         await turn()
     }
+}
+
+/**
+ * Poll a condition on real timers while host timers are faked, without advancing fake time, for work in other
+ * processes such as supervised children. Unlike vi.waitFor it never advances fake timers. The test timeout bounds a
+ * condition that is never reached
+ */
+export async function realTimeUntil(predicate: () => boolean): Promise<void> {
+    while (!predicate()) await realDelay(5)
 }
 
 /** Settle a default ResultAsync or run a native Effect into its value or typed error, without throwing */

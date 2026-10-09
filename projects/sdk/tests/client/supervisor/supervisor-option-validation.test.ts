@@ -37,6 +37,17 @@ test("default readiness options reject misspellings before observing an idle sup
     await supervisor.shutdown()
 })
 
+test("default readiness rejects a value that is not a signal before observing the supervisor", async () => {
+    // Catches: A malformed signal was used anyway, so the wait threw from inside the SDK or ignored the misuse
+    const supervisor = defaultSupervisor.create(parentOptions)
+    for (const signal of [{ aborted: false }, "not a signal"]) {
+        const result = await supervisor.waitForReady({ signal } as never)
+        expect(result.isErr() && result.error).toMatchObject({ _tag: "ConfigurationError", field: "signal" })
+    }
+    expect(supervisor.status().state).toBe("idle")
+    await supervisor.shutdown()
+})
+
 test.each(["default", "native"] as const)("%s parent option objects suggest corrected keys", async (mode) => {
     for (const [options, expected] of [
         [{ ...parentOptions, startpTimeoutMs: 100 }, "startupTimeoutMs"],
