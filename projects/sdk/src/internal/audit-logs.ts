@@ -20,6 +20,7 @@ import { decodeUser } from "./users.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
 import { count as nonNegativeInt32, identifier, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 
 /** Filters accept only known actions, while entries keep any action number, including one Fluxer adds later */
 const actionTypes = new Set<number>(Object.values(AuditLogActions))
@@ -277,15 +278,16 @@ function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery, guildId
         const item = entry(source)
         if (
             !item ||
-            (previous !== undefined && BigInt(item.id) >= previous) ||
             (query.userId !== undefined && item.userId !== query.userId) ||
             (query.actionType !== undefined && item.actionType !== query.actionType)
         )
             return undefined
+        if (previous !== undefined && BigInt(item.id) >= previous) return rejectCheck("order")
         previous = BigInt(item.id)
         entries.push(item)
     }
-    if (query.after !== undefined && entries.some((item) => BigInt(item.id) <= BigInt(query.after!))) return undefined
+    if (query.after !== undefined && entries.some((item) => BigInt(item.id) <= BigInt(query.after!)))
+        return rejectCheck("order")
     const users = []
     const userIds = new Set<string>()
     for (const source of value.users) {

@@ -28,6 +28,7 @@ import { GuildVerificationLevels } from "#sdk/guilds"
 import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
 import type { InstanceEndpointContext } from "./instance.js"
@@ -599,7 +600,8 @@ export function memberPage(guildId: string, query?: MemberQuery): GuildValidatio
             let previous = after === undefined ? undefined : BigInt(after)
             for (const item of value) {
                 const member = decodeMember(item, guildId)
-                if (!member || (previous !== undefined && BigInt(member.userId) <= previous)) return undefined
+                if (!member) return undefined
+                if (previous !== undefined && BigInt(member.userId) <= previous) return rejectCheck("order")
                 previous = BigInt(member.userId)
                 members.push(member)
             }

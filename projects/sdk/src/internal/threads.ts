@@ -33,6 +33,7 @@ import type { ClientOwner } from "./client.js"
 import { channelFetch, type ChannelRequest } from "./channels.js"
 import { decodeThread, decodeThreadList, decodeThreadMember } from "./channel-decode.js"
 import { count, fieldsOnce, identifier, integerInRange, record, snapshotArray } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { timestamp } from "./decode/timestamp.js"
 import { suspendInput } from "./defects.js"
 import { normalizedText, rawText } from "./field-text.js"
@@ -618,7 +619,8 @@ export function threadMemberPage(
                 let previous = after === undefined ? undefined : BigInt(after)
                 for (const item of value) {
                     const member = threadMember(item, threadId, guildId)
-                    if (!member || (previous !== undefined && BigInt(member.userId) <= previous)) return undefined
+                    if (!member) return undefined
+                    if (previous !== undefined && BigInt(member.userId) <= previous) return rejectCheck("order")
                     previous = BigInt(member.userId)
                     members.push(member)
                 }

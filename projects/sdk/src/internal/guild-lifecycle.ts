@@ -6,6 +6,7 @@
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
 import { count, identifier, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 const unsigned64 = (value: unknown): value is string =>
@@ -72,7 +73,8 @@ export function guildList(
             let previous: bigint | undefined
             for (const item of value) {
                 const guild = decodeGuildListSummary(item)
-                if (!guild || (previous !== undefined && BigInt(guild.id) <= previous)) return undefined
+                if (!guild) return undefined
+                if (previous !== undefined && BigInt(guild.id) <= previous) return rejectCheck("order")
                 previous = BigInt(guild.id)
                 guilds.push(guild)
             }

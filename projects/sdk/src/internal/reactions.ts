@@ -7,6 +7,7 @@ import type { ReactionEmoji, ReactionEmojiInput, ReactionTarget, ReactionUser, R
 import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { format } from "#sdk/helpers"
 import { identifier, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
     const input = query === undefined ? {} : query
@@ -51,7 +52,7 @@ export function decodeReactionUsersPage(
         )
             return undefined
         const id = BigInt(item.id)
-        if (previous !== undefined && id <= previous) return undefined
+        if (previous !== undefined && id <= previous) return rejectCheck("order")
         previous = id
         items.push(Object.freeze({ id: item.id, username: item.username, isBot: item.bot === true }))
     }
