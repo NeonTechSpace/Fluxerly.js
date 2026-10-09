@@ -4,7 +4,7 @@ navTitle: Application supervision
 description: Keep gateway and worker health separate, then choose a fail or restart policy
 ---
 
-A bot started with `runBot` is already supervised: The runner watches the connection and every subscription it registered, and stops the bot with `CriticalWorkerStoppedError` if one closes. This page is for applications that create the client with `createClient` and need the same guarantee together with a health report
+A bot started with `runBot` is already supervised: The runner watches the connection and every subscription it registered, and stops the bot with `CriticalWorkerStoppedError` if one closes. That includes a handler or command router set to `overflow: "stop"` whose queue fills, and the error then names the event and the exceeded limit. This page is for applications that create the client with `createClient` and need the same guarantee together with a health report
 
 A connected bot can still have a stopped event subscription, the registration that delivers one event to its handler. A failed handler does not stop later events, and a full queue drops the oldest waiting event by default. A subscription registered with `overflow: "stop"` closes when its queue fills instead. A subscription the bot cannot work without is called a critical worker here. Check both the connection and each critical worker
 

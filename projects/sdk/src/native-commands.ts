@@ -1219,7 +1219,17 @@ export function nativeBotRouter<M extends MessageCore>(
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("commands", "The commands option must be an object")
     checkBotCommandKeys(options, ["onUnmatched", "onReject", "use"])
-    const { commands: definitions, onError: _onError, ...settings } = options as Record<string, unknown>
+    // The onError hook and delivery settings belong to the router's attachment, which runBot makes with them
+    const {
+        commands: definitions,
+        onError: _onError,
+        concurrency: _concurrency,
+        partition: _partition,
+        overflow: _overflow,
+        maxPendingMessages: _maxPendingMessages,
+        maxPendingBytes: _maxPendingBytes,
+        ...settings
+    } = options as Record<string, unknown>
     const router = nativeCommands.create<unknown, unknown, M>({
         ...settings,
         ignoreBots: settings.ignoreBots ?? ignoreBots,

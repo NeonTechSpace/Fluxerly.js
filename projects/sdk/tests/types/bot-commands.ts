@@ -15,6 +15,10 @@ export function defaultBot(token: string | undefined) {
             mentionPrefix: true,
             onReject: "reply",
             use: [async (_context, next) => next()],
+            // Delivery settings reach the router's attach, and a partition function receives the typed message
+            concurrency: 4,
+            partition: (message) => message.author.id,
+            overflow: "stop",
             commands: {
                 ping: { execute: ({ reply }) => reply("Pong") },
                 roll: {
@@ -56,6 +60,8 @@ export function nativeBot(token: string | undefined) {
         commands: {
             prefix: "!",
             onReject: "reply",
+            partition: (message) => message.channelId,
+            maxPendingMessages: 64,
             commands: {
                 ping: { execute: ({ reply }) => reply("Pong") },
                 roll: {

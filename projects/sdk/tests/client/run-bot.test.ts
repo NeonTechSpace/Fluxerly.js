@@ -5,9 +5,11 @@ import {
     ApplicationError,
     CriticalWorkerStoppedError,
     ConfigurationError,
+    EventOverflowError,
     runBot,
     SdkDefect,
     type FailureReport,
+    type LogRecord,
     type Client,
     type Subscription,
 } from "../../src/index.js"
@@ -121,6 +123,46 @@ function watchSideEffects() {
     }
 }
 
+/**
+ * Run a bot in one entry point and deliver frames until a subscription set to overflow "stop" overflows, then request a
+ * stop. Resolve with the run's failure, or undefined when that requested stop ended the run successfully
+ */
+async function failureAfterOverflow(
+    mode: "default" | "native",
+    options: Record<string, unknown>,
+    frames: readonly [event: string, data: unknown][],
+): Promise<unknown> {
+    const fixture = await gateway()
+    const abort = new AbortController()
+    onTestFinished(() => abort.abort())
+    const overflowed = deferred<void>()
+    const settings = {
+        token,
+        signal: abort.signal,
+        reportFailure: false,
+        // A requested stop cancels the held handlers at once instead of draining them
+        drainMs: 0,
+        logging: {
+            sink: (record: LogRecord) => {
+                if (record.code === "events.overflow") overflowed.resolve()
+            },
+        },
+        ...options,
+    }
+    const running =
+        mode === "default"
+            ? runBot(settings as never).then((result) => (result.isErr() ? result.error : undefined))
+            : Effect.runPromiseExit(runNativeBot(settings as never)).then((exit) =>
+                  Exit.isFailure(exit) ? exit.cause.reasons.find((reason) => reason._tag === "Fail")?.error : undefined,
+              )
+    await fixture.identified
+    for (const [event, data] of frames) fixture.dispatch(event, data)
+    // The overflow is still reported. A bot that kept running without the subscription would end successfully here
+    await overflowed.promise
+    abort.abort()
+    return running
+}
+
 /** Misuse shared by both entry points: runner settings, event entries and delivery settings, and client settings */
 function sharedMisuse(handler: (...args: never[]) => unknown): Record<string, unknown>[] {
     return [
@@ -131,6 +173,8 @@ function sharedMisuse(handler: (...args: never[]) => unknown): Record<string, un
         { token, events: { typingStart: { handler, overflow: "explode" } } },
         { token, events: { typingStart: { handler, maxPendingMessages: 1.5 } } },
         { token, events: { messageCreate: { handler, onError: "report" } } },
+        { token, commands: { prefix: "!", commands: { ping: { execute: handler } }, concurrency: 0 } },
+        { token, commands: { prefix: "!", commands: { ping: { execute: handler } }, overflow: "explode" } },
         { token, setup: "later" },
         { token, processSignals: "yes", events: {} },
         { token, ignoreBots: "no", events: { messageCreate: handler } },
@@ -894,49 +938,77 @@ describe("public runBot", () => {
         expect((await running).isOk()).toBe(true)
     })
 
-    test("an events-map handler that stops on overflow is reported without stopping the bot", async () => {
-        const fixture = await gateway()
-        const abort = new AbortController()
-        onTestFinished(() => abort.abort())
-        const gate = deferred<void>()
-        const reports: FailureReport[] = []
-        const delivered: string[] = []
-        let settled = false
-        const running = runBot({
-            token,
-            signal: abort.signal,
-            onError: (report) => {
-                reports.push(report)
-            },
-            events: {
-                messageCreate: ({ message }) => void delivered.push(message.id),
-                typingStart: {
-                    overflow: "stop",
-                    maxPendingMessages: 1,
-                    handler: async () => {
-                        await gate.promise
+    test("a handler set to overflow stop that overflows fails the run, naming its event and capacity, in both entry points", async () => {
+        const typing = [1, 2, 3].map((timestamp) => [
+            "TYPING_START",
+            { channel_id: "20", user_id: "30", timestamp },
+        ]) as [string, unknown][]
+        const stop = { overflow: "stop", maxPendingMessages: 1 } as const
+        const failures = [
+            await failureAfterOverflow(
+                "default",
+                {
+                    events: {
+                        messageCreate: () => undefined,
+                        typingStart: { ...stop, handler: () => new Promise(() => undefined) },
                     },
                 },
-            },
-        })
-        void running.then(() => {
-            settled = true
-        })
-        await fixture.identified
-        for (let timestamp = 1; timestamp <= 3; timestamp++)
-            fixture.dispatch("TYPING_START", { channel_id: "20", user_id: "30", timestamp })
-        await vi.waitFor(() =>
-            expect(reports).toEqual([
-                expect.objectContaining({ kind: "overflow", event: "typingStart", error: expect.anything() }),
-            ]),
-        )
-        gate.resolve()
-        // A later event still reaches another handler, so the stopped subscription did not stop the bot
-        fixture.dispatch("MESSAGE_CREATE", messageWire)
-        await vi.waitFor(() => expect(delivered).toEqual([messageWire.id]))
-        expect(settled).toBe(false)
-        abort.abort()
-        expect((await running).isOk()).toBe(true)
+                typing,
+            ),
+            await failureAfterOverflow(
+                "native",
+                {
+                    events: {
+                        messageCreate: () => Effect.void,
+                        typingStart: { ...stop, handler: () => Effect.never },
+                    },
+                },
+                typing,
+            ),
+        ]
+        for (const failure of failures) {
+            expect(failure).toBeInstanceOf(CriticalWorkerStoppedError)
+            expect(failure).toMatchObject({
+                workerIndex: 1,
+                details: { event: "typingStart", limit: "messages", capacity: 1 },
+            })
+            expect((failure as Error).cause).toBeInstanceOf(EventOverflowError)
+        }
+    })
+
+    test("runBot commands pass their delivery settings to the router in both entry points", async () => {
+        // The router defaults run eight commands at a time and drop the oldest waiting message, so only these settings
+        // let three held commands overflow
+        const delivery = { concurrency: 1, maxPendingMessages: 1, overflow: "stop" } as const
+        const messages = ["11", "12", "13"].map((id) => [
+            "MESSAGE_CREATE",
+            { ...messageWire, id, content: "!hold" },
+        ]) as [string, unknown][]
+        const failures = [
+            await failureAfterOverflow(
+                "default",
+                {
+                    commands: {
+                        prefix: "!",
+                        ...delivery,
+                        commands: { hold: { execute: () => new Promise(() => undefined) } },
+                    },
+                },
+                messages,
+            ),
+            await failureAfterOverflow(
+                "native",
+                { commands: { prefix: "!", ...delivery, commands: { hold: { execute: () => Effect.never } } } },
+                messages,
+            ),
+        ]
+        for (const failure of failures) {
+            expect(failure).toBeInstanceOf(CriticalWorkerStoppedError)
+            expect(failure).toMatchObject({
+                workerIndex: 0,
+                details: { event: "messageCreate", limit: "messages", capacity: 1 },
+            })
+        }
     })
 
     test("simple native events use the caller's services and interrupt in-flight handlers on stop", async () => {

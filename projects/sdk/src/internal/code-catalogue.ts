@@ -136,8 +136,8 @@ export const errorCodes = {
     "bot.workerStopped": {
         error: "CriticalWorkerStoppedError",
         meaning:
-            "One of the bot's event or command subscriptions ended while the bot was still running, so the bot stopped. The details.workerIndex field numbers it from 0",
-        action: "Keep the bot's subscriptions open while it runs. The hint explains how subscriptions are numbered",
+            'One of the bot\'s event or command subscriptions ended while the bot was still running, so the bot stopped. The details.workerIndex field numbers it from 0. A subscription set to overflow "stop" whose queue overflowed also names its event and the exceeded capacity in details',
+        action: "Keep the bot's subscriptions open while it runs. The hint explains how subscriptions are numbered, or how to keep up with the events after an overflow",
     },
     "events.overflow": {
         error: "EventOverflowError",

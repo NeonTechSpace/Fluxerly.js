@@ -79,12 +79,14 @@ async function checkDefault(token, userId) {
     const listeners = { SIGINT: process.listenerCount("SIGINT"), SIGTERM: process.listenerCount("SIGTERM") }
 
     stage = "configuration_misuse"
-    // Misuse throws synchronously, before any socket or process signal listener exists
+    // A missing token is reported as the run's failure, and other misuse throws synchronously, both before any socket
+    // or process signal listener exists
     const socketsBeforeMisuse = probe.sockets.size
-    assert.throws(
-        () => runBot({ token: "", processSignals: true }),
-        (error) => error instanceof ConfigurationError,
-    )
+    const missingToken = await runBot({ token: "", processSignals: true })
+    assert.ok(missingToken.isErr() && missingToken.error instanceof ConfigurationError)
+    // runBot reports the failed run through the exit code. The failure is test-owned, so the check clears it
+    assert.equal(process.exitCode, 1)
+    process.exitCode = undefined
     assert.throws(
         () => runBot({ token, processSignals: true, events: { notAnEvent: () => undefined } }),
         (error) => error instanceof ConfigurationError,
@@ -180,16 +182,21 @@ async function checkEffect(token, userId) {
         Exit.isFailure(exit)
             ? exit.cause.reasons.filter((reason) => reason._tag === "Die").map(({ defect }) => defect)
             : []
+    const failures = (exit) =>
+        Exit.isFailure(exit)
+            ? exit.cause.reasons.filter((reason) => reason._tag === "Fail").map(({ error }) => error)
+            : []
 
     stage = "configuration_misuse"
-    // Native misuse is a defect carrying the ConfigurationError, and no socket or signal listener is left behind
+    // A missing token is a typed failure and other native misuse is a defect, both carrying the ConfigurationError, and
+    // no socket or signal listener is left behind
     const socketsBeforeMisuse = probe.sockets.size
-    for (const options of [
-        { token: "", processSignals: true },
-        { token, processSignals: true, events: { notAnEvent: () => Effect.void } },
+    for (const [options, reasons] of [
+        [{ token: "", processSignals: true }, failures],
+        [{ token, processSignals: true, events: { notAnEvent: () => Effect.void } }, defects],
     ]) {
         const exit = await Effect.runPromiseExit(runBot(options))
-        assert.ok(defects(exit).some((defect) => defect instanceof ConfigurationError))
+        assert.ok(reasons(exit).some((reason) => reason instanceof ConfigurationError))
         // The Effect runner reports a failure before the client exists and sets a failing exit code
         assert.equal(process.exitCode, 1)
         process.exitCode = undefined

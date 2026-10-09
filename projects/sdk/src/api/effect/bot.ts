@@ -6,14 +6,15 @@ import {
     reportBotFailure,
     runBotCore,
     skipsBotMessage,
+    snapshotBotCommandDelivery,
     snapshotBotEvents,
     standaloneBotLogger,
     validateBotClientOptions,
     validateRunOptions,
 } from "#sdk/internal/bot-runner"
 import { ApplicationError, ConfigurationError, type ConnectError } from "#sdk/errors"
-import type { CriticalWorkerStoppedError, RunBotOptions } from "#sdk/bot-runner"
-import { EventOverflowError, type SendError } from "#sdk/message-errors"
+import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
+import type { SendError } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
 import type { HandlerOptions, EventMap, EventName } from "#sdk/events"
 import type { CommandArgumentSchema } from "#sdk/command-arguments"
@@ -105,9 +106,13 @@ export type BotCommandEntries<S> = Readonly<
 >
 
 /**
- * Prefix commands for the native runBot: The router options of commands.create, the commands themselves and an optional
- * failure hook. Router-level callbacks, such as onUnmatched and middleware, run without extra services, while each
+ * Prefix commands for the native runBot: The router options of commands.create, the commands themselves, an optional
+ * failure hook and the delivery settings of the router's attach. Router-level callbacks, such as onUnmatched and middleware, run without extra services, while each
  * command's services are added to the bot's requirements. The router is attached before the gateway starts and closed when the bot stops.
+ * The delivery settings concurrency, partition, overflow, maxPendingMessages and maxPendingBytes are passed to attach
+ * unchanged and checked before any client exists. Omitted settings keep the attach defaults: Eight commands at a time
+ * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With overflow "stop", a full
+ * queue fails the bot with CriticalWorkerStoppedError.
  * Unlike commands.create, runBot replies to a rejected command by default, such as one with a missing argument, as
  * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback.
  * An unset ignoreBots follows the runBot ignoreBots setting
@@ -119,7 +124,8 @@ export interface BotCommandsOptions<
     S extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>,
     C extends BotCommandEntries<S> = BotCommandEntries<S>,
     RouterServices = never,
-> extends NativePrefixCommandsOptions<unknown, never, M> {
+>
+    extends NativePrefixCommandsOptions<unknown, never, M>, HandlerOptions<M> {
     /**
      * Commands keyed by name, such as `{ ping: { execute: ({ reply }) => reply("Pong") } }`, or a callback that
      * receives the empty router and returns it with registrations, for groups or commands built elsewhere.
@@ -136,8 +142,8 @@ export interface BotCommandsOptions<
 
 /**
  * Configure one Effect bot with client settings, optional stop signals, event handlers, prefix commands and startup work.
- * The token accepts an unvalidated environment value, and a missing or blank value is misuse that dies with
- * ConfigurationError. Client settings, including messageFields and cache callbacks, retain their native semantics.
+ * The token accepts an unvalidated environment value. A missing or blank value is not misuse: Once the other options
+ * are valid, the bot fails with ConfigurationError. Client settings, including messageFields and cache callbacks, retain their native semantics.
  * Handlers and commands are registered when the Effect runs, before the gateway starts.
  * Reports before client creation use the configured logging settings and mask the normalized token, including a token
  * enclosed in matching quotes. If an option getter throws, readable token, logging and reportFailure settings are retained
@@ -221,6 +227,8 @@ interface PreparedNativeBot {
     readonly skipBots: boolean
     readonly router: NativePrefixCommandRouter<unknown, Message> | undefined
     readonly onError: ((report: FailureReport) => Effect.Effect<unknown, unknown, never>) | undefined
+    /** The command router's delivery settings, passed to its attach unchanged */
+    readonly delivery: Readonly<Record<string, unknown>> | undefined
     readonly setup: ((client: Client) => Effect.Effect<unknown, unknown, unknown>) | undefined
     /** A commands register callback's own failure, returned once the other options are checked */
     readonly commandsFailure: ApplicationError | undefined
@@ -249,6 +257,7 @@ function prepareNativeBot(events: unknown, ignoreBots: unknown, commands: unknow
         skipBots,
         router,
         onError: onError as PreparedNativeBot["onError"],
+        delivery: commands === undefined ? undefined : snapshotBotCommandDelivery(commands as object),
         setup: setup as PreparedNativeBot["setup"],
         commandsFailure,
     }
@@ -290,10 +299,10 @@ function registerNativeBot(
             )
         if (prepared.router !== undefined)
             subscriptions.push(
-                yield* prepared.router.attach(
-                    client,
-                    prepared.onError === undefined ? undefined : { onError: prepared.onError },
-                ),
+                yield* prepared.router.attach(client, {
+                    ...prepared.delivery,
+                    ...(prepared.onError === undefined ? {} : { onError: prepared.onError }),
+                } as EventHandlerOptions<unknown, never>),
             )
         return subscriptions
     }) as Effect.Effect<readonly Subscription[], never, Scope.Scope>
@@ -388,8 +397,9 @@ export function installNativeTestBot(
  * By default, messageCreate and messageUpdate events written by bots skip the events handlers and prefix commands.
  * Set ignoreBots to false to opt out.
  * A failed setup Effect or a throwing commands register callback fails the bot with ApplicationError before it connects.
- * A subscription that closes normally while the bot runs fails the bot with CriticalWorkerStoppedError, and a
- * handler set to overflow "stop" that overflows is reported while the bot keeps running without it. Cleanup is awaited.
+ * A subscription that closes while the bot runs fails the bot with CriticalWorkerStoppedError. That includes a handler
+ * or command router set to overflow "stop" whose queue overflows. The overflow is still reported to onError or logged,
+ * and the error names the event and the exceeded capacity, with the EventOverflowError as its cause. Cleanup is awaited.
  * Aborting signal or enabled SIGINT/SIGTERM stops successfully, after running handlers and their requests had up to
  * drainMs, default 5,000 ms, to finish. Fiber interruption remains interruption and does not drain.
  * Process signals stay opt-in here, because a launcher such as NodeRuntime.runMain already interrupts the program on
@@ -496,19 +506,24 @@ export function runBot<
             return reportBotFailure(Exit.fail(failure), standaloneBotLogger(clientOptions, true), runOptions).pipe(
                 Effect.andThen(Effect.fail(failure)),
             )
-        return runBotCore(
+        // Bound first, so the result type below does not narrow the inferred worker failure
+        const run = runBotCore(
             Effect.suspend(() => createClient(clientOptions as ClientOptions)),
             (client) =>
                 Effect.gen(function* () {
                     const subscriptions = yield* registerNativeBot(client, prepared)
                     yield* nativeBotSetup(client, prepared.setup)
-                    // An overflowing event subscription was already reported, and the bot keeps running without it
-                    return subscriptions.map((subscription) => ({
+                    // A subscription stopped by overflow "stop" stops the bot, naming its event and capacity
+                    return subscriptions.map((subscription, index) => ({
                         waitForClose: () =>
                             subscription.waitForClose().pipe(
-                                Effect.catchIf(
-                                    (error): error is EventOverflowError => error instanceof EventOverflowError,
-                                    () => client.waitForClose().pipe(Effect.exit, Effect.asVoid),
+                                Effect.mapError(
+                                    (error) =>
+                                        new CriticalWorkerStoppedError(index, {
+                                            // The command router follows the event handlers and receives messageCreate
+                                            event: prepared.entries[index]?.event ?? "messageCreate",
+                                            error,
+                                        }),
                                 ),
                             ),
                     }))
@@ -516,6 +531,7 @@ export function runBot<
             runOptions,
             () => standaloneBotLogger(clientOptions, true),
         )
+        return run
     }) as Effect.Effect<
         void,
         ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,

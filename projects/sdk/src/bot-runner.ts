@@ -1,5 +1,7 @@
 import type { OperationSignal } from "./client.js"
 import { FluxerlyError } from "./errors.js"
+import type { EventName } from "./events.js"
+import type { EventOverflowError } from "./message-errors.js"
 
 /**
  * Configure how runBot stops. Importing the SDK does not register process signal handlers, only a running bot does
@@ -46,7 +48,9 @@ export interface RunBotOptions {
 }
 
 /**
- * One of the bot's event or command subscriptions ended normally while its client was still running
+ * One of the bot's event or command subscriptions ended while its client was still running. Either it closed normally,
+ * or its queue overflowed while its overflow setting was "stop". For an overflow, the message and details name the
+ * subscription's event and the exceeded capacity, and the cause is the subscription's EventOverflowError
  *
  * @category Errors
  */
@@ -57,12 +61,31 @@ export class CriticalWorkerStoppedError extends FluxerlyError {
     constructor(
         /** Zero-based index among the bot's subscriptions: Its event handlers in configuration order, then its command router */
         readonly workerIndex: number,
+        /** The overflow that stopped a subscription set to overflow "stop", with that subscription's event */
+        overflow?: { readonly event: EventName; readonly error: EventOverflowError },
     ) {
-        super(`Bot subscription ${workerIndex + 1} ended while the bot was still running, so the bot stopped`, {
-            code: "bot.workerStopped",
-            hint: "Subscriptions are numbered from 1 in the order of the events option, then the command router. Keep the bot's subscriptions open while it runs",
-            details: { workerIndex },
-        })
+        super(
+            overflow === undefined
+                ? `Bot subscription ${workerIndex + 1} ended while the bot was still running, so the bot stopped`
+                : `The ${overflow.event} subscription (bot subscription ${workerIndex + 1}) stopped because ${overflow.error.limit === "messages" ? `more than ${overflow.error.capacity} ${overflow.error.capacity === 1 ? "event was" : "events were"} waiting (maxPendingMessages)` : `waiting events exceeded ${overflow.error.capacity} bytes (maxPendingBytes)`}, so the bot stopped`,
+            overflow === undefined
+                ? {
+                      code: "bot.workerStopped",
+                      hint: "Subscriptions are numbered from 1 in the order of the events option, then the command router. Keep the bot's subscriptions open while it runs",
+                      details: { workerIndex },
+                  }
+                : {
+                      code: "bot.workerStopped",
+                      hint: 'Handle these events faster, raise maxPendingMessages or maxPendingBytes, or set overflow "dropOldest" or "dropNewest" so the subscription drops events instead of stopping the bot',
+                      details: {
+                          workerIndex,
+                          event: overflow.event,
+                          limit: overflow.error.limit,
+                          capacity: overflow.error.capacity,
+                      },
+                      cause: overflow.error,
+                  },
+        )
         this.name = "CriticalWorkerStoppedError"
     }
 }

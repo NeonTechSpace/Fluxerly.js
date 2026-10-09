@@ -23,6 +23,7 @@ import { ClientLogger, loggingConfiguration } from "./logging.js"
 import { missingTokenMessage, normalizeToken, validateConfiguration } from "./configuration.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { EventBus } from "./events.js"
+import { botCommandDeliveryKeys, routerSubscriptionOptions } from "./commands.js"
 import { shutdownDrainMs } from "./client/drain.js"
 
 /** Default delivery for runBot event handlers. Overflow drops the oldest waiting event rather than stopping the bot,
@@ -107,6 +108,23 @@ export function snapshotBotEvents(
         entries.push({ event: event as EventName, handler, options: settings })
     }
     return entries
+}
+
+/** Read the delivery settings of a runBot commands object once before any client exists, and check them with the
+ * rules of the router's attach. Invalid settings throw ConfigurationError. The returned settings go to attach unchanged
+ */
+export function snapshotBotCommandDelivery(commands: object): Readonly<Record<string, unknown>> {
+    const delivery: Record<string, unknown> = {}
+    for (const key of botCommandDeliveryKeys) {
+        const value = (commands as Readonly<Record<string, unknown>>)[key]
+        if (value !== undefined) delivery[key] = value
+    }
+    validateBotEvent(
+        "messageCreate",
+        routerSubscriptionOptions(delivery) as Readonly<Record<string, unknown>>,
+        new EventBus(),
+    )
+    return Object.freeze(delivery)
 }
 
 /** Read the runBot ignoreBots setting, true unless it is false. Any value other than a boolean is misuse */

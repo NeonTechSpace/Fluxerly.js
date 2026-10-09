@@ -178,6 +178,44 @@ describe.each(modes)("%s test client failures", (mode) => {
         expect(failures).toEqual([expect.objectContaining({ level: "error", code: "events.handlerFailed" })])
     })
 
+    test("a silent logging level does not hide an unhandled failure from failures() or shutdown", async () => {
+        const failing = async (driver: Driver) => {
+            await driver.onMessage(() => {
+                throw new Error("handler bug")
+            })
+            await driver.ready()
+            await driver.emit("MESSAGE_CREATE", driver.fixtures.message())
+            await driver.idle()
+        }
+        const reading = await open(mode, { logging: { level: "silent" } })
+        await failing(reading)
+        expect(reading.failures()).toEqual([expect.objectContaining({ level: "error", code: "events.handlerFailed" })])
+        await reading.shutdown()
+
+        const unread = await open(mode, { logging: { level: "silent" } })
+        await failing(unread)
+        await expect(unread.shutdown()).rejects.toBeInstanceOf(UnhandledTestFailuresError)
+    })
+
+    test("each repeated failure appears in failures() once, even when log deduplication suppresses its output", async () => {
+        const driver = await open(mode)
+        await driver.onMessage(() => {
+            throw new Error("handler bug")
+        })
+        await driver.ready()
+        // The same failure twice within the deduplication window prints only the first until shutdown
+        for (let index = 0; index < 2; index++) {
+            await driver.emit("MESSAGE_CREATE", driver.fixtures.message())
+            await driver.idle()
+        }
+        expect(driver.failures()).toEqual([
+            expect.objectContaining({ code: "events.handlerFailed" }),
+            expect.objectContaining({ code: "events.handlerFailed" }),
+        ])
+        // Both failures were read, so the summary of suppressed repeats that shutdown prints does not fail it again
+        await driver.shutdown()
+    })
+
     test("failures read by the test and failures passed to onError do not fail shutdown", async () => {
         const handled: unknown[] = []
         const onError = (report: { readonly error: unknown }) =>

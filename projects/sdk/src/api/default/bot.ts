@@ -8,6 +8,7 @@ import {
     reportBotFailure,
     runBotCore,
     skipsBotMessage,
+    snapshotBotCommandDelivery,
     snapshotBotEvents,
     standaloneBotLogger,
     validateBotClientOptions,
@@ -36,8 +37,8 @@ import { type OperationFailure, fromExit } from "#sdk/internal/binding/execute"
 
 type BotFailure = ConnectError | CancelledError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError
 /** Failures the runner observes from client operations. Its own signal is always valid, so a signal ConfigurationError
- * cannot occur. An overflowing subscription's EventOverflowError is caught before the Result, and a failed setup
- * callback adds ApplicationError
+ * cannot occur. An overflowing subscription's EventOverflowError becomes CriticalWorkerStoppedError before the Result,
+ * and a failed setup callback adds ApplicationError
  */
 type RunnerFailure = Exclude<BotFailure, ApplicationError> | ConfigurationError | EventOverflowError
 
@@ -169,8 +170,13 @@ export type BotEvents<M extends MessageCore = Message> = {
 }
 
 /**
- * Prefix commands for runBot: The router options of commands.create, the commands themselves and an optional failure hook.
+ * Prefix commands for runBot: The router options of commands.create, the commands themselves, an optional failure hook
+ * and the delivery settings of the router's attach.
  * The router is attached before the gateway starts and closed when the bot stops.
+ * The delivery settings concurrency, partition, overflow, maxPendingMessages and maxPendingBytes are passed to attach
+ * unchanged and checked before any client exists. Omitted settings keep the attach defaults: Eight commands at a time
+ * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With overflow "stop", a full
+ * queue stops the bot with CriticalWorkerStoppedError.
  * Unlike commands.create, runBot replies to a rejected command by default, such as one with a missing argument, as
  * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback.
  * An unset ignoreBots follows the runBot ignoreBots setting
@@ -180,7 +186,8 @@ export type BotEvents<M extends MessageCore = Message> = {
 export interface BotCommandsOptions<
     M extends MessageCore = Message,
     S extends Readonly<Record<string, unknown>> = Readonly<Record<string, CommandArgumentSchema | undefined>>,
-> extends DefaultPrefixCommandsOptions<M> {
+>
+    extends DefaultPrefixCommandsOptions<M>, HandlerOptions<M> {
     /**
      * Commands keyed by name, such as `{ ping: { execute: ({ reply }) => reply("Pong") } }`, or a callback that
      * receives the empty router and returns it with registrations, for groups or commands built elsewhere.
@@ -269,9 +276,10 @@ export interface BotOptions<
  * Aborting the optional signal requests a normal stop, not a cancellation Err. A requested stop first stops accepting
  * events and lets running handlers and their requests finish for up to drainMs, default 5,000 ms. Success means the client has
  * stopped and cleanup has finished. The runner always shuts down its client, including after a failure.
- * If an event or command subscription closes normally while the bot is still running, the result fails with
- * CriticalWorkerStoppedError. A handler set to overflow "stop" that overflows is reported, and the bot keeps running
- * without it.
+ * If an event or command subscription closes while the bot is still running, the result fails with
+ * CriticalWorkerStoppedError. That includes a handler or command router set to overflow "stop" whose queue overflows.
+ * The overflow is still reported to onError or logged, and the error names the event and the exceeded capacity, with
+ * the EventOverflowError as its cause.
  * Process signal listeners are removed when the run finishes, and the runner never exits the process
  *
  * @example
@@ -356,7 +364,7 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
     }
     // All configuration is checked before any client, listener or request exists, so misuse has no side effects.
     // An already aborted signal still reports misuse rather than hiding it
-    const { entries, skipBots, router, commandHook, commandsFailure } = prepareBot<M>(
+    const { entries, skipBots, router, commandHook, commandDelivery, commandsFailure } = prepareBot<M>(
         events,
         ignoreBots,
         commands as BotCommandsOptions<M, never> | undefined,
@@ -372,7 +380,7 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
     const client = createClient<F>(clientOptions as ClientOptions<F>)
     let subscriptions: readonly Subscription[]
     try {
-        subscriptions = registerBot(client, { entries, skipBots, router, commandHook })
+        subscriptions = registerBot(client, { entries, skipBots, router, commandHook, commandDelivery })
     } catch (error) {
         // Validated registration cannot be misuse here, so this is a defect. The unused client owns no socket yet,
         // and its cleanup failure is logged by the client
@@ -415,17 +423,18 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
                   )
             ).pipe(
                 Effect.as(
-                    subscriptions.map((subscription) => ({
-                        // An overflowing event subscription was already reported, and the bot keeps running without it
+                    subscriptions.map((subscription, index) => ({
+                        // A subscription stopped by overflow "stop" stops the bot, naming its event and capacity
                         waitForClose: () =>
                             botOperation((signal) => subscription.waitForClose({ signal })).pipe(
-                                Effect.catchIf(
-                                    (error): error is EventOverflowError => error instanceof EventOverflowError,
-                                    () =>
-                                        botOperation((signal) => client.waitForClose({ signal })).pipe(
-                                            Effect.exit,
-                                            Effect.asVoid,
-                                        ),
+                                Effect.mapError((error) =>
+                                    error instanceof EventOverflowError
+                                        ? new CriticalWorkerStoppedError(index, {
+                                              // The command router follows the event handlers and receives messageCreate
+                                              event: entries[index]?.event ?? "messageCreate",
+                                              error,
+                                          })
+                                        : error,
                                 ),
                             ),
                     })),
@@ -468,7 +477,9 @@ function prepareBot<M extends MessageCore>(
     const commandHook = readBotOptions(() => commands?.onError)
     if (commandHook !== undefined && typeof commandHook !== "function")
         throw new ConfigurationError("onError", 'The option "commands.onError" must be a function')
-    return { entries, skipBots, router, commandHook, commandsFailure }
+    const commandDelivery =
+        commands === undefined ? undefined : readBotOptions(() => snapshotBotCommandDelivery(commands))
+    return { entries, skipBots, router, commandHook, commandDelivery, commandsFailure }
 }
 
 /**
@@ -525,7 +536,8 @@ function registerBot<M extends MessageCore>(
         skipBots,
         router,
         commandHook,
-    }: Pick<ReturnType<typeof prepareBot<M>>, "entries" | "skipBots" | "router" | "commandHook">,
+        commandDelivery,
+    }: Pick<ReturnType<typeof prepareBot<M>>, "entries" | "skipBots" | "router" | "commandHook" | "commandDelivery">,
 ): readonly Subscription[] {
     const subscriptions: Subscription[] = []
     try {
@@ -556,7 +568,12 @@ function registerBot<M extends MessageCore>(
             )
         }
         if (router !== undefined)
-            subscriptions.push(router.attach(client, commandHook === undefined ? undefined : { onError: commandHook }))
+            subscriptions.push(
+                router.attach(client, {
+                    ...commandDelivery,
+                    ...(commandHook === undefined ? {} : { onError: commandHook }),
+                } as EventHandlerOptions),
+            )
         return subscriptions
     } catch (error) {
         for (const subscription of subscriptions) subscription.close()

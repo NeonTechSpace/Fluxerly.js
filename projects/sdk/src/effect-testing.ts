@@ -69,6 +69,7 @@ import type { Message, MessageCore, MessageFields, SelectedMessage } from "./mes
 import { createClient, type Client, type ClientOptions } from "./api/effect/client.js"
 import { checkTestOptionKeys, TestHarness } from "./internal/testing/harness.js"
 import { botOptionKeys } from "./internal/bot-runner.js"
+import { clientServices } from "./internal/client-registry.js"
 import { TestTimeoutError, type UnhandledTestFailuresError } from "./internal/testing/errors.js"
 import type {
     TestDisconnectOptions,
@@ -249,7 +250,8 @@ export interface TestClient<M extends MessageCore = Message> {
      * Error records of failures no application code handled so far, in order, such as an event handler or command
      * that failed while no onError hook was registered. Assert expected failures here, because shutdown fails for
      * unhandled failures that failures() has not returned.
-     * The records come from logs(), so a logging level above error hides them
+     * Failures are captured whatever the logging level, categories and deduplication, so each one appears here and
+     * counts for shutdown even when logs() leaves it out
      */
     failures(): readonly LogRecord[]
     /**
@@ -328,6 +330,7 @@ function openTestClient<E, R, F extends MessageFields | undefined>(
             }),
         )
         const client = yield* createClient<E, R, F>(harness.clientOptions(options) as ClientOptions<E, R, F>)
+        clientServices(client)!.logging.errorTap = harness.captureError
         const test: TestClient<SelectedMessage<F>> = Object.freeze({
             client,
             fixtures: harness.fixtures,

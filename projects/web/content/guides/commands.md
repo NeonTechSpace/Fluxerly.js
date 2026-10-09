@@ -172,6 +172,29 @@ A skipped answer still counts as a rejection and is logged at Debug. An `onRejec
 
 </details>
 
+## Control how commands run
+
+By default `runBot` runs up to eight commands at a time, and when more messages wait than the queue holds, it drops the oldest waiting message with a Warn record. The `commands` option also accepts the delivery settings of an event handler, `concurrency`, `partition`, `overflow`, `maxPendingMessages` and `maxPendingBytes`, and passes them to the router unchanged. Invalid values throw `ConfigurationError` when `runBot` is called. This bot runs the commands of each channel one at a time in the order they arrived, and stops instead of dropping commands when 64 messages are waiting
+
+```ts
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        partition: "channel",
+        maxPendingMessages: 64,
+        overflow: "stop",
+        commands: {
+            ping: { execute: ({ reply }) => reply("Pong!") },
+        },
+    },
+})
+```
+
+With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop the oldest waiting messages instead
+
 ## Use the Effect entry point
 
 The [Effect](/docs/{{version}}/glossary/#effect) API accepts the same options. Each reply stops when the command handler is interrupted and keeps `SendError` in the Effect error channel. Services required by any command remain requirements of the returned program

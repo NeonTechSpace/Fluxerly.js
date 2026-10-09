@@ -1011,13 +1011,22 @@ function expectation(argument: NonNullable<PrefixCommandMetadata["arguments"]>[n
 /** Router option keys shared by both APIs. Each API adds its own callback keys */
 const routerOptionKeys = ["prefix", "parse", "ignoreBots", "caseSensitive", "mentionPrefix", "cooldowns"] as const
 
+/** Subscription delivery settings that a runBot commands option passes to the router's attach unchanged */
+export const botCommandDeliveryKeys = [
+    "concurrency",
+    "partition",
+    "overflow",
+    "maxPendingMessages",
+    "maxPendingBytes",
+] as const
+
 /**
  * Check the keys of a runBot commands option before its router is created, so the hint also lists commands and onError.
  * A key whose value looks like a command definition is explained as a command placed one level too high.
  * Values are read through property descriptors, so no getter runs here
  */
 export function checkBotCommandKeys(options: object, adapterKeys: readonly string[]): void {
-    const keys = [...routerOptionKeys, ...adapterKeys, "commands", "onError"]
+    const keys = [...routerOptionKeys, ...adapterKeys, ...botCommandDeliveryKeys, "commands", "onError"]
     for (const key of Reflect.ownKeys(options)) {
         if (typeof key !== "string" || keys.includes(key)) continue
         const value: unknown = Reflect.getOwnPropertyDescriptor(options, key)?.value

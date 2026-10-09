@@ -172,7 +172,8 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
      * Error records of failures no application code handled so far, in order, such as an event handler or command
      * that threw or returned a failed Result while no onError hook was registered. Assert expected failures here, because
      * shutdown rejects for unhandled failures that failures() has not returned.
-     * The records come from logs(), so a logging level above error hides them
+     * Failures are captured whatever the logging level, categories and deduplication, so each one appears here and
+     * counts for shutdown even when logs() leaves it out
      */
     failures(): readonly LogRecord[]
     /**
@@ -235,6 +236,7 @@ function openTestClient<F extends MessageFields | undefined>(
 ): { readonly test: TestClient<SelectedMessage<F>>; readonly harness: TestHarness } {
     const harness = new TestHarness(options)
     const client = createClient<F>(harness.clientOptions(options) as ClientOptions<F>)
+    clientServices(client)!.logging.errorTap = harness.captureError
     let closing: Promise<void> | undefined
     const shutdown = async () => {
         closing ??= (async () => {

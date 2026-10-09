@@ -986,11 +986,17 @@ export function botRouter<M extends MessageCore>(
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("commands", "The commands option must be an object")
     checkBotCommandKeys(options, routerAdapterKeys)
+    // The onError hook and delivery settings belong to the router's attachment, which runBot makes with them
     const {
         commands: definitions,
         onError: _onError,
+        concurrency: _concurrency,
+        partition: _partition,
+        overflow: _overflow,
+        maxPendingMessages: _maxPendingMessages,
+        maxPendingBytes: _maxPendingBytes,
         ...settings
-    } = options as typeof options & { readonly onError?: unknown }
+    } = options as typeof options & EventHandlerOptions
     const router = defaultCommands.create<M>({
         ...settings,
         ignoreBots: settings.ignoreBots ?? ignoreBots,

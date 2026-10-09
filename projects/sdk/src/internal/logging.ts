@@ -373,6 +373,10 @@ export class ClientLogger {
     #unsafeBannerShown = false
     /** Native context used when a record is emitted outside a fiber, normally the client's creation context */
     context: Context.Context<never> | undefined
+    /** Receives every Error and Fatal record before level thresholds and deduplication. The test kit sets it, so its
+     * failure checks see unhandled failures however quiet the test client's logging is
+     */
+    errorTap: ((record: LogRecord) => void) | undefined
 
     constructor(
         settings: Settings,
@@ -535,6 +539,12 @@ export class ClientLogger {
 
     /** Emit a record synchronously when its category threshold allows it. Output failures never reach the caller */
     log(input: LogInput, context?: Context.Context<never>) {
+        if (this.errorTap !== undefined && rank[input.level] >= rank.error)
+            try {
+                this.errorTap(this.#record(input))
+            } catch (error) {
+                this.#sinkFailure(error)
+            }
         if (!this.enabled(input.level, input.category)) return
         if (rank[input.level] >= rank.error && typeof input.error === "object" && input.error !== null)
             this.#loggedErrors.add(input.error)

@@ -2,8 +2,9 @@
  * Test client harness shared by the default and native testing entry points: Option handling, log capture and the
  * in-memory transport pair.
  * Invariant: A test client reaches no network. Its options always route HTTP and WebSocket traffic through the fake
- * transport, its log records reach logs() and any caller sinks at the caller's level, and closing the harness closes
- * every fake socket and refuses later requests. This module has no Effect imports, so default declarations stay free of Effect.
+ * transport, its log records reach logs() and any caller sinks at the caller's level, its unhandled failures reach
+ * failures() and the shutdown check at any level, and closing the harness closes every fake socket and refuses later
+ * requests. This module has no Effect imports, so default declarations stay free of Effect.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 // Real timers even when a test fakes the global ones, so idle can count quiet event loop turns
@@ -97,6 +98,8 @@ export class TestHarness {
     readonly http: TestHttp
     readonly gateway: TestGateway
     readonly #records: LogRecord[] = []
+    /** Every Error and Fatal record of the client, captured before its logging thresholds and deduplication */
+    readonly #errors: LogRecord[] = []
     /** Unhandled failure records that failures() returned or shutdown already reported */
     readonly #observed = new WeakSet<LogRecord>()
     /** Pending idle waits, failed with ClientClosedError when the harness closes */
@@ -167,16 +170,24 @@ export class TestHarness {
         return Object.freeze([...this.#records])
     }
 
+    /**
+     * Record an Error or Fatal record of the client before its thresholds and deduplication. Each entry point sets
+     * this as the client logger's errorTap, so a quiet logging level cannot hide a failure from failures() or shutdown
+     */
+    readonly captureError = (record: LogRecord) => {
+        this.#errors.push(record)
+    }
+
     /** Unhandled failure records so far, in order. Returning them marks them as observed by the test */
     failures(): readonly LogRecord[] {
-        const failures = this.#records.filter(unhandledFailure)
+        const failures = this.#errors.filter(unhandledFailure)
         for (const record of failures) this.#observed.add(record)
         return Object.freeze(failures)
     }
 
     /** Throw UnhandledTestFailuresError for unhandled failures the test has not observed, then mark them observed */
     checkFailures() {
-        const unobserved = this.#records.filter((record) => unhandledFailure(record) && !this.#observed.has(record))
+        const unobserved = this.#errors.filter((record) => unhandledFailure(record) && !this.#observed.has(record))
         if (unobserved.length === 0) return
         for (const record of unobserved) this.#observed.add(record)
         throw new UnhandledTestFailuresError(unobserved)

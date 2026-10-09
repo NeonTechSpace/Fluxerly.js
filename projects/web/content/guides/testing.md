@@ -172,7 +172,7 @@ The test client records everything, without the token or Authorization header:
 - HTTP requests: The `requests()` method lists each one with its method, path, query, parsed JSON body and uploaded files
 - Gateway commands: The `commands()` method lists what the client sent to the gateway, such as presence updates
 - Logs: The `logs()` method returns the records the client produced, which are kept out of the console
-- Failures: The `failures()` method returns the Error records of handler and command failures no `onError` hook received
+- Failures: The `failures()` method returns the Error records of handler and command failures no `onError` hook received, even when the logging level or deduplication keeps them out of `logs()`
 - Counters: The `counters()` method returns the same running totals as `client.diagnostics().counters`
 
 Each `rest.respond` call returns a route whose `requests()` lists only the requests it answered, `next()` waits for the next one and `remove()` stops it. The newest matching response wins. A matcher can be a `"METHOD /path/:param"` string, a RegExp, an object or a function
