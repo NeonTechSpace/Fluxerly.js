@@ -1,6 +1,6 @@
 import type { Message, MessageCore, MessageDeletion, MessageBulkDeletion } from "./messages.js"
 import type { ChannelPinsUpdate } from "./pins.js"
-import type { Guild, GuildDeletion, MemberReference } from "./guilds.js"
+import type { Guild, GuildDeletion, GuildMember, MemberReference } from "./guilds.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval, ReactionTarget } from "./reactions.js"
 import type { InviteMetadata } from "./invites.js"
@@ -269,6 +269,25 @@ export interface VoiceState {
     readonly isMobile: boolean
     /** Whether Fluxer reports this connection as prevented from speaking */
     readonly isSuppressed: boolean
+    /** Whether the participant is publishing camera video. An omitted flag reads as false */
+    readonly isSelfVideoOn: boolean
+    /**
+     * Whether the connection advertises a screen-share track. The participant's client reports it, and in a community
+     * Fluxer sets it to false while the participant lacks the Stream permission. An omitted flag reads as false
+     */
+    readonly isSelfStreaming: boolean
+    /**
+     * Keys of the screen shares this connection is watching, empty when it watches none or Fluxer omits them.
+     * A key reads `{guildId}:{channelId}:{connectionId}` for a community voice channel and `dm:{channelId}:{connectionId}`
+     * for a private call, where the last part is the publisher's connectionId
+     */
+    readonly viewerStreamKeys: readonly string[]
+    /**
+     * The participant's community member data as Fluxer attached it to this voice state, omitted when Fluxer sends none.
+     * Fluxer refreshes it when the voice state changes, so it can lag behind later nickname or role edits.
+     * It is a frozen observation and neither reads nor writes any member cache
+     */
+    readonly member?: GuildMember
 }
 
 /**
@@ -314,12 +333,13 @@ export interface EntranceSoundPlay {
 
 /**
  * One participant's connection in a private call, as observed when the call was created or updated.
- * The fields match VoiceState without a community, since calls take place in private channels.
+ * The fields match VoiceState without a community and member, since calls take place in private channels and Fluxer
+ * attaches no community member there.
  * Fluxer's region_id and server_id entry fields are internal routing data and are not projected
  *
  * @category Events and collectors
  */
-export interface CallVoiceState extends Omit<VoiceState, "guildId"> {}
+export interface CallVoiceState extends Omit<VoiceState, "guildId" | "member"> {}
 
 /**
  * Current state of an active private-channel call: Its ringing set, participants and voice region.

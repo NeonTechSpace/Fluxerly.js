@@ -72,6 +72,9 @@ const voiceState = (userId: string) => ({
     isSelfDeafened: false,
     isMobile: false,
     isSuppressed: false,
+    isSelfVideoOn: false,
+    isSelfStreaming: false,
+    viewerStreamKeys: [],
 })
 
 const update: CallUpdate = {
@@ -122,6 +125,28 @@ test("call and entrance-sound decoders project frozen camelCase copies without r
     } satisfies EntranceSoundPlay)
     expect(Object.isFrozen(sound)).toBe(true)
     expect(decodeEntranceSoundPlay(soundWire({ guild_id: "4" }))).toMatchObject({ guildId: "4" })
+})
+
+test("a call participant keeps video, stream and watched-stream data but never a community member", () => {
+    const member = { user: { id: "30", username: "caller" }, roles: [], joined_at: "2026-01-02T03:04:05.000Z" }
+    const call = decodeCallUpdate(
+        callWire({
+            voice_states: [
+                voiceStateWire("30", {
+                    self_video: true,
+                    self_stream: true,
+                    viewer_stream_keys: ["dm:20:connection-31"],
+                    member,
+                }),
+            ],
+        }),
+    )
+    expect(call?.voiceStates[0]).toEqual({
+        ...voiceState("30"),
+        isSelfVideoOn: true,
+        isSelfStreaming: true,
+        viewerStreamKeys: ["dm:20:connection-31"],
+    })
 })
 
 test.each([

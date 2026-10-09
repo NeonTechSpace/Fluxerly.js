@@ -58,6 +58,11 @@ const projectVoiceState = (guildId, state) => ({
     isSelfDeafened: state.self_deaf,
     isMobile: state.is_mobile,
     isSuppressed: state.suppress,
+    isSelfVideoOn: state.self_video === true,
+    isSelfStreaming: state.self_stream === true,
+    viewerStreamKeys: state.viewer_stream_keys ?? [],
+    // Left out of this comparison, which checks only the member's account ID separately
+    member: undefined,
 })
 
 async function waitForVoiceSnapshot(client, guildId, snapshot) {
@@ -78,10 +83,20 @@ async function waitForVoiceSnapshot(client, guildId, snapshot) {
         return false
     }
     assert.ok(Array.isArray(rawGuildCreate.value.voice_states))
-    assert.deepEqual(snapshot.value, {
-        guildId,
-        voiceStates: rawGuildCreate.value.voice_states.map((state) => projectVoiceState(guildId, state)),
-    })
+    assert.deepEqual(
+        {
+            ...snapshot.value,
+            voiceStates: snapshot.value.voiceStates.map((state) => ({ ...state, member: undefined })),
+        },
+        {
+            guildId,
+            voiceStates: rawGuildCreate.value.voice_states.map((state) => projectVoiceState(guildId, state)),
+        },
+    )
+    assert.deepEqual(
+        snapshot.value.voiceStates.map((state) => state.member?.userId),
+        rawGuildCreate.value.voice_states.map((state) => state.member?.user?.id),
+    )
     assert.ok(Object.isFrozen(snapshot.value) && Object.isFrozen(snapshot.value.voiceStates))
     return true
 }

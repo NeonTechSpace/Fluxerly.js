@@ -85,6 +85,25 @@ const presenceBulkWire = (overrides: Record<string, unknown> = {}) => ({
     ],
     ...overrides,
 })
+const voiceMemberWire = {
+    user: { id: "30", username: "voice-member", bot: true },
+    roles: ["50"],
+    joined_at: "2026-01-02T03:04:05.000Z",
+    nick: null,
+    mute: false,
+    deaf: true,
+}
+const voiceMember = {
+    guildId: "40",
+    userId: "30",
+    username: "voice-member",
+    isBot: true,
+    roleIds: ["50"],
+    joinedAt: "2026-01-02T03:04:05.000Z",
+    nickname: null,
+    isMuted: false,
+    isDeafened: true,
+}
 const voiceStateWire = (overrides: Record<string, unknown> = {}) => ({
     guild_id: "40",
     channel_id: "41",
@@ -99,9 +118,10 @@ const voiceStateWire = (overrides: Record<string, unknown> = {}) => ({
     suppress: false,
     self_video: true,
     self_stream: true,
-    viewer_stream_keys: ["ignored-media-field"],
+    viewer_stream_keys: ["40:41:remote-connection"],
     e2ee_capable: true,
-    member: { user: { id: "30", username: "not projected" } },
+    version: 3,
+    member: voiceMemberWire,
     ...overrides,
 })
 const guildSnapshotWire = (voiceStates?: readonly unknown[]) => ({
@@ -512,7 +532,48 @@ test("voice decoders distinguish an explicit empty initial snapshot and reject s
     expect(decodeVoiceState(voiceStateWire({ session_id: null }))).not.toHaveProperty("sessionId")
 })
 
-test("default voice subscriptions expose the initial visible snapshot and subsequent move phases without media fields", async () => {
+test("voice decoders read the video, stream, watched-stream and member fields as frozen copies", () => {
+    const state = decodeVoiceState(voiceStateWire())!
+    expect(state).toMatchObject({
+        isSelfVideoOn: true,
+        isSelfStreaming: true,
+        viewerStreamKeys: ["40:41:remote-connection"],
+        member: voiceMember,
+    })
+    expect(
+        Object.isFrozen(state.viewerStreamKeys) &&
+            Object.isFrozen(state.member) &&
+            Object.isFrozen(state.member!.roleIds),
+    ).toBe(true)
+    expect(decodeVoiceState(voiceStateWire({ self_video: false, self_stream: false }))).toMatchObject({
+        isSelfVideoOn: false,
+        isSelfStreaming: false,
+    })
+})
+
+test.each([
+    ["omitted", undefined],
+    ["null", null],
+])("voice decoders accept %s optional media and member fields as their empty values", (_name, absent) => {
+    const state = decodeVoiceState(
+        voiceStateWire({ self_video: undefined, self_stream: undefined, viewer_stream_keys: absent, member: absent }),
+    )
+    expect(state).toMatchObject({ isSelfVideoOn: false, isSelfStreaming: false, viewerStreamKeys: [] })
+    expect(state).not.toHaveProperty("member")
+})
+
+test.each([
+    ["a non-boolean video flag", { self_video: "yes" }],
+    ["a non-boolean stream flag", { self_stream: 1 }],
+    ["watched streams that are not a list", { viewer_stream_keys: "40:41:remote-connection" }],
+    ["a watched stream key that is not text", { viewer_stream_keys: ["40:41:remote-connection", 7] }],
+    ["a member without its roles and join time", { member: { user: { id: "30", username: "voice-member" } } }],
+    ["a member that is not an object", { member: "30" }],
+])("a voice state with %s is rejected whole", (_name, overrides) => {
+    expect(decodeVoiceState(voiceStateWire(overrides))).toBeUndefined()
+})
+
+test("default voice subscriptions expose the initial visible snapshot and subsequent move phases with their video, stream and member fields", async () => {
     const server = await fixture(guildSnapshotWire([voiceStateWire()]))
     const client = defaultApi()
     const snapshots: VoiceStateSnapshot[] = []
@@ -540,13 +601,15 @@ test("default voice subscriptions expose the initial visible snapshot and subseq
         isSelfDeafened: false,
         isMobile: true,
         isSuppressed: false,
+        isSelfVideoOn: true,
+        isSelfStreaming: true,
+        viewerStreamKeys: ["40:41:remote-connection"],
+        member: voiceMember,
     }
     expect(snapshot).toEqual({ guildId: "40", voiceStates: [expectedInitial] })
     expect(
         Object.isFrozen(snapshot) && Object.isFrozen(snapshot.voiceStates) && Object.isFrozen(snapshot.voiceStates[0]),
     ).toBe(true)
-    for (const omitted of ["selfVideo", "selfStream", "viewerStreamKeys", "e2eeCapable", "member"])
-        expect(snapshot.voiceStates[0]).not.toHaveProperty(omitted)
 
     server.dispatch("VOICE_STATE_UPDATE", voiceStateWire({ channel_id: null }))
     server.dispatch(
@@ -589,6 +652,32 @@ test("native voice callbacks and streams deliver an explicit empty initial colle
                 )
                 yield* callback.close()
                 yield* callback.waitForClose()
+            }),
+        ),
+    )
+    expect(server.requests).toBe(0)
+})
+
+test("native voice streams deliver the video, stream and member fields", async () => {
+    const server = await fixture(guildSnapshotWire([voiceStateWire()]))
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({
+                    token: "fixture-only-not-a-credential",
+                    gateway: { onMalformedDispatch: "terminate" as const },
+                })
+                const stream = yield* Effect.forkScoped(
+                    Stream.runCollect(client.subscribe("voiceStateSnapshot").pipe(Stream.take(1))),
+                )
+                yield* client.connect()
+                const [snapshot] = yield* Fiber.join(stream)
+                expect(snapshot?.voiceStates[0]).toMatchObject({
+                    isSelfVideoOn: true,
+                    isSelfStreaming: true,
+                    viewerStreamKeys: ["40:41:remote-connection"],
+                    member: voiceMember,
+                })
             }),
         ),
     )

@@ -11,10 +11,13 @@ import { decodeVoiceState } from "./guilds.js"
 /** Stand-in server ID that lets the shared voice-state decoder validate a call entry, removed again after decoding */
 const callScope = "0"
 
-/** Decode one call participant with the shared voice-state rules. The entry's guild ID must be null or absent */
+/**
+ * Decode one call participant with the shared voice-state rules. The entry's guild ID must be null or absent.
+ * A call has no community, so the member field is ignored rather than decoded against the stand-in server ID
+ */
 function decodeCallVoiceState(value: unknown): CallVoiceState | undefined {
     if (!record(value) || (value.guild_id !== undefined && value.guild_id !== null)) return undefined
-    const state = decodeVoiceState({ ...value, guild_id: callScope })
+    const state = decodeVoiceState({ ...value, guild_id: callScope, member: null })
     if (!state) return undefined
     const { guildId: _guildId, ...call } = state
     return Object.freeze(call)

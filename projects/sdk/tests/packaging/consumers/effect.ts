@@ -931,7 +931,11 @@ export function voiceOperations(client: Client, target: VoiceConnectionReference
             Effect.sync(() => {
                 const current: VoiceState = state
                 const channel: string | null = current.channelId
-                void channel
+                const video: boolean = current.isSelfVideoOn
+                const sharing: boolean = current.isSelfStreaming
+                const watching: readonly string[] = current.viewerStreamKeys
+                const memberId: string | undefined = current.member?.userId
+                void [channel, video, sharing, watching, memberId]
             }),
         )
         // @ts-expect-error Server deafen state is boolean

@@ -178,9 +178,19 @@ export function decodeVoiceState(value: unknown, expectedGuildId?: string): Voic
         typeof value.self_mute !== "boolean" ||
         typeof value.self_deaf !== "boolean" ||
         typeof value.is_mobile !== "boolean" ||
-        typeof value.suppress !== "boolean"
+        typeof value.suppress !== "boolean" ||
+        (value.self_video !== undefined && typeof value.self_video !== "boolean") ||
+        (value.self_stream !== undefined && typeof value.self_stream !== "boolean") ||
+        (value.viewer_stream_keys !== undefined &&
+            value.viewer_stream_keys !== null &&
+            (!Array.isArray(value.viewer_stream_keys) ||
+                !value.viewer_stream_keys.every((key) => typeof key === "string")))
     )
         return undefined
+    // Fluxer sends member null where no community member applies, such as in a private call
+    const hasMember = value.member !== undefined && value.member !== null
+    const member = hasMember ? decodeMember(value.member, value.guild_id) : undefined
+    if (hasMember && !member) return undefined
     return Object.freeze({
         guildId: value.guild_id,
         channelId: value.channel_id,
@@ -193,6 +203,12 @@ export function decodeVoiceState(value: unknown, expectedGuildId?: string): Voic
         isSelfDeafened: value.self_deaf,
         isMobile: value.is_mobile,
         isSuppressed: value.suppress,
+        isSelfVideoOn: value.self_video === true,
+        isSelfStreaming: value.self_stream === true,
+        viewerStreamKeys: Object.freeze(
+            Array.isArray(value.viewer_stream_keys) ? ([...value.viewer_stream_keys] as string[]) : [],
+        ),
+        ...(member ? { member } : {}),
     })
 }
 

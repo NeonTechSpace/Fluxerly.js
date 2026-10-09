@@ -795,9 +795,12 @@ field|shared|CallVoiceState.isMobile|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isMuted|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSelfDeafened|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSelfMuted|boolean|optional=false|nullable=false
+field|shared|CallVoiceState.isSelfStreaming|boolean|optional=false|nullable=false
+field|shared|CallVoiceState.isSelfVideoOn|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSuppressed|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.sessionId|string | undefined|optional=true|nullable=false
 field|shared|CallVoiceState.userId|string|optional=false|nullable=false
+field|shared|CallVoiceState.viewerStreamKeys|readonly string[]|optional=false|nullable=false
 field|native|CanManageOptions.actorUserId|string | undefined|optional=true|nullable=false
 field|native|CanManageOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|default|CancelledError._tag|"CancelledError"|optional=false|nullable=false
@@ -2630,9 +2633,13 @@ field|shared|VoiceState.isMobile|boolean|optional=false|nullable=false
 field|shared|VoiceState.isMuted|boolean|optional=false|nullable=false
 field|shared|VoiceState.isSelfDeafened|boolean|optional=false|nullable=false
 field|shared|VoiceState.isSelfMuted|boolean|optional=false|nullable=false
+field|shared|VoiceState.isSelfStreaming|boolean|optional=false|nullable=false
+field|shared|VoiceState.isSelfVideoOn|boolean|optional=false|nullable=false
 field|shared|VoiceState.isSuppressed|boolean|optional=false|nullable=false
+field|shared|VoiceState.member|GuildMember | undefined|optional=true|nullable=false
 field|shared|VoiceState.sessionId|string | undefined|optional=true|nullable=false
 field|shared|VoiceState.userId|string|optional=false|nullable=false
+field|shared|VoiceState.viewerStreamKeys|readonly string[]|optional=false|nullable=false
 field|shared|VoiceStateSnapshot.guildId|string|optional=false|nullable=false
 field|shared|VoiceStateSnapshot.voiceStates|readonly VoiceState[]|optional=false|nullable=false
 field|shared|Webhook.avatar|null | string|optional=false|nullable=true
