@@ -124,6 +124,38 @@ describeBothApis("cache refill after a restored session", (mode) => {
         expect(await settle((client as Client).guilds.get(guildIds[1]!))).toBeUndefined()
     })
 
+    test("stops with a Warn when the community list repeats a full page, instead of paging forever", async () => {
+        const fixtures = createFixtures()
+        // A full page of 200 communities, returned again whatever cursor the SDK sends
+        const page = Array.from({ length: 200 }, () => ({
+            id: fixtures.nextId(),
+            name: "fixture",
+            owner_id: "90",
+            features: [],
+        }))
+        const listRequests: string[] = []
+        const requests: string[] = []
+        stubFetchWithHostedDiscovery(async (url) => {
+            const path = new URL(url).pathname.replace(/^\/v1/u, "")
+            requests.push(path)
+            if (path !== "/users/@me/guilds")
+                return Response.json({ code: "UNKNOWN", message: "Unknown" }, { status: 404 })
+            listRequests.push(url)
+            // Bounds an SDK that keeps paging, so the test fails on the request count rather than hanging
+            if (listRequests.length > 2)
+                return Response.json({ code: "MISSING_ACCESS", message: "Missing access" }, { status: 403 })
+            return Response.json(page)
+        })
+        const { client, logs } = await start(mode, { snapshot: true })
+        await settle((client as Client).connect())
+        await vi.waitFor(() => expect(logs.withCode("lifecycle.cacheRefill")).toHaveLength(1))
+        const [record] = logs.withCode("lifecycle.cacheRefill")
+        expect(record).toMatchObject({ level: "warn", fields: { guilds: 200, refilled: 0, failed: 0 } })
+        expect(record?.error).toBeUndefined()
+        expect(listRequests).toHaveLength(2)
+        expect(requests.filter((path) => path !== "/users/@me/guilds")).toEqual([])
+    })
+
     test.each([
         { name: "a new session", snapshot: false, refillCaches: undefined },
         { name: "refillCaches set to false", snapshot: true, refillCaches: false },

@@ -426,11 +426,6 @@ function controlledClock() {
     }
 }
 
-/** Wait until a condition holds, observing it on host turns. The harness timeout bounds a hung check */
-async function observed(condition) {
-    while (!condition()) await sleep(5)
-}
-
 async function verifyRateLimits(client, guildId, userId, run, fail) {
     stage = "rate_limits_discovery"
     await run(client.instance.resolve())
@@ -462,31 +457,25 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         const rejected = await fail(client.users.fetchSelf({ timeoutMs: 500 }))
         assert.equal(rejected.status, 429)
         assert.equal(rejected.reason, "rateLimit")
-        // Each read waits in the queue behind the learned global pause until its own deadline passes
-        const holds = async (operation, timeoutMs) => {
-            const failure = fail(operation)
-            await observed(() => client.diagnostics().rest.queuedRequests === 1)
-            clock.advance(timeoutMs)
-            return failure
-        }
-        const queued = await holds(client.guilds.fetch(guildId, { timeoutMs: 100 }), 100)
-        assert.equal(queued.reason, "timeout")
+        // A read whose deadline ends within the learned global pause fails at once with the remaining wait, unsent.
+        // The controlled clock stands still, so the whole injected wait remains, up to rounding
+        const queued = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
+        assert.equal(queued.reason, "rateLimit")
         assert.equal(queued.outcome, "notDispatched")
-        // Raw requests share the client's admission, so the learned global wait also holds them back
-        const rawQueued = await holds(
-            client.rest.request({ method: "GET", path: `/guilds/${guildId}`, timeoutMs: 100 }),
-            100,
-        )
+        assert.ok(Math.abs(queued.retryAfterMs - retryAfterMs) <= 1)
+        // Raw requests share the client's admission, so the learned global wait also refuses them
+        const rawQueued = await fail(client.rest.request({ method: "GET", path: `/guilds/${guildId}`, timeoutMs: 100 }))
         assert.equal(rawQueued._tag, "RestRequestError")
-        assert.ok(rawQueued.reason === "timeout" || rawQueued.reason === "rateLimit")
+        assert.equal(rawQueued.reason, "rateLimit")
         assert.equal(rawQueued.outcome, "notDispatched")
+        assert.ok(Math.abs(rawQueued.retryAfterMs - retryAfterMs) <= 1)
         assert.equal(remoteReads, 0)
         assert.equal(client.diagnostics().rest.queuedRequests, 0)
         report(stage, { passed: true, injectedRejections: injected, remoteRequests: remoteReads })
 
         stage = "rate_limits_live_read_recovery"
-        // The rest of the injected window passes, which ends the global pause
-        clock.advance(retryAfterMs - 200)
+        // The injected window passes, which ends the global pause
+        clock.advance(retryAfterMs)
         await clock.restore()
         assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
         assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
@@ -535,9 +524,11 @@ async function verifyBucketLearning(client, guildId, userId, run, fail) {
         assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
         assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
         stage = "bucket_learning_shared_wait"
+        // The refill is past the deadline, so the read fails at once with the remaining wait, unsent
         const rejected = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
-        assert.equal(rejected.reason, "timeout")
+        assert.equal(rejected.reason, "rateLimit")
         assert.equal(rejected.outcome, "notDispatched")
+        assert.ok(rejected.retryAfterMs >= 100)
         assert.equal(requests, 3)
         assert.equal(client.diagnostics().rest.queuedRequests, 0)
         report(stage, { passed: true, injectedHeaderSets: 3, realBucketHeadersObserved: headersObserved })

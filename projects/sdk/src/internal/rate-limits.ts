@@ -98,23 +98,27 @@ export class RateLimits {
         return bucket !== undefined && bucket.until > now && bucket.remaining <= 0
     }
 
-    #wait(key: string, now: number) {
+    #wait(key: string, now: number, firm = false) {
         const bucket = this.#buckets.get(key)
         if (bucket && bucket.until <= now) {
             this.#buckets.delete(key)
             return 0
         }
         if (!bucket || bucket.remaining > 0) return 0
-        if (bucket.probeRoute !== undefined) return bucket.until
+        if (bucket.probeRoute !== undefined && !firm) return bucket.until
         return bucket.next !== undefined && bucket.next < bucket.until ? bucket.next : bucket.until
     }
 
-    wait(route: string, now: number): number {
+    /**
+     * The logical time before which the route may not send, or 0 when it may send now. A firm wait leaves out the hold
+     * of an outstanding refill probe, whose answer can reopen the bucket early, so the route cannot send before it
+     */
+    wait(route: string, now: number, firm = false): number {
         const alias = this.#alias(route, now)
         const until = Math.max(
             this.#overflowUntil,
             alias?.carryUntil ?? 0,
-            this.#wait(alias?.key ?? provisional(route), now),
+            this.#wait(alias?.key ?? provisional(route), now, firm),
         )
         return until > now ? until : 0
     }

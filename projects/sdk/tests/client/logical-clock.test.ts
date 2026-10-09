@@ -347,13 +347,16 @@ test("a REST admission timer defect retains bounded failure, closure and later p
 
 test("REST admission and total deadline remain bound to the client creation Clock", async () => {
     let calls = 0
-    stubFetchWithHostedDiscovery(async () =>
+    // The second request is never answered, so only its deadline can end it
+    stubFetchWithHostedDiscovery((_url, init) =>
         ++calls === 1
             ? new Response(null, {
                   status: 429,
                   headers: { "retry-after": "1", "x-ratelimit-scope": "global" },
               })
-            : new Response(null, { status: 204 }),
+            : new Promise<Response>((_resolve, reject) =>
+                  init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }),
+              ),
     )
     await withTestClock(
         Effect.scoped(
@@ -369,26 +372,31 @@ test("REST admission and total deadline remain bound to the client creation Cloc
                     Effect.provideService(Clock.Clock, operationClock),
                 )
                 let settled = false
+                // The deadline outlasts the one second global pause, so the request waits in admission for it
                 const queued = yield* Effect.forkChild(
-                    Effect.exit(client.messages.delete({ channelId: "21", id: "10" }, { timeoutMs: 100 })).pipe(
+                    Effect.exit(client.messages.delete({ channelId: "21", id: "10" }, { timeoutMs: 1_500 })).pipe(
                         Effect.provideService(Clock.Clock, operationClock),
                         Effect.ensuring(Effect.sync(() => (settled = true))),
                     ),
                 )
                 yield* Effect.yieldNow
-                yield* operationClock.adjust(100)
+                yield* operationClock.adjust(1_500)
+                yield* Effect.yieldNow
                 expect(settled).toBe(false)
-                yield* creationClock.adjust(100)
+                expect(calls).toBe(1)
+                // The pause ends on the creation Clock, which sends the request, and then its deadline passes there
+                yield* creationClock.adjust(1_000)
+                yield* creationClock.adjust(500)
                 const exit = yield* Fiber.join(queued)
                 expect(Exit.isFailure(exit)).toBe(true)
                 if (Exit.isFailure(exit))
                     expect(exit.cause.reasons).toContainEqual(
                         expect.objectContaining({
                             _tag: "Fail",
-                            error: expect.objectContaining({ reason: "timeout", outcome: "notDispatched" }),
+                            error: expect.objectContaining({ reason: "timeout", outcome: "unknown" }),
                         }),
                     )
-                expect(calls).toBe(1)
+                expect(calls).toBe(2)
                 yield* client.shutdown()
                 yield* Scope.close(scope, Exit.void)
             }),

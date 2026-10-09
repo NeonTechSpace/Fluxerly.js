@@ -81,6 +81,101 @@ describe("default API drain", () => {
         expect(timedOut).toMatchObject({ level: "warn", fields: { running: 1, waiting: 0, drainMs: 50 } })
     })
 
+    test("a draining shutdown records how many events it refused, instead of dropping them silently", async () => {
+        const test = open()
+        const gate = Promise.withResolvers<void>()
+        test.client.on("messageCreate", () => gate.promise)
+        await test.ready()
+        test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "first" }))
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        const stopping = test.client.shutdown({ drainMs: 10_000 })
+        await vi.waitFor(() => expect(codes(test.logs())).toContain("lifecycle.draining"))
+        for (const content of ["second", "third"]) test.emit("MESSAGE_CREATE", test.fixtures.message({ content }))
+        gate.resolve()
+        expect((await stopping).isOk()).toBe(true)
+        expect(test.logs().filter((record) => record.code === "events.refused")).toEqual([
+            expect.objectContaining({ level: "info", fields: { refused: 2 } }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
+    test("a draining shutdown also records refused events that only a collector would have received", async () => {
+        // Catches: Refusals were counted only for subscriptions, so events only a collector wanted vanished unrecorded
+        // Collectors open after ready, so the session must not suppress the dispatches only they receive
+        const test = createTestClient({ gateway: { ignoredEvents: [] } })
+        onTestFinished(() => test.shutdown())
+        const gate = Promise.withResolvers<void>()
+        test.client.on("typingStart", () => gate.promise)
+        const channelId = test.fixtures.ids.channel
+        const target = { channelId, id: test.fixtures.nextId() }
+        await test.ready()
+        test.client.messages.collect(channelId)
+        test.client.messages.collectReactions(target)
+        test.emit("TYPING_START", { channel_id: channelId, user_id: test.fixtures.ids.user, timestamp: 1 })
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        const stopping = test.client.shutdown({ drainMs: 10_000 })
+        await vi.waitFor(() => expect(codes(test.logs())).toContain("lifecycle.draining"))
+        test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "during drain" }))
+        test.emit("MESSAGE_REACTION_ADD", {
+            message_id: target.id,
+            channel_id: channelId,
+            guild_id: test.fixtures.ids.guild,
+            user_id: test.fixtures.ids.user,
+            emoji: { name: "👍" },
+        })
+        gate.resolve()
+        expect((await stopping).isOk()).toBe(true)
+        expect(test.logs().filter((record) => record.code === "events.refused")).toEqual([
+            expect.objectContaining({ level: "info", fields: { refused: 2 } }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
+    test("a shutdown records the waiting events it discards, once per subscription", async () => {
+        const test = open()
+        const subscription = test.client.on(
+            "messageCreate",
+            (_message, signal) => new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve())),
+        )
+        await test.ready()
+        // The first event runs and blocks the only handler slot, so the other two wait in the queue
+        for (const content of ["first", "second", "third"])
+            test.emit("MESSAGE_CREATE", test.fixtures.message({ content }))
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        expect((await test.client.shutdown()).isOk()).toBe(true)
+        expect(test.logs().filter((record) => record.code === "events.discarded")).toEqual([
+            expect.objectContaining({
+                level: "info",
+                subscriptionId: subscription.id,
+                fields: { discarded: 2, reason: "clientClosed" },
+            }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
+    test("closing a subscription records the waiting events it drops at Debug", async () => {
+        const test = createTestClient({ logging: { categories: { events: "debug" } } })
+        onTestFinished(() => test.shutdown())
+        const subscription = test.client.on(
+            "messageCreate",
+            (_message, signal) => new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve())),
+        )
+        await test.ready()
+        for (const content of ["first", "second", "third"])
+            test.emit("MESSAGE_CREATE", test.fixtures.message({ content }))
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        subscription.close()
+        expect((await subscription.waitForClose()).isOk()).toBe(true)
+        expect(test.logs().filter((record) => record.code === "events.discarded")).toEqual([
+            expect.objectContaining({
+                level: "debug",
+                subscriptionId: subscription.id,
+                fields: { discarded: 2, reason: "subscriptionClosed" },
+            }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
     test("an idle client ends the drain at once without drain records", async () => {
         const test = open()
         await test.ready()
@@ -194,6 +289,114 @@ describe("native API drain", () => {
         await stopping
         expect(outcomes).toEqual([true])
         expect(codes(test.logs())).toContain("lifecycle.drained")
+    })
+
+    test("a draining shutdown records how many events it refused, instead of dropping them silently", async () => {
+        const { test, scope } = await openNative()
+        const gate = Deferred.makeUnsafe<void>()
+        await Effect.runPromise(test.client.on("messageCreate", () => Deferred.await(gate)).pipe(Scope.provide(scope)))
+        await Effect.runPromise(test.ready())
+        await Effect.runPromise(test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "first" })))
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        const stopping = Effect.runPromise(test.client.shutdown({ drainMs: 10_000 }))
+        await vi.waitFor(() => expect(codes(test.logs())).toContain("lifecycle.draining"))
+        for (const content of ["second", "third"])
+            await Effect.runPromise(test.emit("MESSAGE_CREATE", test.fixtures.message({ content })))
+        Deferred.doneUnsafe(gate, Effect.void)
+        await stopping
+        expect(test.logs().filter((record) => record.code === "events.refused")).toEqual([
+            expect.objectContaining({ level: "info", fields: { refused: 2 } }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
+    test("a draining shutdown also records refused events that only a collector would have received", async () => {
+        // Catches: Refusals were counted only for subscriptions, so events only a collector wanted vanished unrecorded
+        // Collectors open after ready, so the session must not suppress the dispatches only they receive
+        const scope = Scope.makeUnsafe()
+        onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+        const test = await Effect.runPromise(
+            createNativeTestClient({ gateway: { ignoredEvents: [] } }).pipe(Scope.provide(scope)),
+        )
+        const gate = Deferred.makeUnsafe<void>()
+        const channelId = test.fixtures.ids.channel
+        const target = { channelId, id: test.fixtures.nextId() }
+        await Effect.runPromise(test.client.on("typingStart", () => Deferred.await(gate)).pipe(Scope.provide(scope)))
+        await Effect.runPromise(test.ready())
+        await Effect.runPromise(
+            Effect.gen(function* () {
+                yield* test.client.messages.collect(channelId)
+                yield* test.client.messages.collectReactions(target)
+            }).pipe(Scope.provide(scope)),
+        )
+        await Effect.runPromise(
+            test.emit("TYPING_START", { channel_id: channelId, user_id: test.fixtures.ids.user, timestamp: 1 }),
+        )
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        const stopping = Effect.runPromise(test.client.shutdown({ drainMs: 10_000 }))
+        await vi.waitFor(() => expect(codes(test.logs())).toContain("lifecycle.draining"))
+        await Effect.runPromise(test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "during drain" })))
+        await Effect.runPromise(
+            test.emit("MESSAGE_REACTION_ADD", {
+                message_id: target.id,
+                channel_id: channelId,
+                guild_id: test.fixtures.ids.guild,
+                user_id: test.fixtures.ids.user,
+                emoji: { name: "👍" },
+            }),
+        )
+        Deferred.doneUnsafe(gate, Effect.void)
+        await stopping
+        expect(test.logs().filter((record) => record.code === "events.refused")).toEqual([
+            expect.objectContaining({ level: "info", fields: { refused: 2 } }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
+    test("a shutdown records the waiting events it discards, once per subscription", async () => {
+        const { test, scope } = await openNative()
+        const subscription = await Effect.runPromise(
+            test.client.on("messageCreate", () => Effect.never).pipe(Scope.provide(scope)),
+        )
+        await Effect.runPromise(test.ready())
+        // The first event runs and blocks the only handler slot, so the other two wait in the queue
+        for (const content of ["first", "second", "third"])
+            await Effect.runPromise(test.emit("MESSAGE_CREATE", test.fixtures.message({ content })))
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        await Effect.runPromise(test.client.shutdown())
+        expect(test.logs().filter((record) => record.code === "events.discarded")).toEqual([
+            expect.objectContaining({
+                level: "info",
+                subscriptionId: subscription.id,
+                fields: { discarded: 2, reason: "clientClosed" },
+            }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
+    })
+
+    test("closing a subscription records the waiting events it drops at Debug", async () => {
+        const scope = Scope.makeUnsafe()
+        onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+        const test = await Effect.runPromise(
+            createNativeTestClient({ logging: { categories: { events: "debug" } } }).pipe(Scope.provide(scope)),
+        )
+        const subscription = await Effect.runPromise(
+            test.client.on("messageCreate", () => Effect.never).pipe(Scope.provide(scope)),
+        )
+        await Effect.runPromise(test.ready())
+        for (const content of ["first", "second", "third"])
+            await Effect.runPromise(test.emit("MESSAGE_CREATE", test.fixtures.message({ content })))
+        await vi.waitFor(() => expect(test.client.diagnostics().events.activeHandlers).toBe(1))
+        await Effect.runPromise(subscription.close())
+        await Effect.runPromise(subscription.waitForClose())
+        expect(test.logs().filter((record) => record.code === "events.discarded")).toEqual([
+            expect.objectContaining({
+                level: "debug",
+                subscriptionId: subscription.id,
+                fields: { discarded: 2, reason: "subscriptionClosed" },
+            }),
+        ])
+        expect(test.client.diagnostics().counters.eventsDropped.closed).toBe(2)
     })
 
     test("a handler that starts a draining shutdown ends at once instead of holding the drain open", async () => {

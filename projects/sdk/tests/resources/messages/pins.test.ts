@@ -392,13 +392,11 @@ test.each(modes)("%s shares the pin rate bucket across pin, unpin and pin reads"
     })
     await expect(api.mutate("unpin", target, { timeoutMs: 10 })).rejects.toMatchObject({ reason: "rateLimit" })
     const before = calls
-    const blocked = expect(api.pins({}, "20", { timeoutMs: 10 })).rejects.toMatchObject({
-        reason: "timeout",
+    await expect(api.pins({}, "20", { timeoutMs: 10 })).rejects.toMatchObject({
+        reason: "rateLimit",
         outcome: "notDispatched",
+        retryAfterMs: 60_000,
     })
-    await clock.waiting(10)
-    await clock.advance(10)
-    await blocked
     expect(calls).toBe(before)
 })
 

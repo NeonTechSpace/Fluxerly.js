@@ -1973,7 +1973,8 @@ test.each(modes)(
 )
 
 test.each(modes)("%s shares member read rate state without blocking guild reads", async (mode) => {
-    const clock = sdkClock()
+    // SDK time stands still, so the remaining wait stays exact
+    sdkClock()
     let calls = 0
     rest(async (url) => {
         calls++
@@ -1982,10 +1983,11 @@ test.each(modes)("%s shares member read rate state without blocking guild reads"
     })
     const api = await setup(mode)
     await expect(api.member(target, { timeoutMs: 20 })).rejects.toMatchObject({ reason: "rateLimit" })
-    const blocked = expect(api.member(target, { timeoutMs: 20 })).rejects.toMatchObject({ reason: "timeout" })
-    await clock.waiting(20)
-    await clock.advance(20)
-    await blocked
+    await expect(api.member(target, { timeoutMs: 20 })).rejects.toMatchObject({
+        reason: "rateLimit",
+        outcome: "notDispatched",
+        retryAfterMs: 60_000,
+    })
     expect(calls).toBe(1)
     expect((await api.guild()).id).toBe("20")
 })

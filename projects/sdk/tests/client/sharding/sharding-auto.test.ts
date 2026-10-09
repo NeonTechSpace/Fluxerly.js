@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
-import { AuthenticationError, type Client } from "../../../src/index.js"
+import { AuthenticationError, ConnectionError, type Client } from "../../../src/index.js"
 import type { Client as NativeClient } from "../../../src/effect.js"
 import { Opcode } from "../../../src/internal/protocol/gateway.js"
 import { describeBothApis, setup, type Mode } from "../../support/both-apis.js"
@@ -111,6 +111,29 @@ describeBothApis("automatic sharding", (mode) => {
         expect(await expectErr((client as Client).connect())).toBeInstanceOf(AuthenticationError)
         expect(client.state).toBe("Disconnected")
         expect(client.shards).toEqual([])
+        expect(gateway.sockets).toEqual([])
+    })
+
+    test("fails startup at once when the community list repeats a full page, instead of timing out", async () => {
+        // A full page of 200 communities, returned again whatever cursor the SDK sends
+        const page = Array.from({ length: 200 }, (_, index) => ({
+            id: String(index + 1),
+            name: "fixture",
+            owner_id: "90",
+            features: [],
+        }))
+        let listRequests = 0
+        const { gateway, client } = await start(mode, (_request, response) => {
+            listRequests += 1
+            // Bounds an SDK that keeps paging, so the test fails on the request count rather than waiting for the deadline
+            if (listRequests > 2) return sendJson(response, { code: "MISSING_ACCESS", message: "Missing access" }, 403)
+            sendJson(response, page)
+        })
+        const failure = await expectErr((client as Client).connect())
+        expect(failure).toBeInstanceOf(ConnectionError)
+        expect(failure).toMatchObject({ phase: "discovery", reason: "protocol", status: null })
+        expect(listRequests).toBe(2)
+        expect(client.state).toBe("Disconnected")
         expect(gateway.sockets).toEqual([])
     })
 })

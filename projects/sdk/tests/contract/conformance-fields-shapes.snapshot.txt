@@ -2185,6 +2185,7 @@ field|shared|LinkChannelCreate.url|null | string | undefined|optional=true|nulla
 field|shared|LinkChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|LinkChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|shared|LogLevelSettings.categories|Readonly<Partial<Record<LogCategory, LogThreshold>>> | undefined|optional=true|nullable=false
+field|shared|LogLevelSettings.debug|boolean | readonly LogCategory[] | undefined|optional=true|nullable=false
 field|shared|LogLevelSettings.level|LogThreshold | undefined|optional=true|nullable=false
 field|shared|MediaChannelCreate.availableTags|readonly ForumTagInput[] | undefined|optional=true|nullable=false
 field|shared|MediaChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true

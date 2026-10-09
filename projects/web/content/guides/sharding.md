@@ -33,7 +33,7 @@ Handlers and commands work the same on every shard. The `client.shards` list sho
 The count pages through the bot's community list under its own deadline, as long as `connection.startupTimeoutMs`, and supports 1 through 16,384 shards.
 The shards then start one second apart, and the startup deadline grows by one second for each shard after the first.
 Until the count completes, `client.shards` and `diagnostics().shards` are empty.
-A failed count fails startup like a connection failure.
+A failed count fails startup like a connection failure, and a page that does not move past the previous one fails it at once with a `ConnectionError` instead of waiting for the deadline.
 When Fluxer closes a shard with 4011 while the client runs, the SDK counts again and moves every shard to the plan for the new count, or to one more shard when the count still fits the old plan.
 Every shard then starts a new session, so events sent during the move are missed, and the community caches fill again from the new sessions.
 The move is logged once at Warn with code `lifecycle.resharded` and the old and new totals.
@@ -206,6 +206,7 @@ A child that exits unexpectedly is replaced by default, up to `maxAttempts` time
 A child that ran for `healthyResetMs` (default 60 seconds) after finishing `configure` gets its full budget and the first delay back, so only a crash loop uses up the attempts.
 When a child uses up its attempts, the supervisor fails and stops the other children. With `restart: false`, the first unexpected exit does the same.
 Each child has `startupTimeoutMs` (default 30 seconds) to accept its assignment and finish `configure`, and `shutdownTimeoutMs` (default 5 seconds) to exit after a stop request.
+The parent logs why before it acts: `supervisor.startupTimeout` when a child misses its startup time, `supervisor.terminated` before it force-terminates a child and `supervisor.identifyUnacknowledged` when a child does not confirm a session start, which stops that child. When reading a child's output fails, `supervisor.outputFailed` records the error and that stream is no longer forwarded.
 A replacement is a new process with a new client. A crash leaves no saved session, so the replacement starts new sessions.
 The [`SupervisorOptions`](/docs/{{version}}/api/interfaces/js-ts.SupervisorOptions/) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
 

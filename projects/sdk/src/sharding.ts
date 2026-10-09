@@ -75,7 +75,9 @@ export interface ShardingOptions {
      * and requests.
      * Once every shard is ready, the SDK lists the bot's communities and fetches each one on a resumed shard, one
      * request at a time, so application requests keep the other REST slots and every request respects rate limits.
-     * It logs lifecycle.cacheRefill when done. Set false to skip the refill, for example for a bot that reads no cache
+     * It logs lifecycle.cacheRefill when done, at Warn when communities failed or the refill stopped early. A community list
+     * page that does not move past the previous one stops the refill instead of paging forever.
+     * Set false to skip the refill, for example for a bot that reads no cache
      * @defaultValue true
      */
     readonly refillCaches?: boolean

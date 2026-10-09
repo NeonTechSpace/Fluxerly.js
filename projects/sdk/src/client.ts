@@ -269,7 +269,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * Until that count completes, client.shards and diagnostics().shards are empty and community routing treats every community
      * as unowned. A failed count fails startup like a connection failure: A rejected token with AuthenticationError, an
      * exhausted rate limit with RateLimitError, the deadline with ConnectionTimeoutError and other failures with
-     * ConnectionError whose phase is discovery.
+     * ConnectionError whose phase is discovery, including a community list page that does not move past the previous one.
      *
      * When the bot grows and Fluxer closes a shard with 4011 while the client runs, the SDK counts the communities again and
      * moves every shard to a larger plan in the same process: The plan for the new count, or one shard more when the count

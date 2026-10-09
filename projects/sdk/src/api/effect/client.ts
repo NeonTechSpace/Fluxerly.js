@@ -154,6 +154,7 @@ export interface ClientOptions<E = never, R = never, F extends MessageFields | u
  * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
  * Without global metadata, only requests in the same rate-limit group wait. Without a usable delay, the call fails rather than guessing how long to wait.
  * Rate-limit waits count toward each call's original deadline. Interruption removes only that call from the queue, not the shared pause.
+ * A call whose known pause outlasts its deadline fails at once with reason rateLimit and the remaining wait as retryAfterMs instead of waiting.
  * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
  * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
  *
@@ -498,6 +499,9 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Active handlers and message and reaction collector callbacks are cancelled.
      * Pass drainMs to first stop accepting events and let running handlers and REST requests finish for up to that many
      * milliseconds, as runBot does when asked to stop. See ShutdownOptions.
+     * Events still waiting in a subscription's queue are discarded, with one events.discarded Info record for each
+     * subscription that had any, and a drain records the events it refused in one events.refused Info record.
+     * Both kinds are counted in diagnostics().counters.eventsDropped.closed.
      * Collector callback cleanup is awaited, so a collector callback that ignores cancellation can delay shutdown.
      * Repeated and concurrent calls share the shutdown outcome.
      * A pending connection call fails with ClientClosedError rather than cancellation.

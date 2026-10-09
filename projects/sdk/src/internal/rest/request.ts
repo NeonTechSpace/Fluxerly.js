@@ -11,6 +11,7 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import { encodeAttachments, type EncodedBody } from "../attachments.js"
 import { auditSettings } from "../audit.js"
 import { record } from "../decode/primitives.js"
+import { TransportError } from "../effect-failures.js"
 import { callerRouteTemplate } from "../rate-limits.js"
 import { ResponseJsonCleanupError } from "../response-json.js"
 import { RestFailure } from "./classify.js"
@@ -214,7 +215,10 @@ export function encodeRestRequest(input: unknown): EncodedRestRequest | InputVal
     }
 }
 
-/** Read a body within the JSON limit. The result is undefined when empty and a failure when oversized or not JSON */
+/**
+ * Read a body within the JSON limit. The result is undefined when empty and a failure when oversized or not JSON.
+ * A body whose connection fails mid-read throws a TransportError
+ */
 async function readBody(response: Response, signal: AbortSignal): Promise<unknown> {
     const invalid = () => new RestFailure({ reason: "response", outcome: "unknown", status: response.status })
     const reader = response.body?.getReader()
@@ -223,11 +227,15 @@ async function readBody(response: Response, signal: AbortSignal): Promise<unknow
     let text = ""
     let bytes = 0
     let ended = false
-    let failure: RestFailure | undefined
+    let failure: RestFailure | TransportError | undefined
     let value: unknown
     try {
         while (true) {
-            const next = await reader.read()
+            const next = await reader.read().catch((error: unknown) => {
+                // A failed read leaves the stream errored, so it needs no cancellation
+                ended = true
+                throw new TransportError(error, "response body read")
+            })
             if (next.done) {
                 ended = true
                 break
@@ -243,9 +251,10 @@ async function readBody(response: Response, signal: AbortSignal): Promise<unknow
             text += decoder.decode()
             if (bytes > 0) value = JSON.parse(text) as unknown
         }
-    } catch {
-        // allow-silent: A body that is not UTF-8 JSON becomes the typed response failure returned below
-        failure = invalid()
+    } catch (error) {
+        // allow-silent: A body that is not UTF-8 JSON becomes the typed response failure thrown below. A read failure is
+        // thrown as it is
+        failure = error instanceof TransportError ? error : invalid()
     }
     const cleanup: unknown[] = []
     const actions: (() => Promise<void> | void)[] = [

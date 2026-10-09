@@ -1,10 +1,14 @@
 import { Effect, Exit, Scope } from "effect"
-import { describe, expect, onTestFinished, test } from "vitest"
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
 import { ConfigurationError, type LoggingOptions, type LogLevelSettings } from "../../src/index.js"
 import { createTestClient as createDefaultTestClient } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { settle } from "../support/settle.js"
+
+afterEach(() => {
+    vi.unstubAllEnvs()
+})
 
 /** A test client whose configure and message sends run in either API style, counting its Debug REST records */
 async function open(mode: Mode, logging?: LoggingOptions) {
@@ -51,6 +55,23 @@ describe.each(modes)("%s client.logging.configure", (mode) => {
         expect(driver.requestRecords()).toBe(1)
     })
 
+    test("turns off Debug categories chosen at creation, including FLUXERLY_DEBUG, and can turn them on again", async () => {
+        vi.stubEnv("FLUXERLY_DEBUG", "rest")
+        const driver = await open(mode)
+        await driver.send()
+        expect(driver.requestRecords()).toBe(1)
+        driver.configure({ debug: false })
+        await driver.send()
+        expect(driver.requestRecords()).toBe(1)
+        driver.configure({ debug: ["rest"] })
+        await driver.send()
+        expect(driver.requestRecords()).toBe(2)
+        // An omitted debug keeps the categories the previous call chose
+        driver.configure({ level: "error" })
+        await driver.send()
+        expect(driver.requestRecords()).toBe(3)
+    })
+
     test("rejects invalid settings with ConfigurationError and keeps the previous levels", async () => {
         const driver = await open(mode)
         driver.configure({ categories: { rest: "debug" } })
@@ -59,16 +80,18 @@ describe.each(modes)("%s client.logging.configure", (mode) => {
             { level: "loud" },
             { categories: { network: "debug" } },
             { categories: { rest: "debug" }, sink: () => undefined },
+            { debug: ["network"] },
+            { debug: "rest" },
         ])
             expect(() => driver.configure(settings as never)).toThrow(ConfigurationError)
-        const debug = (() => {
+        const format = (() => {
             try {
-                driver.configure({ debug: true } as never)
+                driver.configure({ format: "json" } as never)
             } catch (error) {
                 return error
             }
         })()
-        expect(debug).toMatchObject({ hint: expect.stringContaining("Other logging settings are fixed at creation") })
+        expect(format).toMatchObject({ hint: expect.stringContaining("Other logging settings are fixed at creation") })
         await driver.send()
         expect(driver.requestRecords()).toBe(1)
     })

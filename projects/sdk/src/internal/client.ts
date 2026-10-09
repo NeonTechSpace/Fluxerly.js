@@ -1835,8 +1835,8 @@ export class ClientOwner<M extends MessageCore = Message> {
     /**
      * Refill the enabled guild, role and channel caches for the guilds of shards that resumed a stored session, since a
      * resumed session receives no guild data. Guilds are fetched one request at a time through the REST scheduler, so
-     * the refill holds at most one REST slot and waits out rate limits. It stops after refillFailureLimit failed guilds
-     * and when the client closes
+     * the refill holds at most one REST slot and waits out rate limits. It stops after refillFailureLimit failed guilds,
+     * when a guild-list page does not move past the previous one and when the client closes
      */
     #refillRestored(): Effect.Effect<void> {
         const owner = this
@@ -1864,6 +1864,12 @@ export class ClientOwner<M extends MessageCore = Message> {
                     if (page.failure instanceof ClientClosedError) return
                     firstError = page.failure
                     stopped = "the bot's community list could not be read"
+                    break
+                }
+                // As in guilds.iterate, a page that repeats or goes back past the cursor would page forever
+                const cursor = after
+                if (cursor !== undefined && page.success.some((guild) => BigInt(guild.id) <= BigInt(cursor))) {
+                    stopped = "the bot's community list returned a page that did not move past the previous one"
                     break
                 }
                 for (const guild of page.success)
@@ -1917,7 +1923,8 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     /**
      * Count the bot's guilds by paging the current-user guild list within timeoutMs. Automatic sharding and the
-     * supervisor's automatic plan both size their plans from this count
+     * supervisor's automatic plan both size their plans from this count. A page that does not move past the previous
+     * one fails at once as a discovery ConnectionError, instead of paging until the deadline
      */
     countGuilds(timeoutMs: number): Effect.Effect<number, ConnectionFailure> {
         const owner = this
@@ -1936,6 +1943,17 @@ export class ClientOwner<M extends MessageCore = Message> {
                         { timeoutMs: remaining },
                     )
                     .pipe(Effect.mapError((error) => automaticPlanFailure(error, timeoutMs)))
+                // As in guilds.iterate, a page that repeats or goes back past the cursor would page until the deadline
+                const cursor = after
+                if (cursor !== undefined && page.some((guild) => BigInt(guild.id) <= BigInt(cursor)))
+                    return yield* Effect.fail(
+                        new ConnectionError("discovery", "protocol", null, {
+                            details: {
+                                detail: "the community list returned a page that did not move past the previous one, so the community count for automatic sharding could not be read",
+                            },
+                            hint: 'Set sharding.totalShards to a number instead of "auto"',
+                        }),
+                    )
                 guilds += page.length
                 if (page.length < guildCountPageSize) return guilds
                 after = page.at(-1)!.id

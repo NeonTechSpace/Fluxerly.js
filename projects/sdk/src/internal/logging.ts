@@ -346,12 +346,14 @@ export class ClientLogger {
     readonly #settings: Settings
     /** Category thresholds, replaced by configure while the client runs */
     #thresholds: Readonly<Record<LogCategory, number>>
+    /** Categories lowered to Debug: The debug setting and FLUXERLY_DEBUG at creation, until configure replaces them */
+    #debugCategories: ReadonlySet<LogCategory>
     #secrets: string[] = []
     readonly #counters: Counters = {
         handlerFailures: 0,
         hookFailures: 0,
         reportsDropped: 0,
-        eventsDropped: { overflow: 0, malformed: 0, collector: 0 },
+        eventsDropped: { overflow: 0, malformed: 0, collector: 0, closed: 0 },
         protocolFailures: 0,
         unknownDispatches: 0,
         unknownOpcodes: 0,
@@ -384,30 +386,38 @@ export class ClientLogger {
     ) {
         this.#settings = settings
         this.#thresholds = settings.thresholds
+        this.#debugCategories = settings.debugCategories
     }
 
     /**
-     * Replace the level and category thresholds from caller settings, applying the debug setting and FLUXERLY_DEBUG
-     * read at creation again. Invalid settings return ConfigurationError and change nothing. Caller reads are marked,
-     * so the caller must run this under a defect boundary
+     * Replace the level and category thresholds from caller settings. A debug setting replaces the Debug categories,
+     * including those from FLUXERLY_DEBUG, and an omitted one keeps the current categories. Invalid settings return
+     * ConfigurationError and change nothing. Caller reads are marked, so the caller must run this under a defect boundary
      */
     configure(value: unknown): ConfigurationError | undefined {
-        const thresholds = readCaller(() => {
+        const settings = readCaller(() => {
             if (!record(value)) return new ConfigurationError("logging", "Logging level settings must be an object")
-            const unsupported = Object.keys(value).find((key) => key !== "level" && key !== "categories")
+            const keys = ["level", "categories", "debug"]
+            const unsupported = Object.keys(value).find((key) => !keys.includes(key))
             if (unsupported !== undefined)
                 return new ConfigurationError(
                     "logging",
                     `Unsupported logging level setting ${JSON.stringify(unsupported)}`,
                     {
-                        hint: `${unsupportedKeyHint(unsupported, ["level", "categories"], "settings")}. Other logging settings are fixed at creation`,
+                        hint: `${unsupportedKeyHint(unsupported, keys, "settings")}. Other logging settings are fixed at creation`,
                     },
                 )
-            return levelThresholds(value)
+            const thresholds = levelThresholds(value)
+            if (thresholds instanceof ConfigurationError) return thresholds
+            const debug = value.debug
+            const debugCategories = debug === undefined ? undefined : debugSetting(debug)
+            if (debugCategories instanceof ConfigurationError) return debugCategories
+            return { thresholds, debugCategories }
         })
-        if (thresholds instanceof ConfigurationError) return thresholds
-        for (const category of this.#settings.debugCategories)
-            thresholds[category] = Math.min(thresholds[category], rank.debug)
+        if (settings instanceof ConfigurationError) return settings
+        const { thresholds, debugCategories } = settings
+        if (debugCategories !== undefined) this.#debugCategories = new Set(debugCategories)
+        for (const category of this.#debugCategories) thresholds[category] = Math.min(thresholds[category], rank.debug)
         this.#thresholds = Object.freeze(thresholds)
         return undefined
     }
@@ -549,7 +559,8 @@ export class ClientLogger {
         if (rank[input.level] >= rank.error && typeof input.error === "object" && input.error !== null)
             this.#loggedErrors.add(input.error)
         if (rank[input.level] >= rank.warn && this.#settings.dedupeMs !== undefined) {
-            const key = `${input.level}|${input.code}|${input.message}|${this.#errorKey(input.error)}`
+            // The shard and subscription keep the same fault on different shards or subscriptions apart
+            const key = `${input.level}|${input.code}|${input.shardId ?? ""}|${input.subscriptionId ?? ""}|${input.message}|${this.#errorKey(input.error)}`
             const now = Date.now()
             const entry = this.#dedupe.get(key)
             if (entry && now - entry.shownAt < this.#settings.dedupeMs) {
@@ -838,6 +849,35 @@ function levelThresholds(settings: Record<string, unknown>): Record<LogCategory,
     return thresholds
 }
 
+/** Validate a debug setting into its categories: True for every category, false for none or a list of categories */
+function debugSetting(debug: unknown): LogCategory[] | ConfigurationError {
+    if (debug === true) return [...logCategories]
+    if (debug === false) return []
+    if (!Array.isArray(debug))
+        return new ConfigurationError(
+            "debug",
+            'The option "logging.debug" must be true, false or an array of categories',
+        )
+    const categories: LogCategory[] = []
+    for (const category of debug) {
+        if (!(logCategories as readonly unknown[]).includes(category))
+            return new ConfigurationError(
+                "debug",
+                typeof category === "string"
+                    ? `Unknown log category ${JSON.stringify(category)} in logging.debug`
+                    : 'The option "logging.debug" must list log category names',
+                {
+                    hint:
+                        typeof category === "string"
+                            ? unsupportedKeyHint(category, logCategories, "categories")
+                            : `Known categories are ${logCategories.join(", ")}`,
+                },
+            )
+        categories.push(category as LogCategory)
+    }
+    return categories
+}
+
 /** Validate caller logging settings, reading each setting once so the validated value is the one used */
 function loggingInput(value: unknown): LoggingInput | ConfigurationError {
     if (value !== undefined && !record(value))
@@ -853,33 +893,9 @@ function loggingInput(value: unknown): LoggingInput | ConfigurationError {
         })
     const thresholds = levelThresholds(settings)
     if (thresholds instanceof ConfigurationError) return thresholds
-    const debugCategories: LogCategory[] = []
     const debug = settings.debug
-    if (debug !== undefined) {
-        if (debug === true) debugCategories.push(...logCategories)
-        else if (Array.isArray(debug)) {
-            for (const category of debug) {
-                if (!(logCategories as readonly unknown[]).includes(category))
-                    return new ConfigurationError(
-                        "debug",
-                        typeof category === "string"
-                            ? `Unknown log category ${JSON.stringify(category)} in logging.debug`
-                            : 'The option "logging.debug" must list log category names',
-                        {
-                            hint:
-                                typeof category === "string"
-                                    ? unsupportedKeyHint(category, logCategories, "categories")
-                                    : `Known categories are ${logCategories.join(", ")}`,
-                        },
-                    )
-                debugCategories.push(category as LogCategory)
-            }
-        } else if (debug !== false)
-            return new ConfigurationError(
-                "debug",
-                'The option "logging.debug" must be true, false or an array of categories',
-            )
-    }
+    const debugCategories = debug === undefined ? [] : debugSetting(debug)
+    if (debugCategories instanceof ConfigurationError) return debugCategories
     const format = settings.format
     if (format !== undefined && format !== "pretty" && format !== "json")
         return new ConfigurationError("format", 'The option "logging.format" must be "pretty" or "json"')
@@ -939,7 +955,7 @@ function loggingInput(value: unknown): LoggingInput | ConfigurationError {
     return { thresholds, debugCategories, format, sinks, dedupeMs, unsafe }
 }
 
-/** Run client.logging.configure: Replace the logger's thresholds, failing with ConfigurationError for invalid settings */
+/** Run client.logging.configure: Replace the logger's thresholds and, when given, its Debug categories, failing with ConfigurationError for invalid settings */
 export const configureLogging = (logger: ClientLogger, settings: unknown): Effect.Effect<void, ConfigurationError> =>
     suspendMarked(() => {
         const failure = logger.configure(settings)

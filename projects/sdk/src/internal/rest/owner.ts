@@ -180,6 +180,12 @@ export class RestRuntime<M extends MessageCore> {
 
     /** Logical time of the last rest.busy Warn, repeated at most once per busyWarnIntervalMs */
     #busyWarnedAt: number | undefined
+    /**
+     * Logical time of the last ratelimit.deadline Warn for requests refused before dispatch, per route template.
+     * Each new Warn first removes entries older than busyWarnIntervalMs, which no longer hold back a Warn, so the map
+     * holds only routes warned within one interval of the latest Warn
+     */
+    readonly deadlineWarnedAt = new Map<string, number>()
 
     constructor(options: RestOwnerOptions<M>) {
         this.settings = options.settings ?? defaultRestConfiguration
@@ -965,6 +971,17 @@ export class RestOwner<M extends MessageCore = Message> {
     ): Effect.Effect<A, RestFailure | ClientClosedError> {
         const runtime = this.#runtime
         const { request, progress, generation, deadline, retainedBytes = 0 } = options
+        // A long pause can refuse every request on a route, so only the first refusal per route and minute is a Warn
+        const deadlineLevel = (template: string, retryAfterMs: number): "warn" | "debug" => {
+            if (retryAfterMs < longRateLimitWaitMs) return "debug"
+            const now = runtime.logical.now()
+            const last = runtime.deadlineWarnedAt.get(template)
+            if (last !== undefined && now - last < busyWarnIntervalMs) return "debug"
+            for (const [warned, at] of runtime.deadlineWarnedAt)
+                if (now - at >= busyWarnIntervalMs) runtime.deadlineWarnedAt.delete(warned)
+            runtime.deadlineWarnedAt.set(template, now)
+            return "warn"
+        }
         const route = rateRoute(request.method, request.path, request.channel, request.bucket, request.webhookId)
         const template =
             request.template ?? routeTemplate(request.put ? "/attachments/upload" : request.path, request.webhookId)
@@ -981,7 +998,7 @@ export class RestOwner<M extends MessageCore = Message> {
                         restore(
                             Effect.acquireUseRelease(
                                 Effect.interruptible(
-                                    runtime.admission.acquire({ route: route.key, bytes, until }),
+                                    runtime.admission.acquire({ route: route.key, bytes, until, deadline }),
                                 ).pipe(
                                     mapFailureCause((error) =>
                                         error instanceof RestFailure ? error.withOutcome(progress.outcome) : error,
@@ -1016,6 +1033,26 @@ export class RestOwner<M extends MessageCore = Message> {
                     if (reason?._tag !== "Fail")
                         return yield* Effect.die(new Error("REST request failed without a cause"))
                     const error = reason.error
+                    // Admission fails a request whose learned wait outlasts its deadline. That is the only rate-limit
+                    // failure without an HTTP status, and it is logged like a 429 whose wait passes the deadline
+                    if (
+                        error instanceof RestFailure &&
+                        error.reason === "rateLimit" &&
+                        error.status === null &&
+                        error.retryAfterMs !== null
+                    )
+                        runtime.logging?.log(
+                            {
+                                level: deadlineLevel(template, error.retryAfterMs),
+                                category: "ratelimit",
+                                code: "ratelimit.deadline",
+                                message: `${request.method} ${template} is rate-limited for another ${error.retryAfterMs} ms, which is past its timeout, so it fails without waiting`,
+                                route: template,
+                                delayMs: error.retryAfterMs,
+                                fields: { method: request.method },
+                            },
+                            fiber.context,
+                        )
                     // An unusable success response usually means a Fluxer schema change or a wrong test fixture,
                     // so it is logged once per route and field, mirroring gateway.dispatchRejected. A caller-described
                     // route has no expected shape, so its failure is only returned to the caller

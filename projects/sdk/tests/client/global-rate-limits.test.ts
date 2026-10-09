@@ -1,10 +1,11 @@
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { createClient } from "../../src/index.js"
+import { createClient, type ClientOptions } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { modes, type Mode } from "../support/both-apis.js"
-import { fakeHostTime, outcome } from "../support/client-clock.js"
+import { fakeHostTime, hostTurnsUntil, outcome } from "../support/client-clock.js"
+import { captureLogs } from "../support/log-capture.js"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -12,10 +13,10 @@ afterEach(() => {
     vi.useRealTimers()
 })
 
-async function setup(mode: Mode) {
+async function setup(mode: Mode, logging?: ClientOptions["logging"]) {
     fakeHostTime()
     const scope = Scope.makeUnsafe()
-    const options = { token: "fixture-only-not-a-credential" }
+    const options = { token: "fixture-only-not-a-credential", ...(logging ? { logging } : {}) }
     const client =
         mode === "default"
             ? createClient(options)
@@ -103,17 +104,21 @@ for (const mode of modes) {
         await vi.advanceTimersByTimeAsync(0)
         expect(await first).toMatchObject({ error: { reason: "rateLimit", outcome: "rejected", status: 429 } })
 
+        // A request whose deadline ends within the pause fails at once with the remaining wait
         const other = outcome(client.messages.delete({ channelId: "21", id: "10" }, { timeoutMs: 100 }))
-        await vi.advanceTimersByTimeAsync(110)
         expect(await other).toMatchObject(
-            entry.global ? { error: { reason: "timeout", outcome: "notDispatched" } } : { value: undefined },
+            entry.global
+                ? { error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 1_000 } }
+                : { value: undefined },
         )
         expect(calls).toHaveLength(entry.global ? 1 : 2)
+        await vi.advanceTimersByTimeAsync(110)
 
         // The rejected route is still paused even when unrelated routes can proceed
         const same = outcome(client.messages.typing("20", { timeoutMs: 100 }))
-        await vi.advanceTimersByTimeAsync(110)
-        expect(await same).toMatchObject({ error: { reason: "timeout", outcome: "notDispatched" } })
+        expect(await same).toMatchObject({
+            error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 890 },
+        })
         await vi.advanceTimersByTimeAsync(1000)
         expect(await outcome(client.messages.typing("20"))).toEqual({ value: undefined })
         expect(calls).toHaveLength(entry.global ? 2 : 3)
@@ -134,10 +139,11 @@ for (const mode of modes) {
         const first = outcome(client.messages.typing("20", { timeoutMs: 500 }))
         await vi.advanceTimersByTimeAsync(0)
         const other = outcome(client.messages.typing("21", { timeoutMs: 30 }))
-        await vi.advanceTimersByTimeAsync(30)
-        expect(await other).toMatchObject({ error: { reason: "timeout", outcome: "notDispatched" } })
+        expect(await other).toMatchObject({
+            error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 1_000 },
+        })
         expect(cancelled).not.toHaveBeenCalled()
-        await vi.advanceTimersByTimeAsync(80)
+        await vi.advanceTimersByTimeAsync(110)
         expect(await first).toMatchObject({ error: { reason: "rateLimit", outcome: "rejected" } })
         expect(cancelled).toHaveBeenCalledOnce()
         expect(calls).toBe(1)
@@ -189,6 +195,46 @@ for (const mode of modes) {
         await vi.advanceTimersByTimeAsync(110)
         expect(await other).toMatchObject({ error: { outcome: "notDispatched" } })
         expect(calls).toBe(1)
+    })
+
+    // One hour-long global pause held every later request until its own deadline ended as a timeout without a wait
+    test(`${mode}: a request whose deadline ends within a global pause fails at once, and the pause still ends`, async () => {
+        const logs = captureLogs()
+        const client = await setup(mode, { ...logs.logging, categories: { ratelimit: "debug" } })
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () =>
+            ++calls === 1
+                ? new Response(null, { status: 429, headers: { "retry-after": "3600", "x-ratelimit-global": "true" } })
+                : new Response(null, { status: 204 }),
+        )
+        expect(await outcome(client.messages.typing("20"))).toMatchObject({
+            error: { reason: "rateLimit", outcome: "rejected", retryAfterMs: 3_600_000 },
+        })
+        // Fake time stands still, so neither the 30 second default deadline nor the pause can end while this waits
+        let settled = false
+        const later = outcome(client.messages.typing("21")).finally(() => {
+            settled = true
+        })
+        await hostTurnsUntil(() => settled)
+        expect(await later).toMatchObject({
+            error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 3_600_000 },
+        })
+        // A long pause refuses every request on the route, so a repeat within a minute is recorded at Debug only
+        settled = false
+        const repeat = outcome(client.messages.typing("22")).finally(() => {
+            settled = true
+        })
+        await hostTurnsUntil(() => settled)
+        expect(await repeat).toMatchObject({ error: { reason: "rateLimit", outcome: "notDispatched" } })
+        expect(calls).toBe(1)
+        expect(logs.withCode("ratelimit.deadline")).toEqual([
+            expect.objectContaining({ level: "warn", delayMs: 3_600_000 }),
+            expect.objectContaining({ level: "warn", delayMs: 3_600_000 }),
+            expect.objectContaining({ level: "debug", delayMs: 3_600_000 }),
+        ])
+        await vi.advanceTimersByTimeAsync(3_600_000)
+        expect(await outcome(client.messages.typing("21"))).toEqual({ value: undefined })
+        expect(calls).toBe(2)
     })
 
     test.each(["network", "server"])(`${mode}: %s failure never replays an uncertain mutation`, async (failure) => {

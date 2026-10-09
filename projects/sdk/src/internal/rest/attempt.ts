@@ -265,7 +265,10 @@ export function runAttempt<A, M extends MessageCore>(
             ? new ClientClosedError()
             : error instanceof RestFailure || error instanceof ClientClosedError
               ? error
-              : new RestFailure({ reason: "network", outcome: progress.outcome })
+              : // A connection lost while the response body arrives is a network failure that an eligible read may retry
+                error instanceof TransportError
+                ? new RestFailure({ reason: "network", outcome: progress.outcome, retryableRead: true, cause: error })
+                : new RestFailure({ reason: "network", outcome: progress.outcome })
     }
     const send = (state: AttemptState) =>
         Effect.suspend(() => {

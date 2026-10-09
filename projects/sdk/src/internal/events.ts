@@ -1,14 +1,15 @@
 /**
  * Event intake: Per-subscription scheduling, bounded pending delivery, overflow policies and event waits.
  * Invariant: Gateway callbacks never await consumer work, overflow ends only the affected subscription, and shutdown discards
- * pending delivery. Default callback promises stay application-owned while native cleanup is cooperative and awaited, and a native
- * handler's shutdown request runs in the client scope so the handler never joins itself. Each admitted event keeps the shard and
+ * pending delivery with one record per subscription that had waiting events. Default callback promises stay application-owned
+ * while native cleanup is cooperative and awaited, and a native handler's shutdown request runs in the client scope so the
+ * handler never joins itself. Each admitted event keeps the shard and
  * received frame size it arrived with for its handler context, without changing queue accounting. Middleware wraps on handler
  * invocations only, with the list registered when an invocation starts, and every failure inside the chain is reported where it
  * occurs, so middleware cannot hide a handler failure. A partitioned handler starts events in receive order per key and runs
  * at most one invocation per key, selecting from its own bounded queue so queue limits still cover every waiting event.
  * A draining shutdown seals the bus: New events and registrations are refused while running and queued handler work
- * continues until the client stops the bus. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ * continues until the client stops the bus, which records how many refused events had a subscription. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
@@ -468,16 +469,34 @@ export class EventSource<A = Message> {
         )
     }
 
-    stop(failure?: EventOverflowError) {
+    /** Stop intake and discard waiting events. The reason names who stopped it in the record of what was discarded */
+    stop(failure?: EventOverflowError, reason: "clientClosed" | "subscriptionClosed" = "subscriptionClosed") {
         if (!this.#active) return
         this.#active = false
         this.#failure = failure
+        // An overflow stop has already recorded and counted the events it discarded
+        if (!failure && this.#pending.length) this.#discarded(this.#pending.length, reason)
         this.#pending = []
         this.#bytes = 0
         for (const resume of this.#waiters) resume(failure ? Effect.fail(failure) : Effect.succeed(null))
         this.#waiters.clear()
         this.#stopWorker?.()
         if (!this.#managed) this.finish(Exit.void)
+    }
+
+    /** Count the waiting events a stop discards and log one summary: Info when the client closes, Debug when the subscription closes */
+    #discarded(count: number, reason: "clientClosed" | "subscriptionClosed") {
+        const logger = this.meta.logger?.()
+        logger?.countDrop("closed", count)
+        logger?.log({
+            level: reason === "clientClosed" ? "info" : "debug",
+            category: "events",
+            code: "events.discarded",
+            message: `The ${this.meta.event} subscription ${this.meta.id} discarded ${count} waiting ${count === 1 ? "event" : "events"}, because ${reason === "clientClosed" ? "the client is closing" : "the subscription closed"}`,
+            event: this.meta.event,
+            subscriptionId: this.meta.id,
+            fields: { discarded: count, reason },
+        })
     }
 
     manage(stopWorker: () => void) {
@@ -778,6 +797,8 @@ export class EventBus<M extends MessageCore = Message> {
     #closed = false
     /** Whether intake stopped for a draining shutdown: New events and registrations are refused, admitted work continues */
     #sealed = false
+    /** Events refused after sealing that an open subscription or collector would have received, reported once when the bus stops */
+    #refused = 0
     /** Handler invocations started and not yet finished, counted from admission so a drain never misses one about to start */
     #running = 0
     /** Released and replaced whenever a handler invocation finishes, so a drain can wait for progress */
@@ -893,27 +914,43 @@ export class EventBus<M extends MessageCore = Message> {
         return source
     }
     offer<K extends EventName>(event: K, message: EventMap<M>[K], bytes: number, shardId = 0) {
-        if (this.#sealed) return
-        if (
+        const reaction =
             event === "messageReactionAdd" ||
             event === "messageReactionAddMany" ||
             (event === "messageReactionRemove" && this.#reactionRemovalListeners)
-        ) {
-            const reaction = message as MessageReaction | MessageReactionBatch
-            for (const offer of this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`) ?? [])
-                offer(reaction, bytes, shardId, event === "messageReactionRemove")
+                ? (message as MessageReaction | MessageReactionBatch)
+                : undefined
+        const reactionCollectors = reaction && this.#reactionCollectors.get(`${reaction.channelId}:${reaction.id}`)
+        const messageCollectors =
+            event === "messageCreate" && isMessageEvent<K, M>(event, message)
+                ? this.#collectors.get(message.channelId)
+                : undefined
+        if (this.#sealed) {
+            // Collectors count too, so an event only a collector would have received is still recorded
+            if (this.#sources[event].size || reactionCollectors || messageCollectors) this.#refused++
+            return
         }
-        if (event === "messageCreate" && isMessageEvent<K, M>(event, message)) {
-            const created = message
-            for (const offer of this.#collectors.get(created.channelId) ?? []) offer(created, bytes, shardId)
-        }
+        for (const offer of reactionCollectors ?? [])
+            offer(reaction!, bytes, shardId, event === "messageReactionRemove")
+        for (const offer of messageCollectors ?? []) offer(message as M, bytes, shardId)
         for (const source of this.#sources[event]) source.offer(message, bytes, shardId)
     }
     stop() {
         if (this.#closed) return
         this.#closed = true
+        if (this.#refused) {
+            const logger = this.logging?.()
+            logger?.countDrop("closed", this.#refused)
+            logger?.log({
+                level: "info",
+                category: "events",
+                code: "events.refused",
+                message: `The draining shutdown refused ${this.#refused} received ${this.#refused === 1 ? "event" : "events"} that open subscriptions or collectors would have received, because it accepts no new events`,
+                fields: { refused: this.#refused },
+            })
+        }
         this.#closingSources = Object.values(this.#sources).flatMap((sources) => [...sources])
-        for (const source of this.#closingSources) source.stop()
+        for (const source of this.#closingSources) source.stop(undefined, "clientClosed")
     }
     shutdown(): Effect.Effect<void> {
         return Effect.suspend(() => {

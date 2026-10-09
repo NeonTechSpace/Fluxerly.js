@@ -3,6 +3,8 @@
  * Invariant: Decoded body bytes are bounded before parsing, and reader cancellation and release are always awaited.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
+import { TransportError } from "./effect-failures.js"
+
 /** Bounded response parsing completed, but releasing its owned reader failed */
 export class ResponseJsonCleanupError extends Error {
     constructor(
@@ -14,7 +16,10 @@ export class ResponseJsonCleanupError extends Error {
     }
 }
 
-/** Bound decoded HTTP body bytes before parsing JSON, then await reader cancellation and release */
+/**
+ * Bound decoded HTTP body bytes before parsing JSON, then await reader cancellation and release.
+ * Invalid UTF-8 or JSON returns undefined. A body whose connection fails mid-read throws a TransportError
+ */
 export async function readResponseJson(
     response: Response,
     maxBytes = 16_777_216,
@@ -28,7 +33,11 @@ export async function readResponseJson(
         ended = false
     try {
         while (true) {
-            const next = await reader.read()
+            const next = await reader.read().catch((error: unknown) => {
+                // A failed read leaves the stream errored, so it needs no cancellation
+                ended = true
+                throw new TransportError(error, "response body read")
+            })
             if (next.done) {
                 ended = true
                 break
@@ -38,8 +47,9 @@ export async function readResponseJson(
             result += decoder.decode(next.value, { stream: true })
         }
         return JSON.parse(result + decoder.decode()) as unknown
-    } catch {
-        // allow-silent: Invalid JSON returns undefined, which the decoder reports as an unusable response
+    } catch (error) {
+        if (error instanceof TransportError) throw error
+        // allow-silent: Invalid UTF-8 or JSON returns undefined, which the decoder reports as an unusable response
         return undefined
     } finally {
         const failures: unknown[] = []

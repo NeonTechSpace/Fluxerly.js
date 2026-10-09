@@ -146,7 +146,7 @@ The SDK applies these rules automatically. They need no configuration, but expla
 <details>
 <summary>Automatic request retries</summary>
 
-A read that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice.
+A read that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice. A connection lost while the response body arrives counts as a network error.
 A write is sent again only after Fluxer confirms a rate limit with HTTP 429, so a write with an unknown outcome is never repeated automatically.
 Each retry is counted in `diagnostics().counters.restRetries` and logged at Debug
 
@@ -156,7 +156,7 @@ Each retry is counted in `diagnostics().counters.restRetries` and logged at Debu
 <summary>Rate limits</summary>
 
 The SDK waits for [rate limits](/docs/{{version}}/glossary/#rate-limit) on its own and logs waits of one second or more at Warn.
-Waiting counts toward each operation's deadline. A wait that would pass the deadline fails at once with `ratelimit.deadline`.
+Waiting counts toward each operation's deadline. A wait that would pass the deadline fails at once with `ratelimit.deadline`, including for an operation queued behind an earlier pause, and the error's `retryAfterMs` names the remaining wait.
 A global HTTP 429 pauses unrelated API routes on the same client, including when a valid global header accompanies an unreadable error body. Cancelling one queued operation does not clear the shared pause.
 Server-provided bucket identifiers refine request grouping automatically, so bot code does not configure rate-limit groups. Matching limits share a wait, while independently limited resources stay separate. The first requests can still receive a 429 before the grouping is learned.
 The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) explains scope metadata and retry boundaries

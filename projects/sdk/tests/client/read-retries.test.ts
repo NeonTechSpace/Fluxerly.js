@@ -24,6 +24,16 @@ const body = (operation: (typeof reads)[number]) =>
           : operation === "fetchReactionUsers"
             ? { items: [{ id: "30", username: "fixture" }], has_more: false, next_after: null }
             : { items: [{ message: wire, pinned_at: "2026-09-08T12:00:00Z" }], has_more: false }
+/** A success response whose connection drops after its first body bytes, as when a socket resets mid-body */
+const droppedBody = () =>
+    new Response(
+        new ReadableStream({
+            start: (controller) => controller.enqueue(new TextEncoder().encode('{"id":"10",')),
+            pull: (controller) =>
+                controller.error(Object.assign(new Error("private socket detail"), { code: "ECONNRESET" })),
+        }),
+        { headers: { "content-type": "application/json" } },
+    )
 const unwrap = <A, E>(result: { isErr(): boolean; value?: A; error?: E }): A => {
     if (result.isErr()) throw result.error
     return result.value!
@@ -421,5 +431,37 @@ test.each(modes)(
         expect(write).toMatchObject({ reason: "network", outcome: "unknown" })
         expect((write as { details: object }).details).not.toHaveProperty("read")
         expect(errors.isRetryable(write)).toBe(false)
+    },
+)
+
+// A connection lost mid-body was reported as an unusable response with a cleanup defect, so reads were never retried
+test.each(modes)("%s retries a read whose connection drops while the success body arrives", async (mode) => {
+    const time = retryTime()
+    let calls = 0
+    stubFetchWithHostedDiscovery(async () => (++calls === 1 ? droppedBody() : Response.json(wire)))
+    const api = await setup(mode, time.logging)
+    const reading = api.read()
+    await time.runRetry(1, 125, () => calls)
+    expect(await reading).toMatchObject({ id: "10" })
+    expect(calls).toBe(2)
+    expect(time.retries()[0]).toMatchObject({ fields: { reason: "network" } })
+})
+
+test.each(modes)(
+    "%s fails a write whose connection drops while the success body arrives as a network failure, without resending it",
+    async (mode) => {
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () => {
+            calls++
+            return droppedBody()
+        })
+        const api = await setup(mode)
+        const error: unknown = await api.edit().catch((error: unknown) => error)
+        expect(error).toMatchObject({ _tag: "MessageOperationError", reason: "network", outcome: "unknown" })
+        expect(errors.isRetryable(error)).toBe(false)
+        const cause = (error as { cause?: Error & { code?: string } }).cause
+        expect(cause).toMatchObject({ name: "TransportError", code: "ECONNRESET" })
+        expect(cause?.message).not.toContain("private")
+        expect(calls).toBe(1)
     },
 )

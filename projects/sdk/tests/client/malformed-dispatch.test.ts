@@ -1,7 +1,9 @@
 import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { createClient, type ClientDiagnostics, type Message } from "../../src/index.js"
+import { createClient, type ClientDiagnostics, type LogRecord, type Message } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
+import { createTestClient } from "../../src/testing.js"
+import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { modes } from "../support/both-apis.js"
 import { startGatewayServer } from "../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
@@ -217,5 +219,37 @@ test.each(modes)(
             "MESSAGE_DELETE",
             "CHANNEL_UPDATE",
         ])
+    },
+)
+
+test.each(modes)(
+    "%s keeps identical malformed dispatches on different shards in separate records instead of collapsing them",
+    async (mode) => {
+        const options = { sharding: { totalShards: 2 } }
+        // The user ID must be a string, so both shards skip the same dispatch with the same message
+        const malformed = { channel_id: "20", user_id: 30, timestamp: 1_767_225_600 }
+        let records: () => readonly LogRecord[]
+        if (mode === "default") {
+            const test = createTestClient(options)
+            onTestFinished(() => test.shutdown())
+            test.client.on("typingStart", () => undefined)
+            await test.ready()
+            // The test gateway delivers each dispatch synchronously, so its record exists when emit returns
+            for (const shardId of [0, 1]) test.emit("TYPING_START", malformed, { shardId })
+            records = () => test.logs()
+        } else {
+            const scope = Scope.makeUnsafe()
+            onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+            const test = await Effect.runPromise(createNativeTestClient(options).pipe(Scope.provide(scope)))
+            await Effect.runPromise(test.client.on("typingStart", () => Effect.void).pipe(Scope.provide(scope)))
+            await Effect.runPromise(test.ready())
+            for (const shardId of [0, 1]) await Effect.runPromise(test.emit("TYPING_START", malformed, { shardId }))
+            records = () => test.logs()
+        }
+        expect(
+            records()
+                .filter((record) => record.code === "gateway.dispatchRejected")
+                .map((record) => record.shardId),
+        ).toEqual([0, 1])
     },
 )

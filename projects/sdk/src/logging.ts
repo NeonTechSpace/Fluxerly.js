@@ -113,7 +113,8 @@ export type LogSink = (record: LogRecord) => void
  * With no settings, the SDK prints Info and higher records, including startup, readiness, connection loss,
  * rate-limit waits of at least one second, shutdown and full application errors.
  * The FLUXERLY_DEBUG environment variable, read when the client is created, enables Debug records:
- * 1, true or * for every category, or a comma-separated list such as gateway,rest.
+ * 1, true or * for every category, or a comma-separated list such as gateway,rest. A debug value passed to
+ * client.logging.configure replaces those categories while the client runs.
  * HTTP 401 and 403 rejections log a rest.rejected Warn even when handled. An unhandled handler failure with that same
  * rejection, directly or in its cause chain, replaces its Warn if it happens within one second. A later handler failure
  * also logs its own record, because the Warn has already been emitted.
@@ -129,7 +130,9 @@ export interface LoggingOptions {
     /** Per-category minimum severity that replaces level for that category, such as { rest: "debug", cache: "warn" } */
     readonly categories?: Readonly<Partial<Record<LogCategory, LogThreshold>>>
     /** Enable Debug records for every category with true, or for the listed categories.
-     * Adds to FLUXERLY_DEBUG and lowers, never raises, the configured threshold
+     * At creation it adds to FLUXERLY_DEBUG. In client.logging.configure it replaces the current Debug categories,
+     * including those from FLUXERLY_DEBUG, and false or an empty list turns them all off.
+     * It lowers, never raises, the configured threshold
      */
     readonly debug?: boolean | readonly LogCategory[]
     /** Built-in console output format. The value pretty prints readable single lines with indented stacks, and json prints one LogRecord per line.
@@ -146,7 +149,8 @@ export interface LoggingOptions {
      * Each sink is called synchronously in order for every emitted record
      */
     readonly sink?: LogSink | readonly LogSink[]
-    /** Collapse repeated identical Warn, Error and Fatal records within a window.
+    /** Collapse repeated identical Warn, Error and Fatal records within a window. Records about different shards or
+     * subscriptions are not identical, so each one's first occurrence is shown.
      * The next identical record after the window reports how many were suppressed in fields.repeated and as "(repeated N× since last shown)" in its message,
      * and shutdown reports any remainder the same way. When more than 512 distinct records are tracked, the oldest one's window ends early and its count is reported then.
      * Default { windowMs: 60000 }. A false value or a windowMs of 0 disables collapsing
@@ -174,11 +178,11 @@ export interface LoggingOptions {
 }
 
 /**
- * The level and categories settings of LoggingOptions, which client.logging.configure replaces while a client runs
+ * The level, categories and debug settings of LoggingOptions, which client.logging.configure changes while a client runs
  *
  * @category Logging and diagnostics
  */
-export type LogLevelSettings = Pick<LoggingOptions, "level" | "categories">
+export type LogLevelSettings = Pick<LoggingOptions, "level" | "categories" | "debug">
 
 /**
  * Running totals for one client since creation, returned by diagnostics().counters. Values only increase
@@ -193,7 +197,7 @@ export interface ClientCounters {
     /** Failure reports that could not be queued for a busy hook and were logged instead */
     readonly reportsDropped: number
     /** Events not delivered to a subscription, by reason. The reason overflow is a full queue, malformed is a rejected dispatch,
-     * and collector is a full collector buffer
+     * collector is a full collector buffer and closed is a shutdown or closed subscription
      */
     readonly eventsDropped: {
         /** Events dropped because a subscription queue was full */
@@ -202,6 +206,10 @@ export interface ClientCounters {
         readonly malformed: number
         /** Messages or reactions dropped because a collector buffer was full */
         readonly collector: number
+        /** Events still waiting when a subscription or the client closed, plus events a draining shutdown refused after it
+         * stopped accepting new ones
+         */
+        readonly closed: number
     }
     /** Gateway messages rejected as invalid protocol data, including skipped malformed dispatches */
     readonly protocolFailures: number

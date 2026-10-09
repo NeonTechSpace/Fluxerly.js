@@ -189,13 +189,14 @@ test("history shares its channel bucket across pages, separately from single fet
     await clock.waiting(300)
     await settle(client.messages.fetch({ channelId: "20", id: "10" }))
     await settle(client.messages.fetchHistory("21"))
-    const queued = client.messages.fetchHistory("20", { before: "12" }, { timeoutMs: 30 })
-    await clock.waiting(30)
-    await clock.advance(30)
-    const expired = await queued
-    expect(expired.isErr() && expired.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+    const refused = await client.messages.fetchHistory("20", { before: "12" }, { timeoutMs: 30 })
+    expect(refused.isErr() && refused.error).toMatchObject({
+        reason: "rateLimit",
+        outcome: "notDispatched",
+        retryAfterMs: 300,
+    })
     expect(server.requests).toHaveLength(3)
-    await clock.advance(270)
+    await clock.advance(300)
     await settle(first)
     expect(server.requests).toHaveLength(4)
     expect(server.requests.at(-1)!.at - server.requests[0]!.at).toBe(300)

@@ -16,7 +16,9 @@ export interface Subscription {
     /** Identifier of this subscription, such as messageCreate#3, used in failure reports and log records */
     readonly id: string
     /**
-     * Stop new deliveries, drop queued events and stop running handlers, without waiting for the handler that called close
+     * Stop new deliveries, drop queued events and stop running handlers, without waiting for the handler that called close.
+     * When queued events are dropped, one events.discarded Debug record reports how many, and
+     * diagnostics().counters.eventsDropped.closed counts them
      *
      * @remarks
      * Stops the subscription when the Effect executes and interrupts its handlers

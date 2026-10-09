@@ -792,8 +792,19 @@ function forwardLines(
     }
     stream.once("end", finish)
     stream.once("close", finish)
-    // A read error ends the child's output, but the child's exit is still observed and logged separately
-    stream.once("error", finish)
+    // A read error ends forwarding of this stream while the child can keep running, so the error is recorded. The child's
+    // exit is still observed and logged separately
+    stream.once("error", (error) => {
+        logger.log({
+            level: "warn",
+            category: "supervisor",
+            code: "supervisor.outputFailed",
+            message: `Reading the ${name === "stdout" ? "standard output" : "standard error"} of child ${configuration.id} failed, so the supervisor stops forwarding it`,
+            error,
+            fields: { child: configuration.id, shards: configuration.assignment.shardIds.join(","), stream: name },
+        })
+        finish()
+    })
 }
 
 /** Owns only processes forked from one local supervisor instance */
@@ -1106,10 +1117,18 @@ export class SupervisorOwner {
             { fields: { generation: slot.generation } },
         )
         slot.child = child
+        const startupTimeoutMs = this.#configuration!.startupTimeoutMs
         slot.startupTimer = setTimeout(() => {
-            if (slot.child === child && slot.generation === generation && !slot.ready)
-                this.#fail(new SupervisorError(slot.configuration.id, "startupTimeout"))
-        }, this.#configuration!.startupTimeoutMs)
+            if (slot.child !== child || slot.generation !== generation || slot.ready) return
+            this.#log(
+                "error",
+                "supervisor.startupTimeout",
+                `Child ${slot.configuration.id} did not become ready within ${startupTimeoutMs} ms (startupTimeoutMs), so the supervisor shuts down`,
+                slot,
+                { fields: { startupTimeoutMs } },
+            )
+            this.#fail(new SupervisorError(slot.configuration.id, "startupTimeout"))
+        }, startupTimeoutMs)
         child.on("message", (message: unknown) => this.#message(slot, child, generation, message))
         child.once("disconnect", () => this.#disconnect(slot, child, generation))
         child.once("error", (error) => this.#childError(slot, child, generation, error))
@@ -1185,6 +1204,7 @@ export class SupervisorOwner {
         }
         // A normal process exit closes IPC just before its exit event. Reuse the configured graceful deadline
         // before classifying a still-running current child as a terminal supervisor failure
+        const shutdownTimeoutMs = this.#configuration!.shutdownTimeoutMs
         slot.disconnectTimer = setTimeout(() => {
             slot.disconnectTimer = undefined
             if (
@@ -1199,9 +1219,16 @@ export class SupervisorOwner {
             // The observation window is the disconnected child's only graceful exit window. Do not give it a
             // second shutdown timeout after terminal coordination loss, while sibling children still receive
             // their normal graceful stop request
+            this.#log(
+                "error",
+                "supervisor.terminated",
+                `Child ${slot.configuration.id} lost its message channel to the supervisor and was still running ${shutdownTimeoutMs} ms later (shutdownTimeoutMs), so the supervisor shuts down and force-terminates it`,
+                slot,
+                { fields: { shutdownTimeoutMs } },
+            )
             this.#fail(new SupervisorError(slot.configuration.id, "closed"))
             this.#requestStop(slot, true)
-        }, this.#configuration!.shutdownTimeoutMs)
+        }, shutdownTimeoutMs)
     }
 
     #message(slot: ChildSlot, child: ChildProcess, generation: number, message: unknown) {
@@ -1447,6 +1474,13 @@ export class SupervisorOwner {
         outstanding.timer = setTimeout(() => {
             if (this.#outstanding === outstanding) {
                 outstanding.stalled = true
+                this.#log(
+                    "warn",
+                    "supervisor.identifyUnacknowledged",
+                    `Child ${outstanding.slot.configuration.id} did not confirm sending Identify for shard ${outstanding.shardId} within ${grantAcknowledgementMs} ms of its permission, so the supervisor stops it`,
+                    outstanding.slot,
+                    { fields: { shardId: outstanding.shardId } },
+                )
                 this.#requestStop(outstanding.slot)
             }
         }, grantAcknowledgementMs)
@@ -1479,7 +1513,7 @@ export class SupervisorOwner {
         try {
             child.send(message, undefined, undefined, (error) => {
                 if (error && slot.child === child && !(this.#stopping && !child.connected) && !slot.disconnectTimer)
-                    this.#childError(slot, child, slot.generation)
+                    this.#childError(slot, child, slot.generation, error)
             })
             return true
         } catch (error) {
@@ -1597,15 +1631,23 @@ export class SupervisorOwner {
         if (slot.stopTimer) return
         slot.state = "stopping"
         const generation = slot.generation
+        const shutdownTimeoutMs = this.#configuration!.shutdownTimeoutMs
         slot.stopTimer = setTimeout(() => {
             if (slot.child !== child || slot.generation !== generation) return
+            this.#log(
+                "warn",
+                "supervisor.terminated",
+                `Child ${slot.configuration.id} did not exit within ${shutdownTimeoutMs} ms (shutdownTimeoutMs) of the stop request, so the supervisor force-terminates it`,
+                slot,
+                { fields: { shutdownTimeoutMs } },
+            )
             try {
                 // Only this exact ChildProcess is force-terminated. Completion still waits for its exit event
                 child.kill("SIGKILL")
             } catch (error) {
                 this.#childError(slot, child, generation, error)
             }
-        }, this.#configuration!.shutdownTimeoutMs)
+        }, shutdownTimeoutMs)
         this.#send(slot, { type: "shutdown", generation })
     }
 

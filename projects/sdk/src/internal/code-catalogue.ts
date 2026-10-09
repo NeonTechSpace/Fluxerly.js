@@ -330,8 +330,8 @@ export const logCodes = {
     "lifecycle.cacheRefill": {
         levels: ["info", "warn"],
         meaning:
-            "Shards resumed sessions from the session store, which carry no community data, so the SDK refilled the enabled community, role and channel caches through REST. Warn means some communities failed or the refill stopped early",
-        action: "At Warn, read the error. The affected cache entries fill as events and requests arrive",
+            "Shards resumed sessions from the session store, which carry no community data, so the SDK refilled the enabled community, role and channel caches through REST. Warn means some communities failed or the refill stopped early, such as when the community list repeated a page",
+        action: "At Warn, read the message and any error. The affected cache entries fill as events and requests arrive",
     },
     "lifecycle.attempt": { levels: ["debug"], meaning: "A shard started a connection attempt" },
     "lifecycle.ready": { levels: ["info"], meaning: "A shard is ready and receives events" },
@@ -537,6 +537,17 @@ export const logCodes = {
         meaning: "A full subscription queue dropped an event under its overflow policy",
         action: "Handle events faster or raise the pending limits",
     },
+    "events.discarded": {
+        levels: ["debug", "info"],
+        meaning:
+            "A subscription stopped with events still waiting in its queue, so they were discarded unhandled. Info means the client was closing, and Debug means the subscription itself closed. The count is in fields.discarded and in the eventsDropped.closed counter",
+        action: "Shut down with drainMs to let waiting handler events run first",
+    },
+    "events.refused": {
+        levels: ["info"],
+        meaning:
+            "A draining shutdown did not deliver events that open subscriptions would have received, because it accepts no new events. The count is in fields.refused and in the eventsDropped.closed counter",
+    },
     "events.raw": { levels: ["trace"], meaning: "A raw dispatch is being delivered to raw subscribers" },
     "events.registeredAfterShutdown": {
         levels: ["warn"],
@@ -635,6 +646,29 @@ export const logCodes = {
     "supervisor.childOutput": {
         levels: ["info", "warn"],
         meaning: "A child printed a line that is not a log record. Standard error lines are Warn",
+    },
+    "supervisor.outputFailed": {
+        levels: ["warn"],
+        meaning:
+            "Reading a child's standard output or standard error failed, so the parent stops forwarding that stream while the child keeps running. The stream is in fields.stream",
+        action: "Read the record's error, and restart the supervisor if that child's output is needed",
+    },
+    "supervisor.startupTimeout": {
+        levels: ["error"],
+        meaning: "A child did not become ready within startupTimeoutMs, so the supervisor shuts down",
+        action: "Read the child's output records before this one, or raise startupTimeoutMs if startup needs longer",
+    },
+    "supervisor.identifyUnacknowledged": {
+        levels: ["warn"],
+        meaning:
+            "A child did not confirm sending Identify within 5 seconds of its permission, so the supervisor stops that child. Its restart follows the restart settings",
+        action: "Read the child's output records before this one",
+    },
+    "supervisor.terminated": {
+        levels: ["warn", "error"],
+        meaning:
+            "The supervisor force-terminates a child. Warn means the child did not exit within shutdownTimeoutMs of a stop request. Error means the child lost its message channel to the parent and kept running past shutdownTimeoutMs, so the supervisor shuts down",
+        action: "Make the child's cleanup finish sooner, or raise shutdownTimeoutMs",
     },
     "sdk.unknownDebugCategory": {
         levels: ["warn"],

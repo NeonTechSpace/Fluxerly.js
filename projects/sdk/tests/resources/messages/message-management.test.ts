@@ -253,11 +253,12 @@ test("route limits group message IDs by method/channel without blocking other me
         response.end(JSON.stringify(wire()))
     }
     await settle(client.messages.fetch(target))
-    const queued = client.messages.fetch({ ...target, id: "11" }, { timeoutMs: 30 })
-    await clock.waiting(30)
-    await clock.advance(30)
-    const expired = await queued
-    expect(expired.isErr() && expired.error).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+    const refused = await client.messages.fetch({ ...target, id: "11" }, { timeoutMs: 30 })
+    expect(refused.isErr() && refused.error).toMatchObject({
+        reason: "rateLimit",
+        outcome: "notDispatched",
+        retryAfterMs: 200,
+    })
     expect(server.requests).toHaveLength(4)
 })
 

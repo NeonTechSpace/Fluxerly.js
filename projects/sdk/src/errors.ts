@@ -129,6 +129,7 @@ export type OperationOutcome = "notDispatched" | "rejected" | "unknown"
  * A 404 does not prove that an earlier deletion succeeded.
  * The reason rejected is another API rejection, network is a transport failure, response means unusable success data,
  * timeout means the deadline expired, and rateLimit means the wait Fluxer required could not be completed.
+ * A connection lost while a response body arrives is a network failure.
  * HTTP failures keep their status, never their response bodies
  *
  * @category Errors

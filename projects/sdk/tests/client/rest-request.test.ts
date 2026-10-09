@@ -247,6 +247,28 @@ describeBothApis("rest.request", (mode) => {
         expect(calls.map((call) => call.init.method)).toEqual(["POST", "PUT", "GET", "GET", "GET"])
     })
 
+    // A connection lost mid-body was reported as an unusable response with a cleanup defect, so reads were never retried
+    test("treats a connection lost while the body arrives as a network failure, retrying only a read", async () => {
+        const dropped = () =>
+            new Response(
+                new ReadableStream({
+                    start: (controller) => controller.enqueue(new TextEncoder().encode('{"id":')),
+                    pull: (controller) =>
+                        controller.error(Object.assign(new Error("socket reset"), { code: "ECONNRESET" })),
+                }),
+            )
+        const { calls, request } = await restClient(mode, (_url, init, call) =>
+            init.method === "GET" && call === 2 ? Response.json({ id: "30" }) : dropped(),
+        )
+        expect((await settle(request({ method: "GET", path: "/users/@me" }))).body).toEqual({ id: "30" })
+        expect(await rejection(request({ method: "POST", path: "/channels/20/custom", body: {} }))).toMatchObject({
+            reason: "network",
+            outcome: "unknown",
+            cause: { name: "TransportError", code: "ECONNRESET" },
+        })
+        expect(calls.map((call) => call.init.method)).toEqual(["GET", "GET", "POST"])
+    })
+
     test("waits out a confirmed 429 and sends the write again", async () => {
         const logs = captureLogs()
         const { calls, request } = await restClient(
@@ -264,7 +286,7 @@ describeBothApis("rest.request", (mode) => {
         expect(logs.withCode("ratelimit.wait")[0]).toMatchObject({ route: "/channels/:id/messages", status: 429 })
     })
 
-    test("learns a rate-limit bucket and holds later requests to the route until it resets", async () => {
+    test("learns a rate-limit bucket and refuses later requests to the route that cannot wait for its reset", async () => {
         const { calls, request } = await restClient(mode, () =>
             Response.json(
                 {},
@@ -273,7 +295,8 @@ describeBothApis("rest.request", (mode) => {
         )
         await settle(request({ method: "GET", path: "/channels/20/custom" }))
         const held = await rejection(request({ method: "GET", path: "/channels/20/custom", timeoutMs: 50 }))
-        expect(held).toMatchObject({ reason: "timeout", outcome: "notDispatched" })
+        expect(held).toMatchObject({ reason: "rateLimit", outcome: "notDispatched" })
+        expect((held as RestRequestError).retryAfterMs).toBeGreaterThan(50)
         // Another channel is a different resource, so it is not held
         await settle(request({ method: "GET", path: "/channels/21/custom" }))
         expect(calls.map((call) => call.url)).toEqual([`${api}/channels/20/custom`, `${api}/channels/21/custom`])

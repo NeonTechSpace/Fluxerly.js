@@ -210,13 +210,15 @@ export interface SupervisorOptions {
      * Children receive the supervisor's resolved format and color through FLUXERLY_LOG_FORMAT and FLUXERLY_LOG_COLOR,
      * unless those variables are already set, so a default-API child prints readable lines when this process writes to a terminal.
      * Lines longer than 262,144 characters are truncated with a marker, and child output pauses while this process's
-     * output applies backpressure. Exit handling waits up to one second after a child exits for its output to drain
+     * output applies backpressure. Exit handling waits up to one second after a child exits for its output to drain.
+     * A failed read of a child stream logs supervisor.outputFailed at Warn and stops forwarding that stream
      *
      * The value inherit shares this process's streams without labels, and ignore discards child output
      * @defaultValue "prefix"
      */
     readonly childOutput?: "prefix" | "inherit" | "ignore"
     /** Records for the automatic plan, child spawn, exit with code and signal, crash, restart and refused Identify permits, in the supervisor log category.
+     * A missed startup deadline, a forced termination and an unconfirmed Identify grant are each logged before the supervisor acts on them.
      * Accepts the same settings as client logging. Default output prints these records at Info and higher.
      * The native supervisor sends them to the Effect logger of the context that creates it unless a sink or format is set
      */

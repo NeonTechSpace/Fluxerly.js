@@ -12,9 +12,11 @@ import type { DefaultRestRequest, RestRequestFailure, RestResponse } from "#sdk/
 export interface RestRequests {
     /**
      * Send one request to a route under /v1 and resolve with its status, lower-case headers and parsed JSON body.
-     * The request waits in the client's queue and learned rate-limit windows like wrapped operations, and a 429 is
-     * waited out and sent again while the deadline allows. A GET is also retried at most twice after a network error
-     * or HTTP 500, 502, 503 or 504. Another method is never sent again after an uncertain outcome.
+     * The request waits in the client's queue and learned rate-limit windows like wrapped operations, and fails at once
+     * with reason rateLimit and the remaining wait as retryAfterMs when a window outlasts the deadline. A 429 is waited
+     * out and sent again while the deadline allows. A GET is also retried at most twice after a network error, including
+     * a connection lost while the response body arrives, or HTTP 500, 502, 503 or 504. Another method is never sent
+     * again after an uncertain outcome.
      * Invalid input fails with RestRequestError reason input before any request, a non-2xx status fails with its status
      * and sanitized apiError, and closure fails with ClientClosedError. Message and resource caches are not updated.
      * Percent-encoded unreserved letters cannot bypass the reserved /v1 prefix or token-webhook route checks, which remain case-sensitive.

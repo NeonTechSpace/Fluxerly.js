@@ -91,7 +91,7 @@ export function createQuietClient(token: string) {
 
 The `silent` level turns a category or the whole client off, including application errors that have no `onError` hook and unsafe payload records
 
-To change levels while the bot runs, for example to investigate a problem without a restart, pass new `level` and `categories` settings to `client.logging.configure`. Omitted settings return to their defaults, and the other `logging` settings stay as the client was created
+To change levels while the bot runs, for example to investigate a problem without a restart, pass new `level` and `categories` settings to `client.logging.configure`. Omitted `level` and `categories` return to their defaults. A `debug` setting there replaces the current Debug categories, as described in [Turn on debug output without changing code](/docs/{{version}}/logging/#turn-on-debug-output-without-changing-code), and an omitted one keeps them. The other `logging` settings stay as the client was created
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -110,6 +110,16 @@ FLUXERLY_DEBUG=rest,ratelimit node bot.js
 ```
 
 The `debug` option does the same from code, with `true` or a list of categories. Debug settings only lower a threshold, so `level: "silent"` with `FLUXERLY_DEBUG=rest` still prints REST Debug records
+
+To change Debug output while the bot runs, pass `debug` to `client.logging.configure`. It replaces the categories chosen at creation, including those from `FLUXERLY_DEBUG`, and `debug: false` turns them all off
+
+```ts
+import type { Client } from "@neontechspace/fluxerly"
+
+export function stopDebugOutput(client: Client) {
+    client.logging.configure({ debug: false })
+}
+```
 
 ## Handle failures in one place
 
@@ -201,7 +211,7 @@ A sink runs synchronously and its return value is ignored. A sink that throws or
 
 ## Collapse repeated errors
 
-Identical Warn, Error and Fatal records within one minute are printed once. The next identical record after the window says how many were hidden, as in `(repeated 12× since last shown)`, and shutdown prints any remainder. A sink finds that count in `fields.repeated`. Change the window with `dedupe: { windowMs: 10_000 }` or turn collapsing off with `dedupe: false`. Counters in `diagnostics().counters` still include every occurrence
+Identical Warn, Error and Fatal records within one minute are printed once. Records about different shards or subscriptions are not identical, so each one's first occurrence is printed. The next identical record after the window says how many were hidden, as in `(repeated 12× since last shown)`, and shutdown prints any remainder. A sink finds that count in `fields.repeated`. Change the window with `dedupe: { windowMs: 10_000 }` or turn collapsing off with `dedupe: false`. Counters in `diagnostics().counters` still include every occurrence
 
 ## Count what happened
 

@@ -62,8 +62,9 @@ for (const mode of modes) {
         expect(await outcome(client.members.setRoles(target, []))).toHaveProperty("value")
         expect(await outcome(client.members.setNickname(target, "Fixture"))).toHaveProperty("value")
         const queued = outcome(client.members.setRoles(target, [], { timeoutMs: 100 }))
-        await vi.advanceTimersByTimeAsync(110)
-        expect(await queued).toMatchObject({ error: { reason: "timeout", outcome: "notDispatched" } })
+        expect(await queued).toMatchObject({
+            error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 1_000 },
+        })
         expect(calls).toBe(3)
     })
     test(`${mode}: learned sharing blocks a different operation on the same resource`, async () => {
@@ -75,8 +76,9 @@ for (const mode of modes) {
         await outcome(client.messages.delete(target))
         await outcome(client.messages.typing("20"))
         const queued = outcome(client.messages.delete(target, { timeoutMs: 100 }))
-        await vi.advanceTimersByTimeAsync(110)
-        expect(await queued).toMatchObject({ error: { reason: "timeout", outcome: "notDispatched" } })
+        expect(await queued).toMatchObject({
+            error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 1_000 },
+        })
         expect(calls).toBe(3)
         await vi.advanceTimersByTimeAsync(1000)
         expect(await outcome(client.messages.delete(target))).toEqual({ value: undefined })
@@ -147,6 +149,33 @@ for (const mode of modes) {
         expect(calls).toHaveLength(6)
         expect(await third).toEqual({ value: undefined })
         expect(calls.slice(3).map((call) => call.split(" ", 1)[0])).toEqual(["DELETE", "POST", "DELETE"])
+    })
+
+    // The probe's answer can reopen the bucket before its full reset, so failing at once would refuse a request in time
+    test(`${mode}: a request behind a refill probe waits for its answer though the full reset passes its deadline`, async () => {
+        const client = await setup(mode)
+        let calls = 0
+        let answerProbe!: (response: Response) => void
+        stubFetchWithHostedDiscovery(async () => {
+            if (++calls === 4)
+                return new Promise<Response>((resolve) => {
+                    answerProbe = resolve
+                })
+            return limited("channel:typing::channel_id", calls < 3 ? 3 - calls : 0, { limit: 4, resetAfter: 4 })
+        })
+        for (let index = 0; index < 3; index++)
+            expect(await outcome(client.messages.typing("20"))).toHaveProperty("value")
+        // The depleted bucket admits one refill probe after a quarter of its four second reset
+        const probe = outcome(client.messages.typing("20"))
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(calls).toBe(4)
+        // The full reset is three seconds away, past this two second deadline
+        const queued = outcome(client.messages.typing("20", { timeoutMs: 2_000 }))
+        await hostTurnsUntil(() => client.diagnostics().rest.queuedRequests === 1)
+        answerProbe(limited("channel:typing::channel_id", 1, { limit: 4, resetAfter: 3 }))
+        expect(await probe).toEqual({ value: undefined })
+        expect(await queued).toEqual({ value: undefined })
+        expect(calls).toBe(5)
     })
 
     test(`${mode}: a precise 429 body schedules the route retry before its rounded header`, async () => {
@@ -274,7 +303,9 @@ for (const mode of modes) {
             await hostTurnsUntil(() => otherChannelSettled || api.queued() === 2)
             await vi.advanceTimersByTimeAsync(100)
 
-            expect(await sameChannel).toMatchObject({ error: { reason: "timeout", outcome: "notDispatched" } })
+            expect(await sameChannel).toMatchObject({
+                error: { reason: "rateLimit", outcome: "notDispatched", retryAfterMs: 1_000 },
+            })
             expect(await otherChannel).toHaveProperty("value")
             expect(responses.requests().map((request) => request.path.split("/")[2])).toEqual(["20", "21", "20", "21"])
             if (operation === "follow")
