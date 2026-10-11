@@ -104,6 +104,8 @@ The size of a release decides whether Stable needs an RC first:
 - **Big release:** A new major version, which is a breaking change, or a new epoch.
   It must be published as an RC first. Stable then promotes that RC from an RC source version with no pending notes
 
+A maintainer decides when a published RC is ready to become Stable. There is no fixed waiting period
+
 A pending RC is the newest published RC above the newest published Stable.
 While one exists, the only Stable at or above its version that can be published is the RC's own version.
 Stables below it stay free, such as a fix on an older line.
