@@ -10,7 +10,7 @@ outside this comment, replacing the placeholders with actual values:
 > This was posted by (model + reasoning) on behalf of (username)
 
 Human-edited text and human-written text do not require the note, even when a
-model posts them. Model use must still be disclosed in "Models used"
+model posts them. Model use is disclosed in "Models used" as described there
 -->
 
 ## Problem
@@ -93,11 +93,13 @@ Remove this section if there is nothing additional to flag
 ## Models used
 
 <!--
-Identify every model used for the contribution, its role, and reasoning setting
-where known. State when a reasoning setting is unknown
-This includes implementation, tests, review, and prose, even if edited by a human
-If no models were used, state "None"
+Required without general vouch status, optional for vouched contributors and maintainers
+Use one line per main model from /.github/contribution-policy.json, with its
+exact version, reasoning setting, and harness. "unknown" reasoning is not accepted
+Do not list subagents. If no model was used, replace the line with None
 -->
+
+- Model: (model id) | Reasoning: (setting) | Harness: (harness)
 
 ## Contributor confirmation
 
@@ -110,3 +112,5 @@ verification, and engage with review findings
 - [ ] The final diff has been reviewed for unintended changes and unrelated work
 - [ ] Verification results reflect checks actually performed, with limits stated
 - [ ] Code, logs, and attachments have been checked for credentials and private data
+
+<!-- This is volunteer work. Be patient during the review process -->

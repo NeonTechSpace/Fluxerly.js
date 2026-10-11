@@ -9,6 +9,9 @@ const trustPath = ".github/VOUCHED.json"
 const policyPath = ".github/contribution-policy.json"
 const permissionMarker = "<!-- fluxerly-contribution-permissions:v1 -->"
 const outcomeMarker = "<!-- fluxerly-contribution-permission-result:v1 -->"
+const modelMarker = "<!-- fluxerly-contribution-model-result:v1 -->"
+const modelEvents = ["opened", "reopened", "edited", "synchronize", "ready_for_review"]
+const overrideLabel = "keep-open"
 const managedPrLabels = ["vouch:trusted", "vouch:unvouched", "permission:issue"]
 const loginPattern = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38})(?:\[bot\])?$/
 
@@ -100,6 +103,30 @@ function validateTrust(trust) {
     return trust
 }
 
+function validDate(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+    const date = new Date(`${value}T00:00:00Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+const normalizeModel = (value) => value.trim().toLowerCase().replace(/[\s_-]+/g, "-")
+
+function validateModels(models) {
+    if (!Array.isArray(models) || models.length === 0) throw new Error("Allowed model list is malformed")
+    for (const model of models) {
+        if (
+            (model?.aliases !== undefined && !Array.isArray(model.aliases)) ||
+            ![model?.id, model?.name, ...(model?.aliases ?? [])].every(
+                (name) => typeof name === "string" && normalizeModel(name),
+            ) ||
+            (model.allowedUntil !== undefined && !validDate(model.allowedUntil))
+        ) {
+            throw new Error("Allowed model list is malformed")
+        }
+    }
+    return models
+}
+
 async function loadPolicy(api) {
     const repo = await api.request("GET", base)
     if (repo?.full_name !== repository || repo.default_branch !== "main") {
@@ -125,6 +152,7 @@ async function loadPolicy(api) {
     ) {
         throw new Error("Contribution policy is malformed")
     }
+    validateModels(policy.allowedModels)
     const trustFile = await api.request("GET", `${base}/contents/${trustPath}?ref=${sha}`)
     return { policy, trust: validateTrust(decodeFile(trustFile)), trustFile, sha }
 }
@@ -136,10 +164,10 @@ export function parseCommand(body) {
     return match ? { name: match[1], login: match[2] } : undefined
 }
 
-export function linkedIssues(body) {
-    // Examples, quoted text and hidden template instructions do not authorize a submission
+function visibleLines(body) {
+    // Examples, quoted text and hidden template instructions do not authorize or declare anything
     const text = String(body ?? "").replace(/<!--[\s\S]*?(?:-->|$)/g, "")
-    const numbers = new Set()
+    const lines = []
     let fence
     for (const line of text.split(/\r?\n/)) {
         const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
@@ -153,6 +181,14 @@ export function linkedIssues(body) {
             continue
         }
         if (/^(?: {4}| *\t| {0,3}>)/.test(line)) continue
+        lines.push(line)
+    }
+    return lines
+}
+
+export function linkedIssues(body) {
+    const numbers = new Set()
+    for (const line of visibleLines(body)) {
         const match =
             /^ {0,3}(?:Issue|Fixes|Closes|Resolves):?\s+(?:#([1-9]\d*)|https:\/\/github\.com\/NeonTechSpace\/Fluxerly\.js\/issues\/([1-9]\d*))\s*$/i.exec(
                 line,
@@ -163,6 +199,60 @@ export function linkedIssues(body) {
         }
     }
     return [...numbers]
+}
+
+// Reads "## Models used" in PR bodies and "### Models used" in issue form output
+export function parseModels(body) {
+    const lines = visibleLines(body)
+    const start = lines.findIndex((line) => /^ {0,3}#{2,3}[ \t]+Models used[ \t]*$/i.test(line))
+    if (start < 0) return { error: "missing" }
+    const section = []
+    for (const line of lines.slice(start + 1)) {
+        if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(line)) break
+        if (line.trim() && line.trim() !== "_No response_") section.push(line.trim())
+    }
+    if (section.length === 0) return { error: "missing" }
+    if (section.length === 1 && /^(?:[-*+][ \t]+)?None$/i.test(section[0])) return { models: [] }
+    const models = []
+    for (const line of section) {
+        const match = /^[-*+][ \t]+Model:[ \t]*(.*?)[ \t]*\|[ \t]*Reasoning:[ \t]*(.*?)[ \t]*\|[ \t]*Harness:[ \t]*(.*)$/i.exec(
+            line,
+        )
+        const values = match?.slice(1) ?? []
+        // Unfilled template placeholders such as (model id) do not declare anything
+        if (!match || values.some((value) => !value || /^\(.*\)$/.test(value)) || /^unknown$/i.test(values[1])) {
+            return { error: "malformed" }
+        }
+        models.push({ model: values[0], reasoning: values[1], harness: values[2] })
+    }
+    return { models }
+}
+
+function hasOverride(item) {
+    return Array.isArray(item.labels) && item.labels.some((label) => label?.name === overrideLabel)
+}
+
+function modelProblem(item, policy, trusted, today) {
+    if (trusted || hasOverride(item)) return undefined
+    const parsed = parseModels(item.body)
+    if (parsed.error) return parsed.error
+    const accepted = policy.allowedModels
+        .filter((model) => !model.allowedUntil || model.allowedUntil >= today)
+        .flatMap((model) => [model.id, model.name, ...(model.aliases ?? [])].map(normalizeModel))
+    return parsed.models.every((entry) => accepted.includes(normalizeModel(entry.model))) ? undefined : "not allowed"
+}
+
+function modelComment(kind) {
+    return `${modelMarker}\nThis ${kind} needs a "Models used" section, because its author does not have general vouch status. The section is missing or malformed, or names a model that is not in the allowed model list\n\nUse one line per main model in the form \`- Model: (model id) | Reasoning: (setting) | Harness: (harness)\`, or write \`None\` if no model was used. Edit the ${kind} to correct the section, and it reopens automatically\n\nSee [disclose models used](https://github.com/${repository}/blob/main/docs/CONTRIBUTING.md#disclose-models-used)`
+}
+
+function generallyTrusted(user, policy, trust) {
+    const author = userRecord(user)
+    return (
+        policy.maintainerIds.includes(author.id) ||
+        policy.automationIds.includes(author.id) ||
+        trust.users.some((record) => record.id === author.id)
+    )
 }
 
 function readGrants(comments, policy) {
@@ -234,12 +324,7 @@ async function syncLabels(api, number, managed, wanted, dryRun, log) {
 
 async function decide(api, pr, policy, trust) {
     const author = userRecord(pr.user)
-    if (
-        policy.maintainerIds.includes(author.id) ||
-        policy.automationIds.includes(author.id) ||
-        trust.users.some((user) => user.id === author.id)
-    )
-        return { allowed: true, trusted: true }
+    if (generallyTrusted(author, policy, trust)) return { allowed: true, trusted: true }
     for (const number of linkedIssues(pr.body)) {
         const issue = await optionalGet(api, `${base}/issues/${number}`)
         if (!issue) continue
@@ -252,14 +337,30 @@ async function decide(api, pr, policy, trust) {
     return { allowed: false, trusted: false }
 }
 
-async function checkPr(api, number, dryRun, log) {
+async function closeWithComment(api, number, body, path, closure, policy, dryRun, log) {
+    const comments = await api.list(`${base}/issues/${number}/comments?per_page=100`)
+    if (!comments.some((comment) => comment.user?.id === policy.permissionWriterId && comment.body === body)) {
+        await change(api, dryRun, "POST", `${base}/issues/${number}/comments`, { body }, log)
+    }
+    await change(api, dryRun, "PATCH", path, closure, log)
+}
+
+function prProblem(pr, decision, policy, models, today) {
+    if (hasOverride(pr)) return undefined
+    if (!decision.allowed) return "permission"
+    return models ? modelProblem(pr, policy, decision.trusted, today) : undefined
+}
+
+// Models are checked only for the PR's own events, so a model list change cannot close existing work
+async function checkPr(api, number, dryRun, log, { models = false, today } = {}) {
     let { policy, trust } = await loadPolicy(api)
     if (!policy.enabled) return
     let pr = await api.request("GET", `${base}/pulls/${number}`)
     if (pr.state !== "open") return
     let decision = await decide(api, pr, policy, trust)
-    if (!decision.allowed) {
-        // Re-evaluate immediately before a closure if the body, head or trusted revision changed
+    let problem = prProblem(pr, decision, policy, models, today)
+    if (problem) {
+        // Re-evaluate immediately before a closure if the body, head, labels or trusted revision changed
         const latest = await api.request("GET", `${base}/pulls/${number}`)
         const trusted = await loadPolicy(api)
         if (!trusted.policy.enabled) return
@@ -267,21 +368,87 @@ async function checkPr(api, number, dryRun, log) {
         if (latest.state !== "open") return
         pr = latest
         decision = await decide(api, pr, trusted.policy, trusted.trust)
+        problem = prProblem(pr, decision, policy, models, today)
     }
     const labels = decision.trusted
         ? ["vouch:trusted"]
         : ["vouch:unvouched", ...(decision.issue ? ["permission:issue"] : [])]
     await syncLabels(api, number, managedPrLabels, labels, dryRun, log)
     log(
-        `PR #${number}: ${decision.allowed ? (decision.trusted ? "general permission" : "issue-specific permission") : "missing permission"}`,
+        `PR #${number}: ${decision.allowed ? (decision.trusted ? "general permission" : "issue-specific permission") : "missing permission"}${problem && problem !== "permission" ? `, models used ${problem}` : ""}${hasOverride(pr) ? `, kept open by ${overrideLabel}` : ""}`,
     )
-    if (decision.allowed) return
+    if (!problem) return
+    const body =
+        problem === "permission"
+            ? `${outcomeMarker}\nThis PR has no verified contribution permission. General vouch status or a maintainer grant to this author for a linked, open issue is required\n\nFor issue-specific permission, include a line such as \`Issue: #123\` or \`Issue: https://github.com/${repository}/issues/123\` in the PR body. After receiving permission, edit the PR body so it includes the issue reference, and the PR reopens automatically\n\nSee [permission to submit a PR](https://github.com/${repository}/blob/main/docs/CONTRIBUTING.md#permission-to-submit-a-pr). Permission does not approve feature scope or merging`
+            : modelComment("PR")
+    await closeWithComment(api, number, body, `${base}/pulls/${number}`, { state: "closed" }, policy, dryRun, log)
+}
+
+// Authors without write access cannot reopen what the workflow closed, so a corrected edit reopens it.
+// Only items whose latest closure came from this workflow are reopened, never a maintainer's own closure
+async function reopenCorrected(api, number, pullRequest, dryRun, log, today) {
+    const { policy, trust } = await loadPolicy(api)
+    if (!policy.enabled) return false
+    const issue = await api.request("GET", `${base}/issues/${number}`)
+    verifyIssue(issue, number)
+    if (issue.state !== "closed" || !!issue.pull_request !== pullRequest) return false
+    if (issue.closed_by?.id !== policy.permissionWriterId) return false
     const comments = await api.list(`${base}/issues/${number}/comments?per_page=100`)
-    const body = `${outcomeMarker}\nThis PR has no verified contribution permission. General vouch status or a maintainer grant to this author for a linked, open issue is required\n\nFor issue-specific permission, include a line such as \`Issue: #123\` or \`Issue: https://github.com/${repository}/issues/123\` in the PR body. Reopen the PR after correcting the issue reference and receiving permission\n\nSee [permission to submit a PR](https://github.com/${repository}/blob/main/docs/CONTRIBUTING.md#permission-to-submit-a-pr). Permission does not approve feature scope or merging`
-    if (!comments.some((comment) => comment.user?.id === policy.permissionWriterId && comment.body === body)) {
-        await change(api, dryRun, "POST", `${base}/issues/${number}/comments`, { body }, log)
+    const explained = comments.some(
+        (comment) =>
+            comment.user?.id === policy.permissionWriterId &&
+            [outcomeMarker, modelMarker].some((marker) => String(comment.body ?? "").startsWith(marker)),
+    )
+    if (!explained) return false
+    if (pullRequest) {
+        const pr = await api.request("GET", `${base}/pulls/${number}`)
+        if (pr.state !== "closed" || pr.merged_at) return false
+        if (prProblem(pr, await decide(api, pr, policy, trust), policy, true, today)) return false
+    } else if (modelProblem(issue, policy, generallyTrusted(issue.user, policy, trust), today)) {
+        return false
     }
-    await change(api, dryRun, "PATCH", `${base}/pulls/${number}`, { state: "closed" }, log)
+    const kind = pullRequest ? "PR" : "Issue"
+    try {
+        await change(api, dryRun, "PATCH", `${base}/${pullRequest ? "pulls" : "issues"}/${number}`, { state: "open" }, log)
+    } catch (error) {
+        // GitHub refuses to reopen a PR whose branch was deleted or force-pushed after the closure
+        if (!(error instanceof GitHubError) || error.status !== 422) throw error
+        log(`${kind} #${number}: corrected, but GitHub refused to reopen it`)
+        return false
+    }
+    log(`${kind} #${number}: corrected after an automatic closure, reopened`)
+    return true
+}
+
+// Returns whether the issue was closed, so the caller can refresh grants that depended on it being open
+async function checkIssue(api, number, dryRun, log, today) {
+    const { policy, trust } = await loadPolicy(api)
+    if (!policy.enabled) return false
+    const issue = await api.request("GET", `${base}/issues/${number}`)
+    verifyIssue(issue, number)
+    if (issue.pull_request || issue.state !== "open") return false
+    if (!modelProblem(issue, policy, generallyTrusted(issue.user, policy, trust), today)) return false
+    // Re-evaluate immediately before a closure if the body, labels or trusted revision changed
+    const latest = await api.request("GET", `${base}/issues/${number}`)
+    verifyIssue(latest, number)
+    const current = await loadPolicy(api)
+    if (!current.policy.enabled || latest.pull_request || latest.state !== "open") return false
+    const trusted = generallyTrusted(latest.user, current.policy, current.trust)
+    const problem = modelProblem(latest, current.policy, trusted, today)
+    if (!problem) return false
+    log(`Issue #${number}: models used ${problem}`)
+    await closeWithComment(
+        api,
+        number,
+        modelComment("issue"),
+        `${base}/issues/${number}`,
+        { state: "closed", state_reason: "not_planned" },
+        current.policy,
+        dryRun,
+        log,
+    )
+    return true
 }
 
 async function recheckOpen(api, dryRun, log) {
@@ -377,7 +544,15 @@ async function issueChange(api, event, command, current, dryRun, log) {
     if (!dryRun) await recheckOpen(api, false, log)
 }
 
-export async function runContributionEvent({ api, event, eventName, dryRun = false, prNumber, log = () => {} }) {
+export async function runContributionEvent({
+    api,
+    event,
+    eventName,
+    dryRun = false,
+    prNumber,
+    log = () => {},
+    today = new Date().toISOString().slice(0, 10),
+}) {
     if (event.repository?.full_name !== repository || event.repository?.id !== 1370449818) {
         throw new Error("Contribution event targets the wrong repository")
     }
@@ -388,7 +563,11 @@ export async function runContributionEvent({ api, event, eventName, dryRun = fal
     }
     if (eventName === "pull_request_target") {
         if (!numericId(event.pull_request?.number)) throw new Error("PR event number is invalid")
-        return await checkPr(api, event.pull_request.number, dryRun, log)
+        if (event.action === "edited") await reopenCorrected(api, event.pull_request.number, true, dryRun, log, today)
+        return await checkPr(api, event.pull_request.number, dryRun, log, {
+            models: modelEvents.includes(event.action),
+            today,
+        })
     }
     if (eventName === "issue_comment") {
         const command = parseCommand(event.comment?.body)
@@ -405,7 +584,7 @@ export async function runContributionEvent({ api, event, eventName, dryRun = fal
         }
         if (command.name === "recheck") {
             if (!event.issue.pull_request) return
-            return await checkPr(api, event.issue.number, dryRun, log)
+            return await checkPr(api, event.issue.number, dryRun, log, { models: true, today })
         }
         const current = await loadPolicy(api)
         if (!current.policy.enabled) return
@@ -420,6 +599,13 @@ export async function runContributionEvent({ api, event, eventName, dryRun = fal
     }
     if (eventName === "issues") {
         if (!numericId(event.issue?.number) || event.issue.pull_request) return
+        // A reopen by the workflow token starts no new run, so its grants are refreshed here
+        const reopened =
+            event.action === "edited" && (await reopenCorrected(api, event.issue.number, false, dryRun, log, today))
+        const closedByCheck =
+            ["opened", "edited", "reopened"].includes(event.action) &&
+            (await checkIssue(api, event.issue.number, dryRun, log, today))
+        if (!reopened && !closedByCheck && event.action !== "closed" && event.action !== "reopened") return
         const { policy } = await loadPolicy(api)
         if (!policy.enabled) return
         const issue = await api.request("GET", `${base}/issues/${event.issue.number}`)
@@ -440,7 +626,7 @@ export async function runContributionEvent({ api, event, eventName, dryRun = fal
         await loadPolicy(api)
         if (prNumber !== undefined) {
             if (!numericId(prNumber)) throw new Error("Requested PR number is invalid")
-            return await checkPr(api, prNumber, dryRun, log)
+            return await checkPr(api, prNumber, dryRun, log, { models: true, today })
         }
         return await recheckOpen(api, dryRun, log)
     }

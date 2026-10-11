@@ -6,7 +6,7 @@ on: # zizmor: ignore[dangerous-triggers]
   issue_comment:
     types: [created]
   issues:
-    types: [closed, reopened]
+    types: [opened, edited, closed, reopened]
   push:
     branches: [main]
     paths:

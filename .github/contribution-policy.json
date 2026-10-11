@@ -9,5 +9,11 @@
   "commitIdentity": {
     "name": "Neonsy",
     "email": "118444485+Neonsy@users.noreply.github.com"
-  }
+  },
+  "allowedModels": [
+    { "id": "claude-fable-5-1", "name": "Claude Fable 5.1", "aliases": ["Fable 5.1"] },
+    { "id": "claude-opus-5-5", "name": "Claude Opus 5.5", "aliases": ["Opus 5.5"] },
+    { "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "aliases": ["Sonnet 5.5"] },
+    { "id": "gpt-6.1-sol", "name": "GPT-6.1 Sol" }
+  ]
 }

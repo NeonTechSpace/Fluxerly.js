@@ -8,6 +8,9 @@ for opening contributions at that release, without opening access now
 
 ## Read this first
 
+Fluxerly.js is provided as is and maintained in spare time. Work happens when
+time allows, with no schedule or guarantee for fixes, features, or replies
+
 Review capacity is limited. Opening an issue, discussion, or PR does not create
 an obligation to review, implement, or merge it
 
@@ -17,6 +20,18 @@ opinionated rewrites, and unrelated cleanup are not
 
 Establish the problem before investing in an implementation. Acceptance of a
 problem does not automatically approve a proposed solution
+
+## Community standards
+
+Respectful, constructive contributions are welcome. The following are not:
+
+- Demanding features, fixes, or replies
+- Rude, dismissive, or condescending language
+- Treating maintainers like paid support
+- Shaming anyone for mistakes or decisions
+
+Maintainers may hide comments, lock threads, or block accounts for this behavior
+without prior warning
 
 ## Report the right thing in the right place
 
@@ -61,8 +76,13 @@ General vouch status permits PR submission. It does not approve new features,
 exempt a contribution from review, or guarantee acceptance
 
 PRs without the required permission are closed with an explanation of the
-missing permission or issue reference. Permission to submit a PR does not change
-the maintainer-only policy before the first Stable release
+missing permission or issue reference. After receiving permission, edit the PR
+body so it includes the issue reference, and the PR reopens automatically.
+Permission to submit a PR does not change the maintainer-only policy before the
+first Stable release
+
+GitHub cannot reopen a PR whose branch was deleted or force-pushed after it was
+closed. Open a new PR in that case
 
 ## Agree on feature scope first
 
@@ -138,12 +158,43 @@ and verification, and to engage with review findings
 
 Model output and model reviews do not establish correctness by themselves
 
+### Allowed models
+
+Contributors without general vouch status may use only the main models in the
+[allowed model list](/.github/contribution-policy.json) for PRs and issues. The
+main model is the one that did the work in a session. Subagents it starts are
+not restricted
+
+An allowed model is eligible, not automatically suitable for every change. A
+maintainer decides whether the depth and scope of a contribution fit the model
+used, and may ask for it to be rebuilt with another allowed model
+
+A model being replaced can stay accepted until a date recorded in the list, so
+work already in progress is not affected by the change
+
 ### Disclose models used
 
-If models were used for a PR, identify every model in its "Models used" section
-and describe its role. Include reasoning settings where known and state when a
-setting is unknown. This requirement applies even when generated code or text
-was edited by a human. If no models were used, state "None"
+Without general vouch status, every PR and issue needs a "Models used" section
+with one line per main model:
+
+```text
+- Model: (model id) | Reasoning: (setting) | Harness: (harness)
+```
+
+Use the exact model version, its reasoning setting, and the harness that ran it.
+A reasoning setting of "unknown" is not accepted. Do not list subagents. If no
+model was used, write `None`
+
+Vouched contributors and maintainers may include the section but are not
+required to
+
+A PR or issue from a contributor without general vouch status is closed
+automatically when the section is missing or malformed, or names a model that is
+not allowed. The closing comment explains the problem. Edit the PR or issue to
+correct the section, and it reopens automatically
+
+The check reads what the contributor declares and cannot confirm which model
+was used. An inaccurate declaration breaks this policy
 
 ### Identify model-written prose
 
@@ -161,7 +212,7 @@ the prose. State "reasoning unknown" when a setting is unavailable
 The note is not required when a human edited the generated text before
 publication, even if a model subsequently posts it. Posting human-written text
 through a model does not require the note either. These exceptions do not remove
-the PR's requirement to disclose models used
+the PR's requirement to disclose models used where it applies
 
 ## Review and reconsideration
 
@@ -169,9 +220,11 @@ Permission to submit a PR is separate from approval to merge it. A PR may be
 declined, deferred, or returned for a smaller scope or additional evidence.
 Meeting these guidelines does not guarantee review or merging
 
-If a PR is closed for missing permission, scope, or evidence, address the stated
-reason and request reconsideration. Do not repeatedly reopen it without resolving
-the problem
+If a PR is closed for missing permission, scope, evidence, or model disclosure,
+address the stated reason and request reconsideration. Do not repeatedly reopen
+it without resolving the problem
 
 Repository maintainers can find access preparation and command operation in
 [contribution administration](/docs/CONTRIBUTIONS.md)
+
+This is volunteer work. Be patient during the review process

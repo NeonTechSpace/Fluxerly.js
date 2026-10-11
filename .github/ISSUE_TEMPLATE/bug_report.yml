@@ -157,6 +157,14 @@ body:
     validations:
       required: false
   - type: textarea
+    id: models-used
+    attributes:
+      label: Models used
+      description: Required without general vouch status, optional for vouched contributors and maintainers. Use one line per main model from the [allowed model list](/.github/contribution-policy.json), with its exact version, reasoning setting, and harness. Do not list subagents. Write None if no model was used
+      placeholder: "- Model: (model id) | Reasoning: (setting) | Harness: (harness)"
+    validations:
+      required: false
+  - type: textarea
     id: prose-attribution
     attributes:
       label: Model-written prose note

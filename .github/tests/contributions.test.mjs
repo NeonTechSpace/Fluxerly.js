@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { GitHubError, linkedIssues, parseCommand, runContributionEvent } from "../scripts/contributions.mjs"
+import { GitHubError, linkedIssues, parseCommand, parseModels, runContributionEvent } from "../scripts/contributions.mjs"
 
 const repository = "NeonTechSpace/Fluxerly.js"
 const base = `repos/${repository}`
@@ -13,6 +13,8 @@ const nextSha = "b".repeat(40)
 const fileSha = "c".repeat(40)
 const repo = { full_name: repository, id: 1370449818, default_branch: "main" }
 const permissionMarker = "<!-- fluxerly-contribution-permissions:v1 -->"
+const modelMarker = "<!-- fluxerly-contribution-model-result:v1 -->"
+const allowedLine = "- Model: example-model-1 | Reasoning: high | Harness: example-cli"
 const clone = (value) => structuredClone(value)
 const file = (value) => ({
     sha: fileSha,
@@ -26,6 +28,7 @@ const grantComment = (grants, user = writer) => ({
     body: `${permissionMarker}\n\`\`\`json\n${JSON.stringify({ version: 1, grants }, null, 2)}\n\`\`\``,
 })
 const issue = (number = 42) => ({ number, state: "open", url: `https://api.github.com/${base}/issues/${number}` })
+const issuePath = new RegExp(`^${base.replaceAll(".", "\\.")}/issues/(\\d+)$`)
 
 // The fake models GitHub's external state, including writes and fresh reads, rather than internal helpers
 function fixture() {
@@ -39,6 +42,10 @@ function fixture() {
             automationIds: [writer.id, 49699333],
             permissionWriterId: writer.id,
             commitIdentity: { name: "Neonsy", email: "118444485+Neonsy@users.noreply.github.com" },
+            allowedModels: [
+                { id: "example-model-1", name: "Example Model 1", aliases: ["Model One"] },
+                { id: "example-model-0", name: "Example Model 0", allowedUntil: "2026-10-11" },
+            ],
         },
         trust: { version: 1, users: [] },
         sha: mainSha,
@@ -71,12 +78,16 @@ function fixture() {
                     const ref = path.split("?ref=")[1]
                     return clone(state.branchFiles.get(ref) ?? file(state.trust))
                 }
-                if (path === `${base}/pulls/81`) return clone(state.pr)
-                const issueMatch = new RegExp(`^${base.replaceAll(".", "\\.")}/issues/(\\d+)$`).exec(path)
+                // Like GitHub, PR and issue reads include their current labels
+                if (path === `${base}/pulls/81`) return clone({ ...state.pr, labels: state.labels.get(81) ?? [] })
+                const issueMatch = issuePath.exec(path)
+                // The issues API also serves PRs
+                if (issueMatch?.[1] === "81" && !state.issues.has(81))
+                    return clone({ ...issue(81), ...state.pr, pull_request: {}, labels: state.labels.get(81) ?? [] })
                 if (issueMatch) {
                     const found = state.issues.get(Number(issueMatch[1]))
                     if (!found) throw new GitHubError(404)
-                    return clone(found)
+                    return clone({ ...found, labels: state.labels.get(found.number) ?? [] })
                 }
                 if (path.startsWith(`${base}/issues/comments/`)) {
                     const comment = state.commands.get(Number(path.split("/").at(-1)))
@@ -110,9 +121,17 @@ function fixture() {
                     state.changePrs.push({ ...clone(body), number: 82 })
                     return { number: 82 }
                 }
+                // Every write comes from the workflow token, so its closures name the writer
+                const closer = body?.state === "closed" ? { closed_by: writer } : {}
                 if (method === "PATCH" && path === `${base}/pulls/81`) {
-                    Object.assign(state.pr, clone(body))
+                    Object.assign(state.pr, clone(body), closer)
                     return clone(state.pr)
+                }
+                const issuePatch = issuePath.exec(path)
+                if (method === "PATCH" && issuePatch) {
+                    const found = state.issues.get(Number(issuePatch[1]))
+                    Object.assign(found, clone(body), closer)
+                    return clone(found)
                 }
                 const commentPost = /\/issues\/(\d+)\/comments$/.exec(path)
                 if (method === "POST" && commentPost) {
@@ -500,7 +519,11 @@ test("closing the source issue removes its invitation label and rechecks existin
     f.state.comments.set(42, [grantComment([grant(contributor)])])
     f.state.labels.set(42, [{ name: "pr:allowed" }])
     f.state.labels.set(81, [{ name: "vouch:unvouched" }, { name: "permission:issue" }])
-    await runContributionEvent({ api: f.api, event: { repository: repo, issue: issue() }, eventName: "issues" })
+    await runContributionEvent({
+        api: f.api,
+        event: { repository: repo, action: "closed", issue: issue() },
+        eventName: "issues",
+    })
     assert.equal(f.state.pr.state, "closed")
     assert.deepEqual(f.state.labels.get(42), [])
     assert.deepEqual(labels(f.state), ["vouch:unvouched"])
@@ -629,7 +652,7 @@ test("the disabled preparation policy makes all supported event paths read-only"
         await runContributionEvent({
             api: f.api,
             eventName,
-            event: { repository: repo, pull_request: { number: 81 }, issue: issue(), comment },
+            event: { repository: repo, action: "reopened", pull_request: { number: 81 }, issue: issue(), comment },
         })
         assert.deepEqual(f.state.writes, [], eventName)
         assert.equal(f.state.pr.state, "open", eventName)
@@ -647,8 +670,355 @@ test("freshly disabled command and issue policies prevent mutation after the ini
             if (path === `${base}/git/ref/heads/main` && ++mainReads === 2) f.state.policy.enabled = false
         }
         if (eventName === "issue_comment") await f.command(`/vouch @${contributor.login}`)
-        else await runContributionEvent({ api: f.api, event: { repository: repo, issue: issue() }, eventName })
+        else
+            await runContributionEvent({
+                api: f.api,
+                event: { repository: repo, action: "closed", issue: issue() },
+                eventName,
+            })
         assert.deepEqual(f.state.writes, [], eventName)
         assert.deepEqual(f.state.changePrs, [], eventName)
     }
+})
+
+const prEvent = (action) => ({ repository: repo, action, pull_request: { number: 81 } })
+const modelComments = (state, number) =>
+    (state.comments.get(number) ?? []).filter((comment) => comment.body.startsWith(modelMarker))
+const grantedPr = (f, section) => {
+    f.state.pr.body = `Issue: #42\n\n${section}`
+    f.state.comments.set(42, [grantComment([grant(contributor)])])
+}
+const models = (...lines) => `## Models used\n\n${lines.join("\n")}`
+const issueEvent = (f, action, number = 50, options = {}) =>
+    runContributionEvent({
+        api: f.api,
+        event: { repository: repo, action, issue: { number } },
+        eventName: "issues",
+        ...options,
+    })
+const authoredIssue = (f, body, user = contributor, number = 50) =>
+    f.state.issues.set(number, { ...issue(number), user, body })
+
+test("model declarations need visible, filled lines with a known reasoning setting", () => {
+    const parsed = parseModels(
+        `${models(allowedLine, "* Model: Model One | Reasoning: low | Harness: other")}\n\n## Contributor confirmation\n\n- unrelated`,
+    )
+    assert.deepEqual(
+        parsed.models.map((entry) => entry.model),
+        ["example-model-1", "Model One"],
+    )
+    assert.deepEqual(parseModels("### Models used\n\nNone"), { models: [] })
+    assert.deepEqual(parseModels(models("- None")), { models: [] })
+    for (const [body, error] of [
+        ["## Change\n\nText", "missing"],
+        ["### Models used\n\n_No response_\n\n### Prose attribution", "missing"],
+        [models(`<!--\n${allowedLine}\n-->`), "missing"],
+        [models("```text", allowedLine, "```"), "missing"],
+        [`> ## Models used\n> ${allowedLine}`, "missing"],
+        [models("- Model: (model id) | Reasoning: (setting) | Harness: (harness)"), "malformed"],
+        [models("- Model: example-model-1 | Reasoning: Unknown | Harness: example-cli"), "malformed"],
+        [models("- Model: example-model-1 | Reasoning: high"), "malformed"],
+        [models("Model: example-model-1 | Reasoning: high | Harness: example-cli"), "malformed"],
+        [models("None", allowedLine), "malformed"],
+    ]) {
+        assert.equal(parseModels(body).error, error, body)
+    }
+})
+
+test("an unvouched PR's own event closes a missing, malformed, or unlisted model declaration", async () => {
+    for (const section of [
+        "",
+        models("- Model: (model id) | Reasoning: (setting) | Harness: (harness)"),
+        models(allowedLine, "- Model: unlisted-model | Reasoning: high | Harness: example-cli"),
+    ]) {
+        const f = fixture()
+        grantedPr(f, section)
+        await f.check({ event: prEvent("opened") })
+        assert.equal(f.state.pr.state, "closed", section)
+        assert.deepEqual(labels(f.state), ["permission:issue", "vouch:unvouched"])
+        const comments = f.state.comments.get(81)
+        assert.equal(comments.length, 1)
+        assert.ok(comments[0].body.startsWith(modelMarker))
+        assert.ok(comments[0].body.includes("/docs/CONTRIBUTING.md#disclose-models-used"))
+        // Reopening without a correction closes again without repeating the explanation
+        f.state.pr.state = "open"
+        await f.check({ event: prEvent("reopened") })
+        assert.equal(closures(f.state).length, 2)
+        assert.equal(f.state.comments.get(81).length, 1)
+    }
+})
+
+test("allowed models match by id, name, or alias regardless of case and separators", async () => {
+    for (const declared of ["example-model-1", "Example Model 1", "model_one", "EXAMPLE MODEL-1"]) {
+        const f = fixture()
+        grantedPr(f, models(`- Model: ${declared} | Reasoning: high | Harness: example-cli`))
+        await f.check({ event: prEvent("edited") })
+        assert.equal(f.state.pr.state, "open", declared)
+        assert.deepEqual(modelComments(f.state, 81), [])
+    }
+    const f = fixture()
+    grantedPr(f, models("None"))
+    await f.check({ event: prEvent("synchronize") })
+    assert.equal(f.state.pr.state, "open")
+})
+
+test("a replaced model keeps passing through its allowedUntil date and fails after it", async () => {
+    for (const [today, state] of [
+        ["2026-10-11", "open"],
+        ["2026-10-12", "closed"],
+    ]) {
+        const f = fixture()
+        grantedPr(f, models("- Model: example-model-0 | Reasoning: high | Harness: example-cli"))
+        await f.check({ event: prEvent("ready_for_review"), today })
+        assert.equal(f.state.pr.state, state, today)
+    }
+})
+
+test("maintainers and vouched contributors need no model declaration", async () => {
+    for (const user of [owner, contributor]) {
+        const f = fixture()
+        f.state.trust.users = [contributor]
+        f.state.pr.user = user
+        await f.check({ event: prEvent("opened") })
+        assert.equal(f.state.pr.state, "open", user.login)
+        authoredIssue(f, "### Problem\n\nText", user)
+        await issueEvent(f, "opened")
+        assert.equal(f.state.issues.get(50).state, "open", user.login)
+        assert.deepEqual(modelComments(f.state, 50), [])
+    }
+})
+
+test("keep-open stops both the permission closure and the model closure", async () => {
+    for (const granted of [false, true]) {
+        const f = fixture()
+        if (granted) grantedPr(f, "")
+        f.state.labels.set(81, [{ name: "keep-open" }])
+        await f.check({ event: prEvent("opened") })
+        assert.equal(f.state.pr.state, "open")
+        assert.equal(f.state.comments.get(81), undefined)
+    }
+    const f = fixture()
+    authoredIssue(f, "### Problem\n\nText")
+    f.state.labels.set(50, [{ name: "keep-open" }])
+    await issueEvent(f, "opened")
+    assert.equal(f.state.issues.get(50).state, "open")
+    assert.deepEqual(f.state.writes, [])
+})
+
+test("a model list change never closes open PRs, while /recheck and a single-PR dispatch apply it", async () => {
+    const changed = () => {
+        const f = fixture()
+        grantedPr(f, models(allowedLine))
+        f.state.policy.allowedModels = [{ id: "example-model-2", name: "Example Model 2" }]
+        return f
+    }
+    for (const run of [
+        (f) => runContributionEvent({ api: f.api, event: { repository: repo }, eventName: "push" }),
+        (f) => runContributionEvent({ api: f.api, event: { repository: repo }, eventName: "workflow_dispatch" }),
+        (f) => f.check({ event: prEvent("converted_to_draft") }),
+        (f) => f.command(`/allow-pr @${stranger.login}`),
+    ]) {
+        const f = changed()
+        await run(f)
+        assert.equal(f.state.pr.state, "open")
+        assert.deepEqual(modelComments(f.state, 81), [])
+    }
+    for (const run of [
+        (f) => {
+            const comment = {
+                id: 900,
+                body: "/recheck",
+                user: contributor,
+                issue_url: `https://api.github.com/${base}/issues/81`,
+            }
+            f.state.commands.set(comment.id, clone(comment))
+            return runContributionEvent({
+                api: f.api,
+                event: { repository: repo, issue: { number: 81, pull_request: {} }, comment },
+                eventName: "issue_comment",
+            })
+        },
+        (f) =>
+            runContributionEvent({
+                api: f.api,
+                event: { repository: repo },
+                eventName: "workflow_dispatch",
+                prNumber: 81,
+            }),
+    ]) {
+        const f = changed()
+        await run(f)
+        assert.equal(f.state.pr.state, "closed")
+        assert.equal(modelComments(f.state, 81).length, 1)
+    }
+})
+
+for (const [name, allowedModels] of [
+    ["a missing", undefined],
+    ["an empty", []],
+    ["a nameless entry in the", [{ id: "example-model-1" }]],
+    ["a non-text alias in the", [{ id: "example-model-1", name: "Example Model 1", aliases: [1] }]],
+    ["an impossible date in the", [{ id: "example-model-1", name: "Example Model 1", allowedUntil: "2026-02-30" }]],
+]) {
+    test(`${name[0].toUpperCase() + name.slice(1)} model list fails the run without closing anything`, async () => {
+        for (const run of [
+            (f) => f.check({ event: prEvent("opened") }),
+            (f) => runContributionEvent({ api: f.api, event: { repository: repo }, eventName: "push" }),
+            (f) => issueEvent(f, "opened"),
+        ]) {
+            const f = fixture()
+            authoredIssue(f, "")
+            f.state.policy.allowedModels = allowedModels
+            await assert.rejects(run(f), /Allowed model list is malformed/)
+            assert.deepEqual(f.state.writes, [])
+        }
+    })
+}
+
+test("a declaration corrected or a keep-open label added during evaluation is reread before closing", async () => {
+    for (const late of [
+        (state) => (state.pr.body = `Issue: #42\n\n${models(allowedLine)}`),
+        (state) => state.labels.set(81, [{ name: "keep-open" }]),
+    ]) {
+        const f = fixture()
+        grantedPr(f, "")
+        let reads = 0
+        f.state.beforeRequest = ({ path, state }) => {
+            if (path === `${base}/pulls/81` && ++reads === 2) late(state)
+        }
+        await f.check({ event: prEvent("opened") })
+        assert.equal(f.state.pr.state, "open")
+        assert.deepEqual(modelComments(f.state, 81), [])
+    }
+    const f = fixture()
+    authoredIssue(f, "")
+    let reads = 0
+    f.state.beforeRequest = ({ path, state }) => {
+        if (path === `${base}/issues/50` && ++reads === 2) state.issues.get(50).body = models(allowedLine)
+    }
+    await issueEvent(f, "edited")
+    assert.equal(f.state.issues.get(50).state, "open")
+    assert.deepEqual(f.state.writes, [])
+})
+
+test("an unvouched issue is checked when opened, edited, or reopened, and not when closed", async () => {
+    for (const action of ["opened", "edited", "reopened"]) {
+        const f = fixture()
+        authoredIssue(f, "### Problem\n\nText\n\n### Models used\n\n_No response_")
+        await issueEvent(f, action)
+        assert.equal(f.state.issues.get(50).state, "closed", action)
+        assert.equal(f.state.issues.get(50).state_reason, "not_planned")
+        const comments = modelComments(f.state, 50)
+        assert.equal(comments.length, 1)
+        assert.ok(comments[0].body.includes("This issue needs"))
+    }
+    const valid = fixture()
+    authoredIssue(valid, `### Problem\n\nText\n\n### Models used\n\n${allowedLine}`)
+    await issueEvent(valid, "opened")
+    assert.equal(valid.state.issues.get(50).state, "open")
+    assert.deepEqual(valid.state.writes, [])
+    const closed = fixture()
+    authoredIssue(closed, "")
+    closed.state.issues.get(50).state = "closed"
+    await issueEvent(closed, "closed")
+    assert.deepEqual(modelComments(closed.state, 50), [])
+})
+
+test("closing an issue for its declaration withdraws grants that depended on it being open", async () => {
+    const f = fixture()
+    grantedPr(f, models(allowedLine))
+    authoredIssue(f, "", contributor, 42)
+    f.state.labels.set(42, [{ name: "pr:allowed" }])
+    await issueEvent(f, "edited", 42)
+    assert.equal(f.state.issues.get(42).state, "closed")
+    assert.deepEqual(f.state.labels.get(42), [])
+    assert.equal(f.state.pr.state, "closed")
+    assert.deepEqual(labels(f.state), ["vouch:unvouched"])
+})
+
+test("dry-run reports model closures without writing", async () => {
+    const f = fixture()
+    grantedPr(f, "")
+    authoredIssue(f, "")
+    const logged = []
+    const log = (line) => logged.push(line)
+    await f.check({ event: prEvent("opened"), dryRun: true, log })
+    await issueEvent(f, "opened", 50, { dryRun: true, log })
+    assert.deepEqual(f.state.writes, [])
+    assert.equal(f.state.pr.state, "open")
+    assert.equal(f.state.issues.get(50).state, "open")
+    assert.ok(logged.includes(`Would perform PATCH ${base}/pulls/81`))
+    assert.ok(logged.includes(`Would perform PATCH ${base}/issues/50`))
+})
+
+test("a corrected edit reopens what the workflow closed, since the author cannot reopen it", async () => {
+    const declared = fixture()
+    grantedPr(declared, "")
+    await declared.check({ event: prEvent("opened") })
+    assert.equal(declared.state.pr.state, "closed")
+    declared.state.pr.body = `Issue: #42\n\n${models(allowedLine)}`
+    await declared.check({ event: prEvent("edited") })
+    assert.equal(declared.state.pr.state, "open")
+    assert.deepEqual(labels(declared.state), ["permission:issue", "vouch:unvouched"])
+
+    const permitted = fixture()
+    await permitted.check({ event: prEvent("opened") })
+    assert.equal(permitted.state.pr.state, "closed")
+    grantedPr(permitted, models(allowedLine))
+    await permitted.check({ event: prEvent("edited") })
+    assert.equal(permitted.state.pr.state, "open")
+
+    const reported = fixture()
+    authoredIssue(reported, "")
+    await issueEvent(reported, "opened")
+    assert.equal(reported.state.issues.get(50).state, "closed")
+    reported.state.issues.get(50).body = models(allowedLine)
+    await issueEvent(reported, "edited")
+    assert.equal(reported.state.issues.get(50).state, "open")
+})
+
+test("an edit does not reopen a still failing item, a maintainer's closure, or a merged PR", async () => {
+    for (const setup of [
+        () => {},
+        (state) => (state.pr.closed_by = owner),
+        (state) => state.comments.set(81, []),
+        (state) => (state.pr.merged_at = "2026-10-11T00:00:00Z"),
+    ]) {
+        const f = fixture()
+        grantedPr(f, "")
+        await f.check({ event: prEvent("opened") })
+        if (setup.length) f.state.pr.body = `Issue: #42\n\n${models(allowedLine)}`
+        setup(f.state)
+        const writes = f.state.writes.length
+        await f.check({ event: prEvent("edited") })
+        assert.equal(f.state.pr.state, "closed", String(setup))
+        assert.equal(f.state.writes.length, writes, String(setup))
+    }
+})
+
+test("reopening a corrected issue restores the grants that its closure withdrew", async () => {
+    const f = fixture()
+    grantedPr(f, models(allowedLine))
+    authoredIssue(f, "", contributor, 42)
+    f.state.labels.set(42, [{ name: "pr:allowed" }])
+    await issueEvent(f, "edited", 42)
+    assert.deepEqual(f.state.labels.get(42), [])
+    f.state.issues.get(42).body = models(allowedLine)
+    await issueEvent(f, "edited", 42)
+    assert.equal(f.state.issues.get(42).state, "open")
+    assert.deepEqual(f.state.labels.get(42), [{ name: "pr:allowed" }])
+})
+
+test("a PR GitHub refuses to reopen is reported without failing the run", async () => {
+    const f = fixture()
+    grantedPr(f, "")
+    await f.check({ event: prEvent("opened") })
+    f.state.pr.body = `Issue: #42\n\n${models(allowedLine)}`
+    f.state.beforeRequest = ({ method, body }) => {
+        if (method === "PATCH" && body?.state === "open") throw new GitHubError(422)
+    }
+    const logged = []
+    await f.check({ event: prEvent("edited"), log: (line) => logged.push(line) })
+    assert.equal(f.state.pr.state, "closed")
+    assert.ok(logged.includes("PR #81: corrected, but GitHub refused to reopen it"))
 })

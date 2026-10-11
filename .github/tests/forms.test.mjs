@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import test from "node:test"
+import { parseModels } from "../scripts/contributions.mjs"
 
 // Reuse the workspace's pinned YAML parser without adding a tooling package
 const { parse } = createRequire(new URL("../../projects/release/package.json", import.meta.url))("yaml")
@@ -45,6 +46,22 @@ test("both issue forms require the agreed version scope first and allow optional
         assert.ok(upload, "Report evidence must have an upload field")
         assert.equal(upload.validations.required, false)
     }
+})
+
+test("issue forms and the PR template produce the section the model check reads", () => {
+    const line = "- Model: example-model-1 | Reasoning: high | Harness: example-cli"
+    for (const path of forms.slice(0, 2)) {
+        const field = parse(read(path)).body.find((entry) => entry.id === "models-used")
+        // GitHub cannot know vouch status, so the workflow enforces the field instead of the form
+        assert.equal(field.validations.required, false)
+        assert.equal(parseModels(`### ${field.attributes.label}\n\n${field.attributes.placeholder}`).error, "malformed")
+        assert.equal(parseModels(`### ${field.attributes.label}\n\n${line}`).models.length, 1)
+    }
+    const template = read(".github/pull_request_template.md")
+    assert.equal(parseModels(template).error, "malformed")
+    const filled = template.replace("- Model: (model id) | Reasoning: (setting) | Harness: (harness)", line)
+    assert.notEqual(filled, template)
+    assert.equal(parseModels(filled).models.length, 1)
 })
 
 test("issue routing reserves feature ideas and usage questions for the planned categories", () => {
