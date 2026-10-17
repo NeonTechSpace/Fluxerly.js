@@ -989,6 +989,8 @@ test.each(modes)(
                     2,
                 ),
             )
+            // A shutdown before a child handles READY can end its startup without a Closed report
+            await owner.waitForReady()
             await owner.shutdown()
             await owner.waitForClose()
             await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))
@@ -1176,6 +1178,8 @@ test.each(modes)(
             await realTimeUntil(() => fixture.identifies.length === 2)
             expect(fixture.identifies[1]).toEqual({ at: 5_000 + 250 + minimumSpacingMs, shardId: 1 })
             expect(fixture.malformedGatewayPackets).toEqual([])
+            // A shutdown before the healthy child handles READY can end its startup without a Closed report
+            await realTimeUntil(() => child("healthy").connectionState === "Connected")
             vi.useRealTimers()
             await owner.shutdown()
             await owner.waitForClose()

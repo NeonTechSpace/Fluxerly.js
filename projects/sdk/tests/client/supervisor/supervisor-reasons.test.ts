@@ -216,6 +216,40 @@ test.each(modes)(
     },
 )
 
+// A child exiting on its own can fail the stop request with EPIPE before its message channel reports the disconnect
+test.each(modes)(
+    "%s completes a shutdown whose stop request fails while the channel still looks open",
+    async (mode) => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+        const logs = captureLogs()
+        const child = scriptedChild({ failSend: "shutdown" })
+        const workers = await managed(mode, { shutdownTimeoutMs: 50, logging: logs.logging })
+        expect(await workers.start()).toBeUndefined()
+        const stopping = workers.shutdown()
+        await vi.advanceTimersByTimeAsync(50)
+        await stopping
+        expect(await workers.closed()).toBeUndefined()
+        expect(child.kills).toEqual(["SIGKILL"])
+        expect(logs.withCode("supervisor.spawnFailed")).toEqual([])
+        expect(workers.status()).toMatchObject({ state: "closed", children: [{ state: "closed" }] })
+    },
+)
+
+test.each(modes)("%s completes a shutdown at once when the child exits after its stop request failed", async (mode) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    const logs = captureLogs()
+    const child = scriptedChild({ failSend: "shutdown" })
+    const workers = await managed(mode, { shutdownTimeoutMs: 50, logging: logs.logging })
+    expect(await workers.start()).toBeUndefined()
+    const stopping = workers.shutdown()
+    await vi.advanceTimersByTimeAsync(0)
+    child.exit(0, null)
+    await stopping
+    expect(await workers.closed()).toBeUndefined()
+    expect(child.kills).toEqual([])
+    expect(logs.withCode("supervisor.spawnFailed")).toEqual([])
+})
+
 test.each(modes)("%s keeps the error of a failed message send to a child in its record", async (mode) => {
     const logs = captureLogs()
     scriptedChild({ failSend: "assignment" })
