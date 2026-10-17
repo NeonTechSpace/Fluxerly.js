@@ -1,9 +1,9 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "ec681e6061a5f72ca2e6cdd40c379d7cd0d31f3c",
+        "commit": "92321aa330e37a8419a0e616eabb0fad6c6e3890",
         "path": "fluxer_api/src/api/openapi/openapi.json",
-        "sha256": "b18f9e0c45af6bbe0a8f1724fb712c0570836d56bab4c6c75cd8c07ddcf9881d"
+        "sha256": "d630e587b8f9a4c2738d00b2f4a0d7d43d7e53223b2292bb00001ebe4154404e"
     },
     "factsSha256": "5bf75bdd8f429eca8e6a8e8c43440e0b0afbab72e1f0f8d899b038be6a7444bd",
     "schemas": {
@@ -217,6 +217,7 @@
                         "user_limit": 2147483647,
                         "voice_connection_limit": 2147483647,
                         "rtc_region": "rtc_region",
+                        "rtc_p2p": true,
                         "last_message_id": "289506316997399986",
                         "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                         "permission_overwrites": [
@@ -446,6 +447,7 @@
                         "user_limit": null,
                         "voice_connection_limit": null,
                         "rtc_region": null,
+                        "rtc_p2p": true,
                         "last_message_id": null,
                         "last_pin_timestamp": null,
                         "permission_overwrites": [
@@ -724,6 +726,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -957,6 +960,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -1071,6 +1075,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -1179,6 +1184,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -1287,6 +1293,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -1394,6 +1401,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -1506,6 +1514,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -1614,6 +1623,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -1722,6 +1732,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -1829,6 +1840,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -1941,6 +1953,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -2049,6 +2062,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -2161,6 +2175,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -2269,6 +2284,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -2395,6 +2411,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -2503,6 +2520,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -2629,6 +2647,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -2737,6 +2756,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -2864,6 +2884,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -2972,6 +2993,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -3084,6 +3106,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -3192,6 +3215,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -3304,6 +3328,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -3412,6 +3437,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -3524,6 +3550,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -3632,6 +3659,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -3740,6 +3768,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -3847,6 +3876,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -3975,6 +4005,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -4083,6 +4114,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -4209,6 +4241,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -4317,6 +4350,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -4444,6 +4478,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -4552,6 +4587,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -4680,6 +4716,7 @@
                     "user_limit": 2147483647,
                     "voice_connection_limit": 2147483647,
                     "rtc_region": "rtc_region",
+                    "rtc_p2p": true,
                     "last_message_id": "289506316997399986",
                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                     "permission_overwrites": [
@@ -4948,6 +4985,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -5100,6 +5138,7 @@
                     "user_limit": null,
                     "voice_connection_limit": null,
                     "rtc_region": null,
+                    "rtc_p2p": true,
                     "last_message_id": null,
                     "last_pin_timestamp": null,
                     "permission_overwrites": [
@@ -5247,6 +5286,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -5404,6 +5444,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -5580,6 +5621,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -5757,6 +5799,7 @@
                                 "user_limit": 2147483647,
                                 "voice_connection_limit": 2147483647,
                                 "rtc_region": "rtc_region",
+                                "rtc_p2p": true,
                                 "last_message_id": "289506316997399986",
                                 "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                                 "permission_overwrites": [
@@ -5938,6 +5981,7 @@
                                 "user_limit": null,
                                 "voice_connection_limit": null,
                                 "rtc_region": null,
+                                "rtc_p2p": true,
                                 "last_message_id": null,
                                 "last_pin_timestamp": null,
                                 "permission_overwrites": [
@@ -7337,6 +7381,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -7500,6 +7545,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -7663,6 +7709,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -7826,6 +7873,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -7989,6 +8037,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -8158,6 +8207,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -8321,6 +8371,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -8604,6 +8655,7 @@
                                 "user_limit": 2147483647,
                                 "voice_connection_limit": 2147483647,
                                 "rtc_region": "rtc_region",
+                                "rtc_p2p": true,
                                 "last_message_id": "289506316997399986",
                                 "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                                 "permission_overwrites": [
@@ -8715,6 +8767,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -8863,6 +8916,7 @@
                                 "user_limit": null,
                                 "voice_connection_limit": null,
                                 "rtc_region": null,
+                                "rtc_p2p": true,
                                 "last_message_id": null,
                                 "last_pin_timestamp": null,
                                 "permission_overwrites": [
@@ -8968,6 +9022,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -9073,6 +9128,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -9191,6 +9247,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -9309,6 +9366,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -9428,6 +9486,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -9556,6 +9615,7 @@
                             "user_limit": 2147483647,
                             "voice_connection_limit": 2147483647,
                             "rtc_region": "rtc_region",
+                            "rtc_p2p": true,
                             "last_message_id": "289506316997399986",
                             "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                             "permission_overwrites": [
@@ -9948,6 +10008,7 @@
                             "user_limit": null,
                             "voice_connection_limit": null,
                             "rtc_region": null,
+                            "rtc_p2p": true,
                             "last_message_id": null,
                             "last_pin_timestamp": null,
                             "permission_overwrites": [
@@ -10600,6 +10661,7 @@
                                     "user_limit": 2147483647,
                                     "voice_connection_limit": 2147483647,
                                     "rtc_region": "rtc_region",
+                                    "rtc_p2p": true,
                                     "last_message_id": "289506316997399986",
                                     "last_pin_timestamp": "2026-01-01T00:00:00.000Z",
                                     "permission_overwrites": [
@@ -10765,6 +10827,7 @@
                                     "user_limit": null,
                                     "voice_connection_limit": null,
                                     "rtc_region": null,
+                                    "rtc_p2p": true,
                                     "last_message_id": null,
                                     "last_pin_timestamp": null,
                                     "permission_overwrites": [
@@ -10907,6 +10970,7 @@
                 "user_limit": null,
                 "voice_connection_limit": null,
                 "rtc_region": null,
+                "rtc_p2p": true,
                 "last_message_id": null,
                 "last_pin_timestamp": null,
                 "permission_overwrites": [
@@ -11012,6 +11076,7 @@
                 "user_limit": null,
                 "voice_connection_limit": null,
                 "rtc_region": null,
+                "rtc_p2p": true,
                 "last_message_id": null,
                 "last_pin_timestamp": null,
                 "permission_overwrites": [

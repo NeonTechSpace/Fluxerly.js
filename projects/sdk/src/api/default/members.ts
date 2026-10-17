@@ -239,6 +239,9 @@ export interface Members {
      * The target.connectionId value selects one observed connection.
      * Omit it to move every active connection for that member.
      * Fluxer requires MoveMembers and checks hierarchy, destination visibility and permission to connect.
+     * Fluxer refuses a move into an occupied voice channel whose participants all use peer-to-peer voice, and the member stays in its current channel.
+     * The call then fails with reason rejected, HTTP 400 and details.providerCode USER_NOT_IN_VOICE even though the member is in voice.
+     * A retry fails the same way while the destination stays in peer-to-peer mode.
      * The frozen HTTP member result means Fluxer accepted the move, not that the participant has reconnected.
      * A voiceStateUpdate event can first show channelId null, then a new connection ID in the destination.
      * Shared moderation deadlines, auditReason validation, confirmed HTTP 429 retries and member-cache invalidation apply.

@@ -225,6 +225,27 @@ test.each(modes)(
     },
 )
 
+// Fluxer answers a move into a channel of peer-to-peer participants with this misleading code
+test.each(modes)("%s reports Fluxer's peer-to-peer move refusal as a rejection without replay", async (mode) => {
+    let patchCalls = 0
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        if (init.method !== "PATCH") return Response.json(wireMember())
+        patchCalls++
+        return Response.json({ code: "USER_NOT_IN_VOICE", message: "User is not in a voice channel" }, { status: 400 })
+    })
+    const api = await setup(mode)
+
+    await expect(api.move(connectionTarget, "50")).rejects.toMatchObject({
+        _tag: "GuildOperationError",
+        operation: "members.move",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 400,
+        details: { providerCode: "USER_NOT_IN_VOICE" },
+    })
+    expect(patchCalls).toBe(1)
+})
+
 test.each(modes)("%s treats a malformed successful voice write as unknown and invalidates the member", async (mode) => {
     let malformed = false
     stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) =>
