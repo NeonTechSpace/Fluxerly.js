@@ -11,7 +11,7 @@ import { fixture, stageFixture, write } from "./helpers.js"
 
 const cli = fileURLToPath(new URL("../cli.js", import.meta.url))
 const name = "@neontechspace/fluxerly"
-const version = "1000.0.0-canary.1"
+const version = "1000.0.0-rc.1"
 const npmToken = `npm_${"a".repeat(36)}`
 
 async function candidateFixture() {
@@ -53,7 +53,7 @@ function preload({ trace, published, different, tarball }) {
         const integrity = "sha512-" + createHash("sha512").update(served).digest("base64")
         const state = {
             published: ${JSON.stringify(Boolean(published))},
-            tags: ${JSON.stringify(published ? { canary: version } : {})},
+            tags: ${JSON.stringify(published ? { rc: version } : {})},
             requests: [],
             spawns: [],
         }
@@ -141,7 +141,7 @@ test("npm publication passes only OIDC authentication to its publisher and surfa
         const output = JSON.parse(result.stdout)
         assert.equal(output.directory, candidate.directory)
         assert.equal(output.checksum, candidate.checksum)
-        assert.deepEqual([output.npm, output.complete, output.tag, output.published], ["published", true, "canary", "now"])
+        assert.deepEqual([output.npm, output.complete, output.tag, output.published], ["published", true, "rc", "now"])
         assert.deepEqual(result.trace.spawns.length, 1)
         assertNpmOnly(result.trace)
         const [spawn] = result.trace.spawns
@@ -171,7 +171,7 @@ test("npm verification, status and publication reruns compare served bytes and n
             const output = JSON.parse(result.stdout)
             assert.equal(output.npm, "published")
             if (action === "publish") assert.equal(output.published, "already")
-            assert.deepEqual(output.distTags, { canary: version })
+            assert.deepEqual(output.distTags, { rc: version })
             assert.deepEqual(result.trace.spawns, [])
             assertNpmOnly(result.trace)
             assert.ok(result.trace.requests.some((request) => request.endsWith(".tgz")))

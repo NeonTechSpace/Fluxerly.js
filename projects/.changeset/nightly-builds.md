@@ -1,0 +1,5 @@
+---
+"@neontechspace/fluxerly": patch
+---
+
+Nightly builds replace Canary releases. A nightly is an automatic build of the latest source, published under the `nightly` npm tag on days when the SDK changed, with a version such as `1000.0.0-nightly.0`. Like an RC, a nightly can include breaking changes, so install it with `--save-exact`, or `--exact` with Bun. Published Canary versions stay installable, but no new Canary is released

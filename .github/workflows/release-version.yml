@@ -10,7 +10,7 @@ on:
         description: Release readiness channel
         required: true
         type: choice
-        options: [canary, rc, stable]
+        options: [rc, stable]
       epoch:
         description: Optional explicit epoch boundary, such as 2000
         type: string
@@ -71,7 +71,7 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `skipped=${result.skipped === true}\n`)
           if (result.skipped === true) appendFileSync(process.env.GITHUB_OUTPUT, `reason=${String(result.reason ?? 'No content change').replace(/[\r\n]/g, ' ')}\n`)
           const { version } = JSON.parse(readFileSync('sdk/package.json', 'utf8'))
-          if (!/^\d+\.\d+\.\d+(?:-(?:canary|rc)\.\d+)?$/.test(version)) throw new Error('Unexpected SDK version format')
+          if (!/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version)) throw new Error('Unexpected SDK version format')
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`)
           NODE
       - name: Format the generated SDK changelog

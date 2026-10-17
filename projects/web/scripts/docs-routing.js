@@ -1,5 +1,5 @@
 // This module is also emitted into the Cloudflare Pages worker
-const prereleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:canary|rc)\.(?:0|[1-9]\d*)$/
+const prereleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:canary|nightly|rc)\.(?:0|[1-9]\d*)$/
 function unpublishedDocsPath(path) {
     let decoded
     try { decoded = decodeURIComponent(path) } catch { decoded = path }
@@ -38,14 +38,14 @@ export function docsRedirect(request, routes, root) {
     // oxlint-disable-next-line no-control-regex -- Decoded control characters are rejected deliberately
     if (!decoded || /[%\\\x00-\x1f\x7f]/.test(decoded) || /%2f|%5c/i.test(path) || decoded.includes("//")) {
         const rawVersion = /^\/docs\/([^/]+)(?:\/|$)/.exec(path)?.[1]
-        const channel = rawVersion === "canary" || rawVersion === "rc" ? rawVersion : null
+        const channel = rawVersion === "nightly" || rawVersion === "rc" ? rawVersion : null
         if (channel) return routes.has(`/docs/${channel}`) ? `/docs/${channel}/` + url.search : null
         return root + url.search
     }
     const canonical = decoded.replace(/\/$/, "")
     const parts = canonical.slice("/docs/".length).split("/")
     const version = parts[0]
-    const channel = version === "canary" || version === "rc" ? version : null
+    const channel = version === "nightly" || version === "rc" ? version : null
     if (channel) {
         const channelRoot = `/docs/${channel}`
         // A channel that was not emitted must remain a 404, never a Stable fallback

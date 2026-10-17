@@ -52,7 +52,7 @@ Issues are accepted only for Stable releases in the current major and the RC
 for the next release. Before the first Stable release, the active RC is in scope
 for maintainer reports
 
-Previous majors and all Canary releases are out of scope. Before reporting a
+Previous majors and all nightly and Canary releases are out of scope. Before reporting a
 problem found on an excluded version, reproduce it on an in-scope version and
 report that exact version, including the full RC suffix where applicable
 

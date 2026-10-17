@@ -49,7 +49,7 @@ The release suffix describes readiness, independently of compatibility changes
 
 | Suffix | Meaning |
 | --- | --- |
-| `-canary.N` | Preview of upcoming changes, available for testing. It can include breaking changes |
+| `-nightly.N` | Automatic build of `main`, published daily when the SDK changed. It can include breaking changes at any time |
 | `-rc.N` | Release candidate for the next Stable, with no known release blockers, under final validation. It can still include breaking changes |
 | No suffix | Stable release supported for public use |
 
@@ -59,20 +59,21 @@ The initial release cycle targets `1000.0.0`, including breaking changes between
 Later cycles accumulate compatibility changes against their stable starting version, so repeated major notes do not repeatedly increase the target major.
 An increased compatibility impact can raise the target, but an already selected target never decreases. Preview-to-preview breaking changes still require migration notes
 
-Canary and RC releases can always include breaking changes against any earlier Canary or RC, including after the first stable release. Only between Stable releases does the version tell what kind of change a release contains: MAJOR for breaking changes, MINOR for compatible features and PATCH for compatible fixes.
-Canary iterations allow experimentation, and an RC is the final validation of the Stable it precedes.
+Nightly and RC releases can always include breaking changes against any earlier preview, including after the first stable release. Only between Stable releases does the version tell what kind of change a release contains: MAJOR for breaking changes, MINOR for compatible features and PATCH for compatible fixes.
 A patch or minor release can go straight to Stable. A new major version or epoch is published as an RC first, and Stable then publishes that RC's package content unchanged.
-While an RC is waiting for Stable, no other Stable at or above its version can be published. Canary releases are exempt from these rules.
+While an RC is waiting for Stable, no other Stable at or above its version can be published.
 [Release stages](/docs/RELEASING.md#release-stages) lists the exact rules
 
-The first published preview starts at `1000.0.0-canary.0`, then moves through RC to Stable.
+A nightly version is never committed. Its core is the version the next RC would target, and its number counts that core's nightly builds, such as `1000.1.0-nightly.4`.
+Nightly builds sit outside the RC and Stable rules, so they never block or wait for another release
+
 The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
 
 | Example release | Package version |
 | --- | --- |
-| First public release preview | `1000.0.0-canary.0` |
 | First release candidate | `1000.0.0-rc.0` |
 | First stable release | `1000.0.0` |
+| Nightly build after the first stable release | `1000.0.1-nightly.0` |
 | Compatible bug fix | `1000.0.1` |
 | Compatible feature | `1000.1.0` |
 | Breaking API change within Epoch 1 | `1001.0.0` |
@@ -80,11 +81,12 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 
 These examples illustrate versioning, not the current release inventory.
 Use the [SDK source manifest](/projects/sdk/package.json) for the checkout's version and [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions.
-The only release channels are Canary, RC and Stable.
-Their npm distribution tags are `canary`, `rc` and `latest`, with `latest` meaning Stable from the first stable release.
+The release channels are Nightly, RC and Stable, with the npm distribution tags `nightly`, `rc` and `latest`.
 Until the first Stable release, `latest` points to a release candidate that the maintainer moves there by hand.
 Release tooling moves only the published channel's tag, so previews never move `latest`.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
+
+Canary was the earlier preview channel. Its published `-canary.N` versions stay on npm and GitHub, but no new Canary is published
 
 ### Effect and diagnostics
 

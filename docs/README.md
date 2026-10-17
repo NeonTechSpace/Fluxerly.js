@@ -65,7 +65,7 @@ pnpm add @neontechspace/fluxerly
 bun add @neontechspace/fluxerly
 ```
 
-> A committed lockfile records the exact installed version and keeps installs reproducible. Canary and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer Canary or RC that breaks the API
+> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly or RC that breaks the API
 
 ## Getting started
 

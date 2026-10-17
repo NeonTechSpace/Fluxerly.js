@@ -7,11 +7,14 @@ import {
     GitHubCommandError,
     createGithub,
     assertReachableFromMain,
+    awaitPreparation,
     commandFailure,
     reconcileRelease,
     releaseTrigger,
     validatePreparation,
+    verifyPreparation,
 } from "../github.js"
+import { parseVersion } from "../planning.js"
 
 test("Atomic file commits bind the repository, exact head and one encoded addition", async () => {
     const oid = "c".repeat(40)
@@ -72,18 +75,113 @@ test("Selected checkout identity is distinct from dispatch workflow head SHA", (
     })
 })
 
+test("A scheduled nightly preparation is accepted like a manual one", () => {
+    const { run, artifact, options } = preparation()
+    assert.deepEqual(validatePreparation({ ...run, event: "schedule" }, [artifact], options), {
+        artifactId: 40,
+        artifactName: artifact.name,
+        sourceCommit,
+        workflowCommit,
+    })
+})
+
+// A run that reports each listed status on successive reads and then stays on the last one, with a controlled clock
+function polledRun(statuses) {
+    const state = { reads: 0, elapsed: 0, waits: [] }
+    state.read = async () => {
+        const status = statuses[Math.min(state.reads++, statuses.length - 1)]
+        return { ...preparation().run, status, conclusion: status === "completed" ? "success" : null }
+    }
+    state.options = {
+        now: () => state.elapsed,
+        wait: async (milliseconds) => {
+            state.waits.push(milliseconds)
+            state.elapsed += milliseconds
+        },
+        timeout: 25_000,
+        delay: 10_000,
+    }
+    return state
+}
+
+test("Preparation is awaited until its run completes and never waits after completion", async () => {
+    const finishing = polledRun(["queued", "in_progress", "completed"])
+    const run = await awaitPreparation(finishing.read, finishing.options)
+    assert.equal(run.status, "completed")
+    assert.deepEqual([finishing.reads, finishing.waits], [3, [10_000, 10_000]])
+    const { artifact, options } = preparation()
+    assert.equal(validatePreparation(run, [artifact], options).artifactId, 40)
+    const finished = polledRun(["completed"])
+    await awaitPreparation(finished.read, finished.options)
+    assert.deepEqual([finished.reads, finished.waits], [1, []])
+})
+
+test("An unfinished preparation is returned at the deadline and then fails validation", async () => {
+    const running = polledRun(["in_progress"])
+    const run = await awaitPreparation(running.read, running.options)
+    assert.equal(run.status, "in_progress")
+    // The last wait is shortened to the deadline and the run is read once more there
+    assert.deepEqual(running.waits, [10_000, 10_000, 5000])
+    assert.equal(running.elapsed, 25_000)
+    assert.equal(running.reads, 4)
+    const { artifact, options } = preparation()
+    assert.throws(() => validatePreparation(run, [artifact], options), /not a successful manual or scheduled run/)
+})
+
+test("Publication waits for its preparation and requires both the candidate and workflow commits on main", async () => {
+    const stub = (comparisons) => {
+        const running = polledRun(["in_progress", "completed"])
+        const { artifact, options } = preparation()
+        const reads = []
+        const github = {
+            artifacts: async (runId) => (runId === "20" ? [artifact] : []),
+            api: async (path) => {
+                reads.push(path)
+                if (path === "actions/runs/20") return running.read()
+                if (path === "actions/workflows/release-prepare.yml") return options.workflow
+                if (path === `commits/${sourceCommit}`) return { sha: sourceCommit }
+                const commit = /^compare\/main\.\.\.([a-f0-9]{40})$/.exec(path)?.[1]
+                if (commit) return comparisons[commit]
+                throw new Error(`Unexpected read ${path}`)
+            },
+        }
+        return { github, reads, running }
+    }
+    const behind = { status: "behind", ahead_by: 0 }
+    const ahead = { status: "ahead", ahead_by: 1 }
+    const accepted = stub({ [sourceCommit]: behind, [workflowCommit]: behind })
+    const result = await verifyPreparation(accepted.github, "20", repository, accepted.running.options)
+    assert.deepEqual(result, { artifactId: 40, artifactName: `release-candidate-${sourceCommit}`, sourceCommit, workflowCommit })
+    assert.deepEqual(accepted.running.waits, [10_000])
+    assert.ok(accepted.reads.includes(`compare/main...${sourceCommit}`))
+    assert.ok(accepted.reads.includes(`compare/main...${workflowCommit}`))
+    const branchWorkflow = stub({ [sourceCommit]: behind, [workflowCommit]: ahead })
+    await assert.rejects(
+        verifyPreparation(branchWorkflow.github, "20", repository, branchWorkflow.running.options),
+        /Preparation workflow commit is not reachable from main/,
+    )
+    const branchSource = stub({ [sourceCommit]: ahead, [workflowCommit]: behind })
+    await assert.rejects(
+        verifyPreparation(branchSource.github, "20", repository, branchSource.running.options),
+        /Candidate source is not reachable from main/,
+    )
+    await assert.rejects(verifyPreparation(accepted.github, "x", repository), /numeric run ID/)
+})
+
 test("Failed, foreign, unexpected-workflow and ambiguous preparation artifacts are rejected", () => {
     const { run, artifact, options } = preparation()
     for (const patch of [
         { conclusion: "failure" },
         { event: "push" },
+        { event: "workflow_run" },
+        { status: "in_progress", conclusion: null },
         { path: ".github/workflows/ci.yml" },
         { head_repository: { full_name: "attacker/fork" } },
         { workflow_id: 99 },
     ])
         assert.throws(
             () => validatePreparation({ ...run, ...patch }, [artifact], options),
-            /not a successful manual run/,
+            /not a successful manual or scheduled run/,
             JSON.stringify(patch),
         )
     assert.throws(
@@ -108,7 +206,7 @@ async function fixture(t, { version = "1000.0.0", existing, newer = false } = {}
         await writeFile(join(directory, name), name === "notes.md" ? "Reviewed notes\n" : `Exact ${name}`)
     const candidate = {
         version,
-        channel: version.includes("-") ? "rc" : "stable",
+        channel: parseVersion(version).channel,
         sourceCommit,
         docs: { path: "docs.json" },
     }
@@ -337,7 +435,7 @@ test("An unconfirmed publish update stops at the deadline without repeating the 
 })
 
 test("Older stable lines and prereleases never become latest", async (t) => {
-    for (const options of [{ newer: true }, { version: "1000.0.0-rc.1" }]) {
+    for (const options of [{ newer: true }, { version: "1000.0.0-rc.1" }, { version: "1000.1.0-nightly.0" }]) {
         const f = await fixture(t, options)
         assert.equal((await reconcileRelease(f.candidate, f.directory, f.github)).latest, false)
         assert.equal(f.getRelease().make_latest, "false")
@@ -548,6 +646,10 @@ test("Candidate sources must be reachable from main through a read-only comparis
         await assert.rejects(assertReachableFromMain(github(comparison), sourceCommit), /not reachable from main/)
     await assert.rejects(assertReachableFromMain(github(new Error("HTTP 404")), sourceCommit), /could not be verified/)
     await assert.rejects(assertReachableFromMain(github({ status: "identical", ahead_by: 0 }), "main"), /exact commit/)
+    await assert.rejects(
+        assertReachableFromMain(github({ status: "ahead", ahead_by: 1 }), sourceCommit, "Preparation workflow commit", "run Release prepare from main"),
+        /^Error: Preparation workflow commit is not reachable from main, run Release prepare from main$/,
+    )
 })
 
 test("Pushes prepare a candidate only when they change the SDK version to one npm lacks", async () => {

@@ -16,7 +16,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: This issue concerns a Stable release in the current major or the RC for the next release, not a previous major or any Canary
+        - label: This issue concerns a Stable release in the current major or the RC for the next release, not a previous major, a nightly or a Canary
           required: true
         - label: Existing issues have been searched for the same problem
           required: true

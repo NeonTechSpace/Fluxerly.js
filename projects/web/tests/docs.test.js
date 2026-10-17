@@ -10,36 +10,49 @@ import { findAll, hasClass, parseHtml, textContent } from "./html.js"
 
 test("Channel pointers prefer Stable, use rolling prerelease paths and omit absent stages", () => {
     assert.deepEqual(channelTargets([]), [])
-    assert.equal(channelTargets(["1000.0.0-canary.9", "1000.0.0-canary.10"])[0].version, "1000.0.0-canary.10")
-    assert.deepEqual(channelTargets(["1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1"]), [
+    assert.equal(channelTargets(["1000.0.0-nightly.9", "1000.0.0-nightly.10"])[0].version, "1000.0.0-nightly.10")
+    assert.deepEqual(channelTargets(["1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.0", "1000.2.0-nightly.1"]), [
         { version: "1000.0.0", label: "Stable", path: "1000.0.0" },
         { version: "1000.1.0-rc.0", label: "RC", path: "rc" },
-        { version: "1000.2.0-canary.1", label: "Canary", path: "canary" },
+        { version: "1000.2.0-nightly.1", label: "Nightly", path: "nightly" },
     ])
     for (const version of ["1000.0.0-alpha.0", "1000.0.0-beta.0"])
-        assert.throws(() => channelTargets([version]), /canary or rc suffix/)
+        assert.throws(() => channelTargets([version]), /nightly, rc or canary suffix/)
+})
+
+test("Retired Canary versions stay parseable but are never channel targets", () => {
+    assert.deepEqual(channelTargets(["1000.0.0-canary.10"]), [])
+    assert.deepEqual(channelTargets(["1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.1", "1000.3.0-canary.0"]), [
+        { version: "1000.0.0", label: "Stable", path: "1000.0.0" },
+        { version: "1000.1.0-rc.0", label: "RC", path: "rc" },
+        { version: "1000.2.0-nightly.1", label: "Nightly", path: "nightly" },
+    ])
 })
 
 test("Latest source selection respects readiness before numerical version order", () => {
     for (const [versions, expected] of [
         [[], null],
-        [["1000.2.0-canary.9", "1000.2.0-canary.10"], "1000.2.0-canary.10"],
-        [["1000.0.0-canary.2", "1000.0.0-rc.0"], "1000.0.0-rc.0"],
-        [["1000.1.0-rc.9", "1000.2.0-canary.10", "1000.1.0-rc.10"], "1000.1.0-rc.10"],
-        [["1000.1.0-canary.0", "1000.0.0"], "1000.0.0"],
-        [["1000.0.9", "1000.1.0-rc.10", "1000.2.0-canary.10", "1000.0.10"], "1000.0.10"],
+        [["1000.2.0-nightly.9", "1000.2.0-nightly.10"], "1000.2.0-nightly.10"],
+        [["1000.0.0-nightly.2", "1000.0.0-rc.0"], "1000.0.0-rc.0"],
+        [["1000.1.0-rc.9", "1000.2.0-nightly.10", "1000.1.0-rc.10"], "1000.1.0-rc.10"],
+        [["1000.1.0-nightly.0", "1000.0.0"], "1000.0.0"],
+        [["1000.0.9", "1000.1.0-rc.10", "1000.2.0-nightly.10", "1000.0.10"], "1000.0.10"],
+        // A retired Canary never becomes latest, even when it is the only or the highest version
+        [["1000.3.0-canary.0"], null],
+        [["1000.2.0-nightly.0", "1000.3.0-canary.0"], "1000.2.0-nightly.0"],
     ]) assert.equal(defaultVersion(versions), expected)
 })
 
 test("Retention keeps all Stable versions and only the newest of each prerelease channel", () => {
-    const versions = ["1000.0.0-canary.9", "1000.0.0-rc.0", "1000.0.0", "1000.0.0-canary.10",
-        "1000.0.0-rc.1", "1000.0.1", "1000.1.0", "1001.0.0"]
+    const versions = ["1000.0.0-nightly.9", "1000.0.0-rc.0", "1000.0.0", "1000.0.0-nightly.10",
+        "1000.0.0-rc.1", "1000.0.1", "1000.1.0", "1001.0.0", "1001.1.0-canary.0"]
     const original = [...versions]
-    assert.deepEqual(retainedVersions(versions), ["1000.0.0", "1000.0.0-canary.10", "1000.0.0-rc.1",
+    assert.deepEqual(retainedVersions(versions), ["1000.0.0", "1000.0.0-nightly.10", "1000.0.0-rc.1",
         "1000.0.1", "1000.1.0", "1001.0.0"])
     assert.deepEqual(versions, original)
     assert.deepEqual(retainedVersions([]), [])
-    assert.deepEqual(retainedVersions(["1000.1.0-canary.9", "1000.2.0-canary.0"]), ["1000.2.0-canary.0"])
+    assert.deepEqual(retainedVersions(["1000.1.0-nightly.9", "1000.2.0-nightly.0"]), ["1000.2.0-nightly.0"])
+    assert.deepEqual(retainedVersions(["1000.1.0-canary.9", "1000.2.0-canary.0"]), [])
 })
 
 test("Published content excludes a withdrawn guide without changing saved snapshots or other history", () => {
@@ -59,11 +72,14 @@ test("Published content excludes a withdrawn guide without changing saved snapsh
 test("Snapshots reject traversal, duplicates, missing guides and invalid provenance", () => {
     const snapshot = {
         schemaVersion: 1,
-        version: "1000.0.0-canary.0",
+        version: "1000.0.0-nightly.0",
         sourceCommit: "1".repeat(40),
         files: ["index.md", "quick-start.md", "changelog.md"].map((path) => ({ path, content: "" })),
     }
     assert.equal(validateSnapshot(snapshot), snapshot)
+    // Retired Canary release assets stay readable
+    const canary = { ...snapshot, version: "1000.0.0-canary.0" }
+    assert.equal(validateSnapshot(canary), canary)
     for (const { patch, reason } of [
         { patch: { files: [...snapshot.files, { path: "../escape.md", content: "" }] }, reason: /Invalid docs snapshot file/ },
         { patch: { files: [...snapshot.files, snapshot.files[0]] }, reason: /Invalid docs snapshot file/ },
@@ -71,7 +87,7 @@ test("Snapshots reject traversal, duplicates, missing guides and invalid provena
         { patch: { files: snapshot.files.slice(1) }, reason: /Incomplete docs snapshot/ },
         { patch: { sourceCommit: "main" }, reason: /Invalid docs provenance/ },
         { patch: { schemaVersion: 3 }, reason: /Invalid docs provenance/ },
-        { patch: { version: "../escape" }, reason: /canary or rc suffix/ },
+        { patch: { version: "../escape" }, reason: /nightly, rc or canary suffix/ },
     ]) assert.throws(() => validateSnapshot({ ...snapshot, ...patch }), reason)
 })
 

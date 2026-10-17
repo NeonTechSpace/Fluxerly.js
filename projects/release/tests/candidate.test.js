@@ -5,7 +5,7 @@ import test from "node:test"
 import { prepareCandidate, readCandidate } from "../candidate.js"
 import { contentFingerprint } from "../content.js"
 import { currentSnapshotSchema } from "../../web/scripts/transform-schemas.js"
-import { fixture, packages, stageFixture, write } from "./helpers.js"
+import { fixture, note, packages, stageFixture, write } from "./helpers.js"
 
 test("Candidate checksum binds exact packages, notes and docs independently of the meaningful-byte guard", async () => {
     const root = await fixture("1000.0.0-rc.0")
@@ -24,7 +24,7 @@ test("Candidate checksum binds exact packages, notes and docs independently of t
         })
         const output = join(root, "candidate")
         const registries = {
-            inventory: async () => ({ npmVersions: ["1000.0.0-canary.1"] }),
+            inventory: async () => ({ npmVersions: ["1000.0.0-nightly.1"] }),
         }
         const prepared = await prepareCandidate({
             workspace: root,
@@ -37,7 +37,7 @@ test("Candidate checksum binds exact packages, notes and docs independently of t
         assert.equal(candidate.checksum, prepared.checksum)
         assert.equal(candidate.schema, 1)
         await assert.rejects(readCandidate(output, { checksum: "f".repeat(64) }), /externally reviewed/)
-        assert.equal(candidate.contentFingerprint, contentFingerprint(packages("1000.0.0-canary.1")))
+        assert.equal(candidate.contentFingerprint, contentFingerprint(packages("1000.0.0-nightly.1")))
         assert.equal(candidate.channel, "rc")
         assert.equal(candidate.line, "1000.0")
         assert.deepEqual(await readFile(join(output, "docs.json")), await readFile(docs))
@@ -125,7 +125,7 @@ test("A stable candidate must carry exactly the bytes of the newest published RC
         const docs = join(root, "snapshot.json")
         await write(docs, { schemaVersion: 1, version: "1000.0.0", sourceCommit: "a".repeat(40), files: [] })
         const registries = {
-            inventory: async () => ({ npmVersions: ["1000.0.0-canary.3", "1000.0.0-rc.0", "1000.0.0-rc.1"] }),
+            inventory: async () => ({ npmVersions: ["1000.0.0-nightly.3", "1000.0.0-rc.0", "1000.0.0-rc.1"] }),
             baseline: async (_name, version) => ({
                 version,
                 contentFingerprint: contentFingerprint(packages(version)),
@@ -142,7 +142,7 @@ test("A stable candidate must carry exactly the bytes of the newest published RC
                 workspace: root,
                 output: join(root, "unqualified"),
                 docs,
-                registries: { ...registries, inventory: async () => ({ npmVersions: ["1000.0.0-canary.3"] }) },
+                registries: { ...registries, inventory: async () => ({ npmVersions: ["1000.0.0-nightly.3"] }) },
                 stage: stageFixture(),
             }),
             /publish 1000.0.0-rc.N first/,
@@ -201,6 +201,116 @@ test("A patch Stable needs no RC, but matches a pending RC of its version and ne
         })
         assert.equal(prepared.baseline, null)
         assert.equal((await readCandidate(output, { checksum: prepared.checksum })).baseline, null)
+    } finally {
+        await rm(root, { recursive: true })
+    }
+})
+
+test("A nightly candidate versions the next RC target from the npm inventory without reviewed notes or source changes", async () => {
+    const root = await fixture("1000.2.3")
+    try {
+        // Nightly builds need neither versioned fragments nor a changelog section
+        await note(root, "feature", "minor", "Add a feature")
+        const manifest = await readFile(join(root, "sdk/package.json"))
+        const fragment = await readFile(join(root, ".changeset/feature.md"))
+        const version = "1000.3.0-nightly.2"
+        const docs = join(root, "snapshot.json")
+        await write(docs, { schemaVersion: 1, version, sourceCommit: "a".repeat(40), files: [] })
+        const registries = {
+            inventory: async () => ({
+                npmVersions: ["1000.2.3", "1000.3.0-nightly.0", "1000.3.0-nightly.1", "1000.2.4-nightly.5"],
+            }),
+            baseline: async (_name, baseline) => ({
+                version: baseline,
+                contentFingerprint: contentFingerprint(packages(baseline, "export const value = 0\n")),
+            }),
+        }
+        const output = join(root, "candidate")
+        const prepared = await prepareCandidate({ workspace: root, output, docs, channel: "nightly", registries, stage: stageFixture() })
+        assert.deepEqual(
+            [prepared.version, prepared.channel, prepared.line, prepared.baseline],
+            [version, "nightly", "1000.3", "1000.3.0-nightly.1"],
+        )
+        const candidate = await readCandidate(output, { checksum: prepared.checksum })
+        assert.deepEqual([candidate.version, candidate.channel, candidate.line], [version, "nightly", "1000.3"])
+        assert.equal(candidate.baseline.version, "1000.3.0-nightly.1")
+        // The notes lead with a nightly disclaimer and then list the unreleased changes
+        const notes = await readFile(join(output, "notes.md"), "utf8")
+        const [disclaimer, ...changes] = notes.split("\n\n")
+        assert.notEqual(disclaimer.trim(), "")
+        assert.equal(changes.join("\n\n"), "### Minor Changes\n\n- Add a feature\n")
+        assert.deepEqual(await readFile(join(root, "sdk/package.json")), manifest)
+        assert.deepEqual(await readFile(join(root, ".changeset/feature.md")), fragment)
+        await assert.rejects(access(join(root, "sdk/CHANGELOG.md")), { code: "ENOENT" })
+        // The documentation snapshot must carry the nightly version, not the source version
+        await write(docs, { schemaVersion: 1, version: "1000.2.3", sourceCommit: "a".repeat(40), files: [] })
+        const mismatched = join(root, "mismatched")
+        await assert.rejects(
+            prepareCandidate({ workspace: root, output: mismatched, docs, channel: "nightly", registries, stage: stageFixture() }),
+            /Documentation snapshot does not match/,
+        )
+        await assert.rejects(access(mismatched), { code: "ENOENT" })
+    } finally {
+        await rm(root, { recursive: true })
+    }
+})
+
+test("A nightly candidate of an RC cycle omits archived notes and skips content unchanged from the previous nightly", async () => {
+    const root = await fixture("1000.0.0-rc.1")
+    try {
+        await write(join(root, ".changeset/pre/released.md"), '---\n"@neontechspace/fluxerly": major\n---\n\nAlready in an RC\n')
+        const registries = (npmVersions, content) => ({
+            inventory: async () => ({ npmVersions }),
+            baseline: async (_name, version) => ({ version, contentFingerprint: contentFingerprint(packages(version, content)) }),
+        })
+        const output = join(root, "candidate")
+        const prepared = await prepareCandidate({
+            workspace: root,
+            output,
+            channel: "nightly",
+            registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"]),
+            stage: stageFixture(),
+        })
+        assert.deepEqual([prepared.version, prepared.baseline], ["1000.0.0-nightly.0", null])
+        const notes = await readFile(join(output, "notes.md"), "utf8")
+        assert.doesNotMatch(notes, /###|Already in an RC/)
+        assert.equal(notes.split("\n\n").filter((paragraph) => paragraph.trim() !== "").length, 2)
+        const unchanged = join(root, "unchanged")
+        const skipped = await prepareCandidate({
+            workspace: root,
+            output: unchanged,
+            channel: "nightly",
+            registries: registries(["1000.0.0-rc.1", "1000.0.0-nightly.0"]),
+            stage: stageFixture(),
+        })
+        assert.deepEqual(
+            [skipped.skipped, skipped.version, skipped.channel, skipped.line, skipped.baseline],
+            [true, "1000.0.0-nightly.1", "nightly", "1000.0", "1000.0.0-nightly.0"],
+        )
+        await assert.rejects(access(unchanged), { code: "ENOENT" })
+    } finally {
+        await rm(root, { recursive: true })
+    }
+})
+
+test("Only a nightly candidate selects its channel, and it takes no release line", async () => {
+    const root = await fixture("1000.0.0-rc.1")
+    try {
+        await write(join(root, "sdk/CHANGELOG.md"), "# SDK\n\n## 1000.0.0-rc.1\n\nFix cancellation\n")
+        const registries = new Proxy({}, { get: () => assert.fail("Rejected options must not read registries") })
+        const stage = () => assert.fail("Rejected options must not stage")
+        const output = join(root, "candidate")
+        for (const channel of ["rc", "stable", "canary"])
+            await assert.rejects(
+                prepareCandidate({ workspace: root, output, channel, registries, stage }),
+                /Only a nightly candidate selects its channel/,
+                channel,
+            )
+        await assert.rejects(
+            prepareCandidate({ workspace: root, output, channel: "nightly", line: "1000.0", registries, stage }),
+            /takes no release line/,
+        )
+        await assert.rejects(access(output), { code: "ENOENT" })
     } finally {
         await rm(root, { recursive: true })
     }

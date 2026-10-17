@@ -16,17 +16,19 @@ if (dirname(root) !== resolve(temporaryParent)) throw new Error("Unexpected docu
 const released = join(root, "released")
 await mkdir(released)
 // Schema 2 snapshots write links with a placeholder. The others keep schema 1 exact-version links
+// The retired Canary snapshot is the highest version, but it must stay archived and never be served
 const fixtures = [
     ["1000.0.0", "Promise<void>", "Stableonlymarker", 1],
     ["1000.0.1", "Promise<boolean>", "Lateststablemarker", 2],
     ["1000.1.0-rc.0", "Promise<number>", "Previousrcmarker", 1],
     ["1000.1.0-rc.1", "Promise<string>", "Rconlymarker", 1],
-    ["1000.2.0-canary.0", "Promise<{ id: string }>", "Canaryonlymarker", 1],
-    ["1000.2.0-canary.1", "Promise<{ id: string }>", "Latestcanarymarker", 2],
+    ["1000.2.0-nightly.0", "Promise<{ id: string }>", "Nightlyonlymarker", 1],
+    ["1000.2.0-nightly.1", "Promise<{ id: string }>", "Latestnightlymarker", 2],
+    ["1000.3.0-canary.0", "Promise<{ id: number }>", "Retiredcanarymarker", 2],
 ]
 const markdown = (title, body) => `---\ntitle: ${JSON.stringify(title)}\n---\n\n${body}\n`
 const saved = new Map()
-const deferred = new Set(["1000.1.0-rc.1", "1000.2.0-canary.1"])
+const deferred = new Set(["1000.1.0-rc.1", "1000.2.0-nightly.1"])
 const exists = (path) => access(path).then(() => true, () => false)
 try {
     for (const [version, signature, marker, schemaVersion] of fixtures) {
@@ -71,7 +73,10 @@ try {
     // Before Stable exists, latest must select the newest prerelease channel path without a copy
     const prereleases = join(root, "prereleases")
     await mkdir(prereleases)
-    for (const [version, path] of [["1000.2.0-canary.0", "canary"], ["1000.1.0-rc.0", "rc"]]) {
+    // A retired Canary alone is not a published snapshot that public documentation can serve
+    await writeFile(join(prereleases, "1000.3.0-canary.0.json"), saved.get("1000.3.0-canary.0"))
+    await assert.rejects(generate({ releasesDirectory: prereleases, publicBuild: true }), /requires an imported published snapshot/)
+    for (const [version, path] of [["1000.2.0-nightly.0", "nightly"], ["1000.1.0-rc.0", "rc"]]) {
         await writeFile(join(prereleases, `${version}.json`), saved.get(version))
         await generate({ releasesDirectory: prereleases, publicBuild: true })
         const metadata = JSON.parse(await readFile(join(webRoot, "content/versions.json"), "utf8"))
@@ -87,7 +92,7 @@ try {
     const before = new Map()
     for (const version of ["1000.0.0", "1000.0.1"]) before.set(version, await filesIn(join(webRoot, "content/docs", version)))
     assert.match(await readFile(join(webRoot, "content/docs/rc/api/signature.md"), "utf8"), /Previousrcmarker/)
-    assert.match(await readFile(join(webRoot, "content/docs/canary/api/signature.md"), "utf8"), /Canaryonlymarker/)
+    assert.match(await readFile(join(webRoot, "content/docs/nightly/api/signature.md"), "utf8"), /Nightlyonlymarker/)
     for (const version of deferred) await writeFile(join(released, `${version}.json`), saved.get(version), { flag: "wx" })
     // A clean regeneration discards stale generated output, never the release snapshot source
     await mkdir(join(webRoot, "content/docs/latest"), { recursive: true })
@@ -100,18 +105,22 @@ try {
         assert.equal(await readFile(join(released, `${version}.json`), "utf8"), saved.get(version))
     }
     for (const [version, files] of before) assert.deepEqual(await filesIn(join(webRoot, "content/docs", version)), files)
-    assert.deepEqual((await readdir(join(webRoot, "content/docs"))).sort(), ["1000.0.0", "1000.0.1", "canary", "meta.json", "rc"])
-    assert.equal(JSON.parse(await readFile(join(webRoot, "content/versions.json"), "utf8")).latestPath, "1000.0.1")
+    assert.deepEqual((await readdir(join(webRoot, "content/docs"))).sort(), ["1000.0.0", "1000.0.1", "meta.json", "nightly", "rc"])
+    const metadata = JSON.parse(await readFile(join(webRoot, "content/versions.json"), "utf8"))
+    assert.equal(metadata.latestPath, "1000.0.1")
+    assert.deepEqual(metadata.targets.map((target) => target.label), ["Stable", "RC", "Nightly"])
+    assert.ok(!metadata.versions.includes("1000.3.0-canary.0"))
+    assert.ok(!(await filesIn(join(webRoot, "content/docs"))).some((file) => file.content.includes("Retiredcanarymarker")))
     assert.match(await readFile(join(webRoot, "content/docs/rc/api/signature.md"), "utf8"), /Rconlymarker/)
-    assert.match(await readFile(join(webRoot, "content/docs/canary/api/signature.md"), "utf8"), /Latestcanarymarker/)
+    assert.match(await readFile(join(webRoot, "content/docs/nightly/api/signature.md"), "utf8"), /Latestnightlymarker/)
     // Schema 1 rolling channels are rebased, and schema 2 snapshots fill their placeholder for each served path
     assert.match(await readFile(join(webRoot, "content/docs/rc/api/index.md"), "utf8"), /snapshotSchema: 1[\s\S]*\/docs\/rc\/api\/signature/)
-    assert.match(await readFile(join(webRoot, "content/docs/canary/api/index.md"), "utf8"), /snapshotSchema: 2[\s\S]*\/docs\/canary\/api\/signature/)
+    assert.match(await readFile(join(webRoot, "content/docs/nightly/api/index.md"), "utf8"), /snapshotSchema: 2[\s\S]*\/docs\/nightly\/api\/signature/)
     assert.match(await readFile(join(webRoot, "content/docs/1000.0.1/quick-start.md"), "utf8"), /\(\/docs\/1000\.0\.1\/api\/signature\/\)/)
     assert.ok(!(await filesIn(join(webRoot, "content/docs"))).some((file) => file.content.includes("{{version}}")))
     const outDir = join(root, "dist")
     const summary = await checkSnapshotBuild({ releasesDirectory: released, outDir })
-    assert.deepEqual([...summary.served].sort((a, b) => a.localeCompare(b)),["1000.0.0", "1000.0.1", "canary", "rc"])
+    assert.deepEqual([...summary.served].sort((a, b) => a.localeCompare(b)),["1000.0.0", "1000.0.1", "nightly", "rc"])
     execFileSync(
         process.execPath,
         [join(dirname(require.resolve("@playwright/test/package.json")), "cli.js"), "test"],

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { gzipSync } from "node:zlib"
 
-export async function fixture(version = "1000.0.0-canary.0") {
+export async function fixture(version = "1000.0.0-rc.0") {
     const root = await mkdtemp(join(tmpdir(), "fluxerly-release-test-"))
     await write(join(root, "package.json"), { private: true })
     await write(join(root, "pnpm-workspace.yaml"), "packages:\n  - sdk\n  - web\n  - release\n")
@@ -25,7 +25,7 @@ export async function fixture(version = "1000.0.0-canary.0") {
         ignore: ["fluxerly-docs", "@fluxerly/release"],
         privatePackages: { version: true, tag: false },
     })
-    const channel = /-(canary|rc)\.\d+$/.exec(version)?.[1]
+    const channel = /-(rc)\.\d+$/.exec(version)?.[1]
     if (channel) await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: channel, releaseBase: null })
     return root
 }

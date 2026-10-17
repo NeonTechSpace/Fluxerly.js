@@ -10,7 +10,7 @@ import { writeHostingArtifacts } from "../scripts/hosting.js"
 const latest = "/docs/1000.0.1"
 const pages = ["/docs/1000.0.1", "/docs/1000.0.1/quick-start", "/docs/1000.0.1/api/interfaces/Client",
     "/docs/1000.0.0", "/docs/1000.0.0/old-guide", "/docs/1000.0.1/space guide",
-    "/docs/canary", "/docs/canary/quick-start", "/docs/canary/space guide",
+    "/docs/nightly", "/docs/nightly/quick-start", "/docs/nightly/space guide",
     "/docs/rc", "/docs/rc/api/interfaces/Client"]
 const handler = createDocsHandler(pages, latest)
 const calls = []
@@ -63,7 +63,8 @@ test("Existing rolling-channel and Stable exact-version pages delegate without r
 })
 
 test("Numbered prerelease paths return 404 without channel or latest fallback", async () => {
-    for (const channel of ["canary", "rc"]) for (const suffix of [
+    // Retired Canary paths stay unpublished alongside the current prerelease channels
+    for (const channel of ["canary", "nightly", "rc"]) for (const suffix of [
         "", "/", "/quick-start?from=link", "/space%20guide#section", "/api/interfaces/Client",
         "/missing", "/%ZZ", "/%252Fquick-start", "//quick-start",
     ]) for (const method of ["GET", "HEAD"]) {
@@ -73,32 +74,36 @@ test("Numbered prerelease paths return 404 without channel or latest fallback", 
         assert.equal(response.headers.get("location"), null, incoming.url)
     }
     assert.equal((await handler.fetch(request("/docs/%31.2.3-rc.4/quick-start"), assets)).status, 404)
+    assert.equal((await handler.fetch(request("/docs/%31.2.3-nightly.4/quick-start"), assets)).status, 404)
 })
 
 test("Missing rolling-channel pages stay in their channel and unavailable channels delegate as 404s", async () => {
     for (const [path, target] of [
-        ["/docs/canary/missing", "/docs/canary/"],
+        ["/docs/nightly/missing", "/docs/nightly/"],
         ["/docs/rc/quick-start", "/docs/rc/"],
-        ["/docs/canary/api/interfaces/Client", "/docs/canary/"],
-        ["/docs/canary/%ZZ", "/docs/canary/"],
+        ["/docs/nightly/api/interfaces/Client", "/docs/nightly/"],
+        ["/docs/nightly/%ZZ", "/docs/nightly/"],
         ["/docs/rc/%252Fquick-start", "/docs/rc/"],
     ]) {
         assert.equal((await handler.fetch(request(path), assets)).headers.get("location"), target, path)
     }
-    const withoutRc = createDocsHandler(["/docs/1000.0.1", "/docs/1000.0.1/quick-start", "/docs/canary"], latest)
-    for (const path of ["/docs/rc", "/docs/rc/quick-start", "/docs/rc/%ZZ"]) {
-        const incoming = request(path)
-        const response = await withoutRc.fetch(incoming, assets)
-        assert.equal(response.status, 404, path)
-        assert.equal(calls.at(-1), incoming, path)
+    for (const [present, absent] of [["nightly", "rc"], ["rc", "nightly"]]) {
+        const partial = createDocsHandler(["/docs/1000.0.1", "/docs/1000.0.1/quick-start", `/docs/${present}`], latest)
+        for (const path of [`/docs/${absent}`, `/docs/${absent}/quick-start`, `/docs/${absent}/%ZZ`]) {
+            const incoming = request(path)
+            const response = await partial.fetch(incoming, assets)
+            assert.equal(response.status, 404, path)
+            assert.equal(calls.at(-1), incoming, path)
+        }
     }
 })
 
 test("Unpublished routes return 404 even when asset storage still has the deleted content", async () => {
     let reads = 0
     const staleAssets = { ASSETS: { fetch() { reads++; return new Response("Stale withdrawn content", { status: 200 }) } } }
-    for (const path of ["/docs/latest/migration/", "/docs/rc/migration", "/docs/canary/migration/",
-        "/docs/preview/migration/", "/docs/1000.0.0/migration/", "/docs/1.2.3-canary.4/quick-start/", "/docs/1.2.3-rc.4/quick-start/",
+    for (const path of ["/docs/latest/migration/", "/docs/rc/migration", "/docs/nightly/migration/",
+        "/docs/preview/migration/", "/docs/1000.0.0/migration/", "/docs/1.2.3-canary.4/quick-start/",
+        "/docs/1.2.3-nightly.4/quick-start/", "/docs/1.2.3-rc.4/quick-start/",
         "/docs/latest/%6Digration/", "/docs/1.2.3-rc.4/%ZZ"]) {
         const response = await handler.fetch(request(path), staleAssets)
         assert.equal(response.status, 404, path)
@@ -142,20 +147,39 @@ test("Broken pages select equivalent latest pages or its root without loops", as
     }
 })
 
+test("The retired Canary path is an unknown version that recovers to the latest path", async () => {
+    for (const [path, target] of [
+        ["/docs/canary", "/docs/1000.0.1/"],
+        ["/docs/canary/", "/docs/1000.0.1/"],
+        ["/docs/canary/quick-start?from=link", "/docs/1000.0.1/quick-start/?from=link"],
+        ["/docs/canary/api/interfaces/Client", "/docs/1000.0.1/api/interfaces/Client/"],
+        ["/docs/canary/missing", "/docs/1000.0.1/"],
+        ["/docs/canary/%ZZ", "/docs/1000.0.1/"],
+    ]) {
+        const response = await handler.fetch(request(path), assets)
+        assert.equal(response.status, 302, path)
+        assert.equal(response.headers.get("location"), target, path)
+    }
+    // Before Stable exists, the same recovery targets whichever prerelease path latest selects
+    const nightlyOnly = createDocsHandler(["/docs/nightly", "/docs/nightly/quick-start"], "/docs/nightly")
+    assert.equal((await nightlyOnly.fetch(request("/docs/canary/quick-start"), assets)).headers.get("location"), "/docs/nightly/quick-start/")
+    assert.equal((await nightlyOnly.fetch(request("/docs/canary/"), assets)).headers.get("location"), "/docs/nightly/")
+})
+
 test("Assets, endpoints, unrelated routes and non-navigation methods never fall back", async () => {
     for (const path of ["/api/search/missing.json", "/_astro/missing.js", "/missing", "/docs/missing/file.js",
         "/docs/missing/assets/unknown", "/docs/1000.0.1/search", "/docs/missing/file.css", "/docs/missing/file.json",
-        "/docs/canary/search", "/docs/canary/missing.css", "/docs/1.2.3-rc.2/file.js", "/docs/missing/llms.txt",
+        "/docs/nightly/search", "/docs/nightly/missing.css", "/docs/1.2.3-rc.2/file.js", "/docs/missing/llms.txt",
         "/docs/1000.0.1/missing.md"]) {
         assert.equal((await handler.fetch(request(path), assets)).headers.get("location"), null, path)
     }
     for (const method of ["POST", "PUT", "DELETE", "OPTIONS"]) {
         assert.equal((await handler.fetch(request("/docs/missing", { method }), assets)).headers.get("location"), null)
-        assert.equal((await handler.fetch(request("/docs/1.2.3-canary.4/quick-start", { method }), assets)).headers.get("location"), null)
+        assert.equal((await handler.fetch(request("/docs/1.2.3-nightly.4/quick-start", { method }), assets)).headers.get("location"), null)
     }
     for (const headers of [{ accept: "application/json" }, { "sec-fetch-dest": "script" }, { "sec-fetch-dest": "image" }]) {
         assert.equal((await handler.fetch(request("/docs/missing", { headers }), assets)).headers.get("location"), null)
-        assert.equal((await handler.fetch(request("/docs/1.2.3-canary.4/quick-start", { headers }), assets)).headers.get("location"), null)
+        assert.equal((await handler.fetch(request("/docs/1.2.3-nightly.4/quick-start", { headers }), assets)).headers.get("location"), null)
     }
     assert.equal((await handler.fetch(request("/docs/missing", { method: "HEAD" }), assets)).status, 302)
 })
@@ -181,6 +205,9 @@ test("Hosting artifacts inventory emitted pages and run independently of source 
         assert.equal((await emitted.fetch(request("/docs/latest/quick-start/?a=1"), assets)).headers.get("location"), "/docs/1000.0.1/quick-start/?a=1")
         assert.equal((await emitted.fetch(request("/docs/1000.0.0/old-guide"), assets)).headers.get("location"), null)
         assert.equal((await emitted.fetch(request("/docs/1000.0.0-canary.7/quick-start?old=1"), assets)).status, 404)
+        assert.equal((await emitted.fetch(request("/docs/1000.0.0-nightly.7/quick-start"), assets)).status, 404)
+        assert.equal((await emitted.fetch(request("/docs/canary/quick-start"), assets)).headers.get("location"), "/docs/1000.0.1/quick-start/")
+        assert.equal((await emitted.fetch(request("/docs/nightly/missing"), assets)).headers.get("location"), "/docs/nightly/")
         assert.equal((await emitted.fetch(request("/docs/1000.0.0-rc.7/quick-start"), assets)).status, 404)
         assert.equal((await emitted.fetch(request("/docs/rc/api/interfaces/Client"), assets)).headers.get("location"), null)
     } finally {

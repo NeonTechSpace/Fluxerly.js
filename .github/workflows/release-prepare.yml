@@ -1,31 +1,43 @@
 name: Release prepare
 on:
+  # The daily run prepares a nightly build of main and starts its publication
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Exact reviewed merged source ref or commit
+        description: Exact reviewed merged source ref or commit. A nightly ignores it and builds the commit the workflow runs from
         required: true
         type: string
       line:
         description: Optional expected major.minor release line
         type: string
+      nightly:
+        description: Prepare and publish a nightly build of the commit this workflow runs from instead of the reviewed source
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
 cache-mode: read
 concurrency:
-  group: release-prepare-${{ inputs.source_ref }}-${{ inputs.line }}
+  group: release-prepare-${{ (github.event_name == 'schedule' || inputs.nightly) && 'nightly' || format('{0}-{1}', inputs.source_ref, inputs.line) }}
   cancel-in-progress: false
   queue: max
 jobs:
   prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      skipped: ${{ steps.candidate.outputs.skipped }}
+      checksum: ${{ steps.candidate.outputs.checksum }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
-          ref: ${{ inputs.source_ref }}
+          # A nightly publishes without review, so it builds only the workflow's own commit, which Release publish
+          # requires to be part of main. Other candidates build the selected source and wait for checksum review
+          ref: ${{ (github.event_name == 'schedule' || inputs.nightly) && github.sha || inputs.source_ref }}
           persist-credentials: false
       - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         id: setup
@@ -66,6 +78,7 @@ jobs:
         working-directory: projects
         env:
           RELEASE_LINE: ${{ inputs.line }}
+          RELEASE_NIGHTLY: ${{ github.event_name == 'schedule' || inputs.nightly }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process'
@@ -74,11 +87,20 @@ jobs:
           import { readCandidate } from './release/candidate.js'
           const source = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
           if (!/^[a-f0-9]{40}$/.test(source)) throw new Error('Invalid selected source commit')
+          const nightly = process.env.RELEASE_NIGHTLY === 'true'
+          if (nightly && process.env.RELEASE_LINE) throw new Error('A nightly follows the source and takes no release line')
           const docs = join(process.env.RUNNER_TEMP, 'docs-snapshot.json')
           const directory = join(process.env.RUNNER_TEMP, 'release-candidate')
-          execFileSync(process.execPath, ['web/scripts/snapshot.js', '--out', docs], { stdio: 'inherit', timeout: 300000 })
+          const snapshot = ['web/scripts/snapshot.js', '--out', docs]
           const args = ['release:prepare', '--output', directory, '--docs', docs]
+          if (nightly) {
+            // The nightly version exists only in the candidate, so the docs snapshot receives it from the plan
+            const plan = execFileSync('pnpm', ['release:plan', '--channel', 'nightly'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 120000 })
+            snapshot.push('--nightly', JSON.parse(plan.trim().split('\n').at(-1)).version)
+            args.push('--channel', 'nightly')
+          }
           if (process.env.RELEASE_LINE) args.push('--line', process.env.RELEASE_LINE)
+          execFileSync(process.execPath, snapshot, { stdio: 'inherit', timeout: 300000 })
           const output = execFileSync('pnpm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 600000 })
           process.stdout.write(output)
           const result = JSON.parse(output.trim().split('\n').at(-1))
@@ -133,5 +155,38 @@ jobs:
           steps: ${{ toJSON(steps) }}
           details: >-
             {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate artifact": ${{ toJSON(steps.candidate.outputs.name) }}, "Candidate artifact ID": ${{ toJSON(steps.artifact.outputs.artifact-id) }}, "Candidate retention": "90 days after upload", "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
-          next: Review the version, release notes and candidate SHA256 externally. Then publish this candidate from main
-          command: ${{ steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}
+          next: ${{ (github.event_name == 'schedule' || inputs.nightly) && (steps.candidate.outputs.skipped == 'true' && 'Nothing to publish, the SDK content matches the previous nightly' || 'The publish job starts Release publish for this nightly candidate') || 'Review the version, release notes and candidate SHA256 externally. Then publish this candidate from main' }}
+          command: ${{ !(github.event_name == 'schedule' || inputs.nightly) && steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}
+  publish:
+    name: Start nightly publication
+    needs: prepare
+    # The trigger, not a step output that checked-out code could write, decides whether this run is a nightly
+    if: (github.event_name == 'schedule' || inputs.nightly) && needs.prepare.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      # Nightly builds are published without external review. Release publish still inspects the candidate and waits
+      # for this run to finish before it trusts the preparation
+      - name: Dispatch Release publish for the nightly candidate
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RUN_ID: ${{ github.run_id }}
+          CANDIDATE_CHECKSUM: ${{ needs.prepare.outputs.checksum }}
+        run: gh workflow run release-publish.yml --repo "$GITHUB_REPOSITORY" --ref main -f preparation_run_id="$PREPARATION_RUN_ID" -f candidate_checksum="$CANDIDATE_CHECKSUM"
+      - name: Summarize the nightly publication start
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Nightly publication start
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate SHA256": ${{ toJSON(needs.prepare.outputs.checksum) }}}
+          next: Follow the Release publish run, which publishes, checks registry installs, announces the prerelease and deploys the Docs preview

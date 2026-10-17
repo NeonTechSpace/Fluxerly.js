@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import test from "node:test"
 import { parse } from "yaml"
 import { renderSummary } from "../../../.github/actions/summary/summary.mjs"
+import { channels } from "../planning.js"
 
 const repository = fileURLToPath(new URL("../../../", import.meta.url))
 const read = (path) => parse(readFileSync(join(repository, path), "utf8"))
@@ -24,6 +25,7 @@ const writers = {
     "contributions.yml/permissions": { actions: "write", contents: "write", issues: "write", "pull-requests": "write" },
     "dependabot-changeset.yml/note": { contents: "write", actions: "write" },
     "ci.yml/release-trigger": { actions: "write" },
+    "release-prepare.yml/publish": { actions: "write" },
     "release-version.yml/pull_request": { contents: "write", "pull-requests": "write", actions: "write" },
     "release-publish.yml/publish": { "id-token": "write" },
 }
@@ -165,6 +167,67 @@ test("Dependency notes execute only reviewed base code and treat the PR branch a
     assert.deepEqual(job.steps.filter((step) => step.run).map((step) => step.run), ["node release/dependency-changeset.js"])
     assert.equal(job.steps.at(-1).env.DEPENDENCY_CHECK_RUN_ID, "${{ github.event.workflow_run.id }}")
     assert.equal(workflow.concurrency["cancel-in-progress"], false)
+})
+
+test("Nightly preparation runs daily and starts only Release publish from main for an unskipped nightly candidate", () => {
+    const workflow = workflows["release-prepare.yml"]
+    const [minute, hour, day, month, weekday] = workflow.on.schedule[0].cron.split(" ")
+    assert.deepEqual([day, month, weekday], ["*", "*", "*"])
+    assert.ok(Number(minute) >= 0 && Number(minute) < 60 && Number(hour) >= 0 && Number(hour) < 24)
+    assert.deepEqual(
+        [workflow.on.workflow_dispatch.inputs.nightly.type, workflow.on.workflow_dispatch.inputs.nightly.default],
+        ["boolean", false],
+    )
+    // Scheduled runs have no inputs, so the event alone must select nightly preparation and its shared queue
+    const nightly = "github.event_name == 'schedule' || inputs.nightly"
+    const candidate = workflow.jobs.prepare.steps.find((step) => step.id === "candidate")
+    assert.equal(candidate.env.RELEASE_NIGHTLY, `\${{ ${nightly} }}`)
+    // An unreviewed nightly must build the workflow commit that Release publish checks against main, never source_ref
+    const checkout = workflow.jobs.prepare.steps.find((step) => step.id === "checkout")
+    assert.equal(checkout.with.ref, `\${{ (${nightly}) && github.sha || inputs.source_ref }}`)
+    assert.ok(workflow.concurrency.group.includes(`(${nightly}) && 'nightly'`), workflow.concurrency.group)
+    const outputs = workflow.jobs.prepare.outputs
+    assert.deepEqual(Object.keys(outputs).sort(), ["checksum", "skipped"])
+    for (const key of ["skipped", "checksum"])
+        assert.equal(outputs[key], `\${{ steps.candidate.outputs.${key} }}`, key)
+    const job = workflow.jobs.publish
+    assert.equal(job.needs, "prepare")
+    // The trigger decides, because a reviewed-source run executes code that could forge a nightly output.
+    // A skipped nightly has no candidate to publish
+    assert.equal(job.if, `(${nightly}) && needs.prepare.outputs.skipped == 'false'`)
+    assert.equal(job.steps.some((step) => /^pnpm\/setup@|^actions\/setup-node@/.test(String(step.uses))), false)
+    const runs = job.steps.filter((step) => step.run)
+    assert.equal(runs.length, 1, "The publish job runs only its dispatch")
+    const [dispatch] = runs
+    assert.doesNotMatch(dispatch.run, /\b(install|pnpm|npm|node)\b/)
+    assert.deepEqual(dispatch.env, {
+        GH_TOKEN: "${{ github.token }}",
+        PREPARATION_RUN_ID: "${{ github.run_id }}",
+        CANDIDATE_CHECKSUM: "${{ needs.prepare.outputs.checksum }}",
+    })
+    // Run the dispatch against a fake gh to read the exact arguments it receives
+    const checksum = "c".repeat(64)
+    const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'gh() { printf "%s\\n" "$@"; }\n' + dispatch.run], {
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+        env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", PREPARATION_RUN_ID: "30", CANDIDATE_CHECKSUM: checksum },
+    })
+    assert.ifError(result.error)
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
+        "workflow", "run", "release-publish.yml", "--repo", "owner/repo", "--ref", "main",
+        "-f", "preparation_run_id=30", "-f", `candidate_checksum=${checksum}`,
+    ])
+    // The dispatched fields are exactly the inputs Release publish accepts
+    assert.deepEqual(Object.keys(workflows["release-publish.yml"].on.workflow_dispatch.inputs).sort(), [
+        "candidate_checksum",
+        "preparation_run_id",
+    ])
+})
+
+test("Version pull requests offer exactly the channels release planning accepts", () => {
+    assert.deepEqual(workflows["release-version.yml"].on.workflow_dispatch.inputs.channel.options, channels)
 })
 
 test("Release and Preview work is serialized with read-only caches and never cancelled mid-run", () => {

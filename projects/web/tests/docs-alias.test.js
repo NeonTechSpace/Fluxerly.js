@@ -35,7 +35,7 @@ title: "Alias fixture"
     assert.match(rebased, /\[Also code\]\(\/docs\/1000\.1\.0-rc\.1\/guide\/\)/)
 })
 
-for (const channel of ["canary", "rc"]) {
+for (const channel of ["nightly", "rc"]) {
     // Link rebasing itself is covered on rebaseAliasMarkdown and through Schema 1 channel materialization
     test(`The ${channel} alias retitles its navigation without mutating the source files`, () => {
         const version = `1000.1.0-${channel}.2`
@@ -47,16 +47,17 @@ for (const channel of ["canary", "rc"]) {
         const alias = docsAliasFiles(files, version, channel)
         assert.deepEqual(files, original)
         assert.ok(alias[0].content.includes(`(/docs/${channel}/quick-start/)`))
-        assert.equal(JSON.parse(alias[1].content).title, channel === "rc" ? "RC" : "Canary")
+        assert.equal(JSON.parse(alias[1].content).title, channel === "rc" ? "RC" : "Nightly")
     })
 }
 
 test("Alias generation rejects unknown destinations, including the redirect-only latest path", () => {
     const files = [{ path: "meta.json", content: "{}" }]
-    for (const alias of ["../escape", "stable", "constructor", "latest"])
+    // Canary is retired, so it is no longer a rolling destination
+    for (const alias of ["../escape", "stable", "constructor", "latest", "canary"])
         assert.throws(() => docsAliasFiles(files, "1000.0.0", alias), /Unknown documentation alias/)
-    for (const version of ["latest", "canary", "../escape"])
-        assert.throws(() => docsAliasFiles(files, version, "rc"), /canary or rc suffix/)
+    for (const version of ["latest", "nightly", "canary", "../escape"])
+        assert.throws(() => docsAliasFiles(files, version, "rc"), /nightly, rc or canary suffix/)
 })
 
 test("Schema 2 snapshots fill the link placeholder for each served path and record their schema", () => {

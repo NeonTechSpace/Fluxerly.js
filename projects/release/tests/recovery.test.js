@@ -7,7 +7,7 @@ import { inspectPublished, publishCandidate } from "../recovery.js"
 
 const reviewed = Buffer.from("Reviewed npm tarball")
 
-function setup({ version = "1000.0.0-canary.0", channel = "canary", line = "1000.0", tags = {} } = {}) {
+function setup({ version = "1000.0.0-nightly.0", channel = "nightly", line = "1000.0", tags = {} } = {}) {
     const candidate = {
         name: "@neontechspace/fluxerly",
         version,
@@ -64,7 +64,7 @@ function setup({ version = "1000.0.0-canary.0", channel = "canary", line = "1000
 test("A rerun accepts an existing version with the reviewed bytes without publishing again", async () => {
     const state = setup()
     state.published = true
-    state.tags.canary = state.candidate.version
+    state.tags.nightly = state.candidate.version
     const result = await publishCandidate(state.candidate, state)
     assert.equal(result.published, "already")
     assert.equal(result.npm, "published")
@@ -90,7 +90,7 @@ test("An uncertain submission is confirmed from npm without publishing twice, an
         throw new Error("Response lost")
     }
     const result = await publishCandidate(state.candidate, state)
-    assert.deepEqual([result.npm, result.complete, result.tag, result.published], ["published", true, "canary", "now"])
+    assert.deepEqual([result.npm, result.complete, result.tag, result.published], ["published", true, "nightly", "now"])
     assert.equal((await publishCandidate(state.candidate, state)).published, "already")
     assert.equal(state.calls, 1)
     assert.equal(state.baselineChecks, 1)
@@ -126,23 +126,23 @@ test("Distribution tags are polled with the version and a lagging tag is awaited
     }
     const inventory = state.registries.inventory
     state.registries.inventory = async (...args) => {
-        if (state.calls && lagging-- <= 0) state.tags.canary = state.candidate.version
+        if (state.calls && lagging-- <= 0) state.tags.nightly = state.candidate.version
         return inventory(...args)
     }
     const result = await publishCandidate(state.candidate, state)
-    assert.equal(result.tag, "canary")
+    assert.equal(result.tag, "nightly")
     assert.equal(state.calls, 1)
     assert.ok(state.elapsed >= 5000)
 })
 
 test("A version whose channel tag never moves fails at the deadline without republishing", async () => {
-    const state = setup({ tags: { canary: "1000.0.0-canary.0" } })
-    Object.assign(state.candidate, { version: "1000.0.0-canary.1" })
+    const state = setup({ tags: { nightly: "1000.0.0-nightly.0" } })
+    Object.assign(state.candidate, { version: "1000.0.0-nightly.1" })
     state.publisher = async () => {
         state.calls++
         state.published = true
     }
-    await assert.rejects(publishCandidate(state.candidate, state), /canary tag does not point to it/)
+    await assert.rejects(publishCandidate(state.candidate, state), /nightly tag does not point to it/)
     assert.equal(state.calls, 1)
     assert.equal(state.elapsed, state.timeout)
 })
@@ -150,7 +150,7 @@ test("A version whose channel tag never moves fails at the deadline without repu
 test("A superseded release on the same line recovers without republishing or restoring the channel tag", async () => {
     for (const [version, channel, newer] of [
         ["1000.0.0-rc.1", "rc", "1000.0.0-rc.2"],
-        ["1000.0.1-canary.0", "canary", "1000.0.2-canary.0"],
+        ["1000.0.1-nightly.0", "nightly", "1000.0.2-nightly.0"],
         ["1000.0.1", "stable", "1000.0.2"],
     ]) {
         const tag = channel === "stable" ? "latest" : channel
@@ -184,11 +184,11 @@ test("An older published line still requires its staging tag for recovery", asyn
 })
 
 test("An older release line publishes under its staging tag and leaves the newer channel tag in place", async () => {
-    const state = setup({ version: "1000.0.2-canary.0", tags: { canary: "1000.1.0-canary.3" } })
+    const state = setup({ version: "1000.0.2-nightly.0", tags: { nightly: "1000.1.0-nightly.3" } })
     const result = await publishCandidate(state.candidate, state)
     assert.deepEqual(state.publishedTags, [stagingTag(state.candidate)])
-    assert.equal(result.tag, "canary-1000-0")
-    assert.equal(state.tags.canary, "1000.1.0-canary.3")
+    assert.equal(result.tag, "nightly-1000-0")
+    assert.equal(state.tags.nightly, "1000.1.0-nightly.3")
 })
 
 test("Unconfirmed npm publication stops at its deadline without a second upload", async () => {
@@ -243,7 +243,7 @@ test("A provider failure remains recoverable but is unconfirmed without npm meta
 
 test("Unsupported versions, inconsistent channels and unbound tarballs fail before npm effects", async () => {
     for (const [change, reason] of [
-        [{ version: "1000.0.0-beta.0" }, /canary or rc suffix/],
+        [{ version: "1000.0.0-beta.0" }, /numeric SemVer/],
         [{ version: "0.0.0", channel: "stable", line: "0.0" }, /public release channel and line/],
         [{ channel: "rc" }, /public release channel and line/],
         [{ line: "1000.1" }, /public release channel and line/],

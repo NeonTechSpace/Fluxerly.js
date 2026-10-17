@@ -41,7 +41,7 @@ test("both issue forms require the agreed version scope first and allow optional
         assert.equal(fields[0].type, "checkboxes")
         const scope = fields[0].attributes.options[0]
         assert.equal(scope.required, true)
-        assert.match(scope.label, /current major.*RC.*next release.*previous major.*Canary/)
+        assert.match(scope.label, /current major.*RC.*next release.*previous major.*nightly.*Canary/)
         const upload = fields.find((field) => field.type === "upload")
         assert.ok(upload, "Report evidence must have an upload field")
         assert.equal(upload.validations.required, false)

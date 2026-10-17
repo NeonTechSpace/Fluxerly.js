@@ -3,7 +3,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { sha256 } from "./content.js"
-import { parseVersion, planVersion, releaseBaseFor } from "./planning.js"
+import { parseVersion, planNightly, planVersion, releaseBaseFor } from "./planning.js"
 
 export async function readSourcePlan(workspace, options) {
     const [{ assembleReleasePlan }, { readChangesets }, { getPackages }, { readConfig }] = await Promise.all([
@@ -81,6 +81,65 @@ export async function readSourcePlan(workspace, options) {
         packages,
         config: configResult.config,
     }
+}
+
+/**
+ * Reads the source's release notes and state without changing them
+ * @param {string} workspace
+ */
+async function readSourceNotes(workspace) {
+    const { readChangesets } = await import("@changesets/read")
+    const manifest = JSON.parse(await readFile(join(workspace, "sdk", "package.json"), "utf8"))
+    if (manifest.name !== "@neontechspace/fluxerly" || manifest.private !== true)
+        throw new Error("SDK package identity or private publication safeguard does not match")
+    const fragments = await readChangesets(workspace)
+    for (const fragment of fragments) {
+        if (fragment.releases.length !== 1 || fragment.releases[0].name !== manifest.name)
+            throw new Error("Release fragments must describe only the SDK package")
+    }
+    const current = parseVersion(manifest.version)
+    const state = await assertSourceReleaseState(workspace, current, fragments)
+    const pending = fragments.filter((fragment) => !fragment.id.startsWith("pre/"))
+    return { manifest, fragments, pending, state }
+}
+
+/**
+ * Plans the nightly build of the current source against the published npm versions
+ * @param {string} workspace
+ * @param {string[]} npmVersions
+ */
+export async function readNightlyPlan(workspace, npmVersions) {
+    const { manifest, fragments, pending, state } = await readSourceNotes(workspace)
+    return planNightly({
+        currentVersion: manifest.version,
+        pendingTypes: pending.map((fragment) => fragment.releases[0].type),
+        releaseTypes: fragments.map((fragment) => fragment.releases[0].type),
+        releaseBase: state?.releaseBase,
+        npmVersions,
+    })
+}
+
+/**
+ * Formats the pending notes like a Changesets changelog section, or returns an empty string when there are none
+ * @param {string} workspace
+ */
+export async function unreleasedNotes(workspace) {
+    const { pending } = await readSourceNotes(workspace)
+    return [
+        ["major", "Major Changes"],
+        ["minor", "Minor Changes"],
+        ["patch", "Patch Changes"],
+    ]
+        .flatMap(([type, title]) => {
+            const items = pending
+                .filter((fragment) => fragment.releases[0].type === type)
+                .map((fragment) => {
+                    const lines = fragment.summary.trim().split("\n")
+                    return `- ${[lines[0], ...lines.slice(1).map((line) => (line ? `    ${line}` : ""))].join("\n")}`
+                })
+            return items.length ? [`### ${title}\n\n${items.join("\n")}\n`] : []
+        })
+        .join("\n")
 }
 
 export async function assertSourceReleaseState(workspace, current, fragments) {

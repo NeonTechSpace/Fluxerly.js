@@ -53,7 +53,7 @@ test("Official npm package 404 reads as absent only when permitted, other failur
 })
 
 test("npm metadata and integrity lead to actual archive file verification", async () => {
-    const files = packages("1000.0.0-canary.0")
+    const files = packages("1000.0.0-nightly.0")
     const compressed = tarball(files)
     const registries = createRegistries({
         fetchImpl: async (url) =>
@@ -61,24 +61,24 @@ test("npm metadata and integrity lead to actual archive file verification", asyn
                 ? new Response(compressed)
                 : json({
                       name,
-                      version: "1000.0.0-canary.0",
+                      version: "1000.0.0-nightly.0",
                       dist: { tarball: "https://registry.npmjs.org/sdk.tgz", integrity: sha512Integrity(compressed) },
                   }),
     })
-    assert.deepEqual(exactFiles(await registries.npmFiles(name, "1000.0.0-canary.0")), exactFiles(files))
+    assert.deepEqual(exactFiles(await registries.npmFiles(name, "1000.0.0-nightly.0")), exactFiles(files))
     const wrongOrigin = createRegistries({
         fetchImpl: async () =>
             json({
                 name,
-                version: "1000.0.0-canary.0",
+                version: "1000.0.0-nightly.0",
                 dist: { tarball: "https://example.com/sdk.tgz", integrity: sha512Integrity(compressed) },
             }),
     })
-    await assert.rejects(wrongOrigin.npmFiles(name, "1000.0.0-canary.0"), /official npm registry/)
+    await assert.rejects(wrongOrigin.npmFiles(name, "1000.0.0-nightly.0"), /official npm registry/)
 })
 
 test("Served tarballs must match the registry's SHA-512 integrity, which must be present", async () => {
-    const compressed = tarball(packages("1000.0.0-canary.0"))
+    const compressed = tarball(packages("1000.0.0-nightly.0"))
     const registries = createRegistries({ fetchImpl: async () => new Response(compressed) })
     const url = "https://registry.npmjs.org/sdk.tgz"
     assert.deepEqual(await registries.npmTarball({ tarball: url, integrity: sha512Integrity(compressed) }), compressed)

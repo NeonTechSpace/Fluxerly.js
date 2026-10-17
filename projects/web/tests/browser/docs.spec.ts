@@ -42,7 +42,8 @@ for (const width of [390, 1440, 1920]) {
         await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
         await page.evaluate(() => document.fonts.ready)
         await expect(page.getByRole("heading", { level: 1, name: quickStartTitle, exact: true })).toBeVisible()
-        if (previewVersion) expect(previewVersion).toMatch(/^\d+\.\d+\.\d+(?:-(?:canary|rc)\.\d+)?$/)
+        // Source previews plan an RC or Stable version. Nightly versions are never planned in source
+        if (previewVersion) expect(previewVersion).toMatch(/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/)
         // The label names the planned version and marks the build as a preview, without pinning its wording
         const versionLabel = page.locator(".version-label")
         await expect(versionLabel).toHaveText(/preview/i)

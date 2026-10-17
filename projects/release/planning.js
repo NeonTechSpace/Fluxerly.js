@@ -1,10 +1,12 @@
 // @ts-check
 
-export const channels = ["canary", "rc", "stable"]
+// Channels a version pull request can select. Nightly versions are computed at preparation and never committed
+export const channels = ["rc", "stable"]
 
+// Canary is retired, but its published versions must stay readable in registry and GitHub inventories
 export function parseVersion(version) {
-    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(canary|rc)\.(0|[1-9]\d*))?$/.exec(version)
-    if (!match) throw new Error("Release version must use numeric SemVer with a canary or rc suffix")
+    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(canary|nightly|rc)\.(0|[1-9]\d*))?$/.exec(version)
+    if (!match) throw new Error("Release version must use numeric SemVer with a nightly, rc or canary suffix")
     const [major, minor, patch] = match.slice(1, 4).map(Number)
     const number = match[5] === undefined ? undefined : Number(match[5])
     if (![major, minor, patch, number ?? 0].every(Number.isSafeInteger))
@@ -24,7 +26,7 @@ export function compareVersions(a, b) {
     a = parseVersion(a)
     b = parseVersion(b)
     for (const key of ["major", "minor", "patch"]) if (a[key] !== b[key]) return a[key] - b[key]
-    const rank = { canary: 0, rc: 1, stable: 2 }
+    const rank = { canary: 0, nightly: 1, rc: 2, stable: 3 }
     return rank[a.channel] - rank[b.channel] || (a.number ?? 0) - (b.number ?? 0)
 }
 
@@ -57,8 +59,9 @@ export function planVersion({
     epoch,
     allowNoChanges = false,
 }) {
-    if (!channels.includes(channel)) throw new Error("Channel must be canary, rc or stable")
+    if (!channels.includes(channel)) throw new Error("Channel must be rc or stable")
     const current = parseVersion(currentVersion)
+    if (current.channel === "nightly") throw new Error("Nightly versions are never committed as the source version")
     const bump = highestBump(pendingTypes)
     const cycleBump = highestBump(releaseTypes)
     if (current.major < 1000) throw new Error("Public releases must use Epoch Semantic Versioning")
@@ -125,6 +128,36 @@ export function planVersion({
 }
 
 /**
+ * Plans the next nightly version without changing the source. Its core is the version the next RC would target, and
+ * its number follows the newest published nightly of that core
+ * @param {{ currentVersion: string, pendingTypes?: string[], releaseTypes?: string[], releaseBase?: string | null, npmVersions: string[] }} options
+ */
+export function planNightly({
+    currentVersion,
+    pendingTypes = [],
+    releaseTypes = pendingTypes,
+    releaseBase,
+    npmVersions,
+}) {
+    if (!Array.isArray(npmVersions)) throw new Error("Registry version inventory is unavailable")
+    const target = planVersion({
+        currentVersion,
+        channel: "rc",
+        pendingTypes,
+        releaseTypes,
+        releaseBase,
+        allowNoChanges: true,
+    })
+    const { core } = parseVersion(target.version)
+    const numbers = npmVersions
+        .map((value) => parseVersion(value))
+        .filter((item) => item.channel === "nightly" && item.core === core)
+        .map((item) => item.number ?? 0)
+    const version = `${core}-nightly.${numbers.length ? Math.max(...numbers) + 1 : 0}`
+    return { currentVersion, version, channel: "nightly", line: parseVersion(version).line }
+}
+
+/**
  * Reports whether a version core starts a new major version or epoch. Patch and minor releases always raise the minor
  * or patch number, so only a new major version or epoch ends in `.0.0`
  * @param {string} core
@@ -135,9 +168,9 @@ export function isBigRelease(core) {
 }
 
 /**
- * Selects the published version a candidate is compared with. A canary or RC compares with the previous version on
- * its channel and `major.minor` line, or with nothing when the registry inventory lists none. Canaries are experimental
- * and ignore pending RCs.
+ * Selects the published version a candidate is compared with. A nightly or RC compares with the previous version on
+ * its channel and `major.minor` line, or with nothing when the registry inventory lists none. Nightly builds ignore
+ * pending RCs.
  *
  * A stable version compares with the newest published RC of the same version, which it must match byte for byte. The
  * pending RC is the newest RC above the newest stable version. While one exists, no other Stable at or above its

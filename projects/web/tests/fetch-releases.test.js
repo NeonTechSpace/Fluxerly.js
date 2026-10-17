@@ -60,12 +60,12 @@ test("An empty paginated release inventory imports no archive", async (t) => {
 
 test("Published stable and prerelease assets are checksum/source verified and read back byte-for-byte", async (t) => {
     const stable = release(),
-        canary = release("1000.1.0-canary.1", 2)
-    const f = await fixture(t, [stable, canary], { pages: [[stable.metadata], [canary.metadata]] })
-    assert.deepEqual(await f.run(), { imported: ["1000.0.0", "1000.1.0-canary.1"] })
-    assert.deepEqual(await readdir(f.directory), ["1000.0.0.json", "1000.1.0-canary.1.json"])
+        nightly = release("1000.1.0-nightly.1", 2)
+    const f = await fixture(t, [stable, nightly], { pages: [[stable.metadata], [nightly.metadata]] })
+    assert.deepEqual(await f.run(), { imported: ["1000.0.0", "1000.1.0-nightly.1"] })
+    assert.deepEqual(await readdir(f.directory), ["1000.0.0.json", "1000.1.0-nightly.1.json"])
     assert.ok((await readFile(join(f.directory, "1000.0.0.json"))).equals(stable.bytes))
-    assert.ok((await readFile(join(f.directory, "1000.1.0-canary.1.json"))).equals(canary.bytes))
+    assert.ok((await readFile(join(f.directory, "1000.1.0-nightly.1.json"))).equals(nightly.bytes))
     assert.deepEqual(f.calls.slice(1), [
         [
             "api",
@@ -84,7 +84,7 @@ test("Published stable and prerelease assets are checksum/source verified and re
             "-H",
             "Accept: application/octet-stream",
         ],
-        ["api", "--hostname", "github.com", `repos/${repository}/commits/v1000.1.0-canary.1`],
+        ["api", "--hostname", "github.com", `repos/${repository}/commits/v1000.1.0-nightly.1`],
     ])
 })
 
@@ -95,19 +95,30 @@ test("Drafts are skipped without reading assets or source tags", async (t) => {
     assert.equal(f.calls.length, 1)
 })
 
-test("Imports retain Stable history and read only the newest published RC and Canary snapshots", async (t) => {
-    const items = [release("1000.0.0-canary.9", 1), release("1000.0.0", 2), release("1000.0.0-rc.0", 3),
-        release("1000.0.1", 4), release("1000.0.0-canary.10", 5), release("1000.0.0-rc.1", 6)]
-    const draft = release("1000.1.0-canary.0", 7)
+test("Imports retain Stable history and read only the newest published RC and Nightly snapshots", async (t) => {
+    // Retired Canary releases must still parse, but their assets are never read
+    const items = [release("1000.0.0-nightly.9", 1), release("1000.0.0", 2), release("1000.0.0-rc.0", 3),
+        release("1000.0.1", 4), release("1000.0.0-nightly.10", 5), release("1000.0.0-rc.1", 6),
+        release("1000.1.0-canary.4", 8), release("1000.0.0-canary.2", 9)]
+    const draft = release("1000.1.0-nightly.0", 7)
     draft.metadata.draft = true
     const f = await fixture(t, [...items, draft], { pages: [items.slice(0, 3).map((item) => item.metadata),
         [...items.slice(3).map((item) => item.metadata), draft.metadata]] })
-    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-canary.10", "1000.0.0-rc.1"])
-    for (const id of [1, 3, 7]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
+    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-nightly.10", "1000.0.0-rc.1"])
+    for (const id of [1, 3, 7, 8, 9]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
+    assert.ok(!f.calls.some((args) => args.some((arg) => arg.includes("canary"))))
+    assert.deepEqual((await readdir(f.directory)).sort(), ["1000.0.0-nightly.10.json", "1000.0.0-rc.1.json", "1000.0.0.json", "1000.0.1.json"])
     for (const item of [items[1], items[3], items[4], items[5]]) {
         const version = item.metadata.tag_name.slice(1)
         assert.deepEqual(await readFile(join(f.directory, `${version}.json`)), item.bytes)
     }
+})
+
+test("An inventory of only retired Canary releases imports nothing and reads no asset", async (t) => {
+    const f = await fixture(t, [release("1000.0.0-canary.0", 1), release("1000.0.0-canary.1", 2)])
+    assert.deepEqual(await f.run(), { imported: [] })
+    assert.deepEqual(await readdir(f.directory), [])
+    assert.equal(f.calls.length, 1)
 })
 
 test("A broken newest prerelease fails instead of falling back to an older release", async (t) => {

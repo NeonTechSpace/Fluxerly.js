@@ -95,7 +95,8 @@ test("Latest redirects to the newest stable release while navigation and search 
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     const tree = await islandTree(page)
     expect(tree).toContain("/docs/1000.0.1/api")
-    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.0", "1000.2.0-canary.1", "rc", "canary"])
+    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.0", "1000.2.0-nightly.1", "rc", "nightly",
+        "1000.3.0-canary.0", "canary"])
         expect(tree).not.toContain(`/docs/${version}/`)
 
     await committed(page)
@@ -108,7 +109,7 @@ test("Latest redirects to the newest stable release while navigation and search 
     await input.fill("Lateststablemarker")
     const result = page.getByRole("dialog").getByRole("option", { name: /Lateststablemarker/ }).first()
     await expect(result).toBeVisible()
-    for (const marker of ["Stableonlymarker", "Rconlymarker", "Canaryonlymarker", "Latestcanarymarker"]) {
+    for (const marker of ["Stableonlymarker", "Rconlymarker", "Nightlyonlymarker", "Latestnightlymarker", "Retiredcanarymarker"]) {
         await input.fill(marker)
         await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
     }
@@ -121,7 +122,7 @@ test("Latest redirects to the newest stable release while navigation and search 
     expect(index.headers()["cache-control"]).toBe("public, max-age=31536000, immutable")
     const searchIndex = JSON.stringify(await index.json())
     expect(searchIndex).toContain("/docs/1000.0.1/api/signature")
-    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-canary.1"])
+    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.1", "1000.3.0-canary.0", "canary"])
         expect(searchIndex).not.toContain(`/docs/${version}/`)
     expect(new Set(indexes)).toEqual(new Set([indexUrl]))
     expect(errors).toEqual([])
@@ -139,7 +140,9 @@ test("Version search never returns another release or unpublished index", async 
     await expect(page.getByRole("dialog").getByRole("option", { name: /Rconlymarker/ }).first()).toBeVisible()
     await input.fill("Stableonlymarker")
     await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
-    await input.fill("Canaryonlymarker")
+    await input.fill("Nightlyonlymarker")
+    await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
+    await input.fill("Retiredcanarymarker")
     await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
     await input.fill("Previousrcmarker")
     await expect(page.getByRole("dialog").getByText("No results found")).toBeVisible()
@@ -150,17 +153,35 @@ test("Version search never returns another release or unpublished index", async 
     expect(indexes.every((path) => /^\/api\/search\/rc\.[0-9a-f]{16}\.json$/.test(path))).toBe(true)
 })
 
-test("Only channel labels appear and Canary opens the newest published snapshot", async ({ page }) => {
-    for (const path of ["/docs/canary/api/signature/", "/docs/1000.0.0/quick-start/"]) {
+test("Only channel labels appear and Nightly opens the newest published snapshot", async ({ page }) => {
+    for (const path of ["/docs/nightly/api/signature/", "/docs/1000.0.0/quick-start/"]) {
         await page.goto(path)
         await committed(page)
-        await page.getByRole("button", { name: path.includes("signature") ? "Canary" : "Stable", exact: true }).click()
-        await expect(page.getByRole("dialog").getByRole("link")).toHaveText(["Stable", "RC", "Canary"])
-        await page.getByRole("dialog").getByRole("link", { name: "Canary", exact: true }).click()
+        await page.getByRole("button", { name: path.includes("signature") ? "Nightly" : "Stable", exact: true }).click()
+        await expect(page.getByRole("dialog").getByRole("link")).toHaveText(["Stable", "RC", "Nightly"])
+        await page.getByRole("dialog").getByRole("link", { name: "Nightly", exact: true }).click()
         await expect(page).toHaveURL(path.includes("signature")
-            ? /\/docs\/canary\/api\/signature\/?$/
-            : /\/docs\/canary\/quick-start\/?$/)
-        await expect(page.locator(".version-label")).toHaveText("SDK 1000.2.0-canary.1")
+            ? /\/docs\/nightly\/api\/signature\/?$/
+            : /\/docs\/nightly\/quick-start\/?$/)
+        await expect(page.locator(".version-label")).toHaveText("SDK 1000.2.0-nightly.1")
+    }
+})
+
+test("The retired Canary path is not a channel and recovers to the latest path", async ({ request }) => {
+    for (const [from, to] of [
+        ["/docs/canary/", "/docs/1000.0.1/"],
+        ["/docs/canary", "/docs/1000.0.1/"],
+        ["/docs/canary/api/signature/?from=link", "/docs/1000.0.1/api/signature/?from=link"],
+        ["/docs/canary/missing/", "/docs/1000.0.1/"],
+    ]) {
+        const response = await request.get(from, { maxRedirects: 0 })
+        expect(response.status(), from).toBe(302)
+        expect(response.headers().location, from).toBe(to)
+    }
+    for (const path of ["/docs/canary/llms.txt", "/docs/canary/quick-start.md"]) {
+        const response = await request.get(path, { maxRedirects: 0 })
+        expect(response.status(), path).toBe(404)
+        expect(response.headers().location, path).toBeUndefined()
     }
 })
 
@@ -181,7 +202,7 @@ test("Command preferences persist across exact releases without retaining the pr
 })
 
 test("Numbered prerelease pages and search indexes return 404 without redirects", async ({ request }) => {
-    for (const version of ["1000.1.0-rc.0", "1000.1.0-rc.1", "1000.2.0-canary.0", "1000.2.0-canary.1"]) {
+    for (const version of ["1000.1.0-rc.0", "1000.1.0-rc.1", "1000.2.0-nightly.0", "1000.2.0-nightly.1", "1000.3.0-canary.0"]) {
         for (const path of [`/docs/${version}/`, `/docs/${version}/api/signature/?from=link`,
             `/docs/${version}/api/removed/`, `/docs/${version}/llms.txt`, `/api/search/${version}.json`]) {
             const response = await request.get(path, { maxRedirects: 0 })
@@ -192,7 +213,7 @@ test("Numbered prerelease pages and search indexes return 404 without redirects"
 })
 
 test("Withdrawn content is absent from published pages, navigation, search and assistant files", async ({ request }) => {
-    for (const version of ["latest", "rc", "canary", "1000.0.0", "1000.0.1"]) {
+    for (const version of ["latest", "rc", "nightly", "1000.0.0", "1000.0.1"]) {
         const removed = await request.get(`/docs/${version}/migration/`, { maxRedirects: 0 })
         expect(removed.status()).toBe(404)
         expect(removed.headers().location).toBeUndefined()
@@ -211,29 +232,29 @@ test("Withdrawn content is absent from published pages, navigation, search and a
     }
 })
 
-test("Canary navigation, search, serialized tree and assistant files stay within the rolling channel", async ({ page, request }) => {
-    await page.goto("/docs/canary/api/")
+test("Nightly navigation, search, serialized tree and assistant files stay within the rolling channel", async ({ page, request }) => {
+    await page.goto("/docs/nightly/api/")
     await page.locator(".docs-content").getByRole("link", { name: "Signature", exact: true }).click()
-    await expect(page).toHaveURL(/\/docs\/canary\/api\/signature\/?$/)
+    await expect(page).toHaveURL(/\/docs\/nightly\/api\/signature\/?$/)
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     const tree = await islandTree(page)
-    expect(tree).toContain("/docs/canary/api")
-    for (const path of ["1000.0.0", "1000.0.1", "1000.2.0-canary.0", "1000.2.0-canary.1", "rc", "latest"])
+    expect(tree).toContain("/docs/nightly/api")
+    for (const path of ["1000.0.0", "1000.0.1", "1000.2.0-nightly.0", "1000.2.0-nightly.1", "rc", "latest"])
         expect(tree).not.toContain(`/docs/${path}/`)
-    const searchIndex = JSON.stringify(await (await request.get(await searchIndexUrl(request, "/docs/canary/"))).json())
-    expect(searchIndex).toContain("Latestcanarymarker")
-    expect(searchIndex).not.toContain("Canaryonlymarker")
-    expect(searchIndex).toContain("/docs/canary/api/signature")
-    expect(searchIndex).not.toContain("/docs/1000.2.0-canary.1/")
-    const assistant = await (await request.get("/docs/canary/llms.txt")).text()
-    expect(assistant).toContain("/docs/canary/quick-start.md")
-    expect(assistant).not.toContain("/docs/1000.2.0-canary.1/")
-    const twin = await (await request.get("/docs/canary/quick-start.md")).text()
-    expect(twin).toContain("npm install --save-exact @neontechspace/fluxerly@1000.2.0-canary.1")
-    expect(twin).toContain("(/docs/canary/api/signature/)")
+    const searchIndex = JSON.stringify(await (await request.get(await searchIndexUrl(request, "/docs/nightly/"))).json())
+    expect(searchIndex).toContain("Latestnightlymarker")
+    expect(searchIndex).not.toContain("Nightlyonlymarker")
+    expect(searchIndex).toContain("/docs/nightly/api/signature")
+    expect(searchIndex).not.toContain("/docs/1000.2.0-nightly.1/")
+    const assistant = await (await request.get("/docs/nightly/llms.txt")).text()
+    expect(assistant).toContain("/docs/nightly/quick-start.md")
+    expect(assistant).not.toContain("/docs/1000.2.0-nightly.1/")
+    const twin = await (await request.get("/docs/nightly/quick-start.md")).text()
+    expect(twin).toContain("npm install --save-exact @neontechspace/fluxerly@1000.2.0-nightly.1")
+    expect(twin).toContain("(/docs/nightly/api/signature/)")
     await openSearch(page)
-    const input = page.getByRole("combobox", { name: "Search Canary documentation" })
-    await input.fill("Latestcanarymarker")
-    await page.getByRole("dialog").getByRole("option", { name: /Latestcanarymarker/ }).first().click()
-    await expect(page).toHaveURL(/\/docs\/canary\/api\/signature\/?(?:#sendonce)?$/)
+    const input = page.getByRole("combobox", { name: "Search Nightly documentation" })
+    await input.fill("Latestnightlymarker")
+    await page.getByRole("dialog").getByRole("option", { name: /Latestnightlymarker/ }).first().click()
+    await expect(page).toHaveURL(/\/docs\/nightly\/api\/signature\/?(?:#sendonce)?$/)
 })

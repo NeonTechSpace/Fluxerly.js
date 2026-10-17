@@ -42,7 +42,7 @@ Fluxerly is tested against Node.js 24.15 or newer.
 JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
 
 Keep the package manager's lockfile for reproducible installs and review the changelog before upgrading.
-Canary and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer Canary or RC that breaks the API.
+Nightly and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly or RC that breaks the API.
 The installed package also contains the changelog as `CHANGELOG.md`
 
 ## Start a bot

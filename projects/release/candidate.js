@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { assertExactFiles, contentFingerprint, exactFiles, readDirectory, readNpmTarball, sha256 } from "./content.js"
 import { assertStablePromotion, parseVersion, selectBaseline } from "./planning.js"
-import { assertSourceReleaseState, changelogSection } from "./source.js"
+import { assertSourceReleaseState, changelogSection, readNightlyPlan, unreleasedNotes } from "./source.js"
 
 export async function guardVersionContent({ plan, registries, stage }) {
     const inventory = await registries.inventory("@neontechspace/fluxerly")
@@ -33,15 +33,11 @@ export async function guardVersionContent({ plan, registries, stage }) {
 }
 
 /**
- * @param {{ workspace: string, output: string, line?: string, docs?: string, registries: any, stage: any }} options
+ * Reads the version, channel, line and release notes that a reviewed source commit records
+ * @param {string} workspace
+ * @param {string | undefined} line
  */
-export async function prepareCandidate({ workspace, output, line, docs, registries, stage }) {
-    if (
-        !isAbsolute(output) ||
-        resolve(output) === workspace ||
-        resolve(output).startsWith(join(workspace, "sdk") + sep)
-    )
-        throw new Error("Candidate output must be a new absolute directory outside SDK source")
+async function reviewedRelease(workspace, line) {
     const source = JSON.parse(await readFile(join(workspace, "sdk", "package.json"), "utf8"))
     const version = parseVersion(source.version)
     if (source.name !== "@neontechspace/fluxerly" || source.private !== true || version.major < 1000)
@@ -53,6 +49,40 @@ export async function prepareCandidate({ workspace, output, line, docs, registri
     await assertSourceReleaseState(workspace, version, fragments)
     if (fragments.some((fragment) => !fragment.id.startsWith("pre/")))
         throw new Error("Pending Changesets fragments must be versioned and reviewed before candidate staging")
+    return { name: source.name, version: source.version, channel: version.channel, line: version.line, notes }
+}
+
+/**
+ * Plans a nightly build of the source, whose version exists only in the candidate and never in source
+ * @param {string} workspace
+ * @param {any} registries
+ */
+async function nightlyRelease(workspace, registries) {
+    const name = "@neontechspace/fluxerly"
+    const plan = await readNightlyPlan(workspace, (await registries.inventory(name)).npmVersions)
+    const changes = await unreleasedNotes(workspace)
+    const notes =
+        "Automatic nightly build of `main`. It can include breaking changes at any time\n\n" +
+        (changes || "No release notes are recorded for these changes yet\n")
+    return { name, version: plan.version, channel: plan.channel, line: plan.line, notes }
+}
+
+/**
+ * @param {{ workspace: string, output: string, line?: string, docs?: string, channel?: string, registries: any, stage: any }} options
+ */
+export async function prepareCandidate({ workspace, output, line, docs, channel, registries, stage }) {
+    if (
+        !isAbsolute(output) ||
+        resolve(output) === workspace ||
+        resolve(output).startsWith(join(workspace, "sdk") + sep)
+    )
+        throw new Error("Candidate output must be a new absolute directory outside SDK source")
+    if (channel !== undefined && channel !== "nightly")
+        throw new Error("Only a nightly candidate selects its channel at preparation, others use the source version")
+    if (channel === "nightly" && line)
+        throw new Error("A nightly candidate follows the source and takes no release line")
+    const release =
+        channel === "nightly" ? await nightlyRelease(workspace, registries) : await reviewedRelease(workspace, line)
     let documentation
     let sourceCommit = null
     if (docs) {
@@ -60,18 +90,18 @@ export async function prepareCandidate({ workspace, output, line, docs, registri
         const snapshot = JSON.parse(documentation.toString("utf8"))
         if (
             !(Number.isSafeInteger(snapshot.schemaVersion) && snapshot.schemaVersion >= 1) ||
-            snapshot.version !== source.version ||
+            snapshot.version !== release.version ||
             !Array.isArray(snapshot.files) ||
             !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit)
         )
             throw new Error("Documentation snapshot does not match the reviewed SDK candidate")
         sourceCommit = snapshot.sourceCommit
     }
-    const inventory = await registries.inventory(source.name)
-    if (inventory.npmVersions.includes(source.version))
+    const inventory = await registries.inventory(release.name)
+    if (inventory.npmVersions.includes(release.version))
         throw new Error("Candidate version already exists, recover using its original immutable candidate")
-    const baselineVersion = selectBaseline({ ...inventory, version: source.version, channel: version.channel })
-    const baseline = baselineVersion === null ? null : await registries.baseline(source.name, baselineVersion)
+    const baselineVersion = selectBaseline({ ...inventory, version: release.version, channel: release.channel })
+    const baseline = baselineVersion === null ? null : await registries.baseline(release.name, baselineVersion)
     try {
         await lstat(output)
         throw new Error("Candidate output already exists, use a new directory")
@@ -79,7 +109,7 @@ export async function prepareCandidate({ workspace, output, line, docs, registri
         if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT") throw error
     }
     const intendedOutput = join(await realpath(dirname(output)), basename(output))
-    const staged = await stage({ version: source.version, output })
+    const staged = await stage({ version: release.version, output })
     const npm = await readDirectory(staged.npm.directory)
     const files = exactFiles(npm)
     const fingerprint = contentFingerprint(npm)
@@ -89,32 +119,32 @@ export async function prepareCandidate({ workspace, output, line, docs, registri
         await rm(actualOutput, { recursive: true })
     }
     try {
-        assertStablePromotion(version.channel, baselineVersion, fingerprint, baseline?.contentFingerprint)
+        assertStablePromotion(release.channel, baselineVersion, fingerprint, baseline?.contentFingerprint)
     } catch (error) {
         await discardOutput()
         throw error
     }
-    if (version.channel !== "stable" && baseline?.contentFingerprint === fingerprint) {
+    if (release.channel !== "stable" && baseline?.contentFingerprint === fingerprint) {
         await discardOutput()
         return {
             skipped: true,
             reason: "Publishable SDK bytes are unchanged from the previous published channel and line baseline",
             baseline: baselineVersion,
-            version: source.version,
-            channel: version.channel,
-            line: version.line,
+            version: release.version,
+            channel: release.channel,
+            line: release.line,
         }
     }
     assertExactFiles(readNpmTarball(await readFile(staged.npm.tarball)), files)
-    await writeFile(join(output, "notes.md"), notes)
+    await writeFile(join(output, "notes.md"), release.notes)
     if (documentation) await writeFile(join(output, "docs.json"), documentation)
     const artifacts = await readDirectory(output)
     const candidate = {
         schema: 1,
-        name: source.name,
-        version: source.version,
-        channel: version.channel,
-        line: version.line,
+        name: release.name,
+        version: release.version,
+        channel: release.channel,
+        line: release.line,
         sourceCommit,
         baseline,
         contentFingerprint: fingerprint,

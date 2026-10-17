@@ -18,7 +18,11 @@ const args = process.argv.slice(2)
 if (args.length && (args.length !== 2 || args[0] !== "--candidate" || !isAbsolute(args[1])))
     throw new Error("Use no arguments or --candidate ABSOLUTE_DIRECTORY")
 const candidate = args.length ? await readCandidate(args[1]) : null
-if (candidate && (candidate.name !== source.name || candidate.version !== source.version))
+// A nightly version exists only in its candidate, never in the checked source manifest
+if (
+    candidate &&
+    (candidate.name !== source.name || (candidate.channel !== "nightly" && candidate.version !== source.version))
+)
     throw new Error("Candidate identity does not match the checked source")
 const root = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(root, "fluxerly-npm-package-check-"))

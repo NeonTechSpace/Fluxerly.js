@@ -17,7 +17,7 @@ Introduce the SDK with a bot that responds to a message. Show client creation, o
 
 Use JavaScript & TypeScript for the default API section, `js-ts` in its generated URLs and `Default` in SDK identifiers.
 The testing entry points are titled Testing and Effect testing, with `testing` and `Effect-testing` in their generated URLs.
-Published Stable URLs remain tied to their original release. Canary and RC URLs show the newest published snapshot in their respective channels
+Published Stable URLs remain tied to their original release. Nightly and RC URLs show the newest published snapshot in their respective channels
 
 Lead with the reader's next task and explain unfamiliar concepts before use. Keep conditions beside consequences, and place necessary warnings before optional detail. Group sentences by purpose, with blank lines between Markdown paragraphs and empty comment lines between JSDoc paragraphs. Source wrapping does not end a paragraph. Omit the final period only at the end of a rendered paragraph, while retaining periods between its sentences
 
@@ -155,6 +155,7 @@ The local `/docs/preview/` preview is regenerated from the current SDK build and
 Released docs come from retained snapshots, not the latest declarations relabeled with an old version
 
 Snapshot creation (`projects/web/scripts/snapshot.js`) requires a prepared release version and clean reviewed source checkout.
+A nightly snapshot instead receives its planned nightly version through `--nightly VERSION` and adds the pending Changesets notes to its changelog as unreleased changes.
 It records the exact version, source commit and generated Markdown and metadata.
 Schema 2 snapshots write documentation links as `/docs/{{version}}/`, filled with each served path. Schema 1 snapshots keep exact-version links, which rolling channels rebase outside code.
 Build-time Markdown transforms list the schemas they read in the [schema registry](/projects/web/scripts/transform-schemas.js). A change to generated syntax needs a new schema while retained snapshots stay readable.
@@ -162,16 +163,16 @@ Release preparation binds that snapshot to the immutable package candidate.
 Publication requires the [registry contract and external setup](/docs/RELEASING.md#registry-publication-contract)
 
 Release import (`projects/web/scripts/fetch-releases.js`) uses authenticated `gh` reads for `NeonTechSpace/Fluxerly.js`.
-It selects every Stable release and the newest published Canary and RC before downloading snapshots. Each selected snapshot requires a unique `docs.json` asset, matching SHA256 digest, size, version tag and resolved source commit. A failed newest snapshot stops the build rather than falling back to an older prerelease
+It selects every Stable release and the newest published nightly and RC before downloading snapshots. Retired Canary releases are skipped. Each selected snapshot requires a unique `docs.json` asset, matching SHA256 digest, size, version tag and resolved source commit. A failed newest snapshot stops the build rather than falling back to an older prerelease
 
 Imported archives live under ignored `projects/web/released/`.
 An import requires an empty generated archive directory and preserves existing or partial files on failure.
 Reconcile partial output explicitly rather than deleting it to hide an error.
 Archive imports are not multi-file atomic writes
 
-The public site serves every published Stable version at its exact-version URL, plus the newest published Canary at `/docs/canary/` and the newest published RC at `/docs/rc/`. Each served version has its own guide, reference, changelog and search index. The rolling channel pages prominently identify the exact package version used for their content and installation commands
+The public site serves every published Stable version at its exact-version URL, plus the newest published nightly at `/docs/nightly/` and the newest published RC at `/docs/rc/`. Each served version has its own guide, reference, changelog and search index. The rolling channel pages prominently identify the exact package version used for their content and installation commands
 
-The selector has one entry per available channel, ordered Stable, RC and Canary, with channel-only labels. Keep Canary and RC available after a Stable release, even if their newest snapshots are older than Stable. The local source preview remains separate from published channels and is excluded from public builds
+The selector has one entry per available channel, ordered Stable, RC and Nightly, with channel-only labels. Keep Nightly and RC available after a Stable release, even if their newest snapshots are older than Stable. The local source preview remains separate from published channels and is excluded from public builds
 
 Release and documentation version parsing share the [release planner](/projects/release/planning.js)
 
@@ -185,14 +186,14 @@ No channel or version should imply that a prepared version was actually publishe
 
 ### Latest alias and missing pages
 
-The `/docs/latest/` address is an HTTP 302 redirect to the path of the newest imported Stable snapshot, otherwise the RC channel, otherwise the Canary channel. It is not a generated copy.
+The `/docs/latest/` address is an HTTP 302 redirect to the path of the newest imported Stable snapshot, otherwise the RC channel, otherwise the nightly channel. It is not a generated copy.
 The redirect keeps the rest of the path and the query. It never falls back to unpublished source. Public builds require at least one imported published snapshot.
 The build records the selected path in `content/versions.json` and the emitted worker. Changing it requires a successful documentation build and separately authorized deployment, without querying npm or release metadata on each request
 
 The hosting integration (`projects/web/scripts/hosting.js`) inventories the emitted HTML and produces a self-contained Cloudflare Pages `_worker.js` and `_routes.json` in the selected build directory.
 The routing policy (`projects/web/scripts/docs-routing.js`) handles `/`, `/docs` and documentation paths. Both documentation entrances return HTTP 302 to the path `latest` selects, without waiting for page JavaScript or a meta refresh
 
-Stable exact-version and rolling channel pages pass through unchanged. Numbered Canary and RC paths return 404, with no redirects or compatibility routes. Other unknown versions and broken non-channel documentation paths redirect to an existing equivalent page in the path `latest` selects when unambiguous, otherwise to its introduction. Missing pages in an emitted rolling channel redirect to that channel's introduction. An absent channel remains a 404 rather than falling back to Stable.
+Stable exact-version and rolling channel pages pass through unchanged. Numbered nightly, RC and retired Canary paths return 404, with no redirects or compatibility routes. Other unknown versions, including the retired `/docs/canary/` channel, and broken non-channel documentation paths redirect to an existing equivalent page in the path `latest` selects when unambiguous, otherwise to its introduction. Missing pages in an emitted rolling channel redirect to that channel's introduction. An absent channel remains a 404 rather than falling back to Stable.
 Malformed encoded paths fall back to the applicable channel introduction or the selected introduction rather than being interpreted as another page, except numbered prerelease paths remain 404.
 Queries are preserved, and redirect targets come only from the built page inventory. Browsers retain fragments across redirects when the response supplies none
 

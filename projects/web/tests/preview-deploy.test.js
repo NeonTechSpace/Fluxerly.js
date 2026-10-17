@@ -54,14 +54,14 @@ function fixture(options = {}) {
             if (/[\\/]dist[\\/]docs$/.test(path)) {
                 if (!docsListed) clock += options.localMs ?? 0
                 docsListed = true
-                return options.docsEntries ?? ["1000.0.0", "canary"]
+                return options.docsEntries ?? ["1000.0.0", "nightly"]
             }
             if (/[\\/]dist$/.test(path)) return ["deployment.json", "_headers", "docs"]
             return ["index.html"]
         },
         lstat: async (path) => {
             calls.push(["stat", path])
-            const directory = /[\\/](?:docs|1000\.0\.0|canary)$/.test(path)
+            const directory = /[\\/](?:docs|1000\.0\.0|nightly)$/.test(path)
             const size = path.endsWith("deployment.json") ? 100 : path.endsWith("_headers") ? 20 : 30
             return { size, isDirectory: () => directory, isFile: () => !directory }
         },

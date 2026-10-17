@@ -1,7 +1,7 @@
 import { parseVersion } from "./versions.js"
 
 const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-const labels = { rc: "RC", canary: "Canary" }
+const labels = { rc: "RC", nightly: "Nightly" }
 
 // Schema 1 snapshots contain exact-version links. Rolling channels rebase them outside code
 

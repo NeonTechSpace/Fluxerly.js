@@ -59,17 +59,24 @@ export async function announceRelease(candidate, directory, github, registries =
  * Fails unless the commit is main or one of its ancestors, using a read-only comparison
  * @param {{ api(path: string): Promise<any> }} github
  * @param {string} commit
+ * @param {string} [subject] What the commit identifies, for error messages
+ * @param {string} [remedy]
  */
-export async function assertReachableFromMain(github, commit) {
-    if (!commitPattern.test(commit)) throw new Error("Candidate source must be an exact commit")
+export async function assertReachableFromMain(
+    github,
+    commit,
+    subject = "Candidate source",
+    remedy = "prepare a candidate from merged main source",
+) {
+    if (!commitPattern.test(commit)) throw new Error(`${subject} must be an exact commit`)
     let comparison
     try {
         comparison = await github.api(`compare/main...${commit}`)
     } catch {
-        throw new Error("Candidate source reachability from main could not be verified")
+        throw new Error(`${subject} reachability from main could not be verified`)
     }
     if (!["behind", "identical"].includes(comparison?.status) || comparison.ahead_by !== 0)
-        throw new Error("Candidate source is not reachable from main, prepare a candidate from merged main source")
+        throw new Error(`${subject} is not reachable from main, ${remedy}`)
 }
 
 /**
@@ -95,7 +102,7 @@ export function validatePreparation(run, artifacts, { repository, runId, workflo
         run.id !== Number(runId) ||
         run.repository?.full_name !== repository ||
         run.head_repository?.full_name !== repository ||
-        run.event !== "workflow_dispatch" ||
+        !["workflow_dispatch", "schedule"].includes(run.event) ||
         run.status !== "completed" ||
         run.conclusion !== "success" ||
         run.path !== ".github/workflows/release-prepare.yml" ||
@@ -103,7 +110,7 @@ export function validatePreparation(run, artifacts, { repository, runId, workflo
         workflow.path !== ".github/workflows/release-prepare.yml" ||
         !commitPattern.test(run.head_sha)
     )
-        throw new Error("Preparation is not a successful manual run of this repository's release-prepare workflow")
+        throw new Error("Preparation is not a successful manual or scheduled run of this repository's release-prepare workflow")
     const candidates = artifacts.filter((artifact) => artifact.name.startsWith("release-candidate-"))
     if (candidates.length !== 1) throw new Error("Preparation must have exactly one named candidate artifact")
     const artifact = candidates[0]
@@ -120,6 +127,51 @@ export function validatePreparation(run, artifacts, { repository, runId, workflo
         throw new Error("Candidate artifact is expired or has inconsistent preparation provenance")
     // A dispatch run's head SHA identifies the workflow ref, not inputs.source_ref
     return { artifactId: artifact.id, artifactName: artifact.name, sourceCommit, workflowCommit: run.head_sha }
+}
+
+/**
+ * Reads a preparation run until it completes. A nightly preparation starts Release publish from its last job, so its
+ * run can still be finishing when publication begins. An unfinished run at the deadline fails validation
+ * @param {() => Promise<any>} read
+ */
+export async function awaitPreparation(
+    read,
+    {
+        wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+        now = () => performance.now(),
+        timeout = 5 * 60_000,
+        delay = 10_000,
+    } = {},
+) {
+    const started = now()
+    for (;;) {
+        const run = await read()
+        if (run?.status === "completed") return run
+        const remaining = timeout - (now() - started)
+        if (remaining <= 0) return run
+        await wait(Math.min(delay, remaining))
+    }
+}
+
+/**
+ * Verifies a finished preparation run and the provenance of its candidate before publication
+ * @param {any} github
+ * @param {string} runId
+ * @param {string} repository
+ * @param {Parameters<typeof awaitPreparation>[1]} [timing]
+ */
+export async function verifyPreparation(github, runId, repository, timing) {
+    if (!/^[1-9]\d*$/.test(runId)) throw new Error("Preparation needs a numeric run ID")
+    const run = await awaitPreparation(() => github.api(`actions/runs/${runId}`), timing)
+    const workflow = await github.api("actions/workflows/release-prepare.yml")
+    const result = validatePreparation(run, await github.artifacts(runId), { repository, runId, workflow })
+    if ((await github.api(`commits/${result.sourceCommit}`)).sha !== result.sourceCommit)
+        throw new Error("Selected candidate source does not resolve in this repository")
+    // The candidate commit is data for the tag target, so it must already be part of main
+    await assertReachableFromMain(github, result.sourceCommit)
+    // A nightly starts publication without review, so its preparation workflow must also come from main
+    await assertReachableFromMain(github, result.workflowCommit, "Preparation workflow commit", "run Release prepare from main")
+    return result
 }
 
 export async function reconcileRelease(
@@ -514,19 +566,7 @@ async function main() {
     const action = process.argv[2]
     if (action === "preparation") {
         const runId = process.env.PREPARATION_RUN_ID ?? ""
-        if (!/^[1-9]\d*$/.test(runId)) throw new Error("Preparation needs a numeric run ID")
-        const run = await github.api(`actions/runs/${runId}`)
-        const workflow = await github.api("actions/workflows/release-prepare.yml")
-        const result = validatePreparation(run, await github.artifacts(runId), {
-            repository: environment("GITHUB_REPOSITORY"),
-            runId,
-            workflow,
-        })
-        if ((await github.api(`commits/${result.sourceCommit}`)).sha !== result.sourceCommit)
-            throw new Error("Selected candidate source does not resolve in this repository")
-        // The candidate commit is data for the tag target, so it must already be part of main
-        await assertReachableFromMain(github, result.sourceCommit)
-        await writeOutputs(result)
+        await writeOutputs(await verifyPreparation(github, runId, environment("GITHUB_REPOSITORY")))
     } else if (action === "inspect" || action === "announce") {
         const directory = resolve(environment("CANDIDATE_DIRECTORY"))
         const checksum = process.env.CANDIDATE_CHECKSUM ?? ""

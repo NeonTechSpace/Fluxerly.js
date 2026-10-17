@@ -23,7 +23,9 @@ const sentinel = `
 test("Release support succeeds locally and malformed release commands still stop before effects", () => {
     for (const [args, status, reason] of [
         [["check-support"], 0, undefined],
-        [["version", "--epoch", "bogus", "--channel", "canary"], 1, /Epoch/],
+        [["version", "--epoch", "bogus", "--channel", "rc"], 1, /Epoch/],
+        [["plan", "--channel", "nightly", "--line", "1000.0"], 1, /no epoch or line/],
+        [["plan", "--channel", "nightly", "--epoch", "2000"], 1, /no epoch or line/],
         [["prepare"], 1, /--output/],
         [["status", "nonexistent-candidate"], 1, /--checksum/],
         [["verify", "nonexistent-candidate"], 1, /--checksum/],

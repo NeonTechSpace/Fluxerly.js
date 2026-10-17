@@ -10,7 +10,7 @@ import { selectBaseline } from "./planning.js"
 import { forwardRedacted } from "./redact.js"
 import { createRegistries } from "./registries.js"
 import { inspectPublished, publishCandidate } from "./recovery.js"
-import { readSourcePlan, versionSource } from "./source.js"
+import { readNightlyPlan, readSourcePlan, versionSource } from "./source.js"
 import { assertReleaseSupport } from "./support.js"
 
 const workspace = resolve(import.meta.dirname, "..")
@@ -164,11 +164,16 @@ async function main() {
         await command(process.execPath, [require.resolve("@changesets/cli/bin.js"), ...args], { interactive: true })
     } else if (action === "plan" || action === "version") {
         const options = arguments_(args, ["channel", "epoch", "line"])
-        if (action === "version") {
+        if (action === "plan" && options.channel === "nightly") {
+            if (options.epoch !== undefined || options.line)
+                throw new Error("A nightly plan follows the source and takes no epoch or line")
+            const inventory = await registries.inventory("@neontechspace/fluxerly")
+            console.log(JSON.stringify(await readNightlyPlan(workspace, inventory.npmVersions)))
+        } else if (action === "version") {
             console.log(JSON.stringify(await versionSource({ workspace, options, registries, stage })))
         } else console.log(JSON.stringify((await readSourcePlan(workspace, options)).plan))
     } else if (action === "prepare") {
-        const options = arguments_(args, ["output", "line", "docs"])
+        const options = arguments_(args, ["output", "line", "docs", "channel"])
         if (!options.output) throw new Error("Prepare needs --output NEW_ABSOLUTE_DIRECTORY")
         console.log(
             JSON.stringify(
@@ -176,6 +181,7 @@ async function main() {
                     workspace,
                     line: options.line,
                     docs: options.docs,
+                    channel: options.channel,
                     output: resolve(options.output),
                     registries,
                     stage,

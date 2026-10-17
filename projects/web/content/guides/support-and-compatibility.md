@@ -31,9 +31,9 @@ A Stable version such as `1000.2.3` has three numbers, and the first one holds t
 | Minor, the second number                 | Adds features and keeps existing code working                                                                                                                | `1000.2.3` → `1000.3.0` |
 | Patch, the third number                  | Only fixes bugs and keeps existing code working                                                                                                              | `1000.2.3` → `1000.2.4` |
 
-A version ending in `-canary.N` or `-rc.N`, such as `1001.0.0-rc.2`, is a preview of that Stable version. A Canary is an early preview, and an RC is the last check before the Stable release. Any preview can break existing code, even after the first Stable release, so the table above applies only to Stable releases
+A version ending in `-nightly.N` or `-rc.N`, such as `1001.0.0-rc.2`, is a preview of that Stable version. A nightly is an automatic daily build of the latest source, and an RC is the last check before the Stable release. Any preview can break existing code, even after the first Stable release, so the table above applies only to Stable releases
 
-The lockfile records the exact installed SDK version and keeps installs reproducible. For a Canary or RC, install with `--save-exact`, which npm and pnpm both accept, so a fresh install without a lockfile cannot pick up a newer Canary or RC that may break the API. Read the matching [changelog](/docs/{{version}}/changelog/) and rerun application tests before upgrading
+The lockfile records the exact installed SDK version and keeps installs reproducible. For a nightly or RC, install with `--save-exact`, which npm and pnpm both accept, so a fresh install without a lockfile cannot pick up a newer nightly or RC that may break the API. A nightly built during an RC cycle sorts below that cycle's RCs, so a nightly version range can resolve to an RC with older code. Read the matching [changelog](/docs/{{version}}/changelog/) and rerun application tests before upgrading
 
 No long-term maintenance window, response-time guarantee or deprecation notice period is promised for prerelease versions. A green SDK check covers its named tests, not every bot workload, provider deployment or recovery scenario
 

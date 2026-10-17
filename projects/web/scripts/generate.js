@@ -217,7 +217,7 @@ export async function renderReference({ entryPoints, tsconfig, output, publicPat
     return { project, categories, gaps, tasks }
 }
 
-export async function generateVersion(version, output, { plannedVersion } = {}) {
+export async function generateVersion(version, output, { plannedVersion, unreleased } = {}) {
     if (version !== "preview") parseVersion(version)
     if (version === "preview" && plannedVersion) parseVersion(plannedVersion)
     await mkdir(output, { recursive: true })
@@ -251,7 +251,9 @@ export async function generateVersion(version, output, { plannedVersion } = {}) 
             throw new Error(`Internal-only declaration escaped into reference: ${name}`)
     const releaseStatus = version === "preview"
         ? `These docs describe changes in development${plannedVersion ? ` for SDK **${plannedVersion}**` : ""}. This version has not been released and cannot be installed yet`
-        : `These docs cover SDK **${version}**`
+        : unreleased === undefined
+            ? `These docs cover SDK **${version}**`
+            : `These docs cover SDK **${version}**, an automatic nightly build of \`main\` that can include breaking changes at any time`
     await writeFile(join(output, "index.md"),
         (await readFile(join(partialsRoot, "overview.md"), "utf8")).replaceAll("{{release-status}}", releaseStatus))
     const installation = version === "preview"
@@ -275,12 +277,20 @@ export async function generateVersion(version, output, { plannedVersion } = {}) 
     } catch (error) {
         if (error.code !== "ENOENT") throw error
     }
+    // A nightly lists its pending notes above the released history, below the changelog's title
+    if (unreleased !== undefined) {
+        const section = `## Unreleased\n\n${unreleased || "No release notes are recorded for these changes yet\n"}\n`
+        const title = /^# .*\n\n?/.exec(changelog ?? "")?.[0] ?? ""
+        changelog = title + section + (changelog ?? "").slice(title.length)
+    }
     await writeFile(
         join(output, "changelog.md"),
         frontmatter("Changelog") +
             (version === "preview"
                 ? "This is unreleased source history. Prepared versions are not proof of registry publication\n\n"
-                : `Release history recorded for SDK ${version}\n\n`) +
+                : unreleased === undefined
+                    ? `Release history recorded for SDK ${version}\n\n`
+                    : `Unreleased changes in nightly SDK ${version}, followed by the release history\n\n`) +
             (changelog || "No package releases have been recorded yet\n"),
     )
     await writeFile(

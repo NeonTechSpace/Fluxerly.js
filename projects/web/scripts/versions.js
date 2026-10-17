@@ -3,7 +3,8 @@ export { parseVersion, compareVersions }
 // Every retained release asset must stay readable by the current generator
 export const snapshotSchemas = Object.freeze([1, 2])
 export function channelTargets(versions) {
-    const labels = { stable: "Stable", rc: "RC", canary: "Canary" }
+    // Retired Canary snapshots stay on GitHub but are no longer served
+    const labels = { stable: "Stable", rc: "RC", nightly: "Nightly" }
     const sorted = [...versions].sort(compareVersions).reverse()
     const targets = Object.entries(labels).flatMap(([channel, label]) => {
         const version = sorted.find((v) => parseVersion(v).channel === channel)
