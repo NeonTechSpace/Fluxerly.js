@@ -323,12 +323,16 @@ export class ClientOwner<M extends MessageCore = Message> {
     #messageCollectors = new Set<MessageCollector<M>>()
     trackMessageCollector(collector: MessageCollector<M>) {
         this.#messageCollectors.add(collector)
-        return () => this.#messageCollectors.delete(collector)
+        // A collector that ends while the client closes stays until shutdown has collected its cleanup outcome
+        return () => void (this.#closingOrClosed() || this.#messageCollectors.delete(collector))
     }
     #reactionCollectors = new Set<ReactionCollector>()
     trackReactionCollector(collector: ReactionCollector) {
         this.#reactionCollectors.add(collector)
-        return () => this.#reactionCollectors.delete(collector)
+        return () => void (this.#closingOrClosed() || this.#reactionCollectors.delete(collector))
+    }
+    #closingOrClosed() {
+        return this.#state === "Closing" || this.#state === "Closed"
     }
     readonly logging: ClientLogger
     /** Client-wide failure reports, delivered to onError or logged */
@@ -363,6 +367,8 @@ export class ClientOwner<M extends MessageCore = Message> {
     #nextIdentifyAt = 0
     #worker: Fiber.Fiber<void> | undefined
     #workerExit: Exit.Exit<void, ConnectionFailure> | undefined
+    /** The service cleanup the worker ran when an explicit shutdown interrupted it, which that shutdown logs */
+    #workerServices: Exit.Exit<void> | undefined
     #terminal = Deferred.makeUnsafe<void, ConnectionFailure>()
     #shutdown = Deferred.makeUnsafe<void>()
     #typingClosed = Deferred.makeUnsafe<void>()
@@ -1725,7 +1731,15 @@ export class ClientOwner<M extends MessageCore = Message> {
                     ),
                 ],
                 { concurrency: "unbounded" },
-            ).pipe(Effect.map((exits) => defectsOnly(exits.flat()))),
+            ).pipe(
+                Effect.map((exits) => defectsOnly(exits.flat())),
+                Effect.ensuring(
+                    Effect.sync(() => {
+                        this.#messageCollectors.clear()
+                        this.#reactionCollectors.clear()
+                    }),
+                ),
+            ),
         ]).pipe(Effect.onExit(() => this.#awaitTyping()))
     }
 
@@ -2170,6 +2184,9 @@ export class ClientOwner<M extends MessageCore = Message> {
                                     // An explicit shutdown lands here once the sockets are closed
                                     if (closing) yield* owner.#saveSessions()
                                     const services = yield* Effect.exit(owner.#closeServices())
+                                    // The explicit shutdown that interrupted this worker logs the cleanup. Otherwise this
+                                    // worker logs it below, even when a shutdown arrives during the cleanup
+                                    if (closing) owner.#workerServices = services
                                     const outcome = Exit.isFailure(services)
                                         ? Exit.failCause(
                                               Cause.combine(
@@ -2305,11 +2322,19 @@ export class ClientOwner<M extends MessageCore = Message> {
                 yield* owner.#saveSessions()
                 const services = yield* Effect.exit(owner.#closeServices())
                 const exit = owner.#workerExit
+                // A connected worker already ran the service cleanup when it was interrupted, so its failures are logged here
+                const earlier = owner.#workerServices
+                const cleaned =
+                    earlier && Exit.isFailure(earlier)
+                        ? Exit.failCause(
+                              Cause.combine(earlier.cause, Exit.isFailure(services) ? services.cause : Cause.empty),
+                          )
+                        : services
                 owner.#finish()
                 logShutdownEnd(owner.logging, fiber.context, {
                     everStarted: owner.#everStarted,
                     startedAt,
-                    services,
+                    services: cleaned,
                 })
                 if (Exit.isFailure(services)) {
                     Deferred.doneUnsafe(owner.#terminal, services)
