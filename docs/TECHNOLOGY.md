@@ -220,7 +220,15 @@ Knip reports unused SDK files and exports, and CSpell checks SDK source comments
 These tools are exact workspace development dependencies configured in [projects/](/projects/).
 In CI, actionlint lints the workflow files and zizmor audits them.
 Website formatting has not been selected.
-The Effect language service supports only TypeScript 5 and 6, so it is not used with the SDK's TypeScript 7 compiler
+
+The Effect language service for TypeScript 7, `@effect/tsgo`, checks SDK source, tests and examples for Effect mistakes, such as an Effect that is built but never run.
+Its errors and warnings fail the lint.
+Its style suggestions appear in editors and in `pnpm build` after the [editor setup](/docs/REPOSITORY.md#development-checks).
+The [SDK tsconfig](/projects/sdk/tsconfig.json) turns off `lazyEffect`, because zero-argument public methods such as `connect()` return a new Effect by design.
+Source that keeps a failure from a caller's store, hook or callback as it is turns off `unknownInEffectCatch` for that line with an `@effect-diagnostics-next-line` comment.
+A session store timeout is reported as a plain `Error` among those failures, so its line turns off `globalErrorInEffectFailure` the same way.
+Tests turn both rules off.
+Type tests build Effect values without running them, so they also skip `floatingEffect` and `missingEffectContext`
 
 The SDK build and test tools are installed and configured.
 The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.

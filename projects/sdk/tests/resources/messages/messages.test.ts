@@ -175,6 +175,8 @@ test("invalid message inputs and options fail without network work; native sends
         Effect.scoped(
             Effect.gen(function* () {
                 const native = yield* createNative({ token })
+                // The send Effect is built and never run, so the request is never dispatched
+                // @effect-diagnostics-next-line floatingEffect:off
                 native.messages.send("20", { content: "not executed" })
             }),
         ),

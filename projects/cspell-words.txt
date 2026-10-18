@@ -14,6 +14,7 @@ repobeats
 bunx
 journalctl
 tsgolint
+unpatch
 zizmor
 
 # Protocol and provider terms

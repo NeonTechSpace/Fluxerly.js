@@ -97,7 +97,8 @@ Run these commands from [projects/](/projects/) using the development Node versi
 | `pnpm build` | Compile the SDK with TypeScript 7 and build its documentation website |
 | `pnpm --filter @neontechspace/fluxerly format` | Format SDK source, tests and configuration with Prettier |
 | `pnpm --filter @neontechspace/fluxerly format:check` | Check SDK formatting without writing files |
-| `pnpm lint` | Lint SDK code and tests, release tooling and website scripts with Oxlint, report unused SDK files and exports with Knip and check spelling with CSpell. Warnings do not fail the check |
+| `pnpm lint` | Lint SDK code and tests, release tooling and website scripts with Oxlint, check SDK Effect code with `@effect/tsgo`, report unused SDK files and exports with Knip and check spelling with CSpell. Oxlint warnings do not fail the check |
+| `pnpm --filter @neontechspace/fluxerly exec effect-tsgo patch --typescript` | Show Effect diagnostics and fixes in an editor that uses the workspace TypeScript 7. It replaces the local compiler, so `pnpm build` then also prints Effect suggestions. Run the same command with `unpatch` to restore it |
 | `pnpm check` | Check SDK formatting, lint, build, public-client surface, types, runtime and packed consumers, then release tooling types, lint and tests, and website script lint, build, types and tests |
 | `pnpm --filter @neontechspace/fluxerly test:public-contract` | Check paired client namespace names, runtime keys, structural parameter/result parity and JSDoc presence |
 | `pnpm --filter @neontechspace/fluxerly test:npm` | Check npm installation of the packed SDK and required Effect peer |

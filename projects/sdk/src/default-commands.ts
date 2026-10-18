@@ -821,6 +821,7 @@ function aroundCommand<M extends MessageCore, E>(
             (cause) => primaryError(cause) === restError,
             report,
         )
+        // @effect-diagnostics-next-line unknownInEffectCatch:off
         return Effect.tryPromise({ try: () => step(0), catch: (error) => error }).pipe(
             Effect.exit,
             // Middleware that did not await next still waits for the command, so its failure is not lost

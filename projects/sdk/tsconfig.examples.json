@@ -1,0 +1,10 @@
+{
+    "extends": "./tsconfig.test.json",
+    "compilerOptions": {
+        "paths": {
+            "@neontechspace/fluxerly": ["./src/index.ts"],
+            "@neontechspace/fluxerly/effect": ["./src/effect.ts"]
+        }
+    },
+    "include": ["examples/**/*.ts"]
+}

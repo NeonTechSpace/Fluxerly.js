@@ -35,6 +35,8 @@
             "ignoreUnresolved": ["^(\\.\\./)+dist/"],
             // Lint tools are workspace-root devDependencies shared by every project
             "ignoreBinaries": ["oxlint", "knip", "cspell"],
+            // The Effect diagnostics plugin that tsconfig.json names is built into @effect/tsgo
+            "ignoreDependencies": ["@effect/language-service"],
             "ignore": [
                 // Copied into isolated packed consumers and resolved against the packed SDK and their compiled out/ files
                 "tests/packaging/consumers/**",

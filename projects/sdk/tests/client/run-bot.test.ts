@@ -1034,7 +1034,9 @@ describe("public runBot", () => {
                         expect(ctx.client.messages).toBeDefined()
                         yield* ctx.reply({ content: `${service.label}: Pong!` })
                         entered.resolve()
-                        yield* Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => interrupted.resolve())))
+                        return yield* Effect.never.pipe(
+                            Effect.onInterrupt(() => Effect.sync(() => interrupted.resolve())),
+                        )
                     }),
             },
         })

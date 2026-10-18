@@ -166,6 +166,7 @@ export function defaultMiddleware(
 ): InternalMiddleware {
     return (invocation, next) =>
         Effect.flatMap(Effect.context<never>(), (services) =>
+            // @effect-diagnostics-next-line unknownInEffectCatch:off
             Effect.tryPromise({
                 try: (signal) =>
                     new Promise<unknown>((resolve) => {

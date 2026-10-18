@@ -414,7 +414,8 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
         () =>
             (setup === undefined
                 ? Effect.void
-                : Effect.tryPromise({
+                : // @effect-diagnostics-next-line unknownInEffectCatch:off
+                  Effect.tryPromise({
                       try: () => runBotSetup(setup, client, stopping.signal),
                       catch: (error) => error,
                   }).pipe(

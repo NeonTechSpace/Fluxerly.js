@@ -461,6 +461,7 @@ export function promiseHook(
     hook: (report: FailureReport) => unknown,
 ): (report: InternalReport) => Effect.Effect<unknown, unknown> {
     return (report) =>
+        // @effect-diagnostics-next-line unknownInEffectCatch:off
         Effect.tryPromise({
             try: () => Promise.resolve(hook(publicReport(report))).then(throwIfErr),
             // Keep the thrown or rejected value itself for the hook failure record

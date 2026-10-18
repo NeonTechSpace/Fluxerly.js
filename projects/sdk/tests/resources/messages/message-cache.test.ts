@@ -685,7 +685,7 @@ test("native onError captures creation context, queues reports in order and is i
                         Effect.gen(function* () {
                             reports.push(report)
                             annotations.push((yield* References.CurrentLogAnnotations).cacheCreation)
-                            yield* Effect.never
+                            return yield* Effect.never
                         }).pipe(
                             Effect.ensuring(
                                 Effect.sync(() => {

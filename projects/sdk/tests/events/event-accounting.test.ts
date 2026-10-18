@@ -49,7 +49,7 @@ test("executing handler accounting releases after interruption and failure", asy
                         Effect.gen(function* () {
                             yield* Deferred.succeed(entered, undefined)
                             yield* Deferred.await(release)
-                            if (fail) yield* Effect.fail("fixture")
+                            if (fail) return yield* Effect.fail("fixture")
                         }),
                     undefined,
                     () => Deferred.succeed(reported, undefined),

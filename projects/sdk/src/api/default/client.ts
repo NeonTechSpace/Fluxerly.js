@@ -652,6 +652,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
             Error.captureStackTrace(timing, schedule)
             throw timing
         }
+        // @effect-diagnostics-next-line unknownInEffectCatch:off
         const run = Effect.tryPromise({
             try: (signal) => Promise.resolve(task(signal)).then(throwIfErr),
             // Keep the thrown or rejected value itself for the failure report
@@ -710,6 +711,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                                     Effect.withFiber((fiber) => {
                                         // Operations the handler starts hold their rejection records for its outcome
                                         const rejections = fiberRejectionScope(fiber.context)
+                                        // @effect-diagnostics-next-line unknownInEffectCatch:off
                                         return Effect.tryPromise({
                                             try: (signal) =>
                                                 Promise.resolve(

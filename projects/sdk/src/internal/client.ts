@@ -539,7 +539,8 @@ export class ClientOwner<M extends MessageCore = Message> {
         const plan = owner.#plan!
         const coordinator = owner.#configuration?.identifyCoordinator
         const permit = coordinator
-            ? Effect.tryPromise({
+            ? // @effect-diagnostics-next-line unknownInEffectCatch:off
+              Effect.tryPromise({
                   try: (signal) => Promise.resolve(coordinator.permit(shardId, plan.totalShards, signal)),
                   catch: (error) => error,
               }).pipe(
@@ -2070,6 +2071,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                     savedAt: Date.now(),
                     totalShards: plan.totalShards,
                 })
+                // @effect-diagnostics-next-line unknownInEffectCatch:off
                 return Effect.tryPromise({
                     try: () => Promise.resolve(store.save(shard.shardId, snapshot)),
                     catch: (error) => error,
@@ -2078,6 +2080,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                         duration: sessionSaveTimeoutMs,
                         orElse: () =>
                             Effect.fail(
+                                // @effect-diagnostics-next-line globalErrorInEffectFailure:off
                                 new Error(
                                     `The session store's save did not finish within ${formatDuration(sessionSaveTimeoutMs)}`,
                                 ),
@@ -2413,7 +2416,8 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
                                               ),
                                           )
                                 })
-                              : Effect.tryPromise({
+                              : // @effect-diagnostics-next-line unknownInEffectCatch:off
+                                Effect.tryPromise({
                                     try: () => Promise.resolve(callback(publicReport(report))).then(throwIfErr),
                                     catch: (error) => error,
                                 })

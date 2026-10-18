@@ -16,7 +16,38 @@
         "declarationMap": true,
         "sourceMap": true,
         "rootDir": "src",
-        "outDir": "dist"
+        "outDir": "dist",
+        "plugins": [
+            {
+                "name": "@effect/language-service",
+                "diagnosticSeverity": {
+                    "lazyEffect": "off"
+                },
+                "overrides": [
+                    {
+                        "include": ["tests/**/*.ts"],
+                        "options": {
+                            "diagnosticSeverity": {
+                                "unknownInEffectCatch": "off",
+                                "globalErrorInEffectFailure": "off"
+                            }
+                        }
+                    },
+                    {
+                        "include": [
+                            "tests/packaging/consumers/**/*.ts",
+                            "tests/resources/commands/command-message-types.ts"
+                        ],
+                        "options": {
+                            "diagnosticSeverity": {
+                                "floatingEffect": "off",
+                                "missingEffectContext": "off"
+                            }
+                        }
+                    }
+                ]
+            }
+        ]
     },
     "include": ["src/**/*.ts"]
 }

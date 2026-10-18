@@ -211,7 +211,7 @@ test("native handlers share concurrency controls, own cleanup and send replies t
                         Effect.gen(function* () {
                             seen.push(message.id)
                             yield* client.messages.reply(message, { content: "native" })
-                            yield* Effect.never
+                            return yield* Effect.never
                         }).pipe(
                             Effect.ensuring(
                                 Effect.sync(() => {
@@ -356,7 +356,7 @@ test("native callback retains caller annotations and cleanup defects remain in s
                     Effect.gen(function* () {
                         const annotations = yield* References.CurrentLogAnnotations
                         observed.push(annotations.requestId)
-                        yield* Effect.never
+                        return yield* Effect.never
                     }).pipe(Effect.ensuring(Effect.die(defect))),
                 )
                 yield* client.connect()

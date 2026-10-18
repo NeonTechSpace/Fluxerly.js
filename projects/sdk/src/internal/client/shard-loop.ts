@@ -249,6 +249,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             Effect.gen(function* () {
                 sessionsLoaded = true
                 const loadBudgetMs = Math.max(1, Math.min(sessionLoadTimeoutMs, deadline - now()))
+                // @effect-diagnostics-next-line unknownInEffectCatch:off
                 const loaded = yield* Effect.tryPromise({
                     try: () => Promise.resolve(host.sessions!.load(shard.shardId)),
                     catch: (error) => error,
@@ -257,6 +258,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                         duration: loadBudgetMs,
                         orElse: () =>
                             Effect.fail(
+                                // @effect-diagnostics-next-line globalErrorInEffectFailure:off
                                 new Error(
                                     `The session store's load did not finish within ${formatDuration(loadBudgetMs)}`,
                                 ),

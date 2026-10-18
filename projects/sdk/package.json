@@ -76,12 +76,13 @@
     "scripts": {
         "format": "prettier --write .",
         "format:check": "prettier --check .",
-        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:tests && pnpm run lint:unused && pnpm run lint:spelling",
+        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:tests && pnpm run lint:effect && pnpm run lint:unused && pnpm run lint:spelling",
         "lint:discards": "node scripts/silent-discards.js",
         "lint:code": "oxlint -c ../.oxlintrc.json src scripts examples",
         "lint:unused": "knip --directory .. --workspace sdk --no-progress",
         "lint:spelling": "cspell --no-progress -c ../cspell.json",
         "lint:tests": "oxlint -c ../.oxlintrc.json tests",
+        "lint:effect": "effect-tsgo diagnostics --project tsconfig.test.json --strict --severity error,warning --format text && effect-tsgo diagnostics --project tsconfig.examples.json --strict --severity error,warning --format text",
         "build": "node scripts/build.js",
         "packages:prepare": "node scripts/packages.js",
         "test:packaging": "node --test tests/packaging/packaging-check.js",
@@ -172,6 +173,7 @@
         "effect": "^4.0.0"
     },
     "devDependencies": {
+        "@effect/tsgo": "0.53.3",
         "@types/node": "24.19.0",
         "@types/ws": "8.18.1",
         "effect": "4.0.1",

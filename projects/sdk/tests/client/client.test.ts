@@ -185,7 +185,7 @@ describe("client creation through both public entry points", () => {
                             Effect.gen(function* () {
                                 const client = yield* createEffectClient({ token: "fixture-only-not-a-credential" })
                                 yield* Deferred.succeed(created, client)
-                                yield* Effect.never
+                                return yield* Effect.never
                             }),
                         ),
                     )

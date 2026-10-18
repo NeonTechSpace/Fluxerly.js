@@ -174,6 +174,7 @@ export interface TestRest {
 
 /** Run a test wait as an Effect. A timeout is the typed failure, and misuse or shutdown is a defect */
 function testWait<A>(start: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, TestTimeoutError> {
+    // @effect-diagnostics-next-line unknownInEffectCatch:off
     return Effect.tryPromise({ try: start, catch: (error) => error }).pipe(
         Effect.catch((error) => (error instanceof TestTimeoutError ? Effect.fail(error) : Effect.die(error))),
     )
