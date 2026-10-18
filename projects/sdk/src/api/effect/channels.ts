@@ -30,7 +30,10 @@ import type {
  * Total deadline defaults to the client's rest.defaultTimeoutMs, 30,000 ms unless configured, including queue waits, retries and rate-limit waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
  *
- * Sending any channel write clears the enabled channel cache. Input failures before dispatch leave it unchanged. The SDK does not fetch channels automatically after a write.
+ * Sending a channel write removes the written channel from the enabled channel cache, with its threads when the write deletes the channel or converts its type,
+ * and with the forum posts that apply a tag it removes, as deleteForumTag and an edit with availableTags can, because Fluxer drops removed tags from posts without a thread update.
+ * A write to a category, or one that names a community, such as create or reorder, removes that community's cached channels. A write to a channel the cache does not hold removes every cached channel, because its community is unknown.
+ * Input failures before dispatch leave the cache unchanged, and a write rejected after dispatch removes the same entries. The SDK does not fetch channels automatically after a write.
  * The follow, create, edit, delete, reorder, permission-overwrite and forum-tag mutations accept ChannelAuditOperationOptions. Read operations reject auditReason
  *
  * Operation inputs are copied when the Effect executes and later caller mutations are not observed. Permission bits are bigint values encoded as decimal JSON strings.

@@ -20,7 +20,7 @@ The [deploying guide](/docs/{{version}}/deploying/#what-happens-on-shutdown) lis
 
 ## What each handler receives
 
-In the default API, each event handler receives one context object with `event`, `client` and `signal`. Effect handlers receive `event` and `client` without a signal, because stopping the bot interrupts their Effect instead. A `messageCreate` handler also receives `message` and `reply`
+In the default API, each event handler receives one context object with `event`, `client`, `signal` and `context`, the same `EventContext` a `client.on` handler receives. Effect handlers receive `event`, `client` and `context` without a signal, because stopping the bot interrupts their Effect instead. A `messageCreate` handler also receives `message` and `reply`
 
 The `reply` helper accepts a string or full message content and already applies the handler's cancellation signal. Return its Result so a failed reply is reported like a thrown error, as [reliability](/docs/{{version}}/reliability/#return-the-replys-result) explains. In the Effect API, `reply` returns an Effect. Return it or compose it into the handler's Effect so the SDK can run and interrupt it
 

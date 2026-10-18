@@ -60,9 +60,9 @@ type Lookups = {
     DirectMessages: "get"
     Emojis: "get"
     Guilds: "get"
-    Members: "get"
+    Members: "get" | "getSelf"
     Messages: "get"
-    Roles: "get"
+    Roles: "get" | "getAll"
     Stickers: "get"
     Users: "get" | "getSelf"
 }

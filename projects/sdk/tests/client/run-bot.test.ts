@@ -293,6 +293,48 @@ describe("public runBot", () => {
         expect((await running).isOk()).toBe(true)
     })
 
+    test("event handlers receive the EventContext of their delivery in both entry points", async () => {
+        const run = async (
+            start: (signal: AbortSignal, seen: (context: unknown, epoch: number) => void) => unknown,
+        ) => {
+            const fixture = await gateway()
+            const abort = new AbortController()
+            onTestFinished(() => abort.abort())
+            const handled = deferred<{ context: unknown; epoch: number }>()
+            const running = start(abort.signal, (context, epoch) => handled.resolve({ context, epoch }))
+            await fixture.identified
+            fixture.dispatch("CHANNEL_PINS_UPDATE", { channel_id: "20", last_pin_timestamp: null })
+            const { context, epoch } = await handled.promise
+            abort.abort()
+            await running
+            // The context is the client's own, so sessionEpoch names the session that delivered the event
+            expect(epoch).toBeGreaterThan(0)
+            expect(context).toEqual({ shardId: 0, sessionEpoch: epoch, receivedBytes: expect.any(Number) })
+            expect(Object.isFrozen(context)).toBe(true)
+        }
+        await run((signal, seen) =>
+            runBot({
+                token,
+                signal,
+                events: {
+                    channelPinsUpdate: ({ context, client }) => seen(context, client.shards[0]!.sessionEpoch),
+                },
+            }),
+        )
+        await run((signal, seen) =>
+            Effect.runPromiseExit(
+                runNativeBot({
+                    token,
+                    signal,
+                    events: {
+                        channelPinsUpdate: ({ context, client }) =>
+                            Effect.sync(() => seen(context, client.shards[0]!.sessionEpoch)),
+                    },
+                }),
+            ),
+        )
+    })
+
     test("default misuse throws ConfigurationError before any client, listener or request exists", async () => {
         const side = watchSideEffects()
         const execute = () => undefined

@@ -22,7 +22,7 @@ import type { CommandArgumentSchema } from "#sdk/command-arguments"
 import { ApplicationError, CancelledError, ConfigurationError, SdkDefect, type ConnectError } from "#sdk/errors"
 import { EventOverflowError } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
-import type { HandlerOptions, EventMap, EventName } from "#sdk/events"
+import type { HandlerOptions, EventContext, EventMap, EventName } from "#sdk/events"
 import type { FailureReport } from "#sdk/failures"
 import {
     botRouter,
@@ -116,6 +116,10 @@ export type BotEventContext<K extends EventName, M extends MessageCore = Message
     readonly client: Client<M>
     /** Cancels SDK operations passed this signal when the handler is stopped. It cannot stop arbitrary application Promises */
     readonly signal: AbortSignal
+    /** How the client received this event, the EventContext a client.on handler receives. Its sessionEpoch tells which
+     * shard session the event belongs to
+     */
+    readonly context: EventContext
 } & (K extends "messageCreate"
     ? {
           /** The same incoming message as event */
@@ -550,7 +554,7 @@ function registerBot<M extends MessageCore>(
             subscriptions.push(
                 client.on(
                     event,
-                    (payload, signal) =>
+                    (payload, signal, context) =>
                         skipsBotMessage(event, payload, skipBots)
                             ? undefined
                             : callback(
@@ -558,6 +562,7 @@ function registerBot<M extends MessageCore>(
                                       event: payload,
                                       client,
                                       signal,
+                                      context,
                                       ...(event === "messageCreate"
                                           ? {
                                                 message: payload as M,

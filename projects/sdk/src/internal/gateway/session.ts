@@ -117,6 +117,12 @@ export interface GatewaySessionOptions<M extends MessageCore> {
     readonly timeoutMs: number
     /** Called once when the session is ready, after request owners are attached */
     readonly onReady: (mode: "identify" | "resume") => void
+    /**
+     * Called when a new session's READY is accepted, before raw observers and before the socket's next frame. The
+     * communities Fluxer sends after READY can arrive in the same read, so state the new session replaces is released here
+     * rather than at onReady, which runs later and would discard them
+     */
+    readonly onSessionStart?: (() => void) | undefined
     /** Heartbeat round trip in milliseconds, or null when the session stops having a current measurement */
     readonly onLatency: (milliseconds: number | null) => void
     /** Called when a ready session ends with a retryable failure */
@@ -209,6 +215,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                 session,
                 timeoutMs,
                 onReady,
+                onSessionStart,
                 onLatency,
                 onRecovering,
                 onDispatch,
@@ -365,6 +372,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                                 field: "s",
                             })
                         session.sequence = sequence
+                        if (type === "READY") onSessionStart?.()
                         onRaw?.(type, sequence, body, bytes)
                         if (logger?.enabled("debug", "gateway"))
                             logger.log({

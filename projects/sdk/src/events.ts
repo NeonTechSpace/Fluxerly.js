@@ -172,7 +172,9 @@ export interface GuildLifecycleEvents {
      * Before delivery, fills the enabled community, role, emoji, sticker and channel caches from the snapshot, replacing this
      * community's earlier roles, emojis, stickers, channels and threads. The channel cache takes the active threads the
      * bot can view, and a malformed thread is left out with a gateway.threadSkipped Warn record.
-     * Members are not retained, because the snapshot lists only a few
+     * The enabled member cache stores the members the snapshot lists, which are the bot's own and those in voice channels,
+     * without treating them as the community's member list. The snapshots sent while a session starts list member accounts
+     * by ID only, so from those only the bot's own member is stored, completed from READY's account
      */
     readonly guildCreate: GuildCreate
     /** Current community configuration, not previous-and-current values or a patch to merge */
@@ -512,6 +514,27 @@ export interface EventContext {
      * Fluxer requires more shards and it moves to automatic sharding
      */
     readonly shardId: number
+    /**
+     * The receiving shard's ShardState.sessionEpoch when the client accepted the event, before it waited in this
+     * handler's queue. An event received before a new session keeps its earlier value even when the handler runs after
+     * the new session started, so compare this value rather than the shard's current one to tell which session an event
+     * belongs to. Keep the last value seen per community, because one shard serves many communities, and treat a changed
+     * value as a sign that events of that community between the two sessions may have been missed.
+     * Fluxer then sends the community again as a guildCreate event. It is 0 for events of a session resumed from a
+     * saved session before the shard's first new session in this client
+     *
+     * @example
+     * ```ts
+     * import type { EventContext } from "@neontechspace/fluxerly"
+     * const seen = new Map<string, number>()
+     * export function missedEvents(guildId: string, context: EventContext) {
+     *     const previous = seen.get(guildId)
+     *     seen.set(guildId, context.sessionEpoch)
+     *     return previous !== undefined && previous !== context.sessionEpoch
+     * }
+     * ```
+     */
+    readonly sessionEpoch: number
     /** UTF-8 byte length of the whole received gateway frame that carried the event, the same size counted against maxPendingBytes.
      * Events decoded from one frame, such as guildCreate and its voiceStateSnapshot, report the same value
      */
@@ -528,7 +551,7 @@ export interface EventInvocationOf<K extends EventName, M extends MessageCore = 
     readonly event: K
     /** Frozen event payload the handler receives */
     readonly payload: EventMap<M>[K]
-    /** Shard and received size of the frame that carried the event */
+    /** Shard, its session epoch and received size of the frame that carried the event */
     readonly context: EventContext
     /** Identifier of the subscription whose handler this invocation runs, such as messageCreate#3 */
     readonly subscriptionId: string
@@ -614,7 +637,13 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      */
     readonly guildChannelCreate: import("./channels.js").GuildChannel
     /** Current community channel data, without previous values. Fetch explicitly if a decision requires fresh permissions.
-     * Updates its enabled channel-cache observation, except a category update invalidates all channels cached for the community
+     * Updates its enabled channel-cache observation, except a category update invalidates all channels cached for the community.
+     * Fluxer retypes a converted channel's threads without thread events for archived ones, so a text or announcement
+     * channel update also evicts the channel's cached threads whose type its type cannot hold. Fluxer removes forum tags
+     * through this update alone and drops them from posts on read, so a forum or media channel update also evicts the
+     * channel's cached posts that apply a tag missing from its availableTags. Either update also stops pending reads from
+     * storing the channel's threads, whether or not the channel was cached. Other pending reads by ID, and reads of other
+     * communities, still store what they return, while a pending read of the channel's own community stores nothing
      */
     readonly guildChannelUpdate: import("./channels.js").GuildChannel
     /** A community channel was deleted or became invisible. Evicts its cached messages, without generating message deletion events.

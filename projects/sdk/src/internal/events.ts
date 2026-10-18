@@ -92,11 +92,13 @@ export function recordCommandFailure(
     metrics.handlerFailure(name ?? "messageCreate", context)
 }
 
-/** One admitted event with the shard and received frame size it arrived with */
+/** One admitted event with the shard, its session epoch and the received frame size it arrived with */
 interface Delivery<A> {
     readonly message: A
     readonly bytes: number
     readonly shardId: number
+    /** The shard's session epoch when the event was admitted, so a later new session does not relabel a queued event */
+    readonly sessionEpoch: number
     /** Partition key, computed once when a partitioned handler first considers this event, or the failure computing it */
     key?: string | { readonly failure: unknown }
 }
@@ -216,7 +218,11 @@ export function nativeMiddleware(
 
 /** Frozen delivery details for a handler */
 function eventContext(delivery: Delivery<unknown>): EventContext {
-    return Object.freeze({ shardId: delivery.shardId, receivedBytes: delivery.bytes })
+    return Object.freeze({
+        shardId: delivery.shardId,
+        sessionEpoch: delivery.sessionEpoch,
+        receivedBytes: delivery.bytes,
+    })
 }
 
 /** Identity and logging for one event source, shared with its overflow records */
@@ -405,19 +411,19 @@ export class EventSource<A = Message> {
         return delivery
     }
 
-    /** Admit one event received by a shard, in a frame of the given byte length */
-    offer(message: A, bytes: number, shardId = 0) {
+    /** Admit one event received by a shard during the given session epoch, in a frame of the given byte length */
+    offer(message: A, bytes: number, shardId = 0, sessionEpoch = 0) {
         if (!this.#active) return
         const waiter = this.#waiters.values().next().value
         if (waiter) {
             this.#waiters.delete(waiter)
-            waiter(Effect.succeed({ message, bytes, shardId }))
+            waiter(Effect.succeed({ message, bytes, shardId, sessionEpoch }))
             return
         }
         const full = () =>
             this.#pending.length >= this.limits.maxPendingMessages || bytes > this.limits.maxPendingBytes - this.#bytes
         if (!full()) {
-            this.#pending.push({ message, bytes, shardId })
+            this.#pending.push({ message, bytes, shardId, sessionEpoch })
             this.#bytes += bytes
             this.#arrival?.()
             return
@@ -430,7 +436,7 @@ export class EventSource<A = Message> {
                 this.#bytes -= this.#pending.shift()!.bytes
                 dropped++
             }
-            this.#pending.push({ message, bytes, shardId })
+            this.#pending.push({ message, bytes, shardId, sessionEpoch })
             this.#bytes += bytes
             this.#dropped(dropped, dropped === 1 ? "the oldest waiting event" : "the oldest waiting events", limit)
             this.#arrival?.()
@@ -549,7 +555,7 @@ export class EventSource<A = Message> {
         return Effect.map(this.takeDelivery(), (delivery) => (delivery === null ? null : delivery.message))
     }
 
-    /** Take the next event with the shard and frame size it arrived with */
+    /** Take the next event with the shard, session epoch and frame size it arrived with */
     takeDelivery(): Effect.Effect<Delivery<A> | null, EventOverflowError> {
         return Effect.suspend(() => {
             if (this.#failure) return Effect.fail(this.#failure)
@@ -926,7 +932,7 @@ export class EventBus<M extends MessageCore = Message> {
         })
         return source
     }
-    offer<K extends EventName>(event: K, message: EventMap<M>[K], bytes: number, shardId = 0) {
+    offer<K extends EventName>(event: K, message: EventMap<M>[K], bytes: number, shardId = 0, sessionEpoch = 0) {
         const reaction =
             event === "messageReactionAdd" ||
             event === "messageReactionAddMany" ||
@@ -946,7 +952,7 @@ export class EventBus<M extends MessageCore = Message> {
         for (const offer of reactionCollectors ?? [])
             offer(reaction!, bytes, shardId, event === "messageReactionRemove")
         for (const offer of messageCollectors ?? []) offer(message as M, bytes, shardId)
-        for (const source of this.#sources[event]) source.offer(message, bytes, shardId)
+        for (const source of this.#sources[event]) source.offer(message, bytes, shardId, sessionEpoch)
     }
     stop() {
         if (this.#closed) return

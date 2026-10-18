@@ -83,7 +83,7 @@ export interface CacheObserverOptions {
  * When capacity is full, the least recently used snapshot is removed first.
  * Expired entries, overlapping reads and lost gateway connections can make a lookup miss.
  * A connection gap clears affected users and direct messages even if the session resumes. Community-scoped snapshots stay
- * while the session resumes and are cleared when a new session starts, except cached threads, which a completed Resume
+ * while the session resumes and are cleared when a new session starts, including the first, except cached threads, which a completed Resume
  * clears. Responses started before the gap are not stored.
  * Shutdown releases the SDK's copies, not copies still held by the application
  *

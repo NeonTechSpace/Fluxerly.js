@@ -61,6 +61,8 @@ export interface ShardRuntime {
     submit: ((op: number, d: unknown, sent?: () => void) => Effect.Effect<void, SubmitFailure>) | undefined
     /** Gateway URL this shard's sessions use, known after discovery and recorded in saved session snapshots */
     gatewayUrl: string | undefined
+    /** The client-wide number of this shard's current session, assigned at each READY that starts a new session */
+    sessionEpoch: number
 }
 
 /** What the shard loop needs from its client */
@@ -78,9 +80,13 @@ export interface ShardLoopHost<M extends MessageCore> {
     /** Record a shard transition and recompute the client state */
     readonly setShardState: (shard: ShardRuntime, state: ConnectionState) => void
     /** Release a shard's guild-scoped cache entries once an established or restored session needs a new session, and
-     * again when that session is ready, because partial replay and reads stored during the outage may be stale
+     * again when each new session's READY is accepted, including the first, because partial replay and reads stored
+     * before it, during an outage or before connecting, may be stale and pending reads must not store them. It runs
+     * before the frames after READY, which carry the communities that refill the caches
      */
     readonly newSession?: (shardId: number) => void
+    /** The next client-wide session number, which never repeats within the client */
+    readonly nextSessionEpoch: () => number
     /** Pace a fresh Identify for this shard, or undefined when Identify needs no coordination */
     readonly identify: ((shardId: number, send: () => void) => Effect.Effect<void, AttemptFailure>) | undefined
     /** Optional Identify fields, computed when this shard sends Identify */
@@ -364,9 +370,6 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                         })
                         if (readyMode === "resume") host.resumed?.(shard.shardId)
                         if (readyMode === "resume" && restoredSession) host.restored?.(shard.shardId)
-                        // REST reads stored during the outage may be stale, and a new session replays nothing
-                        if ((established || restoredSession) && readyMode === "identify")
-                            host.newSession?.(shard.shardId)
                         restoredSession = false
                         established = true
                         connectedAt = connectedAtMs
@@ -374,6 +377,13 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                         shard.recovery = null
                         host.setShardState(shard, "Connected")
                         if (host.state() === "Connected") Deferred.doneUnsafe(startup, Effect.void)
+                    },
+                    // Runs on the socket's turn when READY is accepted, so the communities Fluxer sends right after it
+                    // refill the caches this releases. REST reads stored or pending during an outage or before connecting
+                    // may be stale, and a new session replays nothing
+                    onSessionStart: () => {
+                        shard.sessionEpoch = host.nextSessionEpoch()
+                        host.newSession?.(shard.shardId)
                     },
                     onLatency: (latency) => {
                         shard.latency = latency
@@ -384,7 +394,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     },
                     onDispatch: (event, message, bytes) => {
                         applyEvent(host.caches, event, message)
-                        host.events.offer(event, message, bytes, shard.shardId)
+                        host.events.offer(event, message, bytes, shard.shardId, shard.sessionEpoch)
                     },
                     onRaw: (t, s, d, bytes) => {
                         // READY is session control and never reaches the dispatch table, so its user is taken here
@@ -405,6 +415,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                             Object.freeze({ shardId: shard.shardId, t, s, d }),
                             bytes,
                             shard.shardId,
+                            shard.sessionEpoch,
                         )
                     },
                     identifyFields: () => host.identifyFields(shard.shardId),

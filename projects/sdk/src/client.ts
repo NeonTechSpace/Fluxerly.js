@@ -153,7 +153,8 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * Each category has its own client-wide budget shared across this client's shards, not a budget per shard or community.
      * A lost gateway connection clears affected users, direct messages and messages, even after the session resumes.
      * Community, member, role, emoji, sticker and channel snapshots stay while the shard resumes, because Fluxer replays every
-     * missed event on Resume, and are cleared when the shard has to start a new session. Cached threads are the exception:
+     * missed event on Resume, and are cleared whenever the shard starts a new session, including its first, so snapshots read
+     * before connecting do not outlast the first READY. Cached threads are the exception:
      * Fluxer does not replay thread list changes, so a resumed shard's threads are cleared.
      * Resume sends no community snapshots, so a process that resumes a session from sharding.sessions refills the enabled
      * community, role and channel caches through REST once every shard is ready, unless sharding.refillCaches is false.
@@ -176,7 +177,9 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * Community removal or unavailability clears this community's cached resources, including channels
          */
         readonly guilds?: boolean | ResourceCacheSettings<Guild>
-        /** Cache individual memberships from explicit reads, REST pages and member add or update events.
+        /** Cache individual memberships from explicit reads, REST pages, member add or update events and the members a guild create
+         * event lists, which are the bot's own and those in voice channels. The guild create events sent while a session starts
+         * list member accounts by ID only, so only the bot's own member, completed from READY's account, is stored from them.
          * Member removal clears that membership.
          * Successful or uncertain role assignment clears the target
          */
@@ -188,6 +191,9 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * A full list removes missing roles only when no conflicting observation overlaps the read.
          * Partial bulk events replace only the roles they supply.
          * A guild create event replaces this community's cached roles with its complete role list.
+         * The roles.getAll method returns a community's roles only while that list is known complete, which a full list read
+         * establishes only while the community's shard is connected.
+         * The entry limit counts the roles of every community together, so complete lists for many communities need a larger maxEntries.
          * The cache counts bigint permission fields as decimal strings when measuring bytes
          */
         readonly roles?: boolean | ResourceCacheSettings<GuildRole>
@@ -201,12 +207,22 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         readonly stickers?: boolean | ResourceCacheSettings<GuildSticker>
         /** Cache community channels and threads from explicit reads and channel and thread events, without automatically listing them.
          * A guild create event replaces this community's cached channels and threads with the channels and active threads the bot can view.
-         * Once a channel mutation is dispatched, the SDK clears this client's channel cache and prevents pending reads from restoring it,
-         * except that an operation confined to one thread clears only that thread.
+         * Once a channel mutation is dispatched, the SDK removes the cached channels it can affect and prevents pending reads from restoring them.
+         * That is the written channel, with its threads when the mutation deletes the channel or converts its type, and with the
+         * forum posts that apply a tag it removes, as deleteForumTag and an edit with availableTags can, because Fluxer drops
+         * removed tags from posts without a thread update, or this community's channels for a category or a community-wide
+         * mutation such as create or reorder, or every cached channel when the cache does not hold the written channel.
+         * An operation confined to one thread removes only that thread.
          * Bulk ordering events clear this community's cached channels because permission updates may still be in progress.
          * Category updates or deletions also clear this community's channels because children can inherit changed permissions.
          * Visibility loss clears the affected channel, and for a text, announcement, forum or media channel also its threads,
          * because Fluxer deletes them without thread deletion events.
+         * A text or announcement channel update clears that channel's cached threads whose type its type cannot hold, because
+         * Fluxer retypes a converted channel's threads without thread events for archived ones. A forum or media channel update
+         * clears that channel's cached posts that apply a tag missing from the update, because Fluxer removes a tag through the
+         * channel update alone. Either update also stops pending reads from storing that channel's threads. Other pending
+         * reads by ID, and reads of other communities, still store what they return, while a pending read of the channel's own
+         * community stores nothing, as after any channel update.
          * Thread create and update events store the thread, a thread deletion clears it, and a thread list replaces the cached
          * threads of its community or of its listed parent channels. A change to the bot's own membership of a thread clears
          * that thread, because its membership field is then out of date.

@@ -3,16 +3,21 @@
  * Invariant: REST registers conflict guards before admission waits and keeps them through retries and cleanup, and gateway intake
  * updates or invalidates the cache before delivery, including memberships after role deletion. Connection gaps stop old requests
  * from repopulating snapshots while late writes still invalidate newer observations. Fluxer stays authoritative for membership,
- * permissions and hierarchy, so an earlier observation never suppresses a targeted role request. Every applied store, removal and
- * whole-kind clear is recorded to the client's change hub, a replacement counting as one store. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
+ * permissions and hierarchy, so an earlier observation never suppresses a targeted role request. A guild's role list is complete
+ * only from a GUILD_CREATE fill or an uncontested full role read that retained every role while the guild's shard was
+ * connected, because only its role events keep the list current. It stays complete while role events add or replace
+ * retained roles, and becomes unknown when any of its roles is removed or an observed role is not retained.
+ * Every applied store, removal and whole-kind clear is recorded to the client's change hub, a replacement counting as one store.
+ * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import { isDeepStrictEqual } from "node:util"
 import type { CacheDiagnostic } from "#sdk/client"
 import type { Guild, GuildMember, GuildRole } from "#sdk/guilds"
 import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
+import type { User } from "#sdk/users"
 import type { EventMap, EventName } from "#sdk/events"
 import type { ResourceCacheSettings } from "#sdk/cache"
-import { decodeGuild, decodeGuildSnapshot, decodeRoles } from "./guilds.js"
+import { decodeGuild, decodeGuildSnapshot, decodeMember, decodeRoles } from "./guilds.js"
 import { expressionItems } from "./expressions.js"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
@@ -20,6 +25,7 @@ import type { CacheChangeHub } from "./cache-changes.js"
 import { retentionAge } from "./retention-age.js"
 import { identifier, record } from "./decode/primitives.js"
 import { cacheStats, readStats } from "./cache.js"
+import { compareRoleHierarchy } from "./role-hierarchy.js"
 
 export type ResourceKind = "guilds" | "members" | "roles" | "emojis" | "stickers"
 export type Resources = {
@@ -74,6 +80,8 @@ export class GuildCache {
         stickers: cacheStats(),
     }
     #requests = new Set<ResourceGuard>()
+    /** Guilds whose every role is retained */
+    readonly #completeRoles = new Set<string>()
     #generation = 0
     #closed = false
     #expiry = new ExpiryQueue<Entry & { expires: number }>(
@@ -87,6 +95,8 @@ export class GuildCache {
         logical?: LogicalScheduler,
         readonly changes?: CacheChangeHub,
         private readonly report: (error: unknown) => void = () => undefined,
+        /** Whether a guild's shard is connected, so that its role events keep a role list read now current */
+        private readonly live: (guildId: string) => boolean = () => true,
     ) {
         this.#timer = new ExpiryTimer(
             "guild cache",
@@ -109,6 +119,31 @@ export class GuildCache {
         entries.delete(key(selection))
         entries.set(key(selection), entry)
         return entry.value as Resources[K]
+    }
+
+    /**
+     * Every role of a guild, highest in the hierarchy first as Fluxer lists them, or undefined unless the list is complete.
+     * A hit makes the roles more recently used without extending expiry
+     */
+    getRoles(guildId: string): readonly GuildRole[] | undefined {
+        // An expired role removes itself from the list first, which makes the list unknown
+        this.#purge()
+        this.#schedule()
+        const complete = this.#completeRoles.has(guildId)
+        if (this.settings.roles) this.#stats.roles[complete ? "hits" : "misses"]++
+        if (!complete) return undefined
+        const entries = this.#entries.roles
+        const roles: Entry[] = []
+        for (const entry of entries.values()) if (entry.selection.guildId === guildId) roles.push(entry)
+        for (const entry of roles) {
+            entries.delete(key(entry.selection))
+            entries.set(key(entry.selection), entry)
+        }
+        return Object.freeze(
+            roles
+                .map((entry) => entry.value as GuildRole)
+                .sort((left, right) => compareRoleHierarchy(right, left) ?? 0),
+        )
     }
 
     diagnostics(kind: ResourceKind): CacheDiagnostic {
@@ -150,6 +185,7 @@ export class GuildCache {
         const held = this.#entries[kind].size > 0
         this.#entries[kind].clear()
         this.#bytes[kind] = 0
+        if (kind === "roles") this.#completeRoles.clear()
         if (held && this.changes?.active) this.changes.record(kind, "clear", null)
         this.#schedule()
     }
@@ -171,13 +207,19 @@ export class GuildCache {
         return entry
     }
 
-    /** Remove one retained snapshot, reporting the deletion unless the caller replaces it. Returns whether it was removed */
+    /**
+     * Remove one retained snapshot, reporting the deletion and making its guild's role list unknown unless the caller
+     * replaces it. Returns whether it was removed
+     */
     #remove(entry: Entry, notify = true): boolean {
         const entries = this.#entries[entry.selection.kind]
         if (entries.get(key(entry.selection)) !== entry) return false
         entries.delete(key(entry.selection))
         this.#bytes[entry.selection.kind] -= entry.bytes
-        if (notify) this.#changed("delete", entry.selection)
+        if (notify) {
+            if (entry.selection.kind === "roles") this.#completeRoles.delete(entry.selection.guildId)
+            this.#changed("delete", entry.selection)
+        }
         return true
     }
 
@@ -200,6 +242,7 @@ export class GuildCache {
 
     #evict(selection: Selection, except?: ResourceGuard) {
         this.#invalidate(selection, except)
+        if (selection.kind === "roles") this.#completeRoles.delete(selection.guildId)
         if (selection.id !== undefined) {
             const entry = this.#entries[selection.kind].get(key(selection))
             if (entry) this.#remove(entry)
@@ -241,7 +284,25 @@ export class GuildCache {
                 if (entry && !isDeepStrictEqual(entry.value, value)) this.#evict(selection, guard)
             } else this.#observe(guard.selection.kind, value, guard)
         }
+        // An uncontested full role read proves the list complete once it retained every role, while role events keep it so
+        if (
+            guard.replace &&
+            !guard.invalid &&
+            guard.selection.kind === "roles" &&
+            guard.selection.id === undefined &&
+            this.live(guard.selection.guildId)
+        )
+            this.#markRolesComplete(guard.selection.guildId, values as readonly GuildRole[])
         this.#schedule()
+    }
+
+    #markRolesComplete(guildId: string, roles: readonly GuildRole[]) {
+        const entries = this.#entries.roles
+        if (
+            this.settings.roles &&
+            roles.every((role) => entries.get(key({ kind: "roles", guildId, id: role.id }))?.value === role)
+        )
+            this.#completeRoles.add(guildId)
     }
 
     missing(guard: ResourceGuard) {
@@ -274,6 +335,8 @@ export class GuildCache {
         if (this.#closed) return
         const previous = entries.get(key(selection))
         if ("error" in resolved) {
+            // A role that is not retained leaves its guild's list incomplete
+            if (kind === "roles") this.#completeRoles.delete(selection.guildId)
             if (previous) this.#remove(previous)
             this.report(resolved.error)
             return
@@ -288,6 +351,7 @@ export class GuildCache {
                       JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item)),
                   )
         if (age === 0 || bytes > settings.maxBytes) {
+            if (kind === "roles") this.#completeRoles.delete(selection.guildId)
             if (replaced) this.#changed("delete", selection)
             return
         }
@@ -327,7 +391,11 @@ export class GuildCache {
         this.#schedule()
     }
 
-    guildEvent(event: string, value: unknown) {
+    /**
+     * Apply a raw guild lifecycle or expression dispatch. The bot's own account, from READY, completes its membership in a
+     * startup GUILD_CREATE, which lists member users by ID only
+     */
+    guildEvent(event: string, value: unknown, self?: User) {
         if (this.#closed) return
         if (event === "GUILD_EMOJIS_UPDATE" || event === "GUILD_STICKERS_UPDATE") {
             if (!record(value) || !identifier(value.guild_id)) this.gap()
@@ -346,16 +414,20 @@ export class GuildCache {
             const guild = event === "GUILD_CREATE" ? decodeGuildSnapshot(value) : decodeGuild(value)
             if (guild) this.#observe("guilds", guild)
             else this.#evict({ kind: "guilds", guildId: value.id })
-            if (guild && event === "GUILD_CREATE") this.#seed(value.id, value)
+            // A snapshot that fills no roles leaves an earlier list unproven
+            if (event === "GUILD_CREATE") this.#completeRoles.delete(value.id)
+            if (guild && event === "GUILD_CREATE") this.#seed(value.id, value, self)
         }
         this.#schedule()
     }
 
     /**
-     * Replace a guild's roles, emojis and stickers with the complete collections of its GUILD_CREATE snapshot.
-     * Members are not seeded, because the snapshot lists only a few of them
+     * Replace a guild's roles, emojis and stickers with the complete collections of its GUILD_CREATE snapshot. Its
+     * members, the bot's own and those in voice channels, are stored one by one without replacing the guild's others.
+     * A startup snapshot strips each member's user to its ID, and READY lists no other users for a bot, so only the
+     * bot's own member, completed from self, is stored from it
      */
-    #seed(guildId: string, snapshot: Readonly<Record<string, unknown>>) {
+    #seed(guildId: string, snapshot: Readonly<Record<string, unknown>>, self: User | undefined) {
         const collections = {
             roles: () => decodeRoles(snapshot.roles, guildId),
             emojis: () => expressionItems("emojis", snapshot.emojis, guildId),
@@ -364,8 +436,18 @@ export class GuildCache {
         for (const kind of ["roles", "emojis", "stickers"] as const) {
             this.#evict({ kind, guildId })
             // A malformed collection leaves the category empty for this guild rather than partly seeded
-            if (this.settings[kind]) for (const item of collections[kind]() ?? []) this.#observe(kind, item)
+            if (!this.settings[kind]) continue
+            const items = collections[kind]()
+            for (const item of items ?? []) this.#observe(kind, item)
+            if (kind === "roles" && items) this.#markRolesComplete(guildId, items as readonly GuildRole[])
         }
+        if (this.settings.members && Array.isArray(snapshot.members))
+            for (const item of snapshot.members as readonly unknown[]) {
+                const member = decodeMember(withSelfUser(item, self), guildId)
+                // allow-silent: A malformed member, or another user's that a startup snapshot stripped to its ID, is only left out
+                // of the member cache, and handlers still receive the community
+                if (member) this.#observe("members", member)
+            }
     }
 
     #purge() {
@@ -388,6 +470,7 @@ export class GuildCache {
         if (!affects) {
             this.#generation++
             for (const request of this.#requests) request.invalid = true
+            this.#completeRoles.clear()
             for (const kind of kinds) {
                 const held = this.#entries[kind].size > 0
                 this.#entries[kind].clear()
@@ -397,6 +480,7 @@ export class GuildCache {
             this.#expiry.clear()
         } else {
             this.pause(affects)
+            for (const guildId of this.#completeRoles) if (affects(guildId)) this.#completeRoles.delete(guildId)
             for (const kind of kinds)
                 for (const entry of this.#entries[kind].values())
                     if (affects(entry.selection.guildId)) this.#remove(entry)
@@ -421,4 +505,17 @@ export class GuildCache {
         this.gap()
         this.#requests.clear()
     }
+}
+
+/** A member whose user is stripped to the bot's own ID, with the user filled from the bot's account, or the member unchanged */
+function withSelfUser(member: unknown, self: User | undefined): unknown {
+    if (
+        self === undefined ||
+        !record(member) ||
+        !record(member.user) ||
+        member.user.id !== self.id ||
+        member.user.username !== undefined
+    )
+        return member
+    return { ...member, user: { id: self.id, username: self.username, bot: self.isBot } }
 }

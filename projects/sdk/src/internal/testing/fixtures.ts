@@ -437,8 +437,9 @@ export interface Fixtures {
     /** Build a community record, by default the default community owned by the default author */
     guild(overrides?: WireOverrides<WireGuild>): WireGuild
     /**
-     * Build a GUILD_CREATE body for the default community, as sent in the startup burst after READY.
-     * By default it holds the everyone role, the default text channel and the bot's own membership
+     * Build a GUILD_CREATE body for the default community, as sent after READY once the session is running.
+     * By default it holds the everyone role, the default text channel and the bot's own membership with a full user.
+     * The startup burst after READY lists member users by ID only, so it differs: Override members to describe it
      */
     guildCreate(overrides?: WireGuildCreateOverrides): WireGuildCreate
     /** Build a community text channel, by default the default channel in the default community */

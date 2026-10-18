@@ -38,7 +38,7 @@ A successful `connect()` means Fluxer accepted the session, not that every commu
 <details>
 <summary>What else does a handler receive?</summary>
 
-A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, and `receivedBytes` is the size of the gateway message that carried it.
+A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, and `receivedBytes` is the size of the gateway message that carried it.
 Pass the signal to SDK operations inside the handler so they stop with it. To run code around every handler, such as timing or tracing, register event [middleware](/docs/{{version}}/glossary/#middleware) with `client.use`
 
 A handler runs one event at a time by default, and later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead

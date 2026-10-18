@@ -88,6 +88,7 @@ operation|default|Members.fetchCanManage|(target: MemberReference, options?: Def
 operation|default|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildMember[], CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.fetchSelf|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.get|(member: MemberReference) => GuildMember | undefined
+operation|default|Members.getSelf|(guildId: string) => GuildMember | undefined
 operation|default|Members.iterate|(guildId: string, query: UserIterationQuery, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<GuildMember, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
 operation|default|Members.iterateChunks|(guildId: string, query: MemberChunkQuery, options?: DefaultMemberChunkOptions | undefined) => AsyncIterable<Result<MemberChunk, CancelledError | ConfigurationError | MemberChunkFailure>>
 operation|default|Members.iterateSearch|(guildId: string, filters: Omit<MemberSearchQuery, "limit">, limits: MemberSearchIterationLimits, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<MemberSearchHit, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
@@ -155,6 +156,7 @@ operation|default|Roles.delete|(role: RoleReference, options?: DefaultGuildAudit
 operation|default|Roles.edit|(role: RoleReference, input: RoleEdit, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildRole, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Roles.fetchAll|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildRole[], CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Roles.get|(role: RoleReference) => GuildRole | undefined
+operation|default|Roles.getAll|(guildId: string) => readonly GuildRole[] | undefined
 operation|default|Roles.reorder|(guildId: string, positions: readonly RolePosition[], options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Roles.resetHoistPositions|(guildId: string, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Roles.setHoistPositions|(guildId: string, positions: readonly RoleHoistPosition[], options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
@@ -290,6 +292,7 @@ operation|native|Members.fetchCanManage|(target: MemberReference, options?: CanM
 operation|native|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: GuildOperationOptions | undefined) => Effect<readonly GuildMember[], GuildOperationFailure, never>
 operation|native|Members.fetchSelf|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.get|(member: MemberReference) => Effect<GuildMember | undefined, never, never>
+operation|native|Members.getSelf|(guildId: string) => Effect<GuildMember | undefined, never, never>
 operation|native|Members.iterate|(guildId: string, query: UserIterationQuery, options?: GuildOperationOptions | undefined) => Stream<GuildMember, PaginationError | GuildOperationFailure, never>
 operation|native|Members.iterateChunks|(guildId: string, query: MemberChunkQuery, options?: MemberChunkOptions | undefined) => Stream<MemberChunk, MemberChunkFailure, never>
 operation|native|Members.iterateSearch|(guildId: string, filters: Omit<MemberSearchQuery, "limit">, limits: MemberSearchIterationLimits, options?: GuildOperationOptions | undefined) => Stream<MemberSearchHit, PaginationError | GuildOperationFailure, never>
@@ -357,6 +360,7 @@ operation|native|Roles.delete|(role: RoleReference, options?: GuildAuditOperatio
 operation|native|Roles.edit|(role: RoleReference, input: RoleEdit, options?: GuildAuditOperationOptions | undefined) => Effect<GuildRole, GuildOperationFailure, never>
 operation|native|Roles.fetchAll|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<readonly GuildRole[], GuildOperationFailure, never>
 operation|native|Roles.get|(role: RoleReference) => Effect<GuildRole | undefined, never, never>
+operation|native|Roles.getAll|(guildId: string) => Effect<readonly GuildRole[] | undefined, never, never>
 operation|native|Roles.reorder|(guildId: string, positions: readonly RolePosition[], options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
 operation|native|Roles.resetHoistPositions|(guildId: string, options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
 operation|native|Roles.setHoistPositions|(guildId: string, positions: readonly RoleHoistPosition[], options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
@@ -1424,6 +1428,7 @@ field|shared|EntranceSoundPlay.userId|string|optional=false|nullable=false
 field|shared|EventBufferOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
 field|shared|EventBufferOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
 field|shared|EventContext.receivedBytes|number|optional=false|nullable=false
+field|shared|EventContext.sessionEpoch|number|optional=false|nullable=false
 field|shared|EventContext.shardId|number|optional=false|nullable=false
 field|shared|EventHandlerOptions.concurrency|number | undefined|optional=true|nullable=false
 field|shared|EventHandlerOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
@@ -2876,6 +2881,7 @@ field|shared|ShardRecoveryDiagnostic.phase|"recovery" | "startup"|optional=false
 field|shared|ShardRecoveryDiagnostic.retryDelayMs|null | number|optional=false|nullable=true
 field|shared|ShardState.gatewayLatencyMs|null | number|optional=false|nullable=true
 field|shared|ShardState.recovery|ShardRecoveryDiagnostic | null|optional=false|nullable=true
+field|shared|ShardState.sessionEpoch|number|optional=false|nullable=false
 field|shared|ShardState.shardId|number|optional=false|nullable=false
 field|shared|ShardState.state|ConnectionState|optional=false|nullable=false
 field|shared|ShutdownOptions.drainMs|number | undefined|optional=true|nullable=false

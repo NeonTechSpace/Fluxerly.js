@@ -157,7 +157,6 @@ import {
     memberPage,
     memberRole,
     memberRolesSet,
-    memberSelf,
     roleCreate,
     roleDelete,
     roleEdit,
@@ -734,11 +733,12 @@ function defineOperations<M extends MessageCore>() {
                     memberPagination(owner, guildId, query, options),
             ),
             get: get((owner: Owner, member: MemberReference) => owner.getResource("members", member)),
+            getSelf: get((owner: Owner, guildId: string) => owner.getSelfMember(guildId)),
             fetch: op(1, (owner: Owner, member: MemberReference, options?: GuildOperationOptions) =>
                 owner.guild("members.fetch", () => memberFetch(member), options),
             ),
             fetchSelf: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
-                owner.guild("members.fetchSelf", () => memberSelf(guildId), options),
+                owner.fetchSelfMember(guildId, options),
             ),
             fetchCanManage: op(1, (owner: Owner, target: MemberReference, options?: CanManageOptions) =>
                 fetchCanManage(owner, target, options),
@@ -777,6 +777,7 @@ function defineOperations<M extends MessageCore>() {
                 owner.guild("roles.resetHoistPositions", () => roleResetHoistPositions(guildId), options),
             ),
             get: get((owner: Owner, role: RoleReference) => owner.getResource("roles", role)),
+            getAll: get((owner: Owner, guildId: string) => owner.getRoleList(guildId)),
             fetchAll: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
                 owner.guild("roles.fetchAll", () => roleList(guildId), options),
             ),

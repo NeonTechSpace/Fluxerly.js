@@ -25,9 +25,11 @@ await runBot({
 })
 ```
 
-Handlers and commands work the same on every shard. The `client.shards` list shows the shards this client owns, and a handler registered with `client.on` receives an `EventContext` third argument whose `shardId` names the shard that delivered the event. When the bot outgrows its plan while it runs, Fluxer closes a shard with close code 4011 and the SDK moves every shard to a larger plan in the same process, so the bot keeps running
+Handlers and commands work the same on every shard. The `client.shards` list shows the shards this client owns, and a handler registered with `client.on` receives an `EventContext` third argument whose `shardId` names the shard that delivered the event. A `runBot` handler finds the same object in its `context` field. When the bot outgrows its plan while it runs, Fluxer closes a shard with close code 4011 and the SDK moves every shard to a larger plan in the same process, so the bot keeps running
 
 A bot without `sharding` settings makes the same move from its one shard when Fluxer refuses it with 4011, so it keeps running too. Until it sets `sharding: "auto"`, each start first opens a session that Fluxer refuses before the move. An explicit `totalShards`, including 1, never moves
+
+Each `client.shards` entry has a `sessionEpoch` number, which stays the same across a Resume and changes whenever that shard starts a new session, including after a move. A changed value means the shard's events in between may have been missed, and Fluxer then sends each of its communities again through `guildCreate`, so state kept from events can be rebuilt there. The `EventContext` also carries `sessionEpoch`, fixed when the client accepted the event, so an event still waiting in a handler's queue keeps its own session. Compare `context.sessionEpoch` rather than the shard's current value, and keep the last value seen per community, since one shard serves many communities
 
 <details>
 <summary>Details of automatic sizing</summary>

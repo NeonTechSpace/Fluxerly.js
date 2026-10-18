@@ -116,7 +116,7 @@ import {
     type MemberReference,
     type RoleReference,
 } from "#sdk/guilds"
-import { guildFetch, roleList, type GuildRequest } from "./guilds.js"
+import { guildFetch, memberSelf, roleList, type GuildRequest } from "./guilds.js"
 import { guildDeleteOwnMessages, guildLeave, ownDeletionOptions } from "./guild-lifecycle.js"
 import { RestOwner } from "./rest.js"
 import type { BotApplicationOperation, BotApplicationOperationOptions } from "#sdk/application"
@@ -432,7 +432,14 @@ export class ClientOwner<M extends MessageCore = Message> {
               )
             : undefined
         this.resources = Object.keys(configuration.resourceCache).length
-            ? new GuildCache(configuration.resourceCache, () => logical.now(), logical, this.cacheChanges, reportCache)
+            ? new GuildCache(
+                  configuration.resourceCache,
+                  () => logical.now(),
+                  logical,
+                  this.cacheChanges,
+                  reportCache,
+                  (guildId) => this.gatewayState(guildId) === "Connected",
+              )
             : undefined
         this.channelCache = configuration.channelCache
             ? new ChannelCache(configuration.channelCache, () => logical.now(), logical, this.cacheChanges, reportCache)
@@ -495,6 +502,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             state: () => this.#state,
             setShardState: (shard, state) => this.#setShardState(shard, state),
             newSession: (shardId) => this.#clearShardGuilds(shardId),
+            nextSessionEpoch: () => ++this.#sessionEpochs,
             identify: (shardId, send) => this.#identifyPermit(shardId, send),
             identifyFields: (shardId) => this.#identifyFields(configuration, shardId),
             sessions: configuration.sessions,
@@ -527,6 +535,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                 session: { id: undefined, sequence: null },
                 submit: undefined,
                 gatewayUrl: undefined,
+                sessionEpoch: 0,
             })
     }
 
@@ -651,6 +660,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                     shardId: shard.shardId,
                     state: shard.state,
                     gatewayLatencyMs: shard.latency,
+                    sessionEpoch: shard.sessionEpoch,
                     recovery:
                         shard.recovery === null
                             ? null
@@ -928,6 +938,8 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.#setState("Closed")
     }
 
+    /** The last session number given to a shard, which a new plan's shards continue from */
+    #sessionEpochs = 0
     #selfUserId: string | undefined
     /** The bot account ID once READY or a self read supplied it, without starting a read, for gateway cache intake */
     get botUserId(): string | undefined {
@@ -935,6 +947,15 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
     /** The bot's own public account from the latest READY that carried a complete one, for users.getSelf */
     #selfUser: User | undefined
+    /** The bot's own account for gateway cache intake, which completes its startup community memberships */
+    get botUser(): User | undefined {
+        return this.#selfUser
+    }
+    /**
+     * The bot account ID from a members.fetchSelf result, which members.getSelf uses before READY supplies it. It is kept
+     * apart from the READY ID so mention prefixes and thread intake behave as before
+     */
+    #selfMemberUserId: string | undefined
     /** The one users.fetchSelf read in flight, which concurrent mentions share */
     #selfUserRead: Deferred.Deferred<string | undefined> | undefined
     /** Consecutive failed reads, and the logical time before which no new read starts */
@@ -1312,6 +1333,17 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
+    /** Read the bot's own member of a community, keeping its account ID for members.getSelf */
+    fetchSelfMember(guildId: string, options?: GuildOperationOptions) {
+        return this.guild("members.fetchSelf", () => memberSelf(guildId), options).pipe(
+            Effect.tap((member) =>
+                Effect.sync(() => {
+                    this.#selfMemberUserId = member.userId
+                }),
+            ),
+        )
+    }
+
     leaveGuild(guildId: string, options?: GuildOperationOptions) {
         return this.guild("guilds.leave", () => guildLeave(guildId), options).pipe(
             Effect.tap(() => Effect.sync(() => this.presence.forgetMembers(guildId))),
@@ -1391,6 +1423,40 @@ export class ClientOwner<M extends MessageCore = Message> {
                     }),
                 )
             return Effect.sync(() => this.resources?.get(kind, guildId, id))
+        })
+    }
+
+    /** A guild's cached role list for roles.getAll, when it is known complete */
+    getRoleList(guildId: string) {
+        return this.#guildLookup("roles.getAll", guildId, () => this.resources?.getRoles(guildId))
+    }
+
+    /** The bot's own cached member for members.getSelf, once READY or members.fetchSelf supplied the bot's account ID */
+    getSelfMember(guildId: string) {
+        return this.#guildLookup("members.getSelf", guildId, () => {
+            const self = this.#selfUserId ?? this.#selfMemberUserId
+            return self === undefined ? undefined : this.resources?.get("members", guildId, self)
+        })
+    }
+
+    #guildLookup<A>(operation: GuildOperation, guildId: string, read: () => A | undefined) {
+        return suspendInput((): Effect.Effect<A | undefined, ClientClosedError | GuildOperationError> => {
+            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
+                return Effect.fail(new ClientClosedError())
+            if (!identifier(guildId))
+                return Effect.fail(
+                    new GuildOperationError({
+                        operation,
+                        reason: "input",
+                        outcome: "notDispatched",
+                        inputValidation: inputValidationFailure(
+                            "guildId",
+                            "format",
+                            "Guild IDs must be decimal strings",
+                        ).detail,
+                    }),
+                )
+            return Effect.sync(read)
         })
     }
 

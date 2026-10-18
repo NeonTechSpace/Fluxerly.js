@@ -586,7 +586,7 @@ test.each(modes)("%s preserves failure outcome metadata for channel writes witho
 })
 
 test.each(modes)(
-    "%s keeps channel caching opt-in, local-only and conservatively invalidates dispatched writes",
+    "%s keeps channel caching opt-in, local-only and invalidates what dispatched writes can affect",
     async (mode) => {
         const calls: string[] = []
         let status = 200
@@ -621,17 +621,18 @@ test.each(modes)(
         expect(await api.get()).toBe(retained)
         await api.fetchAll()
         expect(await api.get("11")).toBeDefined()
-        for (const mutate of [
-            () => api.create("20", { type: ChannelType.Text, name: "created" }),
-            () => api.edit("10", { name: "edited" }),
-            () => api.delete("10"),
-            () => api.setPermissionOverwrite("10", { id: "50", type: "role", allow: 0n, deny: 0n }),
-            () => api.removePermissionOverwrite("10", "50"),
-            () => api.reorder("20", [{ id: "10", position: 2 }]),
-        ]) {
+        // A community-scoped write removes the community's channels, while a write to a cached text channel removes only it
+        for (const [mutate, keepsSibling] of [
+            [() => api.create("20", { type: ChannelType.Text, name: "created" }), false],
+            [() => api.edit("10", { name: "edited" }), true],
+            [() => api.delete("10"), true],
+            [() => api.setPermissionOverwrite("10", { id: "50", type: "role", allow: 0n, deny: 0n }), true],
+            [() => api.removePermissionOverwrite("10", "50"), true],
+            [() => api.reorder("20", [{ id: "10", position: 2 }]), false],
+        ] as const) {
             await mutate()
             expect(await api.get()).toBeUndefined()
-            expect(await api.get("11")).toBeUndefined()
+            expect((await api.get("11")) !== undefined).toBe(keepsSibling)
             await api.fetchAll()
         }
         status = 400

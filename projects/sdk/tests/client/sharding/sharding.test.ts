@@ -500,6 +500,7 @@ test.each(modes)("%s resumes only a failed shard while its healthy sibling remai
             shardId: 0,
             state: "Recovering",
             gatewayLatencyMs: null,
+            sessionEpoch: 1,
             recovery: { phase: "recovery", attempt: 1, retryDelayMs: 500 },
         },
         expect.objectContaining({ shardId: 1, state: "Connected", recovery: null }),

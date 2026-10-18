@@ -61,6 +61,13 @@ export interface ChannelRequest<A> {
          * creates a thread when channelId is absent
          */
         readonly thread?: boolean
+        /**
+         * The mutation can change the threads of the channel named by channelId without thread events, by deleting or
+         * retyping them
+         */
+        readonly changesThreads?: boolean
+        /** Which forum tags the mutation can remove from the channel named by channelId, and so from its posts */
+        readonly removesTag?: (tagId: string) => boolean
     }
 }
 
@@ -635,6 +642,12 @@ export function channelCreate(guildId: string, input: ChannelCreate): ChannelVal
     }
 }
 
+/** The tags an edit's availableTags removes: Every existing tag that no entry names by ID */
+function tagsRemovedBy(tags: readonly ForumTagInput[]) {
+    const kept = new Set(tags.flatMap((tag) => (typeof tag.id === "string" ? [tag.id] : [])))
+    return (tagId: string) => !kept.has(tagId)
+}
+
 export function channelEdit(channelId: string, input: ChannelEdit): ChannelValidationResult<GuildChannel> {
     if (!identifier(channelId))
         return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
@@ -649,7 +662,14 @@ export function channelEdit(channelId: string, input: ChannelEdit): ChannelValid
         status: 200,
         json,
         ...(input.permissionOverwrites === undefined ? {} : { features: ["view_channel_members_permission"] }),
-        cache: { channelId, mutation: true },
+        // Converting a channel's type also retypes its threads, and replacing a forum's tags drops every tag the list does
+        // not name by ID from its posts, which Fluxer filters on read without a thread update
+        cache: {
+            channelId,
+            mutation: true,
+            ...(input.type === undefined ? {} : { changesThreads: true }),
+            ...(input.availableTags === undefined ? {} : { removesTag: tagsRemovedBy(input.availableTags) }),
+        },
         decode: (value) => {
             const channel = decodeGuildChannel(value)
             return channel?.id === channelId ? channel : undefined
@@ -671,7 +691,12 @@ function forumTagRequest(
         method,
         status: 200,
         ...(json === undefined ? {} : { json }),
-        cache: { channelId, mutation: true },
+        // Deleting a tag drops it from the forum's posts, which Fluxer filters on read without a thread update
+        cache: {
+            channelId,
+            mutation: true,
+            ...(method === "DELETE" && tagId !== undefined ? { removesTag: (id: string) => id === tagId } : {}),
+        },
         // Fluxer answers with the updated channel, so any other shape is a malformed response
         decode: (value) => {
             const channel = decodeGuildChannel(value)
@@ -733,7 +758,7 @@ export function channelDelete(channelId: string): ChannelValidationResult<void> 
         path: `/channels/${channelId}`,
         method: "DELETE",
         status: 204,
-        cache: { channelId, mutation: true },
+        cache: { channelId, mutation: true, changesThreads: true },
         decode: () => undefined,
     }
 }

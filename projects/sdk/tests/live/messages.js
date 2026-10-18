@@ -443,8 +443,46 @@ async function verifyOptionalTools(ops, channelId, botId) {
     }
 }
 
+// The startup guildCreate fills the guild, the bot's own member and the role list, so a fetched test-owned channel
+// completes the cache-first permission inputs. Run before any fresh guild, member or role read
+async function verifyCachedPermissions(ops, channelId, botId) {
+    stage = "guild_cached_permissions"
+    const target = { guildId, userId: botId, channelId }
+    // READY can finish before the startup guildCreate arrives, so wait for its snapshots before reading the channel. A
+    // read that overlapped the guildCreate could otherwise leave the channel uncached
+    const deadline = performance.now() + 10_000
+    while (
+        (await ops.getGuild()) === undefined ||
+        (await ops.getSelf())?.userId !== botId ||
+        (await ops.getRoles()) === undefined
+    ) {
+        assert.ok(
+            performance.now() < deadline,
+            "The startup guildCreate did not fill the guild, self member and role list",
+        )
+        await sleep(20)
+    }
+    await ops.fetchChannel(channelId)
+    const originalFetch = globalThis.fetch
+    let requests = 0
+    globalThis.fetch = (...args) => {
+        requests++
+        return originalFetch(...args)
+    }
+    let cached
+    try {
+        cached = await ops.permissions(target, { preferCache: true })
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+    assert.equal(requests, 0, "Cache-first permissions read the service despite warm caches")
+    assert.equal(cached, await ops.permissions(target))
+    report(stage, true)
+}
+
 async function verifyGuildMembers(ops, channelId, botId, interrupt) {
     prepareAuditMarker()
+    await verifyCachedPermissions(ops, channelId, botId)
     stage = "guild_member_readback"
     const target = { guildId, userId: botId }
     const rawGuild = (await api("GET", `/guilds/${guildId}`)).data
@@ -631,6 +669,10 @@ async function verifyGuildRoles(ops, roleId, botId) {
         )
         stage = "role_create_event"
         await waitEvent("guildRoleCreate", (role) => role.id === secondId && role.permissions === 0n)
+        // The bot's own role write leaves the cached list unknown, and the event that follows does not complete it
+        stage = "role_list_unknown_after_own_create"
+        assert.equal(await ops.getRoles(), undefined)
+        stage = "role_create_event"
         await waitForAuditEntry(botId, auditActions.roleCreate, secondId, secondRoleCreate.auditReason)
         stage = "role_distinct_position_setup"
         const initial = await ops.roles()
@@ -796,6 +838,16 @@ async function verifyGuildRoles(ops, roleId, botId) {
             await waitEvent("guildRoleDelete", (role) => role.id === id)
             await waitForAuditEntry(botId, auditActions.roleDelete, id, options.auditReason)
         }
+        stage = "role_list_after_own_delete"
+        assert.equal(await ops.getRoles(), undefined)
+        const refreshed = await ops.roles()
+        const completed = await ops.getRoles()
+        assert.ok(completed !== undefined, "A full role read left the cached list unknown")
+        assert.deepEqual(
+            completed.map((role) => role.id),
+            refreshed.map((role) => role.id),
+        )
+        assert.ok(!completed.some((role) => role.id === roleId || role.id === secondId))
         stage = "role_delete_readback"
         const after = (await api("GET", `/guilds/${guildId}/roles`)).data
         assert.ok(!after.some((role) => role.id === roleId || role.id === secondId))
@@ -1717,8 +1769,17 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         const voiceRaw = await rawChannel(voice.id)
         assert.equal(voice.bitrate, voiceRaw.bitrate)
         assert.ok(Number.isInteger(voice.bitrate) && voice.bitrate >= 8_000 && voice.bitrate <= 384_000)
+        // Creating a channel clears the community's cached channels, so read the fixtures again. A write to a cached
+        // non-category channel then removes only that channel, so the categories stay cached. Wait for the voice channel's
+        // create event first, so it cannot overlap the reads and evict the snapshot they store
+        await waitForEvent("guildChannelCreate", 0, (value) => value.id === voice.id)
+        for (const id of [voice.id, categoryA.id, categoryB.id]) {
+            await ops.fetch(id)
+            assert.equal((await ops.get(id))?.id, id)
+        }
         const editedVoice = await ops.edit(voice.id, { bitrate: 384_000 })
         assertSnapshot(editedVoice, voice.id, 2)
+        for (const id of [categoryA.id, categoryB.id]) assert.equal((await ops.get(id))?.id, id)
         const editedVoiceRaw = await rawChannel(voice.id)
         assert.equal(editedVoice.bitrate, editedVoiceRaw.bitrate)
         assert.ok(
@@ -3365,7 +3426,7 @@ try {
             client = createClient({
                 token,
                 ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
-                ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
+                ...(guilds ? { cache: { channels: true, guilds: true, members: true, roles: true } } : {}),
                 ...(channels ? { cache: { channels: true } } : {}),
                 ...(moderation ? { cache: { members: true } } : {}),
                 ...(recover ? { logging: { sink: diagnosticSink } } : {}),
@@ -3789,6 +3850,10 @@ try {
                             getGuild: async () => client.guilds.get(guildId),
                             getMember: async (target) => client.members.get(target),
                             getRole: async (id) => client.roles.get({ guildId, id }),
+                            getRoles: async () => client.roles.getAll(guildId),
+                            getSelf: async () => client.members.getSelf(guildId),
+                            fetchChannel: (id) => run(client.channels.fetch(id)),
+                            permissions: (target, options) => run(client.permissions.fetch(target, options)),
                             roles: () => run(client.roles.fetchAll(guildId)),
                             createRole: (input, options) => run(client.roles.create(guildId, input, options)),
                             editRole: (id, input, options) => run(client.roles.edit({ guildId, id }, input, options)),
@@ -4186,7 +4251,7 @@ try {
                             ...(cache || typing || embeds || attachments || batchDelete || search
                                 ? { cache: cacheOptions() }
                                 : {}),
-                            ...(guilds ? { cache: { guilds: true, members: true, roles: true } } : {}),
+                            ...(guilds ? { cache: { channels: true, guilds: true, members: true, roles: true } } : {}),
                             ...(channels ? { cache: { channels: true } } : {}),
                             ...(moderation ? { cache: { members: true } } : {}),
                             ...(recover ? { logging: { level: "info" } } : {}),
@@ -4630,6 +4695,11 @@ try {
                                         getGuild: () => run(client.guilds.get(guildId)),
                                         getMember: (target) => run(client.members.get(target)),
                                         getRole: (id) => run(client.roles.get({ guildId, id })),
+                                        getRoles: () => run(client.roles.getAll(guildId)),
+                                        getSelf: () => run(client.members.getSelf(guildId)),
+                                        fetchChannel: (id) => run(client.channels.fetch(id)),
+                                        permissions: (target, options) =>
+                                            run(client.permissions.fetch(target, options)),
                                         roles: () => run(client.roles.fetchAll(guildId)),
                                         createRole: (input, options) =>
                                             run(client.roles.create(guildId, input, options)),

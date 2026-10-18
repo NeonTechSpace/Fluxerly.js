@@ -42,6 +42,40 @@ export interface Roles {
      */
     get(role: RoleReference): GuildRole | undefined
     /**
+     * Look up every role of a community by decimal guildId in the enabled cache, including the everyone role.
+     * No request is made. The frozen list is ordered as roles.fetchAll orders it, highest in the hierarchy first: Larger
+     * positions first, and the smaller numeric ID first between equal positions.
+     * The result is undefined unless the cache holds the complete list. A guildCreate event makes the list complete, as does
+     * a full role read, such as roles.fetchAll, that finishes while the community's shard is connected, when no role event,
+     * role write or lost connection overlapped it. Only role events keep the list current, so a read while that shard is not
+     * connected, such as before connect, leaves it unknown. Later role create and update events keep it complete.
+     * Removing any of the community's roles makes it unknown again, whether by a role deletion event, expiry, capacity
+     * eviction, cache.delete or cache.clear, as does a role the cache does not keep because of its limits or maxAgeMs.
+     * So does every role write by the bot that succeeds or has an unknown outcome, including create, edit and reorder.
+     * A shard's new session, including its first, makes it unknown until the next guildCreate, while a resumed session keeps it.
+     * The roles limit, 1,000 entries unless configured, counts roles of every community together, so a bot in many
+     * communities needs a larger limit to keep complete lists.
+     * An invalid ID is misuse: The default API throws GuildOperationError with reason input and the native API dies with it.
+     * A closing or closed client has no cache, so the result is undefined
+     *
+     * @remarks
+     * Returns the value synchronously.
+     * Unexpected failures throw SdkDefect
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export async function roleNamesExample(client: Client, guildId: string) {
+     *     const cached = client.roles.getAll(guildId)
+     *     if (cached) return cached.map((role) => role.name)
+     *     const fetched = await client.roles.fetchAll(guildId)
+     *     if (fetched.isErr()) throw fetched.error
+     *     return fetched.value.map((role) => role.name)
+     * }
+     * ```
+     */
+    getAll(guildId: string): readonly GuildRole[] | undefined
+    /**
      * Fetch the community's current role list, including everyone, in server order.
      * This always reads remotely, without pagination or background refresh
      */

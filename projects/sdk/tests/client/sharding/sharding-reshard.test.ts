@@ -99,7 +99,7 @@ describeBothApis("automatic resharding", (mode) => {
         const clock = sdkClock()
         const driver = await open(mode, { sharding: "auto", cache: { guilds: true } })
         await driver.ready()
-        expect(driver.client.shards.map((shard) => shard.shardId)).toEqual([0])
+        expect(driver.client.shards.map((shard) => [shard.shardId, shard.sessionEpoch])).toEqual([[0, 1]])
         driver.emit("GUILD_CREATE", driver.test.fixtures.guildCreate({ guild: { id: movingGuildId } }))
         expect(driver.client.diagnostics().caches.guilds.retainedEntries).toBe(1)
         expect(driver.client.shardIdForGuild(movingGuildId)).toBe(0)
@@ -124,6 +124,8 @@ describeBothApis("automatic resharding", (mode) => {
             [0, 2],
             [1, 2],
         ])
+        // Each shard of the new plan starts a new session, numbered after every earlier one, so none repeats a value
+        expect(driver.client.shards.map((shard) => shard.sessionEpoch).toSorted()).toEqual([2, 3])
         // Guild-scoped entries from the old sessions are released, and routing follows the new total
         expect(driver.client.diagnostics().caches.guilds.retainedEntries).toBe(0)
         expect(driver.client.shardIdForGuild(movingGuildId)).toBe(1)

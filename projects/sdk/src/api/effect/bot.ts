@@ -16,7 +16,7 @@ import { ApplicationError, ConfigurationError, type ConnectError } from "#sdk/er
 import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
 import type { SendError } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
-import type { HandlerOptions, EventMap, EventName } from "#sdk/events"
+import type { HandlerOptions, EventContext, EventMap, EventName } from "#sdk/events"
 import type { CommandArgumentSchema } from "#sdk/command-arguments"
 import {
     nativeBotRouter,
@@ -30,7 +30,7 @@ import { type FailureReport } from "./failures.js"
 import { type Subscription, type EventHandlerOptions } from "./events.js"
 
 /**
- * Give a bot handler its event payload and client. The messageCreate context also provides
+ * Give a bot handler its event payload, client and EventContext. The messageCreate context also provides
  * `message` as an alias for the payload and `reply`, which uses the client's native messages.reply operation.
  * The reply Effect sends only when executed and retains its normal SendError and interruption behavior
  *
@@ -41,6 +41,10 @@ export type BotEventContext<K extends EventName, M extends MessageCore = Message
     readonly event: EventMap<M>[K]
     /** The client owned by this bot run. Do not retain it after the run stops */
     readonly client: Client<M>
+    /** How the client received this event, the EventContext a client.on handler receives. Its sessionEpoch tells which
+     * shard session the event belongs to
+     */
+    readonly context: EventContext
 } & (K extends "messageCreate"
     ? {
           /** The messageCreate payload, identical to event */
@@ -276,7 +280,7 @@ function registerNativeBot(
             subscriptions.push(
                 yield* client.on(
                     event,
-                    (payload) =>
+                    (payload, context) =>
                         skipsBotMessage(event, payload, prepared.skipBots)
                             ? Effect.void
                             : (
@@ -289,11 +293,12 @@ function registerNativeBot(
                                           ? {
                                                 event: payload,
                                                 client,
+                                                context,
                                                 message: payload,
                                                 reply: (input: ReplyInput | string, options?: SendOptions) =>
                                                     client.messages.reply(payload as Message, input, options),
                                             }
-                                          : { event: payload, client },
+                                          : { event: payload, client, context },
                                   ) as BotEventContext<EventName>,
                               ),
                     options as EventHandlerOptions<unknown, unknown>,

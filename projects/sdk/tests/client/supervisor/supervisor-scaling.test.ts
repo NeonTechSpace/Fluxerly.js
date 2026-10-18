@@ -405,7 +405,7 @@ function diagnosticsSnapshot() {
     return {
         state: "Connected",
         gatewayLatencyMs: 42,
-        shards: [{ shardId: 0, state: "Connected", gatewayLatencyMs: 42, recovery: null }],
+        shards: [{ shardId: 0, state: "Connected", gatewayLatencyMs: 42, sessionEpoch: 1, recovery: null }],
         rest: {
             activeRequests: 1,
             activeCapacity: 8,

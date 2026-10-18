@@ -1,5 +1,6 @@
 // Bot-session guild create delivery after READY for the existing sandbox guild. The `--voice` mode also compares
 // the projected voice-state snapshot and member voice flags with raw reads.
+// Both modes also compare the cached self member and role list right after the startup guildCreate with fresh reads.
 // Creates no journal and no remote resources, and changes no server content
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -14,6 +15,8 @@ let lock
 let stage = "configuration"
 let restoreGatewayCapture
 const rawGuildCreate = { value: undefined }
+let readySelfId
+const cacheOptions = { guilds: true, members: true, roles: true }
 
 // Counts only: which member data the provider includes in GUILD_CREATE, without IDs or profile values
 function guildCreateMembers(botId) {
@@ -30,6 +33,31 @@ function guildCreateMembers(botId) {
 let listedUnavailableAtReady = false
 
 const get = (path, token) => readSandbox(path, token, { timeout: 10_000 })
+
+// Fluxer lists member users by ID only in the startup GUILD_CREATE, so the cached self member and the complete role
+// list are read before any fresh read can replace them. READY supplies the bot's own account
+async function verifyStartupCaches(guildId, ops) {
+    stage = "cached_self_member"
+    assert.equal(readySelfId, ops.botId, "READY did not report the sandbox bot")
+    const cachedSelf = await ops.getSelf()
+    const cachedRoles = await ops.getRoles()
+    assert.ok(cachedSelf !== undefined, "No cached self member after the startup guildCreate")
+    assert.equal(cachedSelf.guildId, guildId)
+    assert.equal(cachedSelf.userId, readySelfId)
+    assert.ok(Object.isFrozen(cachedSelf) && Object.isFrozen(cachedSelf.roleIds))
+    const freshSelf = await ops.fetchSelf()
+    assert.equal(freshSelf.userId, readySelfId)
+    assert.deepEqual([...cachedSelf.roleIds].sort(), [...freshSelf.roleIds].sort())
+    stage = "cached_role_list"
+    assert.ok(cachedRoles !== undefined, "No complete cached role list after the startup guildCreate")
+    assert.ok(Object.isFrozen(cachedRoles))
+    const freshRoles = await ops.fetchRoles()
+    assert.deepEqual(
+        cachedRoles.map((role) => role.id),
+        freshRoles.map((role) => role.id),
+    )
+    report(stage, { passed: true, selfRoles: cachedSelf.roleIds.length, roles: cachedRoles.length })
+}
 
 async function waitForGuildCreate(client, guildId, created, unavailable) {
     const deadline = performance.now() + 15_000
@@ -137,6 +165,7 @@ try {
             if (event === "message") {
                 try {
                     const payload = JSON.parse(args[0].toString())
+                    if (payload?.t === "READY") readySelfId = payload.d?.user?.id
                     if (payload?.t === "READY")
                         listedUnavailableAtReady =
                             payload.d?.guilds?.some((value) => value.id === guildId && value.unavailable === true) ===
@@ -155,7 +184,7 @@ try {
 
     if (mode === "default") {
         const { createClient } = await import("@neontechspace/fluxerly")
-        const client = createClient({ token })
+        const client = createClient({ token, cache: cacheOptions })
         const created = { value: undefined }
         const unavailable = { value: undefined }
         const voiceSnapshot = { value: undefined }
@@ -178,6 +207,13 @@ try {
             assert.equal(created.value.name, guild.name)
             assert.equal(created.value.ownerId, guild.owner_id)
             report(stage, { passed: true, isNewJoin: created.value.isNewJoin, members: guildCreateMembers(bot.id) })
+            await verifyStartupCaches(guildId, {
+                botId: bot.id,
+                getSelf: async () => client.members.getSelf(guildId),
+                getRoles: async () => client.roles.getAll(guildId),
+                fetchSelf: async () => (await client.members.fetchSelf(guildId))._unsafeUnwrap(),
+                fetchRoles: async () => (await client.roles.fetchAll(guildId))._unsafeUnwrap(),
+            })
             if (voice) {
                 stage = "voice_baseline"
                 const snapshotSupplied = await waitForVoiceSnapshot(client, guildId, voiceSnapshot)
@@ -207,7 +243,7 @@ try {
         const exit = await Effect.runPromiseExit(
             Effect.scoped(
                 Effect.gen(function* () {
-                    client = yield* createClient({ token })
+                    client = yield* createClient({ token, cache: cacheOptions })
                     stage = "subscribe_before_ready"
                     yield* client.on("guildCreate", (value) =>
                         Effect.sync(() => {
@@ -236,6 +272,15 @@ try {
                         isNewJoin: created.value.isNewJoin,
                         members: guildCreateMembers(bot.id),
                     })
+                    yield* Effect.promise(() =>
+                        verifyStartupCaches(guildId, {
+                            botId: bot.id,
+                            getSelf: () => Effect.runPromise(client.members.getSelf(guildId)),
+                            getRoles: () => Effect.runPromise(client.roles.getAll(guildId)),
+                            fetchSelf: () => Effect.runPromise(client.members.fetchSelf(guildId)),
+                            fetchRoles: () => Effect.runPromise(client.roles.fetchAll(guildId)),
+                        }),
+                    )
                     if (voice) {
                         stage = "voice_baseline"
                         const snapshotSupplied = yield* Effect.promise(() =>

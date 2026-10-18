@@ -236,7 +236,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Observe the subscription's outcome as well as the client's run or waitForClose outcome.
      * Registration misuse, such as an unknown event name, fails with a suggested correction
      *
-     * Each invocation also receives an EventContext with the receiving shard and the received frame size.
+     * Each invocation also receives an EventContext with the receiving shard, its session epoch and the received frame size.
      * Event middleware registered with use runs around every handler invocation, including those of subscriptions registered earlier
      *
      * @remarks

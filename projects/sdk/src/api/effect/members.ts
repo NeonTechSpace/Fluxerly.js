@@ -466,6 +466,18 @@ export interface Members {
      */
     get(member: MemberReference): Effect.Effect<GuildMember | undefined>
     /**
+     * Look up this bot's own membership of a community by decimal guildId in the enabled member cache, without a request.
+     * The result is undefined while the bot's account ID is unknown, which READY or a successful members.fetchSelf supplies,
+     * and when cache.members is off or the member is not cached.
+     * Each guildCreate event stores the bot's own member. Those sent while a session starts list it by account ID only, and
+     * the SDK completes it from READY's account. Successful members.fetchSelf and members.fetch reads and member events
+     * store it too.
+     * The cache misses, stale-snapshot warnings and recency rules of guilds.get apply.
+     * An invalid ID is misuse: The default API throws GuildOperationError with reason input and the native API dies with it.
+     * A closing or closed client has no cache, so the result is undefined
+     */
+    getSelf(guildId: string): Effect.Effect<GuildMember | undefined>
+    /**
      * Fetch one community member by decimal guildId and userId.
      * A missing member fails with reason notFound rather than an empty result
      */

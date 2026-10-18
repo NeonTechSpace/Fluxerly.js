@@ -23,10 +23,10 @@ type AnyClient = Client | NativeClient
 const typing = (channelId: string): TypingStart => Object.freeze({ channelId, userId: "30", timestamp: 1 })
 const typingWire = (channelId: string) => ({ channel_id: channelId, user_id: "30", timestamp: 1 })
 
-/** Offer one decoded event as if the given shard received it in a frame of the given size */
-function offer(client: AnyClient, channelId: string, bytes = 10, shardId = 0) {
+/** Offer one decoded event as if the given shard received it during the given session, in a frame of the given size */
+function offer(client: AnyClient, channelId: string, bytes = 10, shardId = 0, sessionEpoch = 0) {
     const owner = clientServices(client) as unknown as ClientOwner
-    owner.events.offer("typingStart", typing(channelId), bytes, shardId)
+    owner.events.offer("typingStart", typing(channelId), bytes, shardId, sessionEpoch)
 }
 
 /** Register a typingStart handler in either API style, recording its payload and context */
@@ -132,9 +132,16 @@ describeBothApis("handler context", (mode) => {
         for (const { shardId, frame } of frames) gateway.send(frame, socketOf(shardId))
         await vi.waitFor(() => expect(received).toHaveLength(2))
         const byChannel = new Map(received)
+        // Each shard's first session takes the next client-wide epoch
+        const sessionEpochs = new Map(client.shards.map((shard) => [shard.shardId, shard.sessionEpoch]))
+        expect([...sessionEpochs.values()].toSorted()).toEqual([1, 2])
         for (const { shardId, frame } of frames) {
             const context = byChannel.get(frame.d.channel_id)!
-            expect(context).toEqual({ shardId, receivedBytes: Buffer.byteLength(JSON.stringify(frame)) })
+            expect(context).toEqual({
+                shardId,
+                sessionEpoch: sessionEpochs.get(shardId),
+                receivedBytes: Buffer.byteLength(JSON.stringify(frame)),
+            })
             expect(Object.isFrozen(context)).toBe(true)
         }
     })
@@ -156,14 +163,14 @@ describeBothApis("event middleware", (mode) => {
             after: () => order.push("outer after"),
         })
         await use(mode, client, { before: () => order.push("inner before"), after: () => order.push("inner after") })
-        offer(client, "20", 64, 3)
+        offer(client, "20", 64, 3, 7)
         await vi.waitFor(() => expect(order).toHaveLength(5))
         expect(order).toEqual(["outer before", "inner before", "handler 20 shard 3", "inner after", "outer after"])
         expect(invocations).toEqual([
             {
                 event: "typingStart",
                 payload: typing("20"),
-                context: { shardId: 3, receivedBytes: 64 },
+                context: { shardId: 3, sessionEpoch: 7, receivedBytes: 64 },
                 subscriptionId: subscription.id,
             },
         ])

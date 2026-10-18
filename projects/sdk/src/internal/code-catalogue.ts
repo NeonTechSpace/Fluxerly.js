@@ -110,7 +110,7 @@ export const errorCodes = {
         error: "ClientClosedError",
         meaning:
             "The client is shutting down or has shut down, so it cannot do more work. For a REST request, details.outcome says whether the request may have reached Fluxer",
-        action: "Create a new client to connect again. When details.outcome is unknown, check whether Fluxer applied the change first",
+        action: "Create a new client to connect again. When details.outcome is unknown for a write, check whether Fluxer applied the change before repeating it. A read, marked by details.read, is safe to repeat",
     },
     "operation.cancelled": {
         error: "CancelledError",

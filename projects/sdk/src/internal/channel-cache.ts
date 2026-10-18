@@ -1,8 +1,18 @@
 /**
  * Optional channel cache: ID-keyed guild-channel and thread observations with client-wide limits and in-flight guards.
- * Invariant: The cache never decides effective permissions. Dispatched mutations invalidate channel snapshots and pending channel
- * reads because category and ordering changes can affect descendants, and a rejected multi-entry reorder does not establish
- * rollback. A mutation confined to one thread invalidates only that thread, which has no descendants or sibling order.
+ * Invariant: The cache never decides effective permissions. A dispatched mutation invalidates the channel snapshots and
+ * pending channel reads it can affect, even when Fluxer rejects it, because a rejected multi-entry reorder does not
+ * establish rollback. A mutation confined to one thread affects only that thread, which has no descendants or sibling
+ * order. A community-scoped mutation can create, order or move any of the community's channels, and a write to a category
+ * can move or re-permission its children, so either affects the whole community. A write to any other channel affects only
+ * that channel, plus its threads when the write deletes it or converts its type, and the posts applying a tag it removes,
+ * which Fluxer drops from posts on read without a thread update. For the same reasons, a text or announcement channel
+ * update takes the cached threads whose type the channel's type cannot hold, and a forum or media channel update takes
+ * the cached posts applying a tag the update lacks. Either update also stops the reads in flight from storing the
+ * channel's threads, because a read can store the channel's new state before the update arrives. Fluxer gives each
+ * new tag a new ID, so a missing ID is a removed tag. A channel's community and whether it is a category never change, so
+ * an observation from before the write places it, and a write to a channel the cache cannot place clears every channel,
+ * because it can belong to any community.
  * Bulk gateway observations invalidate their guild rather than keeping permissions Fluxer may still be copying, and
  * create or delete events can be visibility changes, not proof of remote creation or deletion. A deleted or hidden channel
  * takes its cached threads, because Fluxer sends no thread deletion for them, and a full channel list never removes
@@ -12,7 +22,7 @@
 import { isDeepStrictEqual } from "node:util"
 import type { ResourceCacheSettings } from "#sdk/cache"
 import type { CacheDiagnostic } from "#sdk/client"
-import { isThreadChannel, type GuildChannel, type GuildThreadChannel } from "#sdk/channels"
+import { ChannelType, isThreadChannel, type GuildChannel, type GuildThreadChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
@@ -34,13 +44,31 @@ export type ChannelCacheRequest = {
      * has no descendants or sibling order, so the change affects no other channel snapshot
      */
     readonly thread?: boolean
+    /**
+     * Marks a mutation that can change the threads of the channel named by channelId without thread events, as its
+     * deletion or a type conversion does
+     */
+    readonly changesThreads?: boolean
+    /**
+     * Tells which forum tags a mutation of the forum or media channel named by channelId can remove, so the posts
+     * applying one lose it without thread events. Deleting one tag removes that tag, and an edit's availableTags removes
+     * every tag it does not list by ID
+     */
+    readonly removesTag?: (tagId: string) => boolean
 }
 
+/** The facts about a channel that a write cannot change, which decide what the write can affect */
+type ChannelPlace = Pick<GuildChannel, "guildId" | "type">
+
 export type ChannelCacheGuard = ChannelCacheRequest & {
+    /** The target channel's place, observed when a mutation that names one began */
+    readonly target?: ChannelPlace
     readonly generation: number
     invalid: boolean
     /** A scoped gateway gap made this read stale, so it must not evict a newer post-gap observation */
     gapped: boolean
+    /** The channels whose threads this read must not store, because a change to their threads may postdate its answer */
+    stoppedParents?: Set<string>
     success: boolean
 }
 
@@ -65,6 +93,25 @@ const matches = (request: ChannelCacheRequest, channel: GuildChannel) =>
     (request.guildId === undefined || request.guildId === channel.guildId)
 
 const notThread = (channel: GuildChannel) => !isThreadChannel(channel)
+
+/** Channel types whose posts Fluxer shows with only the tags the channel still offers */
+const forumTypes: ReadonlySet<unknown> = new Set([ChannelType.Forum, ChannelType.Media])
+
+/**
+ * The thread types each convertible channel type can hold. Fluxer converts only between text and announcement channels,
+ * retyping their public threads to match without thread events for archived ones, and blocks a conversion to an
+ * announcement channel while private threads remain
+ */
+const textThreadTypes = new Map<unknown, ReadonlySet<unknown>>([
+    [ChannelType.Text, new Set([ChannelType.PublicThread, ChannelType.PrivateThread])],
+    [ChannelType.Announcement, new Set([ChannelType.AnnouncementThread])],
+])
+
+/** The tag IDs a channel offers, or undefined when it is not a forum or media channel or its tags are not known */
+const tagIds = (channel: GuildChannel | undefined) =>
+    channel !== undefined && forumTypes.has(channel.type) && "availableTags" in channel && channel.availableTags
+        ? new Set(channel.availableTags.map((tag) => tag.id))
+        : undefined
 
 /** One client's bounded guild-channel observations and in-flight guards, never a guild inventory or permission authority */
 export class ChannelCache {
@@ -150,8 +197,14 @@ export class ChannelCache {
     }
 
     begin(request: ChannelCacheRequest): ChannelCacheGuard {
+        // A raw read neither expires the entry nor makes it less likely to be removed
+        const known =
+            request.mutation && !request.thread && request.channelId !== undefined
+                ? this.#entries.get(request.channelId)?.value
+                : undefined
         const guard: ChannelCacheGuard = {
             ...request,
+            ...(known === undefined ? {} : { target: { guildId: known.guildId, type: known.type } }),
             generation: this.#generation,
             invalid: false,
             gapped: false,
@@ -185,7 +238,7 @@ export class ChannelCache {
         // never lists threads with a guild's channels, so the list proves nothing about them
         if (guard.replace && !guard.invalid) this.#evict(selection(guard), guard, notThread)
         for (const value of values) {
-            if (guard.invalid) {
+            if (guard.invalid || (isThreadChannel(value) && guard.stoppedParents?.has(value.parentId))) {
                 const entry = this.#peek(value.id)
                 if (entry && !isDeepStrictEqual(entry.value, value))
                     this.#evict({ channelId: value.id, guildId: value.guildId }, guard)
@@ -201,8 +254,8 @@ export class ChannelCache {
     }
 
     end(guard: ChannelCacheGuard, dispatched: boolean) {
-        // A dispatched write can partially apply a category subtree or ordering before a later rejection. Do not let an
-        // ID-only route retain unrelated stale channels. This deliberately clears only this channel cache and its guards
+        // A dispatched write can partially apply a category subtree or ordering before a later rejection, so it affects
+        // the same channels as a successful one. This deliberately changes only this channel cache and its guards
         if (!guard.success && guard.mutation && dispatched && !this.#closed) this.#mutated(guard)
         this.#requests.delete(guard)
     }
@@ -218,17 +271,11 @@ export class ChannelCache {
             // the rest of the guild, so evict every affected channel rather than caching a partial reconciliation
             if (channel.type === categoryType && event !== "guildChannelCreate")
                 this.#evict({ guildId: channel.guildId })
-            else if (event === "guildChannelDelete") {
-                this.#evict({ channelId: channel.id, guildId: channel.guildId })
-                // A deleted or hidden parent takes its threads, and Fluxer sends no THREAD_DELETE for them. The guild-wide
-                // request also stops ID-only reads in flight, which can name one of those threads
-                if (threadParentTypes.has(channel.type))
-                    this.#evict(
-                        { guildId: channel.guildId },
-                        undefined,
-                        (candidate) => isThreadChannel(candidate) && candidate.parentId === channel.id,
-                    )
-            } else this.#observe(channel)
+            else if (event === "guildChannelDelete") this.#removeChannel(channel.id, channel, true)
+            else {
+                if (event === "guildChannelUpdate") this.#updated(channel)
+                this.#observe(channel)
+            }
         } else if (event === "threadCreate") {
             // isNewlyCreated describes the event, not the thread
             const { isNewlyCreated: _isNewlyCreated, ...thread } = value as EventMap["threadCreate"]
@@ -355,14 +402,103 @@ export class ChannelCache {
     }
 
     /**
-     * Apply a dispatched mutation. One confined to a thread evicts only that thread, and creating a new thread evicts
-     * nothing. Any other can reorder or move category descendants, even when its route names one ID, so it clears every
-     * channel snapshot and invalidates every channel guard, never other resource caches
+     * Apply a dispatched mutation, never to other resource caches. One confined to a thread evicts only that thread, and
+     * creating a new thread evicts nothing. A community-scoped one evicts the community's channels. One that names a
+     * channel evicts that channel, with its threads when the write can change them, or the community of a category. A
+     * channel the cache has not observed can belong to any community, so a write to it clears every channel snapshot
      */
     #mutated(guard: ChannelCacheGuard) {
-        if (!guard.thread) return this.gap()
-        if (guard.channelId !== undefined) this.#evict(selection(guard), guard)
+        if (guard.thread) {
+            if (guard.channelId !== undefined) this.#evict(selection(guard), guard)
+        } else if (guard.channelId === undefined) {
+            if (guard.guildId === undefined) return this.gap()
+            this.#evict({ guildId: guard.guildId }, guard)
+        } else {
+            const held = this.#entries.get(guard.channelId)?.value
+            const place: ChannelPlace | undefined = guard.target ?? held
+            if (place === undefined) return this.gap()
+            if (place.type === categoryType) this.#evict({ guildId: place.guildId }, guard)
+            else {
+                this.#removeChannel(guard.channelId, place, guard.changesThreads === true, guard)
+                if (guard.removesTag !== undefined && !guard.changesThreads && forumTypes.has(place.type)) {
+                    const forum = { id: guard.channelId, guildId: place.guildId }
+                    const removed = guard.removesTag
+                    // No read can store the forum while the write runs, so a newer observation of it comes from an
+                    // event or snapshot. Showing every removed tag absent, it shows no removal that reads in flight
+                    // could predate, and the event stopped any such read itself
+                    const earlier = tagIds(held)
+                    if (earlier === undefined || [...earlier].some(removed)) this.#stopThreadReads(forum.id, guard)
+                    this.#dropThreads(forum, (post) => "appliedTagIds" in post && post.appliedTagIds?.some(removed))
+                }
+            }
+        }
         this.#schedule()
+    }
+
+    /**
+     * Apply what a channel update changes about its threads without thread events. A text or announcement channel update
+     * takes the cached threads whose type its new type cannot hold, because Fluxer retypes a converted channel's threads
+     * and sends no thread update for archived ones. A forum or media channel update takes the cached posts applying a tag
+     * the update lacks, because Fluxer removes a tag through this update alone and drops it from posts on read. The
+     * earlier observation cannot tell whether reads in flight predate such a change, because it can be absent or a read
+     * can already have stored the channel's new state, so every such update stops the reads in flight from storing its
+     * threads
+     */
+    #updated(after: GuildChannel) {
+        const fits = textThreadTypes.get(after.type)
+        if (fits !== undefined) {
+            this.#stopThreadReads(after.id)
+            this.#dropThreads(after, (thread) => !fits.has(thread.type))
+        } else if (forumTypes.has(after.type)) {
+            const current = tagIds(after)
+            this.#stopThreadReads(after.id)
+            // An update without the tag list cannot show that any tag survived
+            this.#dropThreads(
+                after,
+                (post) =>
+                    "appliedTagIds" in post &&
+                    post.appliedTagIds?.some((tagId) => current === undefined || !current.has(tagId)),
+            )
+        }
+    }
+
+    /**
+     * Stop the reads in flight from storing a thread of one channel, while they still store every other channel. An
+     * ID-only read cannot tell before it answers whether it names one of those threads, but a thread never changes its
+     * parent channel, so its answer can. A read of the channel itself or of the whole community is stopped as well by
+     * the caller's observation or removal of the channel, which overlaps it
+     */
+    #stopThreadReads(parentId: string, except?: ChannelCacheGuard) {
+        for (const guard of this.#requests) if (guard !== except) (guard.stoppedParents ??= new Set()).add(parentId)
+    }
+
+    /** Remove the cached threads of one channel that only accepts */
+    #dropThreads(parent: Pick<GuildChannel, "id" | "guildId">, only: (thread: GuildThreadChannel) => unknown) {
+        for (const entry of this.#entries.values()) {
+            const thread = entry.value
+            if (
+                isThreadChannel(thread) &&
+                thread.parentId === parent.id &&
+                thread.guildId === parent.guildId &&
+                only(thread)
+            )
+                this.#remove(entry)
+        }
+    }
+
+    /**
+     * Remove one non-category channel, and when threads is true also the cached threads it can hold. A deleted or hidden
+     * parent takes its threads, and Fluxer sends no THREAD_DELETE for them. The guild-wide request also stops ID-only
+     * reads in flight, which can name one of those threads
+     */
+    #removeChannel(channelId: string, place: ChannelPlace, threads: boolean, except?: ChannelCacheGuard) {
+        this.#evict({ channelId, guildId: place.guildId }, except)
+        if (threads && threadParentTypes.has(place.type))
+            this.#evict(
+                { guildId: place.guildId },
+                except,
+                (candidate) => isThreadChannel(candidate) && candidate.parentId === channelId,
+            )
     }
 
     /** Remove the retained channels the request selects, narrowed to those that only accepts when it is given */

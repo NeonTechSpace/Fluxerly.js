@@ -8,6 +8,7 @@
 import type { GuildChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
 import type { MessageCore } from "#sdk/messages"
+import type { User } from "#sdk/users"
 import type { MessageCache } from "../cache.js"
 import type { ChannelCache } from "../channel-cache.js"
 import { identifier, record } from "../decode/primitives.js"
@@ -27,6 +28,8 @@ export interface ClientCaches<M extends MessageCore> {
     readonly logging: ClientLogger
     /** The bot account ID once READY or a self read supplied it, which tells whether a thread member change is the bot's */
     readonly botUserId: string | undefined
+    /** The bot's own account from READY, which completes its startup community memberships */
+    readonly botUser: User | undefined
 }
 
 /** Clear every cache without closing it */
@@ -119,7 +122,7 @@ export function guildIntake<M extends MessageCore>(
                 channelCache?.evictThread(value.id, value.guild_id)
             return
         }
-        resources?.guildEvent(event, value)
+        resources?.guildEvent(event, value, caches.botUser)
         if (event !== "GUILD_EMOJIS_UPDATE" && event !== "GUILD_STICKERS_UPDATE")
             for (const field of channelCache?.guildEvent(event, value) ?? [])
                 logging.log({

@@ -130,6 +130,7 @@ export function logCacheUsage(client: Client) {
 <summary>When cached entries are cleared</summary>
 
 After a lost connection, community, member, role, channel, emoji and sticker entries stay when the session resumes, and are cleared when the shard has to start a new session.
+A shard's first session clears them too, so entries read before connecting do not outlast the first READY.
 A lost connection clears the message, user and direct-message entries it could have changed, even when the session resumes.
 A process that resumes a session saved before a restart refills the community, role and channel caches through REST once every shard is ready, unless `sharding.refillCaches` is `false`.
 Byte counts measure the stored JSON, not process memory

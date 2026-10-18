@@ -40,8 +40,11 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * Permission values use bigint and are sent as decimal JSON strings.
  * Fluxer enforces permissions and restrictions on granting flags.
  * Targeted role and member overwrites require ManageRoles.
- * Any dispatched channel change clears the enabled channel cache.
- * Local input failure before dispatch preserves it.
+ * A dispatched channel change removes the written channel from the enabled channel cache, with its threads when the change deletes the channel or converts its type,
+ * and with the forum posts that apply a tag it removes, as deleteForumTag and an edit with availableTags can, because Fluxer drops removed tags from posts without a thread update.
+ * A change to a category, or one that names a community, such as create or reorder, removes that community's cached channels.
+ * A change to a channel the cache does not hold removes every cached channel, because its community is unknown.
+ * Local input failure before dispatch preserves the cache, and a change rejected after dispatch removes the same entries.
  * No write is followed by an automatic confirmation fetch.
  * The follow, create, edit, delete, reorder, permission-overwrite and forum-tag mutations accept a raw audit reason through
  * DefaultChannelAuditOperationOptions. Read operations reject auditReason instead of sending a meaningless header.

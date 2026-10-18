@@ -239,6 +239,8 @@ The [`members.kick`](/docs/{{version}}/api/interfaces/js-ts.Members/#kick) and `
 
 The `fetchCanManage` method fetches fresh community, member and role data for each check. When the application already holds that data, the `hierarchy` helpers compare it without a request: `hierarchy.canManage({ guild, actor, target, roles })` checks one member against another, and `hierarchy.compare` and `hierarchy.isAbove` order two roles. Like `fetchCanManage`, they check rank only, not permissions. For roles, `hierarchy.highestRole(member, roles)` returns a member's highest explicit role, and `hierarchy.canManageRole({ guild, actor, role, roles })` checks whether the actor outranks a role. Administrator does not bypass rank, so also check the `ManageRoles` permission for the permission half
 
+The caches can supply that data. With `cache.roles` enabled, `roles.getAll(guildId)` returns a community's roles once the cache knows the list is complete, such as after its `guildCreate` or a `roles.fetchAll` while connected, and `undefined` otherwise. With `cache.members` enabled, `members.getSelf(guildId)` returns the bot's own member, which each `guildCreate` and `members.fetchSelf` stores
+
 </details>
 
 ## Communities that require two-factor authentication

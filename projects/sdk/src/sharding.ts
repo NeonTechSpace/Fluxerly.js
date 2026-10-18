@@ -269,4 +269,18 @@ export interface ShardState {
     readonly gatewayLatencyMs: number | null
     /** Current safe connection attempt or retry snapshot, or null when this shard is not attempting or waiting */
     readonly recovery: ShardRecoveryDiagnostic | null
+    /**
+     * Identifies this shard's current gateway session within the client. It is 0 until the shard's first new session and
+     * gets a new value, never used before by this client and larger than every earlier one, each time the shard starts a
+     * new session, including the shards of a larger plan after a move. A Resume, which replays every missed event, keeps it,
+     * and so does resuming a saved session after a restart, so a process that resumes a saved session reports 0 until that
+     * shard next starts a new session.
+     * A changed value means the events of that shard's communities between the two sessions may have been missed.
+     * Fluxer then sends each of those communities again as a guildCreate event, and a community that is unavailable sends
+     * guildDelete instead.
+     * This is the shard's current value, which can already be newer than the session of an event a handler is still
+     * processing, because events wait in each handler's queue. To tell which session an event belongs to, compare
+     * EventContext.sessionEpoch, which keeps the value from when the client accepted the event
+     */
+    readonly sessionEpoch: number
 }

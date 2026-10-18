@@ -148,7 +148,7 @@ export interface Guilds {
      *
      * Successful writes and writes with unknown outcomes invalidate cached guild resources and conflicting pending reads.
      * A confirmed leave also forgets this client's selected member presences, while an unknown outcome keeps that selection.
-     * Any dispatched attempt clears channel and message caches, because messages need not identify their community.
+     * Any dispatched attempt removes this community's cached channels and clears the message cache, because messages need not identify their community.
      * Objects already returned to the caller stay unchanged.
      * This neither deletes the community nor shuts down the client
      */
