@@ -10,6 +10,7 @@ const maximumBytes = 128 * 1024 * 1024
 /**
  * @typedef {object} NpmInventory
  * @property {string[]} npmVersions
+ * @property {Record<string, string>} npmTimes Publication time of each listed version
  * @property {Record<string, string>} npmTags
  * @property {Record<string, NpmDist | undefined>} npmDist
  * @property {{ npm: boolean }} absent
@@ -115,8 +116,15 @@ export function createRegistries({ fetchImpl = fetch, timeout = 30_000 } = {}) {
             if (typeof dist?.tarball === "string" && typeof dist?.integrity === "string")
                 npmDist[version] = { tarball: dist.tarball, integrity: dist.integrity }
         }
+        /** @type {Record<string, string>} */
+        const npmTimes = {}
+        for (const version of Object.keys(versions)) {
+            const time = npm?.time?.[version]
+            if (typeof time === "string") npmTimes[version] = time
+        }
         return {
             npmVersions: Object.keys(versions),
+            npmTimes,
             npmTags: npm?.["dist-tags"] ?? {},
             npmDist,
             absent: { npm: npm === null },

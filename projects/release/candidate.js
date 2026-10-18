@@ -65,7 +65,45 @@ async function nightlyRelease(workspace, registries, number) {
     const notes =
         "Automatic nightly build of `main`. It can include breaking changes at any time\n\n" +
         (changes || "No release notes are recorded for these changes yet\n")
-    return { name, version: plan.version, channel: plan.channel, line: plan.line, notes }
+    return { name, version: plan.version, channel: plan.channel, line: plan.line, notes, source: plan.currentVersion }
+}
+
+/**
+ * Reads the published RC or Stable of a nightly's source version. A nightly with the same bytes is not published, unless
+ * a nightly on the line was published after it, because the nightly tag would then keep serving that newer build
+ * @param {{ name: string, channel: string, source?: string }} release
+ * @param {{ npmVersions: string[], npmTimes?: Record<string, string> }} inventory
+ * @param {string | null} baselineVersion
+ * @param {any} registries
+ * @returns {Promise<{ version: string, contentFingerprint: string } | null>}
+ */
+async function publishedSource(release, inventory, baselineVersion, registries) {
+    const { source } = release
+    if (release.channel !== "nightly" || source === undefined || !inventory.npmVersions.includes(source)) return null
+    if (!["rc", "stable"].includes(parseVersion(source).channel)) return null
+    if (baselineVersion !== null) {
+        const times = inventory.npmTimes ?? {}
+        if (!(Date.parse(times[source] ?? "") > Date.parse(times[baselineVersion] ?? ""))) return null
+    }
+    return { version: source, contentFingerprint: (await registries.baseline(release.name, source)).contentFingerprint }
+}
+
+/**
+ * Explains why a non-Stable candidate would publish bytes that are already published, or returns null
+ * @param {{ channel: string, baselineVersion: string | null, baseline: { contentFingerprint: string } | null, source: { version: string, contentFingerprint: string } | null, fingerprint: string }} options
+ */
+function alreadyPublished({ channel, baselineVersion, baseline, source, fingerprint }) {
+    if (channel !== "stable" && baseline?.contentFingerprint === fingerprint)
+        return {
+            reason: "Publishable SDK bytes are unchanged from the previous published channel and line baseline",
+            baseline: baselineVersion,
+        }
+    if (source?.contentFingerprint === fingerprint)
+        return {
+            reason: `Publishable SDK bytes match ${source.version}, the published version of the source`,
+            baseline: source.version,
+        }
+    return null
 }
 
 /**
@@ -106,6 +144,7 @@ export async function prepareCandidate({ workspace, output, line, docs, channel,
         throw new Error("Candidate version already exists, recover using its original immutable candidate")
     const baselineVersion = selectBaseline({ ...inventory, version: release.version, channel: release.channel })
     const baseline = baselineVersion === null ? null : await registries.baseline(release.name, baselineVersion)
+    const source = await publishedSource(release, inventory, baselineVersion, registries)
     try {
         await lstat(output)
         throw new Error("Candidate output already exists, use a new directory")
@@ -128,16 +167,10 @@ export async function prepareCandidate({ workspace, output, line, docs, channel,
         await discardOutput()
         throw error
     }
-    if (release.channel !== "stable" && baseline?.contentFingerprint === fingerprint) {
+    const unchanged = alreadyPublished({ channel: release.channel, baselineVersion, baseline, source, fingerprint })
+    if (unchanged) {
         await discardOutput()
-        return {
-            skipped: true,
-            reason: "Publishable SDK bytes are unchanged from the previous published channel and line baseline",
-            baseline: baselineVersion,
-            version: release.version,
-            channel: release.channel,
-            line: release.line,
-        }
+        return { skipped: true, ...unchanged, version: release.version, channel: release.channel, line: release.line }
     }
     assertExactFiles(readNpmTarball(await readFile(staged.npm.tarball)), files)
     await writeFile(join(output, "notes.md"), release.notes)

@@ -263,7 +263,7 @@ test("A nightly candidate versions the next RC target from the npm inventory wit
     }
 })
 
-test("A nightly candidate of an RC cycle omits archived notes and skips content unchanged from the previous nightly", async () => {
+test("A nightly candidate of an RC cycle omits archived notes and skips content unchanged from the previous nightly or the published source", async () => {
     const root = await fixture("1000.0.0-rc.1")
     try {
         await write(join(root, ".changeset/pre/released.md"), '---\n"@neontechspace/fluxerly": major\n---\n\nAlready in an RC\n')
@@ -277,7 +277,8 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             output,
             channel: "nightly",
             number: 0,
-            registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"]),
+            // The published source version holds other bytes, so this nightly carries new content
+            registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"], "export const value = 0\n"),
             stage: stageFixture(),
         })
         assert.deepEqual([prepared.version, prepared.baseline], ["1000.0.0-nightly.0", null])
@@ -298,6 +299,90 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             [true, "1000.0.0-nightly.4", "nightly", "1000.0", "1000.0.0-nightly.0"],
         )
         await assert.rejects(access(unchanged), { code: "ENOENT" })
+        // Without an earlier nightly, bytes that match the source's published RC are not published again
+        const released = join(root, "released")
+        const matching = await prepareCandidate({
+            workspace: root,
+            output: released,
+            channel: "nightly",
+            number: 5,
+            registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"]),
+            stage: stageFixture(),
+        })
+        assert.deepEqual([matching.skipped, matching.version, matching.baseline], [true, "1000.0.0-nightly.5", "1000.0.0-rc.1"])
+        assert.match(matching.reason, /match 1000.0.0-rc.1/)
+        await assert.rejects(access(released), { code: "ENOENT" })
+        // A nightly published after the source release, such as a since reverted change, keeps the next nightly due
+        const times = (source, nightly) => ({
+            inventory: async () => ({
+                npmVersions: ["1000.0.0-rc.1", "1000.0.0-nightly.2"],
+                npmTimes: { "1000.0.0-rc.1": source, "1000.0.0-nightly.2": nightly },
+            }),
+            baseline: async (_name, version) => ({
+                version,
+                contentFingerprint: contentFingerprint(
+                    packages(version, version.includes("nightly") ? "export const value = 3\n" : undefined),
+                ),
+            }),
+        })
+        const reverted = await prepareCandidate({
+            workspace: root,
+            output: join(root, "reverted"),
+            channel: "nightly",
+            number: 8,
+            registries: times("2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"),
+            stage: stageFixture(),
+        })
+        assert.deepEqual([reverted.skipped, reverted.version], [undefined, "1000.0.0-nightly.8"])
+        // An older nightly than the source release still leaves the source's bytes as already published
+        const superseded = await prepareCandidate({
+            workspace: root,
+            output: join(root, "superseded"),
+            channel: "nightly",
+            number: 9,
+            registries: times("2026-01-02T00:00:00.000Z", "2026-01-01T00:00:00.000Z"),
+            stage: stageFixture(),
+        })
+        assert.deepEqual([superseded.skipped, superseded.baseline], [true, "1000.0.0-rc.1"])
+        // Unknown publication order publishes rather than risk keeping a newer nightly's build on the tag
+        const unknown = await prepareCandidate({
+            workspace: root,
+            output: join(root, "unknown"),
+            channel: "nightly",
+            number: 10,
+            registries: times("not a time", "2026-01-01T00:00:00.000Z"),
+            stage: stageFixture(),
+        })
+        assert.deepEqual([unknown.skipped, unknown.version], [undefined, "1000.0.0-nightly.10"])
+        // A failed lookup of the source's published bytes stops before anything is staged
+        const failed = join(root, "failed")
+        await assert.rejects(
+            prepareCandidate({
+                workspace: root,
+                output: failed,
+                channel: "nightly",
+                number: 7,
+                registries: {
+                    inventory: async () => ({ npmVersions: ["1000.0.0-rc.1"] }),
+                    baseline: async () => {
+                        throw new Error("registry unavailable")
+                    },
+                },
+                stage: stageFixture(),
+            }),
+            /registry unavailable/,
+        )
+        await assert.rejects(access(failed), { code: "ENOENT" })
+        // An unpublished source version has nothing to match
+        const pending = await prepareCandidate({
+            workspace: root,
+            output: join(root, "pending"),
+            channel: "nightly",
+            number: 6,
+            registries: registries(["1000.0.0-rc.0"]),
+            stage: stageFixture(),
+        })
+        assert.deepEqual([pending.skipped, pending.version], [undefined, "1000.0.0-nightly.6"])
     } finally {
         await rm(root, { recursive: true })
     }

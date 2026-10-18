@@ -14,10 +14,17 @@ test("npm inventory requests only the official package metadata", async () => {
         calls.push(String(url))
         assert.equal(url.origin, "https://registry.npmjs.org")
         assert.equal(url.pathname, "/%40neontechspace%2Ffluxerly")
-        return json({ name, versions: { "1000.0.0": { dist } }, "dist-tags": { latest: "1000.0.0" } })
+        return json({
+            name,
+            versions: { "1000.0.0": { dist } },
+            time: { created: "2026-01-01T00:00:00.000Z", "1000.0.0": "2026-01-02T00:00:00.000Z", "999.0.0": "2025-01-01T00:00:00.000Z" },
+            "dist-tags": { latest: "1000.0.0" },
+        })
     } })
+    // Publication times are kept only for listed versions
     assert.deepEqual(await registries.inventory(name), {
         npmVersions: ["1000.0.0"],
+        npmTimes: { "1000.0.0": "2026-01-02T00:00:00.000Z" },
         npmTags: { latest: "1000.0.0" },
         npmDist: { "1000.0.0": dist },
         absent: { npm: false },
@@ -30,6 +37,7 @@ test("Official npm package 404 reads as absent only when permitted, other failur
     await assert.rejects(registries.inventory(name), /HTTP 404/)
     assert.deepEqual(await registries.inventory(name, { allowMissing: true }), {
         npmVersions: [],
+        npmTimes: {},
         npmTags: {},
         npmDist: {},
         absent: { npm: true },

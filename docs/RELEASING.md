@@ -26,6 +26,7 @@ Every day, [Release prepare](/.github/workflows/release-prepare.yml) builds `mai
 Publication then runs the same checks as any release and announces a GitHub prerelease that carries the docs snapshot
 
 A day whose SDK content matches the previous nightly publishes nothing.
+It also publishes nothing when the content matches the published RC or Stable of the source version and no nightly on that line was published after it.
 Pending Changesets notes appear as unreleased changes in the nightly's release notes and docs changelog, and they stay pending for the next RC or Stable.
 To publish a nightly sooner, dispatch Release prepare from `main` with `nightly` selected. A nightly always builds the commit the workflow runs from and ignores `source_ref`
 
