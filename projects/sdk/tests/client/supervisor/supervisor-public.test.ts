@@ -895,6 +895,31 @@ test.each(modes)(
     12_000,
 )
 
+test.each(modes)(
+    "%s child helper succeeds when the parent stops it while gateway READY is held",
+    async (mode) => {
+        const fixture = await loopbackGateway({ totalShards: 1 })
+        const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+        onTestFinished(async () => {
+            await owner.shutdown()
+            await fixture.close()
+        })
+        await owner.start()
+        // The child's client has sent Identify and waits for the READY packet the gateway never releases
+        await realTimeUntil(() => fixture.identifies.length === 1)
+        await owner.shutdown()
+        await owner.waitForClose()
+        expect(fixture.readySends()).toBe(0)
+        // The child posts this proof only after its helper succeeded, and before it exits
+        expect(fixture.proofs).toContainEqual(expect.objectContaining({ mode, state: "Closed" }))
+        expect(owner.status()).toMatchObject({
+            state: "closed",
+            children: [{ id: "only", pid: null, state: "closed" }],
+        })
+    },
+    12_000,
+)
+
 function options(
     mode: Mode,
     origin: string,
@@ -989,11 +1014,10 @@ test.each(modes)(
                     2,
                 ),
             )
-            // A shutdown before a child handles READY can end its startup without a Closed report
-            await owner.waitForReady()
             await owner.shutdown()
             await owner.waitForClose()
-            await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))
+            // Each child reports Closed before it exits, so the proofs are complete once the supervisor closes
+            expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2)
             expect(fixture.proofs).toEqual(
                 expect.arrayContaining([
                     expect.objectContaining({ mode, state: "Closed" }),
@@ -1079,7 +1103,7 @@ test.each(modes)(
             )
             await owner.shutdown()
             await owner.waitForClose()
-            await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(1))
+            expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(1)
             expect(fixture.proofs.find((proof) => proof.state === "Closed")).toMatchObject({ mode, state: "Closed" })
             expect(owner.status()).toMatchObject({
                 state: "closed",
@@ -1178,12 +1202,10 @@ test.each(modes)(
             await realTimeUntil(() => fixture.identifies.length === 2)
             expect(fixture.identifies[1]).toEqual({ at: 5_000 + 250 + minimumSpacingMs, shardId: 1 })
             expect(fixture.malformedGatewayPackets).toEqual([])
-            // A shutdown before the healthy child handles READY can end its startup without a Closed report
-            await realTimeUntil(() => child("healthy").connectionState === "Connected")
             vi.useRealTimers()
             await owner.shutdown()
             await owner.waitForClose()
-            await vi.waitFor(() => expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2))
+            expect(fixture.proofs.filter((proof) => proof.state === "Closed")).toHaveLength(2)
             expect(owner.status()).toMatchObject({
                 state: "closed",
                 children: [

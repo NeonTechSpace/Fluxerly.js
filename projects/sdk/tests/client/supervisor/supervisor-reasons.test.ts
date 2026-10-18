@@ -250,6 +250,26 @@ test.each(modes)("%s completes a shutdown at once when the child exits after its
     expect(logs.withCode("supervisor.spawnFailed")).toEqual([])
 })
 
+// A stop of one child, here for an unconfirmed Identify grant, races the same exit while the supervisor keeps running
+test.each(modes)("%s restarts a child that exits after its own stop request failed", async (mode) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    const logs = captureLogs()
+    const child = scriptedChild({ failSend: "shutdown" })
+    const workers = await managed(mode, { logging: logs.logging })
+    // Runs before the shutdown cleanup, which a failed assertion would otherwise leave waiting for this exit
+    onTestFinished(() => child.exit(0, null))
+    expect(await workers.start()).toBeUndefined()
+    child.emit("message", { type: "identify", generation: 1, requestId: 0, shardId: 0 })
+    // The child never reports the Identify as sent, so the 5 second acknowledgement deadline stops it
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(workers.status().children[0]).toMatchObject({ state: "stopping" })
+    child.exit(0, null)
+    await hostTurnsUntil(() => codes(logs).includes("supervisor.exit"))
+    expect(logs.withCode("supervisor.spawnFailed")).toEqual([])
+    expect(child.kills).toEqual([])
+    expect(workers.status()).toMatchObject({ state: "running", children: [{ state: "restarting", restarts: 1 }] })
+})
+
 test.each(modes)("%s keeps the error of a failed message send to a child in its record", async (mode) => {
     const logs = captureLogs()
     scriptedChild({ failSend: "assignment" })

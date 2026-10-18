@@ -287,16 +287,25 @@ export function makeNativeSupervisor(
                             bridge.ready()
                             bridge.state(client.state)
                             bridge.reportDiagnostics(() => client.diagnostics())
+                            let stopping = false
                             const outcome = yield* Effect.exit(
                                 Effect.raceFirst(
-                                    client.run().pipe(Effect.as("client" as const)),
+                                    client.run().pipe(
+                                        // A stop before READY cancels startup, so run fails with ClientClosedError.
+                                        // The stop branch then finishes the drain and decides the outcome
+                                        Effect.catchTag("ClientClosedError", (error) =>
+                                            stopping ? Effect.never : Effect.fail(error),
+                                        ),
+                                        Effect.as("client" as const),
+                                    ),
                                     bridge.waitForStop().pipe(
                                         // Begin the drain before raceFirst interrupts run and its zero-drain finalizer
-                                        Effect.flatMap(() =>
-                                            client.shutdown(
+                                        Effect.flatMap(() => {
+                                            stopping = true
+                                            return client.shutdown(
                                                 bridge.drainMs > 0 ? { drainMs: bridge.drainMs } : undefined,
-                                            ),
-                                        ),
+                                            )
+                                        }),
                                         Effect.as("stop" as const),
                                     ),
                                 ),

@@ -1608,8 +1608,15 @@ export class SupervisorOwner {
         try {
             child.send(message, undefined, undefined, (error) => {
                 // A child exiting on its own can fail a stop request with EPIPE before IPC reports the disconnect.
-                // The stop deadline and verified exit still complete a shutdown, so a failed send cannot fail it
-                if (error && slot.child === child && !this.#stopping && !slot.disconnectTimer)
+                // The stop deadline and verified exit still complete a shutdown or the stop of one child, so a failed
+                // send cannot fail either
+                if (
+                    error &&
+                    slot.child === child &&
+                    !this.#stopping &&
+                    slot.state !== "stopping" &&
+                    !slot.disconnectTimer
+                )
                     this.#childError(slot, child, slot.generation, error)
             })
             return true
