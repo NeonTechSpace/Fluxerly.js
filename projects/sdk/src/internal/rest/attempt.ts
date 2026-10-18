@@ -32,7 +32,7 @@ import {
     AttachmentTransferSource,
     AttachmentTransferVerificationCleanupError,
 } from "../transfer-source.js"
-import { classifyResponse, RestFailure, type Outcome } from "./classify.js"
+import { classifyResponse, RestFailure, type Outcome, type RateLimitDetails } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 
 /**
@@ -137,6 +137,7 @@ export type AttemptResult<A> =
           readonly bucket: string
           readonly apiError: ApiErrorDetail | null
           readonly providerCode: string | undefined
+          readonly details: RateLimitDetails
       }
 
 /** Run every cleanup action, then rethrow the one failure or an AggregateError of several */

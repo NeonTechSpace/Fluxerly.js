@@ -88,6 +88,7 @@ import { attachmentRefresh } from "../attachment-refresh.js"
 import type { ClientLogger } from "../logging.js"
 import type { LogicalScheduler } from "../logical-scheduler.js"
 import { metrics } from "../metrics.js"
+import { maskText } from "../masking.js"
 import { emitObservation } from "../observer.js"
 import { linkRejectionError } from "../rejection-scope.js"
 import { rateRoute, routeTemplate } from "../rate-limits.js"
@@ -1140,7 +1141,7 @@ export class RestOwner<M extends MessageCore = Message> {
                             status: 429,
                             delayMs: response.retry,
                             attempt: attempts,
-                            fields: { method: request.method, global: response.global },
+                            fields: { method: request.method, global: response.global, ...response.details },
                         },
                         fiber.context,
                     )
@@ -1162,6 +1163,14 @@ export class RestOwner<M extends MessageCore = Message> {
                     route: template,
                     waitMs: response.retry,
                     global: response.global,
+                    ...response.details,
+                    // Log fields are masked by the logger, while observations go straight to the application
+                    ...(response.details.scope === undefined
+                        ? {}
+                        : { scope: maskText(response.details.scope, runtime.logging?.secrets) }),
+                    ...(response.details.bucket === undefined
+                        ? {}
+                        : { bucket: maskText(response.details.bucket, runtime.logging?.secrets) }),
                 })
                 runtime.logging?.drop(
                     "rateLimitWaits",
@@ -1174,7 +1183,7 @@ export class RestOwner<M extends MessageCore = Message> {
                         status: 429,
                         delayMs: response.retry,
                         attempt: attempts,
-                        fields: { method: request.method, global: response.global },
+                        fields: { method: request.method, global: response.global, ...response.details },
                     },
                     fiber.context,
                 )

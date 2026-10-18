@@ -86,6 +86,8 @@ describe.each(modes)("%s observer", (mode) => {
             route: "/channels/:id/messages",
             waitMs: 20,
             global: false,
+            retryAfterSeconds: 0.02,
+            bodyGlobal: false,
         })
         // Observations carry route templates, never the resource IDs of the request
         expect(JSON.stringify(observations)).not.toContain(driver.test.fixtures.ids.channel)

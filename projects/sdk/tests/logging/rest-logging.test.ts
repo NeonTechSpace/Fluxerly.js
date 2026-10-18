@@ -1,8 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest"
-import type { Client, LogRecord } from "../../src/index.js"
+import type { Client, LogRecord, Observation } from "../../src/index.js"
 import type { Client as NativeClient } from "../../src/effect.js"
 import { modes, setup } from "../support/both-apis.js"
-import { fakeHostTime, hostTurnsUntil } from "../support/client-clock.js"
+import { driveSdkTime, fakeHostTime, hostTurnsUntil, sdkClock } from "../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { captureLogs, counters } from "../support/log-capture.js"
 import { expectErr, settle } from "../support/settle.js"
@@ -182,5 +182,147 @@ test.each(modes)(
         expect(logs.withCode("ratelimit.deadline")).toEqual([
             expect.objectContaining({ level: "warn", delayMs: 5_000, route: "/channels/:id/messages/:id" }),
         ])
+        // A body without rate-limit headers adds only the body members it sent
+        expect(logs.withCode("ratelimit.deadline")[0]!.fields).toEqual({
+            method: "GET",
+            global: false,
+            retryAfterSeconds: 5,
+            bodyGlobal: false,
+        })
+    },
+)
+
+test.each(modes)(
+    "%s a rate-limit wait and a deadline repeat the rate-limit headers and body members Fluxer sent",
+    async (mode) => {
+        const clock = sdkClock()
+        const sent = {
+            "retry-after": "1",
+            "x-ratelimit-scope": "user",
+            "x-ratelimit-bucket": "0123456789abcdef",
+            "x-ratelimit-limit": "5",
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": "1767225601",
+            "x-ratelimit-reset-after": "0.42833333333333334",
+        }
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () =>
+            ++calls === 2
+                ? Response.json(wire("x"))
+                : Response.json(
+                      {
+                          code: "RATE_LIMITED",
+                          message: "Slow down",
+                          global: false,
+                          retry_after: calls === 1 ? 0.02 : 5,
+                      },
+                      { status: 429, headers: sent },
+                  ),
+        )
+        const logs = captureLogs()
+        const observations: Observation[] = []
+        const client = await setup(mode, {
+            logging: { ...logs.logging, categories: { ratelimit: "debug" } },
+            observe: (observation) => void observations.push(observation),
+        })
+        const fetch = (timeoutMs: number) =>
+            settle(
+                mode === "default"
+                    ? (client as Client).messages.fetch(target, { timeoutMs })
+                    : (client as NativeClient).messages.fetch(target, { timeoutMs }),
+            ).then(
+                () => "fetched",
+                () => "failed",
+            )
+        expect(await driveSdkTime(clock, fetch(1_000), { stepMs: 20 })).toBe("fetched")
+        const details = {
+            scope: "user",
+            bucket: "0123456789abcdef",
+            limit: 5,
+            remaining: 0,
+            resetAfterSeconds: 0.42833333333333334,
+            retryAfterHeaderSeconds: 1,
+            retryAfterSeconds: 0.02,
+            bodyGlobal: false,
+        }
+        expect(logs.withCode("ratelimit.wait")).toEqual([
+            expect.objectContaining({ delayMs: 20, fields: { method: "GET", global: false, ...details } }),
+        ])
+        expect(observations.filter((observation) => observation.type === "rateLimit")).toEqual([
+            {
+                type: "rateLimit",
+                method: "GET",
+                route: "/channels/:id/messages/:id",
+                waitMs: 20,
+                global: false,
+                ...details,
+            },
+        ])
+        // The second 429 asks for 5 seconds, past the 1-second timeout, so it fails without waiting
+        expect(await driveSdkTime(clock, fetch(1_000), { stepMs: 20 })).toBe("failed")
+        expect(logs.withCode("ratelimit.deadline")).toEqual([
+            expect.objectContaining({
+                delayMs: 5_000,
+                fields: { method: "GET", global: false, ...details, retryAfterSeconds: 5 },
+            }),
+        ])
+    },
+)
+
+test.each(modes)(
+    "%s rate-limit details omit values in another form and mask the token in what an observer receives",
+    async (mode) => {
+        const clock = sdkClock()
+        const token = "fixture-only-not-a-credential-token"
+        let calls = 0
+        stubFetchWithHostedDiscovery(async () =>
+            ++calls === 2
+                ? Response.json(wire("x"))
+                : Response.json(
+                      { global: "no", retry_after: 0.02 },
+                      {
+                          status: 429,
+                          headers: {
+                              "retry-after": "Thu, 01 Jan 2026 00:00:01 GMT",
+                              "x-ratelimit-scope": "user scope",
+                              "x-ratelimit-bucket": token,
+                              "x-ratelimit-limit": "5.5",
+                              "x-ratelimit-remaining": "-1",
+                              "x-ratelimit-reset-after": `0.${"1".repeat(31)}`,
+                          },
+                      },
+                  ),
+        )
+        const logs = captureLogs()
+        const observations: Observation[] = []
+        const client = await setup(mode, {
+            token,
+            logging: { ...logs.logging, categories: { ratelimit: "debug" } },
+            observe: (observation) => void observations.push(observation),
+        })
+        await driveSdkTime(
+            clock,
+            settle(
+                mode === "default"
+                    ? (client as Client).messages.fetch(target)
+                    : (client as NativeClient).messages.fetch(target),
+            ),
+            { stepMs: 20 },
+        )
+        expect(logs.withCode("ratelimit.wait")[0]!.fields).toEqual({
+            method: "GET",
+            global: false,
+            bucket: "[redacted]",
+            retryAfterSeconds: 0.02,
+        })
+        expect(observations.find((observation) => observation.type === "rateLimit")).toEqual({
+            type: "rateLimit",
+            method: "GET",
+            route: "/channels/:id/messages/:id",
+            waitMs: 20,
+            global: false,
+            bucket: "[redacted]",
+            retryAfterSeconds: 0.02,
+        })
     },
 )

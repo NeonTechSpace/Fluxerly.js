@@ -21,7 +21,13 @@ export interface RestObservation {
 }
 
 /**
- * A REST request that waits before retrying because Fluxer rate-limited it with HTTP 429
+ * A REST request that waits before retrying because Fluxer rate-limited it with HTTP 429.
+ * The optional members repeat the rate-limit headers and body members of that response, so the limiter that answered
+ * can be identified. Each is absent when the response did not send it or sent it in another form.
+ * The scope and bucket headers must be at most 64 letters, digits, underscores, periods, colons or hyphens, a count
+ * header at most 15 digits, and a seconds header at most 32 characters of digits with one optional decimal point.
+ * The body members must be a finite non-negative number for retry_after and a boolean for global.
+ * Credentials in scope and bucket are masked as in log records
  *
  * @category Logging and diagnostics
  */
@@ -34,8 +40,27 @@ export interface RateLimitObservation {
     readonly route: string
     /** Milliseconds the request waits before its retry */
     readonly waitMs: number
-    /** Whether the limit pauses every API route of this client rather than one rate-limit group */
+    /**
+     * Whether the limit pauses every API route of this client rather than one rate-limit group. It is true when the
+     * body's global member is true, the X-RateLimit-Global header is true or the X-RateLimit-Scope header is global
+     */
     readonly global: boolean
+    /** The X-RateLimit-Scope header, such as user, shared or global */
+    readonly scope?: string
+    /** The X-RateLimit-Bucket header, an opaque identifier of the route's rate-limit bucket */
+    readonly bucket?: string
+    /** The X-RateLimit-Limit header, the number of requests the route allowance admits at once */
+    readonly limit?: number
+    /** The X-RateLimit-Remaining header, the number of requests the route allowance still admits */
+    readonly remaining?: number
+    /** The X-RateLimit-Reset-After header, seconds until the whole route allowance is available again */
+    readonly resetAfterSeconds?: number
+    /** The Retry-After header in seconds. An HTTP date in this header is not reported */
+    readonly retryAfterHeaderSeconds?: number
+    /** The body's retry_after member, seconds until Fluxer admits another request */
+    readonly retryAfterSeconds?: number
+    /** The body's global member, unlike global, which combines it with the headers */
+    readonly bodyGlobal?: boolean
 }
 
 /**

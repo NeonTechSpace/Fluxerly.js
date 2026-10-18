@@ -157,6 +157,55 @@ function globalRateLimit(response: Response): boolean {
     )
 }
 
+/**
+ * What one HTTP 429 said about the limiter that answered it, for the ratelimit.wait and ratelimit.deadline records and
+ * the rate-limit observation. Each member is present only when the response sent it in the expected form
+ */
+export interface RateLimitDetails {
+    /** X-RateLimit-Scope header */
+    readonly scope?: string
+    /** X-RateLimit-Bucket header */
+    readonly bucket?: string
+    /** X-RateLimit-Limit header */
+    readonly limit?: number
+    /** X-RateLimit-Remaining header */
+    readonly remaining?: number
+    /** X-RateLimit-Reset-After header, in seconds */
+    readonly resetAfterSeconds?: number
+    /** Retry-After header in its delay-seconds form, not as an HTTP date */
+    readonly retryAfterHeaderSeconds?: number
+    /** The body's retry_after member, in seconds */
+    readonly retryAfterSeconds?: number
+    /** The body's global member */
+    readonly bodyGlobal?: boolean
+}
+
+/** A short header token, such as a scope name or bucket hash, or undefined for anything else */
+function headerToken(response: Response, name: string): string | undefined {
+    const value = response.headers.get(name)?.trim()
+    return value !== undefined && /^[\w.:-]{1,64}$/.test(value) ? value : undefined
+}
+
+/** A count of at most 15 digits, or seconds of at most 32 digits and one decimal point, otherwise undefined */
+function headerNumber(response: Response, name: string, integer = false): number | undefined {
+    const value = response.headers.get(name)?.trim()
+    return value !== undefined && (integer ? /^\d{1,15}$/ : /^(?=.{1,32}$)\d+(?:\.\d+)?$/).test(value)
+        ? Number(value)
+        : undefined
+}
+
+function rateLimitHeaders(response: Response): RateLimitDetails {
+    const details = {
+        scope: headerToken(response, "x-ratelimit-scope"),
+        bucket: headerToken(response, "x-ratelimit-bucket"),
+        limit: headerNumber(response, "x-ratelimit-limit", true),
+        remaining: headerNumber(response, "x-ratelimit-remaining", true),
+        resetAfterSeconds: headerNumber(response, "x-ratelimit-reset-after"),
+        retryAfterHeaderSeconds: headerNumber(response, "retry-after"),
+    }
+    return Object.fromEntries(Object.entries(details).filter(([, value]) => value !== undefined)) as RateLimitDetails
+}
+
 /** Largest provider error body read for its reviewed detail */
 const errorBodyMaxBytes = 8_192
 /** Time allowed for reading an error body before it is cancelled */
@@ -168,6 +217,8 @@ type ApiErrorRead = {
     readonly providerCode: string | null
     readonly retryAfterMs: number | null
     readonly global: boolean
+    /** The retry_after and global members exactly as the body sent them, for rate-limit records */
+    readonly sent: Pick<RateLimitDetails, "retryAfterSeconds" | "bodyGlobal">
     readonly cleanupDefect: unknown
 }
 
@@ -189,10 +240,10 @@ async function readApiError(
         !body ||
         (requireJsonContentType && !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
     )
-        return { detail: null, providerCode: null, retryAfterMs: null, global: false, cleanupDefect: null }
+        return { detail: null, providerCode: null, retryAfterMs: null, global: false, sent: {}, cleanupDefect: null }
     const declared = response.headers.get("content-length")
     if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > errorBodyMaxBytes))
-        return { detail: null, providerCode: null, retryAfterMs: null, global: false, cleanupDefect: null }
+        return { detail: null, providerCode: null, retryAfterMs: null, global: false, sent: {}, cleanupDefect: null }
     const reader = body.getReader()
     const chunks: Uint8Array[] = []
     let size = 0
@@ -210,6 +261,7 @@ async function readApiError(
     let providerCode: string | null = null
     let retryAfterMs: number | null = null
     let global = false
+    let sent: ApiErrorRead["sent"] = {}
     let cleanupDefect: unknown = null
     const recordCleanupDefect = (cause: unknown) => {
         const defect = new ApiErrorBodyCleanupError(cause)
@@ -244,8 +296,10 @@ async function readApiError(
                 if (typeof data.retry_after === "number" && data.retry_after >= 0) {
                     const milliseconds = data.retry_after * 1000
                     if (Number.isFinite(milliseconds)) retryAfterMs = milliseconds
+                    if (Number.isFinite(data.retry_after)) sent = { retryAfterSeconds: data.retry_after }
                 }
                 global = data.global === true
+                if (typeof data.global === "boolean") sent = { ...sent, bodyGlobal: data.global }
             }
         }
     } catch {
@@ -268,7 +322,7 @@ async function readApiError(
             recordCleanupDefect(error)
         }
     }
-    return { detail: result, providerCode, retryAfterMs, global, cleanupDefect }
+    return { detail: result, providerCode, retryAfterMs, global, sent, cleanupDefect }
 }
 
 /** What classification needs from the attempt that received the response */
@@ -304,6 +358,7 @@ export type ResponseClass =
           readonly global: boolean
           readonly apiError: ApiErrorDetail | null
           readonly providerCode: string | undefined
+          readonly details: RateLimitDetails
       }
 
 function collect(context: ClassifyContext, read: ApiErrorRead) {
@@ -357,6 +412,7 @@ export async function classifyResponse(response: Response, context: ClassifyCont
             global,
             apiError: apiRead.detail,
             providerCode: apiRead.providerCode ?? undefined,
+            details: { ...rateLimitHeaders(response), ...apiRead.sent },
         }
     }
     if (response.ok) return { kind: "accepted" }

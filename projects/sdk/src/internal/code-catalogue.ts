@@ -520,12 +520,14 @@ export const logCodes = {
     },
     "ratelimit.wait": {
         levels: ["debug", "warn"],
-        meaning: "A request was rate-limited and waits delayMs before retrying. Waits of a second or more are Warn",
+        meaning:
+            "A request was rate-limited and waits delayMs before retrying, at Warn for a second or more. The fields repeat what the 429 response sent, named like RateLimitObservation",
         action: "Send fewer requests on that route if long waits repeat",
     },
     "ratelimit.deadline": {
         levels: ["debug", "warn"],
-        meaning: "A rate-limit wait would pass the operation's timeout, so the request fails without waiting",
+        meaning:
+            "A rate-limit wait would pass the operation's timeout, so the request fails without waiting. When a 429 response caused it, the fields repeat what that response sent, named like RateLimitObservation",
         action: "Raise timeoutMs, or send fewer requests on that route",
     },
     "events.handlerFailed": {
