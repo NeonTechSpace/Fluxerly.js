@@ -368,7 +368,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     #worker: Fiber.Fiber<void> | undefined
     #workerExit: Exit.Exit<void, ConnectionFailure> | undefined
     /** The service cleanup the worker ran when an explicit shutdown interrupted it, which that shutdown logs */
-    #workerServices: Exit.Exit<void> | undefined
+    #workerCleanup: Exit.Exit<void> | undefined
     #terminal = Deferred.makeUnsafe<void, ConnectionFailure>()
     #shutdown = Deferred.makeUnsafe<void>()
     #typingClosed = Deferred.makeUnsafe<void>()
@@ -2184,9 +2184,23 @@ export class ClientOwner<M extends MessageCore = Message> {
                                     // An explicit shutdown lands here once the sockets are closed
                                     if (closing) yield* owner.#saveSessions()
                                     const services = yield* Effect.exit(owner.#closeServices())
-                                    // The explicit shutdown that interrupted this worker logs the cleanup. Otherwise this
-                                    // worker logs it below, even when a shutdown arrives during the cleanup
-                                    if (closing) owner.#workerServices = services
+                                    // The explicit shutdown that interrupted this worker logs the cleanup, including a socket
+                                    // close that died. Otherwise this worker logs it below, even when a shutdown arrives during
+                                    // the cleanup
+                                    if (closing) {
+                                        const dies = Exit.isFailure(exit)
+                                            ? exit.cause.reasons.filter((reason) => reason._tag === "Die")
+                                            : []
+                                        owner.#workerCleanup =
+                                            dies.length > 0
+                                                ? Exit.failCause(
+                                                      Cause.combine(
+                                                          Cause.fromReasons(dies),
+                                                          Exit.isFailure(services) ? services.cause : Cause.empty,
+                                                      ),
+                                                  )
+                                                : services
+                                    }
                                     const outcome = Exit.isFailure(services)
                                         ? Exit.failCause(
                                               Cause.combine(
@@ -2322,8 +2336,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                 yield* owner.#saveSessions()
                 const services = yield* Effect.exit(owner.#closeServices())
                 const exit = owner.#workerExit
-                // A connected worker already ran the service cleanup when it was interrupted, so its failures are logged here
-                const earlier = owner.#workerServices
+                // An interrupted worker already closed its sockets and ran the service cleanup, so its failures are logged here
+                const earlier = owner.#workerCleanup
                 const cleaned =
                     earlier && Exit.isFailure(earlier)
                         ? Exit.failCause(

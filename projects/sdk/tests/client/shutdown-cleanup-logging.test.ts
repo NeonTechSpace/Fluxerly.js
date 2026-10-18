@@ -1,6 +1,11 @@
+import { EventEmitter } from "node:events"
 import { Cause, Deferred, Effect, Exit, Fiber } from "effect"
 import { expect, test } from "vitest"
+import { createClient, type LogRecord, type WebSocketLike } from "../../src/effect.js"
 import { createTestClient } from "../../src/effect-testing.js"
+import { createFixtures } from "../../src/testing.js"
+import { fixtureToken } from "../support/both-apis.js"
+import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
 import { hostTurnsUntil } from "../support/client-clock.js"
 
 const cleanup = new Error("cleanup-sentinel")
@@ -109,5 +114,68 @@ test("a shutdown during the cleanup a connection end started logs and counts the
     if (!observed) throw new Error("The scenario did not finish")
     expect(observed.shutdownDied).toBe(true)
     expect(observed.failedRecords).toBe(1)
+    expect(observed.counted).toBe(1)
+})
+
+const closeFailure = new Error("socket-close-sentinel")
+
+/** A scripted socket that answers Identify with READY and whose graceful close throws, so only terminate closes it */
+class ThrowingCloseSocket extends EventEmitter implements WebSocketLike {
+    readyState = 1
+    constructor() {
+        super()
+        queueMicrotask(() => this.deliver({ op: 10, d: { heartbeat_interval: 60_000 } }))
+    }
+    send(data: string, callback: (error?: Error) => void) {
+        const { op } = JSON.parse(data) as { op: number }
+        queueMicrotask(() => callback())
+        if (op === 1) queueMicrotask(() => this.deliver({ op: 11 }))
+        if (op === 2) queueMicrotask(() => this.deliver({ op: 0, s: 1, t: "READY", d: readyData }))
+    }
+    deliver(frame: unknown) {
+        if (this.readyState === 1) this.emit("message", Buffer.from(JSON.stringify(frame)), false)
+    }
+    close(): never {
+        throw closeFailure
+    }
+    terminate() {
+        if (this.readyState === 3) return
+        this.readyState = 3
+        queueMicrotask(() => this.emit("close", 1006))
+    }
+}
+
+const readyData = { session_id: "session", shard: [0, 1], user: createFixtures().user(), guilds: [] }
+
+test("explicit shutdown logs and counts a socket close that throws", async () => {
+    const records: LogRecord[] = []
+    let observed: { shutdownDied: boolean; failedRecords: LogRecord[]; counted: number } | undefined
+    // Closing the scope shuts the client down again and repeats the shared shutdown outcome, so it is not asserted
+    await Effect.runPromiseExit(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createClient({
+                    token: fixtureToken,
+                    logging: { level: "error", sink: (record) => void records.push(record) },
+                    sharding: { totalShards: 1 },
+                    transport: {
+                        fetch: async () => Response.json(hostedDiscoveryDocument),
+                        webSocket: () => new ThrowingCloseSocket(),
+                    },
+                })
+                yield* client.connect()
+                const exit = yield* Effect.exit(client.shutdown())
+                observed = {
+                    shutdownDied: Exit.isFailure(exit) && Cause.hasDies(exit.cause),
+                    failedRecords: records.filter((record) => record.code === "lifecycle.cleanupFailed"),
+                    counted: client.diagnostics().counters.cleanupFailures,
+                }
+            }),
+        ),
+    )
+    if (!observed) throw new Error("The scenario did not finish")
+    expect(observed.shutdownDied).toBe(true)
+    expect(observed.failedRecords).toHaveLength(1)
+    expect(observed.failedRecords[0]?.error).toMatchObject({ message: closeFailure.message })
     expect(observed.counted).toBe(1)
 })
