@@ -46,6 +46,13 @@ const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
 /**
+ * Default page allowance when the caller sets only maxItems: the pages maxItems needs at full pageSize plus 100 spare
+ * pages for short pages or skipped duplicates. It stays finite, so a server that returns almost nothing per page cannot
+ * keep a traversal running without bound
+ */
+export const defaultMaxPages = (maxItems: number, pageSize: number) => Math.ceil(maxItems / pageSize) + 100
+
+/**
  * Validate default iteration options before executing the shared, signal-free request options. The signal is passed in
  * when the caller already read it, so each option field is read once
  */
@@ -182,7 +189,6 @@ function prepare<A, E>(
             maxPagesInput = field("maxPages"),
             pageSizeInput = field("pageSize")
         const maxItems = maxItemsInput,
-            maxPages = maxPagesInput === undefined ? 100 : maxPagesInput,
             pageSize = pageSizeInput === undefined ? defaultSize : pageSizeInput
         if (!positive(maxItems))
             return invalid(
@@ -192,7 +198,7 @@ function prepare<A, E>(
                     "The limit maxItems is required and must be a positive safe integer",
                 ),
             )
-        if (!positive(maxPages))
+        if (maxPagesInput !== undefined && !positive(maxPagesInput))
             return invalid(
                 inputValidationFailure("query.maxPages", "range", "The limit maxPages must be a positive safe integer"),
             )
@@ -204,6 +210,7 @@ function prepare<A, E>(
                     `The limit pageSize must be an integer from 1 through ${maximumSize.toLocaleString("en-US")}`,
                 ),
             )
+        const maxPages = maxPagesInput ?? defaultMaxPages(maxItems, pageSize)
         const input = options === undefined ? {} : options
         if (!record(input))
             return invalid(inputValidationFailure("options", "type", "Iteration options must be an object"))

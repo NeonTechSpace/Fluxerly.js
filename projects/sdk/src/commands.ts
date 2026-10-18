@@ -255,6 +255,7 @@ const endsSingleQuotedSpan = (text: string, index: number): boolean => {
  * Empty quotes produce an empty token, which a text argument descriptor rejects.
  * Returns undefined for empty input or an invalid command name.
  * For a quote that never closes or a trailing backslash, it returns a `PrefixCommandParseRejection` with a fixed `reason` and the command `name`, which `onUnmatched` receives.
+ * When an unclosed single-quoted span held a single quote followed by a letter or digit, as in `'a'b`, the `reason` adds that such a quote does not close the span and suggests a space after it or double quotes.
  * A word that begins with an apostrophe, such as `'twas`, opens a span, so write it as `\'twas` to keep the apostrophe literal.
  * This synchronous helper does not inspect the message or change the router's whitespace-only default.
  * Use the public `commands.parseQuoted` helper as the router's `parse` option to opt in
@@ -274,6 +275,8 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
     let started = false
     // Index of the quote that last closed a span, so a single quote right after it can open the next span
     let closedAt = -1
+    // Whether the open single-quoted span held a single quote that a letter or digit kept literal
+    let heldApostrophe = false
     for (let index = 0; index < rawArgs.length; index += 1) {
         const character = rawArgs[index]!
         if (character === "\\") {
@@ -286,9 +289,13 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
             if (character === quote && (quote === '"' || endsSingleQuotedSpan(rawArgs, index))) {
                 quote = undefined
                 closedAt = index
-            } else current += character
+            } else {
+                current += character
+                if (character === "'") heldApostrophe = true
+            }
         } else if (character === '"' || (character === "'" && (!started || closedAt === index - 1))) {
             quote = character
+            heldApostrophe = false
             started = true
         } else if (/\s/.test(character)) {
             if (started) {
@@ -301,8 +308,14 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
             started = true
         }
     }
-    if (quote !== undefined)
-        return { reason: `A ${quote === '"' ? "double" : "single"} quote was opened but never closed`, name }
+    if (quote === '"') return { reason: "A double quote was opened but never closed", name }
+    if (quote === "'")
+        return {
+            reason: heldApostrophe
+                ? "A single quote was opened but never closed. If a single quote before a letter or digit was meant to close it, put a space after that quote or use double quotes"
+                : "A single quote was opened but never closed",
+            name,
+        }
     if (started) args.push(current)
     return { name, rawArgs, args }
 }

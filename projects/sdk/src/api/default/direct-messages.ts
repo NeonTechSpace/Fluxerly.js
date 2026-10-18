@@ -67,7 +67,10 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * The result is a private channel, not proof a message can be delivered.
      * Privacy checks can still prevent sending after opening succeeds.
      * With the direct-message cache enabled, the channel ID is unknown until the response arrives, so some concurrent direct-message cache changes keep the result out of the cache.
-     * Examples are a directMessages.fetch call and a direct-message update event
+     * Examples are a directMessages.fetch call and a direct-message update event.
+     * A successful opening replaces only the returned channel's cached snapshot and keeps other cached private channels.
+     * A failed opening that was started clears the direct-message cache, because its outcome may be unknown and no channel is known to evict.
+     * Invalid input fails before the cache is touched and leaves it intact
      */
     open(
         userId: string,

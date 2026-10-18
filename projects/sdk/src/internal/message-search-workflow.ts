@@ -10,7 +10,7 @@ import { PaginationError } from "#sdk/pagination"
 import type { ClientOwner } from "./client.js"
 import { encodeMessageSearch } from "./message-search.js"
 import { record } from "./decode/primitives.js"
-import { Pagination } from "./pagination.js"
+import { Pagination, defaultMaxPages } from "./pagination.js"
 import { suspendInput } from "./defects.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
@@ -74,7 +74,6 @@ export function searchMessagePagination<M extends MessageCore = Message>(
         if (unsupportedOption) return invalid(unsupportedOption)
         const timeoutMs = options?.timeoutMs
         const pageSize = pageSizeInput === undefined ? 25 : pageSizeInput
-        const requestedMaxPages = maxPagesInput === undefined ? 100 : maxPagesInput
         if (!positive(pageSize) || pageSize > 25)
             return invalid(
                 inputValidationFailure(
@@ -83,7 +82,7 @@ export function searchMessagePagination<M extends MessageCore = Message>(
                     "The limit pageSize must be an integer from 1 through 25",
                 ),
             )
-        if (!positive(requestedMaxPages))
+        if (maxPagesInput !== undefined && !positive(maxPagesInput))
             return invalid(
                 inputValidationFailure(
                     "limits.maxPages",
@@ -105,7 +104,7 @@ export function searchMessagePagination<M extends MessageCore = Message>(
         const copiedFilters = validated.query
         const requestOptions = timeoutMs === undefined ? {} : { timeoutMs }
         const requestLimit = Math.min(pageSize, maxItems)
-        const maxPages = Math.min(requestedMaxPages, 400)
+        const maxPages = Math.min(maxPagesInput ?? defaultMaxPages(maxItems, pageSize), 400)
         return Effect.succeed(
             () =>
                 new Pagination(

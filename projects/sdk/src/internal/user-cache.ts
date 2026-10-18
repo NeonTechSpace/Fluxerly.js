@@ -22,6 +22,8 @@ export type UserCacheGuard = {
     readonly kind: Kind
     readonly id?: string
     readonly mutation: boolean
+    /** Set only for an ID-less write that opens one private conversation and can change only the channel its response names */
+    readonly opensConversation: boolean
     readonly replace: boolean
     readonly collectionEpoch: object
     readonly targetEpoch: object
@@ -63,8 +65,13 @@ export class UserCache {
         )
     }
 
-    begin(kind: Kind, options: { id?: string; mutation?: boolean; replace?: boolean } = {}): UserCacheGuard {
+    begin(
+        kind: Kind,
+        options: { id?: string; mutation?: boolean; opensConversation?: boolean; replace?: boolean } = {},
+    ): UserCacheGuard {
         const mutation = options.mutation === true
+        const opensConversation =
+            mutation && kind === "directMessages" && options.id === undefined && options.opensConversation === true
         const replace = options.replace === true
         const collection = options.id === undefined || replace
         if (collection) this.#advanceCollection(kind)
@@ -77,12 +84,16 @@ export class UserCache {
             kind,
             ...(options.id === undefined ? {} : { id: options.id }),
             mutation,
+            opensConversation,
             replace,
             collectionEpoch: this.#collectionEpoch[kind],
             targetEpoch: this.#targetEpoch[kind],
         }
         if (!collection && !this.#closed) this.#targets[kind].set(options.id!, guard)
-        if (mutation) {
+        // Opening a private conversation can change only the one channel the response names, so retained snapshots of
+        // other channels stay until then, while the collection fence above covers overlapping reads.
+        // Any other mutation without an ID can change unknown resources, so it clears the whole kind
+        if (mutation && !opensConversation) {
             if (options.id === undefined) this.#clearKind(kind)
             else this.#remove(kind, options.id)
             this.#schedule()
@@ -96,15 +107,22 @@ export class UserCache {
             return
         }
         if (!this.#current(guard)) {
-            // A stale write can still have changed Fluxer state, so evict only the resource it could affect
-            if (guard.mutation) this.invalidate(guard.kind, guard.id)
+            // A stale write can still have changed Fluxer state, so evict only the resource it could affect.
+            // For an opening without an ID, that is each channel the response names
+            if (guard.mutation) {
+                if (guard.opensConversation) for (const value of values) this.invalidate(guard.kind, value.id)
+                else this.invalidate(guard.kind, guard.id)
+            }
             this.#finish(guard)
             return
         }
         const settings = this.settings[guard.kind]
+        // An opening's returned channels replace their own snapshots below, and no other snapshot changed
         if (guard.mutation) {
-            if (guard.id === undefined) this.#clearKind(guard.kind)
-            else this.#remove(guard.kind, guard.id)
+            if (!guard.opensConversation) {
+                if (guard.id === undefined) this.#clearKind(guard.kind)
+                else this.#remove(guard.kind, guard.id)
+            }
         } else if (guard.replace) this.#clearKind(guard.kind)
         if (settings && settings.maxAgeMs !== 0 && settings.maxEntries !== 0) {
             this.#purge()
@@ -173,6 +191,7 @@ export class UserCache {
             this.#finish(guard)
             return
         }
+        // A failed opening has no channel ID to evict, so its unknown outcome clears the whole kind
         if (guard.mutation || this.#current(guard)) this.invalidate(guard.kind, guard.id)
         this.#finish(guard)
     }

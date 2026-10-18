@@ -33,7 +33,7 @@ export interface AuditLogs {
     /**
      * Read filtered audit entries newest first, buffering one page and never prefetching.
      * The maxItems option is required.
-     * The pageSize option defaults to 50 and accepts 1–100, maxPages defaults to 100, and timeoutMs applies to each page.
+     * The pageSize option defaults to 50 and accepts 1–100, maxPages defaults to the pages maxItems needs at pageSize plus 100, and timeoutMs applies to each page.
      * An empty page or maxItems ends the scan, not a short page.
      * Invalid traversal input, a stalled cursor or reaching the page budget fails with PaginationError.
      * Remote failures keep auditLogs.fetchPage's errors.

@@ -108,7 +108,7 @@ export interface Guilds {
     /**
      * Read the bot's community memberships in ascending ID order, retaining one page and never prefetching.
      * The maxItems option is required.
-     * The pageSize option defaults to 200, maxPages defaults to 100, and timeoutMs applies to each page.
+     * The pageSize option defaults to 200, maxPages defaults to the pages maxItems needs at pageSize plus 100, and timeoutMs applies to each page.
      * Iteration ends at maxItems or an empty page, not a short page.
      * A repeated or backward ID after a removed cursor fails with PaginationError cursorStalled before delivering that page.
      * Other traversal failures are input and pageLimit, and remote failures keep fetchPage's error.

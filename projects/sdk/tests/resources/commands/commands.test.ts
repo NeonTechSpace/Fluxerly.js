@@ -628,21 +628,35 @@ test.each([
     expect(nativeCommands.parseQuoted({ message: {} as never, prefix: "!", source: `say ${source}` })).toEqual(parsed)
 })
 
+const unclosed = {
+    double: "A double quote was opened but never closed",
+    single: "A single quote was opened but never closed",
+    // A closing single quote that a letter or digit follows keeps the span open, which the reason explains
+    singleHeld:
+        "A single quote was opened but never closed. If a single quote before a letter or digit was meant to close it, put a space after that quote or use double quotes",
+}
 test.each([
     ["don't 'open", "single"],
     ["it's \"open", "double"],
     ["a'b 'c", "single"],
-    ["'it's", "single"],
-    // A span followed directly by a letter or digit is not closed by that quote
-    ["'a'b", "single"],
-    ["'a b'c", "single"],
-    ["''a", "single"],
-    ["'a'1", "single"],
-    ["'日本'語", "single"],
+    ["'unterminated", "single"],
+    // An apostrophe in a word before the span does not explain why the span stayed open
+    ["it's 'open", "single"],
     ['5" pipe', "double"],
-])("quoted parsing of %s still rejects the span that never closes, with the command name", (source, kind) => {
+    // A span followed directly by a letter or digit is not closed by that quote, so the reason says so
+    ["'it's", "singleHeld"],
+    ["'a'b", "singleHeld"],
+    ["'a b'c", "singleHeld"],
+    ["''a", "singleHeld"],
+    ["'a'1", "singleHeld"],
+    ["'日本'語", "singleHeld"],
+    // Only the span that stays open counts: an earlier span that closed does not
+    ["'x' 'it's", "singleHeld"],
+    ["'it's' 'open", "single"],
+] as const)("quoted parsing of %s still rejects the span that never closes, with the command name", (source, kind) => {
     const rejected = commands.parseQuoted({ message: {} as never, prefix: "!", source: `Say ${source}` })
-    expect(rejected).toEqual({ reason: `A ${kind} quote was opened but never closed`, name: "Say" })
+    expect(rejected).toEqual({ reason: unclosed[kind], name: "Say" })
+    expect(nativeCommands.parseQuoted({ message: {} as never, prefix: "!", source: `Say ${source}` })).toEqual(rejected)
 })
 
 test("default unmatched feedback receives frozen outcomes after dynamic prefix matching without bot or chat noise", async () => {

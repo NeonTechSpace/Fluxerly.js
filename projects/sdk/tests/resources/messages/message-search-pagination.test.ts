@@ -133,6 +133,22 @@ test.each(modes)("%s stops indexing, malformed progress, and page budgets withou
     expect(fetch).toHaveBeenCalledTimes(400)
 })
 
+test.each(modes)("%s sizes the default page allowance from maxItems up to the 400-page ceiling", async (mode) => {
+    const api = await setup(mode)
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        return page([String(body.page)], { page: body.page, total: 1000, hitsPerPage: 1 })
+    })
+    stubFetchWithHostedDiscovery(fetch)
+    expect(await collect(api.iterate({}, { maxItems: 150, pageSize: 1 }))).toHaveLength(150)
+    expect(fetch).toHaveBeenCalledTimes(150)
+    fetch.mockClear()
+    await expect(collect(api.iterate({}, { maxItems: 1000, pageSize: 1 }))).rejects.toMatchObject({
+        reason: "pageLimit",
+    })
+    expect(fetch).toHaveBeenCalledTimes(400)
+})
+
 test.each(modes)("%s rejects invalid traversal settings before dispatch", async (mode) => {
     const api = await setup(mode)
     const fetch = vi.fn()

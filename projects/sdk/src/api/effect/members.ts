@@ -161,7 +161,7 @@ export interface Members {
     /**
      * Read unique indexed member-search hits with a bounded scan.
      * The maxItems option is required.
-     * The pageSize option defaults to 100 and accepts 1–100, and maxPages defaults to 100.
+     * The pageSize option defaults to 100 and accepts 1–100, and maxPages defaults to the pages maxItems needs at pageSize plus 100.
      * Each consumption copies filters and their arrays, including recognized inherited and nonenumerable fields, and keeps independent state.
      * Pages are requested only as needed, without prefetch or full-member fetches
      *
@@ -412,7 +412,7 @@ export interface Members {
     ): Effect.Effect<readonly GuildBan[], GuildOperationFailure>
     /**
      * Read community members by ascending user ID, without connecting the gateway or downloading the community eagerly.
-     * The maxItems option is required, and pageSize and maxPages both default to 100.
+     * The maxItems option is required, and pageSize defaults to 100, and maxPages defaults to the pages maxItems needs at pageSize plus 100.
      * Each consumption copies inputs and keeps one page, requested only when needed.
      * An empty page or maxItems ends the scan, not a short page.
      * The timeoutMs option applies to each fetchPage call.

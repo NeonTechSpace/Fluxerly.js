@@ -739,6 +739,35 @@ test.each(modes)("%s keeps successful close and recipient removal from retaining
     }
 })
 
+test.each(modes)("%s keeps other cached private channels when a conversation opens by user ID", async (mode) => {
+    let opening = "success" as "success" | "failure"
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
+        if (path === "/v1/channels/10") return Response.json(directMessage("10"))
+        if (path === "/v1/users/@me/channels") {
+            if (opening === "failure") throw Error("fixture opening failure")
+            return Response.json(directMessage("12", { recipients: [user("31")] }))
+        }
+        if (path === "/v1/channels/12/messages") return Response.json(message("80", "12"))
+        throw Error(`Unexpected request ${init.method} ${path} ${JSON.stringify(body)}`)
+    })
+    const api = await setup(mode, { directMessages: true })
+
+    await api.fetchDirectMessage("10")
+    expect((await api.open("31")).id).toBe("12")
+    expect((await api.getDirectMessage("10"))?.id).toBe("10")
+    expect((await api.getDirectMessage("12"))?.id).toBe("12")
+    expect((await api.send("31", { content: "fixture" })).channelId).toBe("12")
+    expect((await api.getDirectMessage("10"))?.id).toBe("10")
+
+    // A failed opening names no channel, so it clears the whole direct-message cache
+    opening = "failure"
+    await expect(api.open("31")).rejects.toMatchObject({ operation: "directMessages.open" })
+    expect(await api.getDirectMessage("10")).toBeUndefined()
+    expect(await api.getDirectMessage("12")).toBeUndefined()
+})
+
 test.each(modes)("%s invalidates direct-message cache races around nested send opening", async (mode) => {
     let opening = "success" as "success" | "failure"
     let openStarted = false

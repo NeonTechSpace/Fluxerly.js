@@ -234,9 +234,10 @@ test.each(modes)(
         await expect(source.next()).rejects.toMatchObject({
             _tag: "PaginationError",
             reason: "pageLimit",
-            // The message and hint name the limit to raise
+            // The message and hint name the limit to raise, and the hint does not suggest a larger pageSize,
+            // because the default maxPages shrinks as pageSize grows
             message: expect.stringContaining("maxPages"),
-            hint: expect.stringContaining("maxPages"),
+            hint: expect.stringMatching(/^Set maxPages explicitly(?!.*pageSize)/),
         })
         expect(api.requests).toHaveLength(1)
         api.requests.length = 0
@@ -252,6 +253,40 @@ test.each(modes)(
         expect(api.requests).toHaveLength(2)
     },
 )
+
+test.each(modes)("%s sizes the default page allowance from maxItems and keeps it finite", async (mode) => {
+    const api = await fixture(mode)
+    // One item per page makes 150 items need more pages than the former fixed default of 100
+    api.control.respond = async (url) => {
+        const limit = Number(url.searchParams.get("limit"))
+        const index = api.requests.length
+        return url.pathname.endsWith("/members")
+            ? Response.json([member(String(1000 + index))].slice(0, limit))
+            : Response.json([wire(String(1000 - index))].slice(0, limit))
+    }
+    for (const kind of ["history", "members"] as const) {
+        api.requests.length = 0
+        expect(await gather(api.iterate(kind, { maxItems: 150, pageSize: 1 }))).toHaveLength(150)
+        expect(api.requests).toHaveLength(150)
+    }
+    // Short pages use the 100 spare pages (2 needed plus 100), then a server that keeps returning less than asked stops
+    api.requests.length = 0
+    api.control.respond = async () => Response.json([wire(String(1000 - api.requests.length))])
+    const source = api.iterate("history", { maxItems: 200, pageSize: 100 })[Symbol.asyncIterator]()
+    for (let delivered = 0; delivered < 102; delivered++) expect((await source.next()).done).toBe(false)
+    await expect(source.next()).rejects.toMatchObject({ _tag: "PaginationError", reason: "pageLimit" })
+    expect(api.requests).toHaveLength(102)
+    // An explicit maxPages below the default still wins
+    api.requests.length = 0
+    api.control.respond = async () => Response.json([wire(String(1000 - api.requests.length))])
+    const bounded = api.iterate("history", { maxItems: 150, pageSize: 1, maxPages: 120 })[Symbol.asyncIterator]()
+    for (let delivered = 0; delivered < 120; delivered++) expect((await bounded.next()).done).toBe(false)
+    await expect(bounded.next()).rejects.toMatchObject({
+        reason: "pageLimit",
+        hint: expect.stringContaining("maxPages"),
+    })
+    expect(api.requests).toHaveLength(120)
+})
 
 test.each(modes)("%s stops on pin cursor ties without discarding newly observed pin IDs", async (mode) => {
     const api = await fixture(mode)
@@ -425,12 +460,12 @@ test("default traversal preparation sanitizes unexpected input-access defects be
     expect(api.requests).toHaveLength(0)
 })
 
-test.each(modes)("%s defaults to 100 logical pages and counts transient retries within the same page", async (mode) => {
+test.each(modes)("%s counts logical pages, not transient retries within the same page", async (mode) => {
     const clock = sdkClock()
     const api = await fixture(mode)
     let id = 1000
     api.control.respond = async () => Response.json([wire(String(id--))])
-    await expect(gather(api.iterate("history", { maxItems: 200, pageSize: 1 }))).rejects.toMatchObject({
+    await expect(gather(api.iterate("history", { maxItems: 200, pageSize: 1, maxPages: 100 }))).rejects.toMatchObject({
         reason: "pageLimit",
     })
     expect(api.requests).toHaveLength(100)

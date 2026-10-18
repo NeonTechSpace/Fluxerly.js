@@ -1177,6 +1177,9 @@ export class ClientOwner<M extends MessageCore = Message> {
                 const guard = owner.userCache.begin(request.resource, {
                     ...(request.id === undefined ? {} : { id: request.id }),
                     mutation: request.method !== "GET",
+                    ...(request.opensConversation === undefined
+                        ? {}
+                        : { opensConversation: request.opensConversation }),
                     ...(request.replace === undefined ? {} : { replace: request.replace }),
                 })
                 return yield* owner.rest

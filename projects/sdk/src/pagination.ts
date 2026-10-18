@@ -27,7 +27,10 @@ export interface PaginationQuery {
      * Member search defaults to 100 with 1 through 100, message search to 25 with 1 through 25
      */
     readonly pageSize?: number
-    /** Maximum page requests, a positive safe integer, default 100.
+    /** Maximum page requests, a positive safe integer.
+     * Defaults to the pages maxItems needs at pageSize plus 100 spare pages for short pages and skipped duplicates,
+     * so a caller who sets only maxItems is not stopped by the page count when pages are full.
+     * The default stays finite, so a server that returns far less than asked still ends with pageLimit. Set a lower value to cap requests.
      * Retrying a request for the same page does not use another page allowance. Duplicate-only pin pages do count.
      * Needing a further page after this allowance fails with PaginationError reason pageLimit, preserving already-delivered items
      */
@@ -109,7 +112,8 @@ const paginationExplanations: Readonly<Record<PaginationError["reason"], string>
 /** Suggested next step for each non-input pagination failure */
 const paginationHints: Readonly<Record<Exclude<PaginationError["reason"], "input">, string>> = {
     cursorStalled: "Retry later, because concurrent changes or equal timestamps can repeat a cursor",
-    pageLimit: "Raise maxPages, or lower maxItems or raise pageSize so fewer pages are needed",
+    pageLimit:
+        "Set maxPages explicitly to a higher value, or lower maxItems so fewer pages are needed. A message search reads at most 400 pages, so narrow its filters instead",
     indexing: "Retry the search after a short wait",
 }
 

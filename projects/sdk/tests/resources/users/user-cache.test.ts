@@ -116,6 +116,68 @@ test("direct-message mutations invalidate only overlapping reads through complet
     cache.close()
 })
 
+test("an opening without a channel ID replaces only the returned channel and keeps other snapshots", () => {
+    const cache = new UserCache({ directMessages: { ...settings, maxEntries: 5 } }, () => 0)
+    const other = directMessage("10")
+    const stale = directMessage("11")
+    const opened = directMessage("11", { lastMessageId: "70" })
+    complete(cache, "directMessages", [other, stale])
+
+    const opening = cache.begin("directMessages", { mutation: true, opensConversation: true })
+    expect(cache.get("directMessages", other.id)).toBe(other)
+    cache.complete(opening, [opened])
+    expect(cache.get("directMessages", other.id)).toBe(other)
+    expect(cache.get("directMessages", opened.id)).toBe(opened)
+
+    // An opening made stale by an overlapping targeted write evicts only the channel it returned
+    const overlapped = cache.begin("directMessages", { mutation: true, opensConversation: true })
+    const targeted = cache.begin("directMessages", { id: "12" })
+    cache.complete(targeted, [directMessage("12")])
+    cache.complete(overlapped, [opened])
+    expect(cache.get("directMessages", opened.id)).toBeUndefined()
+    expect(cache.get("directMessages", other.id)).toBe(other)
+
+    // A failed opening has no channel to name, so it clears the kind
+    const failing = cache.begin("directMessages", { mutation: true, opensConversation: true })
+    cache.failed(failing)
+    expect(cache.diagnostics("directMessages").retainedEntries).toBe(0)
+    cache.close()
+})
+
+test.each(["users", "directMessages"] as const)(
+    "%s mutation without an ID that does not open a conversation still clears the whole kind",
+    (kind) => {
+        const cache = new UserCache({ [kind]: { ...settings, maxEntries: 5 } }, () => 0)
+        const other = value(kind, "10")
+        const returned = value(kind, "11")
+        complete(cache, kind, [other, returned])
+
+        const clearing = cache.begin(kind, { mutation: true })
+        expect(cache.get(kind, other.id)).toBeUndefined()
+        cache.complete(clearing, [returned])
+        expect(cache.get(kind, other.id)).toBeUndefined()
+        expect(cache.get(kind, returned.id)).toBe(returned)
+
+        // A stale one clears the kind too, because its effect on other snapshots is unknown
+        complete(cache, kind, [other])
+        const stale = cache.begin(kind, { mutation: true })
+        const targeted = cache.begin(kind, { id: "12" })
+        cache.complete(targeted, [value(kind, "12")])
+        cache.complete(stale, [returned])
+        expect(cache.diagnostics(kind).retainedEntries).toBe(0)
+        cache.close()
+    },
+)
+
+test("the opening flag keeps other snapshots only for a direct-message write without an ID", () => {
+    const cache = new UserCache({ users: settings }, () => 0)
+    const other = value("users", "10")
+    complete(cache, "users", [other])
+    cache.begin("users", { mutation: true, opensConversation: true })
+    expect(cache.get("users", other.id)).toBeUndefined()
+    cache.close()
+})
+
 test.each(["users", "directMessages"] as const)(
     "%s collection replacement orders targeted reads and observations without merging partial lists",
     (kind) => {

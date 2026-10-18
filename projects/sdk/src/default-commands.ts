@@ -483,7 +483,7 @@ export interface DefaultCommands {
     /**
      * Split a suffix using single or double quotes and backslash escapes, retaining original argument text in `rawArgs`.
      * Use as `create({ prefix: "!", parse: commands.parseQuoted })` to opt in instead of the whitespace-only default.
-     * Returns undefined for empty input or invalid names, and a `PrefixCommandParseRejection` with a fixed `reason` and the command `name` for an unclosed quote or a trailing escape, which `onUnmatched` receives. A double quote opens a span anywhere. A single quote opens one only at the start of a word and closes unless a letter or digit follows, so `don't` stays literal and `'Yes', 'No'` is `Yes,` and `No`. Empty quotes produce an empty token.
+     * Returns undefined for empty input or invalid names, and a `PrefixCommandParseRejection` with a fixed `reason` and the command `name` for an unclosed quote or a trailing escape, which `onUnmatched` receives. For `'a'b`, the single-quote `reason` adds that a quote followed directly by a letter or digit does not close the span. A double quote opens a span anywhere. A single quote opens one only at the start of a word and closes unless a letter or digit follows, so `don't` stays literal and `'Yes', 'No'` is `Yes,` and `No`. Empty quotes produce an empty token.
      * Runs synchronously without client or network work
      */
     parseQuoted<M extends MessageCore = Message>(

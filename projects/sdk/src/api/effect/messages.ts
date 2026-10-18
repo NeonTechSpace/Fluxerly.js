@@ -97,7 +97,7 @@ export interface Messages<M extends MessageCore = Message> {
     ): Effect.Effect<CrosspostSource, MessageOperationFailure>
     /**
      * Read older messages newest first, without connecting the gateway.
-     * The maxItems option is required, and pageSize and maxPages use the limits in PaginationQuery.
+     * The maxItems option is required, and pageSize and maxPages use the limits and defaults in PaginationQuery.
      * Creating the result makes no request.
      * Each consumption copies the inputs and has independent progress.
      * The SDK keeps one page at a time and fetches the next only when needed.
@@ -163,7 +163,7 @@ export interface Messages<M extends MessageCore = Message> {
     ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure>
     /**
      * Read indexed search hits from the supplied community or channel context, following numbered pages without polling, prefetching or cache population.
-     * The maxItems option is required, pageSize accepts 1–25, and maxPages defaults to 100.
+     * The maxItems option is required, pageSize accepts 1–25, and maxPages defaults to the pages maxItems needs at pageSize plus 100, never above 400.
      * Each consumption copies the filters, including recognized inherited and nonenumerable fields and their arrays, and holds one page at a time.
      * Request capacity stays at the smaller of pageSize and maxItems throughout the scan, and at most maxItems hits are delivered.
      * Reaching maxPages or Fluxer's 400-page ceiling with more matches fails with PaginationError pageLimit.

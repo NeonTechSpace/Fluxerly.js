@@ -30,6 +30,8 @@ export interface UserRequest<A> {
     readonly resource: "users" | "directMessages"
     readonly id?: string
     readonly replace?: boolean
+    /** Marks an ID-less write that opens one private conversation, so the cache keeps other conversations */
+    readonly opensConversation?: boolean
     readonly verifyType?: "private" | "group"
     /** Skips all user-cache conflict guards and writes while retaining the shared REST scheduler and retries */
     readonly noCache?: boolean
@@ -219,6 +221,7 @@ export function directMessageOpen(id: string): UserValidationResult<DirectMessag
         method: "POST",
         status: 200,
         resource: "directMessages",
+        opensConversation: true,
         json,
         decode: (value) => {
             const channel = decodeDirectMessage(value)

@@ -2,7 +2,7 @@
 "@neontechspace/fluxerly": major
 ---
 
-Breaking changes in `commands.parseQuoted`: A single quote is now an apostrophe unless it starts a word, and its rejections carry the command `name`. Double quotes, backslash escapes and the rejections for an unclosed quote and a trailing backslash are otherwise unchanged. A single quote opens a quoted span only at the start of the text, after whitespace or directly after a span that just closed. Inside a single-quoted span, a single quote ends the span unless the next character is a letter or digit, so the end of the text, whitespace, quotes and punctuation all end it. Every other single quote is literal.
+Breaking changes in `commands.parseQuoted`: A single quote is now an apostrophe unless it starts a word, and its rejections carry the command `name`. Double quotes and backslash escapes are unchanged, and the rejections for an unclosed quote and a trailing backslash change only as described below. A single quote opens a quoted span only at the start of the text, after whitespace or directly after a span that just closed. Inside a single-quoted span, a single quote ends the span unless the next character is a letter or digit, so the end of the text, whitespace, quotes and punctuation all end it. Every other single quote is literal.
 
 Inputs that now parse differently, shown as the words each gives (arguments after `!say `):
 
@@ -17,5 +17,7 @@ Inputs that now parse differently, shown as the words each gives (arguments afte
 Inputs that parse as before include `'Yes', 'No'` (`Yes,` and `No`), `'a'.`, `'a'-b`, `'a' 'b'`, `'a''b'` (`ab`), `don\'t` and every input without a single quote.
 
 Rejections that `commands.parseQuoted` returns for an unclosed quote and a trailing backslash now also carry `name`, the command name read before the mistake, so a reply can say which command it was for. A parse and a rejection can therefore both carry `name`, and a caller that told them apart with `"name" in result` must use `"reason" in result` instead.
+
+The `reason` of a `commands.parseQuoted` rejection for an unclosed single quote now explains the common cause when the open span held a single quote that a letter or digit followed, as in `'a'b`. The text then also says that a single quote before a letter or digit may have been meant to close the span, and suggests a space after that quote or double quotes. The `reason` for a single quote without that cause, for a double quote and for a trailing backslash is unchanged, and the rejection keeps its `name`. Code that compared `reason` with the exact text of the first form must match the new text, or the shared start `A single quote was opened but never closed`.
 
 To migrate, remove workarounds such as `don\'t`, which still works but is no longer needed. Wrap values that follow text in double quotes, such as `key="a b"`, and end a single-quoted span before whitespace or punctuation, not before a letter or digit, or use double quotes, which may touch text, such as `"a"b`. A word that begins with an apostrophe, such as `'twas`, still opens a span, so write it as `\'twas`.

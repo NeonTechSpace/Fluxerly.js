@@ -11,7 +11,7 @@ import type { ClientOwner } from "./client.js"
 import { guildFetch, memberSelf, roleList } from "./guilds.js"
 import { calculatePermissions } from "./permissions.js"
 import { encodeMemberSearchQuery, memberSearch } from "./member-search.js"
-import { Pagination } from "./pagination.js"
+import { Pagination, defaultMaxPages } from "./pagination.js"
 import { suspendInput } from "./defects.js"
 import { identifier, record } from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
@@ -168,7 +168,7 @@ export function searchMemberPagination(
             : undefined
         if (unsupportedOption) return invalid(unsupportedOption)
         const pageSize = limits.pageSize === undefined ? 100 : limits.pageSize,
-            maxPages = limits.maxPages === undefined ? 100 : limits.maxPages
+            maxPagesInput = limits.maxPages
         if (!positive(pageSize) || pageSize > 100)
             return invalid(
                 inputValidationFailure(
@@ -177,7 +177,7 @@ export function searchMemberPagination(
                     "The limit pageSize must be an integer from 1 through 100",
                 ),
             )
-        if (!positive(maxPages))
+        if (maxPagesInput !== undefined && !positive(maxPagesInput))
             return invalid(
                 inputValidationFailure(
                     "limits.maxPages",
@@ -185,6 +185,7 @@ export function searchMemberPagination(
                     "The limit maxPages must be a positive safe integer",
                 ),
             )
+        const maxPages = maxPagesInput ?? defaultMaxPages(maxItems, pageSize)
         const timeoutMs = options?.timeoutMs
         if (timeoutMs !== undefined && (!positive(timeoutMs) || timeoutMs > 2_147_483_647))
             return invalid(

@@ -201,7 +201,7 @@ export interface Threads<M extends MessageCore = Message> {
     ): Effect.Effect<readonly ThreadMember[], ChannelOperationFailure>
     /**
      * Read thread members in ascending user ID order, buffering one page and never prefetching.
-     * The maxItems option is required. The pageSize option defaults to 100 and accepts 1–100, maxPages defaults to 100,
+     * The maxItems option is required. The pageSize option defaults to 100 and accepts 1–100, maxPages defaults to the pages maxItems needs at pageSize plus 100,
      * and timeoutMs applies to each page. An empty page or maxItems ends the scan.
      * Invalid traversal input, a stalled cursor or reaching the page budget fails with PaginationError, and remote
      * failures keep threads.fetchMembers's errors.

@@ -102,6 +102,22 @@ test.each(modes)("%s search traversal exposes indexing, stalls and page budgets"
     await expect(collect(api.iterate({}, { maxItems: 10, maxPages: 1 }))).rejects.toMatchObject({ reason: "pageLimit" })
 })
 
+test.each(modes)("%s search traversal sizes the default page allowance from maxItems", async (mode) => {
+    const api = await setup(mode)
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        return page([String(1000 + body.offset)], 1000)
+    })
+    stubFetchWithHostedDiscovery(fetch)
+    expect(await collect(api.iterate({}, { maxItems: 150, pageSize: 1 }))).toHaveLength(150)
+    expect(fetch).toHaveBeenCalledTimes(150)
+    fetch.mockClear()
+    await expect(collect(api.iterate({}, { maxItems: 150, pageSize: 1, maxPages: 120 }))).rejects.toMatchObject({
+        reason: "pageLimit",
+    })
+    expect(fetch).toHaveBeenCalledTimes(120)
+})
+
 test.each(modes)("%s search traversal is lazy, reusable and copies filters at consumption", async (mode) => {
     const api = await setup(mode),
         sent: unknown[] = []

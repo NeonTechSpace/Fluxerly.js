@@ -1660,7 +1660,10 @@ export class RestOwner<M extends MessageCore = Message> {
                 if (request.directMessageUser !== undefined) {
                     const open = directMessageOpen(request.directMessageUser)!
                     if (open instanceof InputValidationFailure) return yield* Effect.fail(inputFailure(open.detail))
-                    const userGuard = runtime.users?.begin("directMessages", { mutation: true })
+                    const userGuard = runtime.users?.begin("directMessages", {
+                        mutation: true,
+                        opensConversation: open.opensConversation === true,
+                    })
                     const channel = yield* owner
                         .#exchange(token, {
                             request: {

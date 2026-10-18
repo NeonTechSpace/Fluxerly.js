@@ -114,7 +114,7 @@ A message that starts with the prefix but runs no command is ignored by default.
 
 - `CommandUnknownName` for a name that is not registered. Its `suggestion` names the closest registered command when one is similar
 - `CommandMissingSubcommand` for a group such as `admin` typed without a subcommand. Its `path` names the group
-- `CommandParserRejected` when the parser could not read the text. With `commands.parseQuoted`, its `reason` explains a quote that never closes or a backslash at the end. The `reason` is absent when the text is not a command at all, such as `!` alone. Its `name` holds the command name the parser read, as typed, so a reply can say which command the mistake was for
+- `CommandParserRejected` when the parser could not read the text. With `commands.parseQuoted`, its `reason` explains a quote that never closes or a backslash at the end. When the open span held a single quote followed by a letter or digit, as in `'a'b` or `'it's`, the `reason` also says that such a quote may have been meant to close the span, so a space after it or double quotes fix the input. The `reason` is absent when the text is not a command at all, such as `!` alone. Its `name` holds the command name the parser read, as typed, so a reply can say which command the mistake was for
 
 This bot answers a syntax mistake with the parser's own explanation. Without the callback, `!greet "Ada` is ignored
 
