@@ -6,7 +6,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { withReleaseAuthentication } from "./authentication.js"
 import { prepareCandidate, readCandidate } from "./candidate.js"
-import { selectBaseline } from "./planning.js"
+import { assertPublishBaseline } from "./planning.js"
 import { forwardRedacted } from "./redact.js"
 import { createRegistries } from "./registries.js"
 import { inspectPublished, publishCandidate } from "./recovery.js"
@@ -36,6 +36,10 @@ function arguments_(args, allowed) {
     if (result.epoch !== undefined) {
         if (!/^\d+$/.test(result.epoch)) throw new Error("Epoch must be a number")
         result.epoch = Number(result.epoch)
+    }
+    if (result.number !== undefined) {
+        if (!/^\d+$/.test(result.number)) throw new Error("Nightly number must be a number")
+        result.number = Number(result.number)
     }
     return result
 }
@@ -102,11 +106,11 @@ async function stage(options) {
 
 async function assertBaseline(candidate) {
     const inventory = await registries.inventory(candidate.name)
-    const version = selectBaseline({ ...inventory, version: candidate.version, channel: candidate.channel })
-    if (version !== (candidate.baseline?.version ?? null))
-        throw new Error(
-            "Published baseline changed since review, prepare a new candidate without changing an existing version",
-        )
+    await assertPublishBaseline(
+        candidate,
+        inventory.npmVersions,
+        async (version) => (await registries.baseline(candidate.name, version)).contentFingerprint,
+    )
     return inventory
 }
 
@@ -149,6 +153,17 @@ function summary(directory, candidate) {
     }
 }
 
+/**
+ * Plans a nightly build of the source with its build number
+ * @param {Record<string, any>} options
+ */
+async function nightlyPlan(options) {
+    if (options.epoch !== undefined || options.line)
+        throw new Error("A nightly plan follows the source and takes no epoch or line")
+    const inventory = await registries.inventory("@neontechspace/fluxerly")
+    return readNightlyPlan(workspace, inventory.npmVersions, options.number)
+}
+
 async function main() {
     const [action, ...args] = process.argv.slice(2)
     assertReleaseSupport(action)
@@ -163,17 +178,14 @@ async function main() {
             throw new Error("Website-only changes need no SDK fragment, empty release fragments are not used")
         await command(process.execPath, [require.resolve("@changesets/cli/bin.js"), ...args], { interactive: true })
     } else if (action === "plan" || action === "version") {
-        const options = arguments_(args, ["channel", "epoch", "line"])
-        if (action === "plan" && options.channel === "nightly") {
-            if (options.epoch !== undefined || options.line)
-                throw new Error("A nightly plan follows the source and takes no epoch or line")
-            const inventory = await registries.inventory("@neontechspace/fluxerly")
-            console.log(JSON.stringify(await readNightlyPlan(workspace, inventory.npmVersions)))
-        } else if (action === "version") {
+        const options = arguments_(args, ["channel", "epoch", "line", "number"])
+        if (action === "plan" && options.channel === "nightly") console.log(JSON.stringify(await nightlyPlan(options)))
+        else if (options.number !== undefined) throw new Error("Only a nightly plan takes a number")
+        else if (action === "version") {
             console.log(JSON.stringify(await versionSource({ workspace, options, registries, stage })))
         } else console.log(JSON.stringify((await readSourcePlan(workspace, options)).plan))
     } else if (action === "prepare") {
-        const options = arguments_(args, ["output", "line", "docs", "channel"])
+        const options = arguments_(args, ["output", "line", "docs", "channel", "number"])
         if (!options.output) throw new Error("Prepare needs --output NEW_ABSOLUTE_DIRECTORY")
         console.log(
             JSON.stringify(
@@ -182,6 +194,7 @@ async function main() {
                     line: options.line,
                     docs: options.docs,
                     channel: options.channel,
+                    number: options.number,
                     output: resolve(options.output),
                     registries,
                     stage,

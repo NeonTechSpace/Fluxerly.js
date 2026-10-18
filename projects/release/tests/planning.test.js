@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { contentFingerprint, exactFiles, readNpmTarball } from "../content.js"
 import {
+    assertPublishBaseline,
     assertStablePromotion,
     channelTagState,
     channels,
@@ -132,7 +133,7 @@ test("Preview baselines are isolated by major.minor line and channel, and a firs
 })
 
 test("A nightly targets the core the next RC would and follows the newest published nightly of that core", () => {
-    const nightly = (currentVersion, extra = {}) => planNightly({ currentVersion, npmVersions: [], ...extra })
+    const nightly = (currentVersion, extra = {}) => planNightly({ currentVersion, npmVersions: [], number: 0, ...extra })
     // A stable source with no pending notes still builds toward the next patch, never the published Stable
     assert.deepEqual(nightly("1000.2.3"), {
         currentVersion: "1000.2.3",
@@ -150,7 +151,7 @@ test("A nightly targets the core the next RC would and follows the newest publis
         "1001.0.0-nightly.0",
     )
     assert.equal(nightly("1000.0.0-rc.7", { releaseBase: null }).version, "1000.0.0-nightly.0")
-    // Numbering follows only published nightlies of the same core, numerically
+    // The build number is the nightly number. It must be above published nightlies of the same core, numerically
     const npmVersions = [
         "1000.2.3",
         "1000.3.0-nightly.0",
@@ -161,7 +162,15 @@ test("A nightly targets the core the next RC would and follows the newest publis
         "1000.3.0-rc.50",
         "1000.3.0-canary.60",
     ]
-    assert.equal(nightly("1000.3.0-rc.1", { ...cycle, npmVersions }).version, "1000.3.0-nightly.11")
+    assert.equal(nightly("1000.3.0-rc.1", { ...cycle, npmVersions, number: 11 }).version, "1000.3.0-nightly.11")
+    assert.equal(nightly("1000.3.0-rc.1", { ...cycle, npmVersions, number: 57 }).version, "1000.3.0-nightly.57")
+    for (const number of [10, 2])
+        assert.throws(
+            () => nightly("1000.3.0-rc.1", { ...cycle, npmVersions, number }),
+            new RegExp(`number ${number} must be above the published 1000.3.0-nightly.10`),
+        )
+    for (const number of [undefined, -1, 1.5, "3"])
+        assert.throws(() => nightly("1000.2.3", { number }), /whole build number/)
     for (const npmVersions of [undefined, null, { versions: [] }])
         assert.throws(() => nightly("1000.2.3", { npmVersions }), /Registry version inventory is unavailable/)
     assert.throws(() => nightly("1000.3.0-nightly.0", { releaseBase: "1000.2.3" }), /never committed/)
@@ -301,4 +310,36 @@ test("npm tag confirmation accepts the channel tag or, behind a newer line, only
     // latest follows the newest preview until the first stable release moves it
     assert.deepEqual(channelTagState(stable, { latest: "1000.0.0-rc.0" }), { tag: "latest", confirmed: false })
     assert.deepEqual(channelTagState(stable, { latest: "1000.0.0" }), { tag: "latest", confirmed: true })
+})
+
+test("Publication accepts a nightly baseline that advanced since preparation, but never another changed baseline", async () => {
+    const nightly = (baseline) => ({
+        version: "1000.1.0-nightly.57",
+        channel: "nightly",
+        contentFingerprint: "new",
+        baseline: baseline && { version: baseline },
+    })
+    const published = ["1000.1.0-nightly.55", "1000.1.0-nightly.56"]
+    const fingerprints = { "1000.1.0-nightly.55": "old", "1000.1.0-nightly.56": "older" }
+    const check = (candidate, npmVersions) =>
+        assertPublishBaseline(candidate, npmVersions, async (version) => fingerprints[version])
+    await check(nightly("1000.1.0-nightly.56"), published)
+    // Run 56 published while run 57 was being prepared against 55, or against no earlier nightly
+    await check(nightly("1000.1.0-nightly.55"), published)
+    await check(nightly(null), published)
+    // Content identical to the nightly that published meanwhile is not published again
+    fingerprints["1000.1.0-nightly.56"] = "new"
+    await assert.rejects(check(nightly("1000.1.0-nightly.55"), published), /matches 1000.1.0-nightly.56/)
+    // A baseline that disappeared or moved backwards is not an earlier nightly finishing
+    await assert.rejects(check(nightly("1000.1.0-nightly.56"), ["1000.1.0-nightly.55"]), /baseline changed/)
+    await assert.rejects(check(nightly("1000.1.0-nightly.55"), []), /baseline changed/)
+    // A newer nightly on the line already won
+    await assert.rejects(
+        check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58"]),
+        /newer version is already published/,
+    )
+    // Reviewed channels keep the exact baseline they were reviewed against
+    const rc = { version: "1000.1.0-rc.2", channel: "rc", contentFingerprint: "new", baseline: { version: "1000.1.0-rc.0" } }
+    await assert.rejects(check(rc, ["1000.1.0-rc.0", "1000.1.0-rc.1"]), /baseline changed/)
+    await check(rc, ["1000.1.0-rc.0"])
 })

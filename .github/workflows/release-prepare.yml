@@ -79,6 +79,8 @@ jobs:
         env:
           RELEASE_LINE: ${{ inputs.line }}
           RELEASE_NIGHTLY: ${{ github.event_name == 'schedule' || inputs.nightly }}
+          # The run number only grows, so overlapping nightly runs never plan the same version
+          RELEASE_NIGHTLY_NUMBER: ${{ github.run_number }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process'
@@ -95,9 +97,10 @@ jobs:
           const args = ['release:prepare', '--output', directory, '--docs', docs]
           if (nightly) {
             // The nightly version exists only in the candidate, so the docs snapshot receives it from the plan
-            const plan = execFileSync('pnpm', ['release:plan', '--channel', 'nightly'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 120000 })
+            const number = ['--number', process.env.RELEASE_NIGHTLY_NUMBER]
+            const plan = execFileSync('pnpm', ['release:plan', '--channel', 'nightly', ...number], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 120000 })
             snapshot.push('--nightly', JSON.parse(plan.trim().split('\n').at(-1)).version)
-            args.push('--channel', 'nightly')
+            args.push('--channel', 'nightly', ...number)
           }
           if (process.env.RELEASE_LINE) args.push('--line', process.env.RELEASE_LINE)
           execFileSync(process.execPath, snapshot, { stdio: 'inherit', timeout: 300000 })

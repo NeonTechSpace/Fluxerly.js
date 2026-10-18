@@ -387,7 +387,7 @@ test("A nightly plans above a pending RC without changing source, and a small re
         }
         await note(root, "feature", "minor", "Add a feature")
         const before = exactFiles(await readDirectory(root))
-        const nightly = await readNightlyPlan(root, npmVersions)
+        const nightly = await readNightlyPlan(root, npmVersions, 0)
         assert.deepEqual(nightly, {
             currentVersion: "1000.2.3",
             version: "1000.3.0-nightly.0",
@@ -402,7 +402,7 @@ test("A nightly plans above a pending RC without changing source, and a small re
         )
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
         npmVersions = [...npmVersions, "1000.2.4", nightly.version]
-        assert.equal((await readNightlyPlan(root, npmVersions)).version, "1000.3.0-nightly.1")
+        assert.equal((await readNightlyPlan(root, npmVersions, 1)).version, "1000.3.0-nightly.1")
         const stable = await versionSource({
             workspace: root,
             options: { channel: "stable" },
@@ -424,25 +424,25 @@ test("A nightly plan reads the source's release state without changing it and re
         await note(root, "preview-fix", "patch", "Fix cancellation")
         const before = exactFiles(await readDirectory(root))
         const npmVersions = ["1000.0.0-rc.0", "1000.0.0-rc.1", "1000.0.0-nightly.3", "1000.0.0-canary.9"]
-        assert.deepEqual(await readNightlyPlan(root, npmVersions), {
+        assert.deepEqual(await readNightlyPlan(root, npmVersions, 4), {
             currentVersion: "1000.0.0-rc.1",
             version: "1000.0.0-nightly.4",
             channel: "nightly",
             line: "1000.0",
         })
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
-        await assert.rejects(readNightlyPlan(root, undefined), /inventory is unavailable/)
+        await assert.rejects(readNightlyPlan(root, undefined, 4), /inventory is unavailable/)
         await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: "1000.0.1" })
-        await assert.rejects(readNightlyPlan(root, npmVersions), /releaseBase/)
+        await assert.rejects(readNightlyPlan(root, npmVersions, 4), /releaseBase/)
         await rm(join(root, ".changeset/pre.json"))
-        await assert.rejects(readNightlyPlan(root, npmVersions), /prerelease state disagree/)
+        await assert.rejects(readNightlyPlan(root, npmVersions, 4), /prerelease state disagree/)
         await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: null })
         await write(join(root, ".changeset/other.md"), '---\n"fluxerly-docs": patch\n---\n\nWebsite change\n')
-        await assert.rejects(readNightlyPlan(root, npmVersions), /only the SDK package/)
+        await assert.rejects(readNightlyPlan(root, npmVersions, 4), /only the SDK package/)
         await rm(join(root, ".changeset/other.md"))
         const manifest = JSON.parse(await readFile(join(root, "sdk/package.json"), "utf8"))
         await write(join(root, "sdk/package.json"), { ...manifest, private: false })
-        await assert.rejects(readNightlyPlan(root, npmVersions), /private publication safeguard/)
+        await assert.rejects(readNightlyPlan(root, npmVersions, 4), /private publication safeguard/)
     } finally {
         await rm(root, { recursive: true })
     }

@@ -226,7 +226,15 @@ test("A nightly candidate versions the next RC target from the npm inventory wit
             }),
         }
         const output = join(root, "candidate")
-        const prepared = await prepareCandidate({ workspace: root, output, docs, channel: "nightly", registries, stage: stageFixture() })
+        const prepared = await prepareCandidate({
+            workspace: root,
+            output,
+            docs,
+            channel: "nightly",
+            number: 2,
+            registries,
+            stage: stageFixture(),
+        })
         assert.deepEqual(
             [prepared.version, prepared.channel, prepared.line, prepared.baseline],
             [version, "nightly", "1000.3", "1000.3.0-nightly.1"],
@@ -246,7 +254,7 @@ test("A nightly candidate versions the next RC target from the npm inventory wit
         await write(docs, { schemaVersion: 1, version: "1000.2.3", sourceCommit: "a".repeat(40), files: [] })
         const mismatched = join(root, "mismatched")
         await assert.rejects(
-            prepareCandidate({ workspace: root, output: mismatched, docs, channel: "nightly", registries, stage: stageFixture() }),
+            prepareCandidate({ workspace: root, output: mismatched, docs, channel: "nightly", number: 2, registries, stage: stageFixture() }),
             /Documentation snapshot does not match/,
         )
         await assert.rejects(access(mismatched), { code: "ENOENT" })
@@ -268,6 +276,7 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output,
             channel: "nightly",
+            number: 0,
             registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"]),
             stage: stageFixture(),
         })
@@ -280,12 +289,13 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output: unchanged,
             channel: "nightly",
+            number: 4,
             registries: registries(["1000.0.0-rc.1", "1000.0.0-nightly.0"]),
             stage: stageFixture(),
         })
         assert.deepEqual(
             [skipped.skipped, skipped.version, skipped.channel, skipped.line, skipped.baseline],
-            [true, "1000.0.0-nightly.1", "nightly", "1000.0", "1000.0.0-nightly.0"],
+            [true, "1000.0.0-nightly.4", "nightly", "1000.0", "1000.0.0-nightly.0"],
         )
         await assert.rejects(access(unchanged), { code: "ENOENT" })
     } finally {
@@ -293,7 +303,7 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
     }
 })
 
-test("Only a nightly candidate selects its channel, and it takes no release line", async () => {
+test("Only a nightly candidate selects its channel or takes a number, and it takes no release line", async () => {
     const root = await fixture("1000.0.0-rc.1")
     try {
         await write(join(root, "sdk/CHANGELOG.md"), "# SDK\n\n## 1000.0.0-rc.1\n\nFix cancellation\n")
@@ -309,6 +319,10 @@ test("Only a nightly candidate selects its channel, and it takes no release line
         await assert.rejects(
             prepareCandidate({ workspace: root, output, channel: "nightly", line: "1000.0", registries, stage }),
             /takes no release line/,
+        )
+        await assert.rejects(
+            prepareCandidate({ workspace: root, output, number: 3, registries, stage }),
+            /Only a nightly candidate takes a number/,
         )
         await assert.rejects(access(output), { code: "ENOENT" })
     } finally {

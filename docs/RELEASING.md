@@ -29,7 +29,8 @@ A day whose SDK content matches the previous nightly publishes nothing.
 Pending Changesets notes appear as unreleased changes in the nightly's release notes and docs changelog, and they stay pending for the next RC or Stable.
 To publish a nightly sooner, dispatch Release prepare from `main` with `nightly` selected. A nightly always builds the commit the workflow runs from and ignores `source_ref`
 
-Two overlapping nightly preparations can choose the same version. The later publication then stops, and the next nightly publishes the newer source.
+Overlapping nightly runs get different versions, because each nightly number is its preparation run number.
+A nightly whose content matches one published meanwhile stops without publishing.
 When a pending major or minor note is removed, the next nightly's version can drop below the newest nightly. It then publishes under a staging tag such as `nightly-1000-1`, while the `nightly` tag and `/docs/nightly/` keep the higher build until a later nightly passes it. The [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags) can point `nightly` at the newer build
 
 ## When a step fails
@@ -40,7 +41,8 @@ When a pending major or minor note is removed, the next nightly's version can dr
 | `npm serves different bytes for VERSION than the reviewed candidate` | npm already has this version with other content | Never republish. Inspect the registry version and release a new version through Changesets |
 | `npm serves VERSION, but the TAG tag does not point to it` | The bytes are published, the distribution tag is not | Correct the tag with the [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags), then rerun Release publish |
 | `npm could not install ... from the registry` | A registry install check failed after publication | Inspect the install log. The GitHub release stays unannounced until a rerun passes |
-| `Published baseline changed since review` | Another version on the same channel and line was published after preparation | Prepare a new candidate from current `main` |
+| `Published baseline changed since review` | Another version on the same channel and line was published after preparation. A nightly still publishes when that version is an earlier nightly with different content | Prepare a new candidate from current `main` |
+| `Nightly content matches VERSION` | A nightly with the same content was published after preparation | None. The next nightly publishes newer source |
 | `Candidate source is not reachable from main` | The candidate was prepared from unmerged source | Merge the source, then prepare from `main` |
 | `Candidate does not match the externally reviewed checksum` | The checksum input differs from the candidate | Copy the checksum from the preparation summary |
 | `Preparation workflow commit is not reachable from main` | Release prepare ran from a branch | Run Release prepare from `main` |
@@ -127,7 +129,9 @@ Whenever an RC of the same version is published, Stable must match the newest on
 
 Nightly builds are exempt from these rules.
 A nightly needs no RC, is never blocked by a pending RC and has no content to match.
-Each nightly number counts up from 0 for its version core, and it publishes under the `nightly` tag without moving `latest` or `rc`
+Each nightly number is the preparation workflow's run number.
+If a later nightly publishes first, the earlier one stops without publishing.
+A nightly publishes under the `nightly` tag without moving `latest` or `rc`
 
 ### Release baselines
 

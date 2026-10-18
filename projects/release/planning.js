@@ -128,9 +128,9 @@ export function planVersion({
 }
 
 /**
- * Plans the next nightly version without changing the source. Its core is the version the next RC would target, and
- * its number follows the newest published nightly of that core
- * @param {{ currentVersion: string, pendingTypes?: string[], releaseTypes?: string[], releaseBase?: string | null, npmVersions: string[] }} options
+ * Plans a nightly version without changing the source. Its core is the version the next RC would target, and its
+ * number is the preparation run's number, which only grows, so concurrent runs never pick the same version
+ * @param {{ currentVersion: string, pendingTypes?: string[], releaseTypes?: string[], releaseBase?: string | null, npmVersions: string[], number?: number }} options
  */
 export function planNightly({
     currentVersion,
@@ -138,8 +138,11 @@ export function planNightly({
     releaseTypes = pendingTypes,
     releaseBase,
     npmVersions,
+    number,
 }) {
     if (!Array.isArray(npmVersions)) throw new Error("Registry version inventory is unavailable")
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 0)
+        throw new Error("A nightly needs a whole build number")
     const target = planVersion({
         currentVersion,
         channel: "rc",
@@ -149,11 +152,16 @@ export function planNightly({
         allowNoChanges: true,
     })
     const { core } = parseVersion(target.version)
-    const numbers = npmVersions
-        .map((value) => parseVersion(value))
-        .filter((item) => item.channel === "nightly" && item.core === core)
-        .map((item) => item.number ?? 0)
-    const version = `${core}-nightly.${numbers.length ? Math.max(...numbers) + 1 : 0}`
+    const newest = Math.max(
+        -1,
+        ...npmVersions
+            .map((value) => parseVersion(value))
+            .filter((item) => item.channel === "nightly" && item.core === core)
+            .map((item) => item.number ?? 0),
+    )
+    if (number <= newest)
+        throw new Error(`Nightly build number ${number} must be above the published ${core}-nightly.${newest}`)
+    const version = `${core}-nightly.${number}`
     return { currentVersion, version, channel: "nightly", line: parseVersion(version).line }
 }
 
@@ -247,6 +255,27 @@ export function npmChannelTag(candidate, tags) {
 // Older maintenance lines publish under a line-specific staging tag instead of moving the channel tag backwards
 export function stagingTag(candidate) {
     return `${candidate.channel}-${candidate.line.replaceAll(".", "-")}`
+}
+
+/**
+ * Checks at publication that the candidate's baseline is still the newest earlier version on its channel and line. A
+ * nightly prepared while an earlier nightly was still publishing may find that nightly as its baseline now, because
+ * nightly content is never reviewed against its baseline. It still stops when its content matches that nightly
+ * @param {{ version: string, channel: string, contentFingerprint: string, baseline?: { version: string } | null }} candidate
+ * @param {string[]} npmVersions
+ * @param {(version: string) => Promise<string>} fingerprintOf Content fingerprint of a published version
+ */
+export async function assertPublishBaseline(candidate, npmVersions, fingerprintOf) {
+    const version = selectBaseline({ npmVersions, version: candidate.version, channel: candidate.channel })
+    const reviewed = candidate.baseline?.version ?? null
+    if (version === reviewed) return
+    const advanced = version !== null && (reviewed === null || compareVersions(version, reviewed) > 0)
+    if (candidate.channel !== "nightly" || !advanced)
+        throw new Error(
+            "Published baseline changed since review, prepare a new candidate without changing an existing version",
+        )
+    if ((await fingerprintOf(version)) === candidate.contentFingerprint)
+        throw new Error(`Nightly content matches ${version}, published after preparation, so nothing is published`)
 }
 
 /**
