@@ -86,7 +86,7 @@ Until the first Stable release, `latest` points to a release candidate that the 
 Release tooling moves only the published channel's tag, so previews never move `latest`.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
 
-Canary was the earlier preview channel. Its published `-canary.N` versions stay on npm, but no new Canary is published
+Canary was the earlier preview channel. Its `-canary.N` versions were removed from npm and GitHub, and no new Canary is published
 
 ### Effect and diagnostics
 
