@@ -59,7 +59,7 @@ Read-only and test-owned checks share the sandbox lock, so several can run at on
 A shared-state check holds `.env.test.local.lock` exclusively and starts only when no other check holds a lock.
 A refused check fails with `sandbox_lock` instead of waiting
 
-`pnpm --filter @neontechspace/fluxerly test:live:all` builds the SDK once and runs every SDK-work check below, including the SDK-work direct harness commands.
+Running `pnpm --filter @neontechspace/fluxerly test:live:all` builds the SDK once and runs every SDK-work check below, including the SDK-work direct harness commands.
 It runs the shared-state checks one at a time first, then the others, one at a time unless `--concurrency` allows more.
 Name checks to run only those, for example `test:live:all pins webhooks`. Package scripts are named without their `test:live:` prefix, `test:live` is `sandbox`, and direct commands are named after their harness file, such as `bot-runner`.
 The runner refuses Per run and Person present checks, and passes no `FLUXER_TEST_` process values, so checks read only the env file

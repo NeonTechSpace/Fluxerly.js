@@ -23,7 +23,9 @@ import type {
  *
  * DM operations are outside this API contract. Supply decimal community-channel IDs. ID-targeted writes do not prefetch or verify their community-channel type
  *
- * Channel requests share this client's REST or upload slots with community, member, role and message requests, regardless of shard. Attachment downloads have separate slots. By default there are four of each, and the shared queue holds at most 256 requests or 4 MiB of JSON bodies. The rest client option changes these limits
+ * Requests share the client's REST or upload slots across all assigned shards, four per local shard by default, up to 64 (rest.concurrency).
+ * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
+ * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
  *
  * Total deadline defaults to the client's rest.defaultTimeoutMs, 30,000 ms unless configured, including queue waits, retries and rate-limit waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
@@ -176,7 +178,8 @@ export interface Channels {
      * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in.
      * On a category, a permissionOverwrites change also writes each child whose overwrites matched the category's old ones, in separate writes.
-     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
+     * A failure can leave some children with the old overwrites.
+     * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * The thread defaults and the forum settings apply to the channel types named on each field. The SDK cannot see the
      * channel's type, so Fluxer ignores a setting that does not belong to it. The availableTags list replaces every tag
      * of a forum or media channel, so channels.createForumTag, editForumTag and deleteForumTag are the safer way to
@@ -220,7 +223,8 @@ export interface Channels {
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageRoles and uses a feature opt-in to set or clear ViewChannelMembers.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
-     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
+     * A failure can leave some children with the old overwrites.
+     * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * No target fetch or inherited-permission calculation is performed
      */
     setPermissionOverwrite(
@@ -234,7 +238,8 @@ export interface Channels {
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageChannels and ManageRoles.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
-     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
+     * A failure can leave some children with the old overwrites.
+     * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * An unknown outcome needs an explicit follow-up read
      */
     removePermissionOverwrite(

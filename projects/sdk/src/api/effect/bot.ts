@@ -395,15 +395,16 @@ export function installNativeTestBot(
  * listener or request exists, even when the signal is already aborted, so misuse leaves nothing to clean up.
  * A missing or empty token, usually from an unset environment variable, is a failure instead: Once every other option
  * is valid, the bot fails with ConfigurationError with field token before any client exists.
- * Handler and command failures are isolated and reported by client.on, not bot failures.
+ * Handler and command failures are reported to onError, or logged with their full Cause, and do not stop the bot.
  * By default, messageCreate and messageUpdate events written by bots skip the events handlers and prefix commands.
  * Set ignoreBots to false to opt out.
  * A failed setup Effect or a throwing commands register callback fails the bot with ApplicationError before it connects.
  * A subscription that closes while the bot runs fails the bot with CriticalWorkerStoppedError. That includes a handler
  * or command router set to overflow "stop" whose queue overflows. The overflow is still reported to onError or logged,
  * and the error names the event and the exceeded capacity, with the EventOverflowError as its cause. Cleanup is awaited.
- * Aborting signal or enabled SIGINT/SIGTERM stops successfully, after running handlers, scheduled tasks and their
- * requests had up to drainMs, default 5,000 ms, to finish. Fiber interruption remains interruption and does not drain.
+ * Aborting the signal option, or SIGINT or SIGTERM when processSignals is true, stops the bot successfully after running
+ * handlers, scheduled tasks and their requests have had up to drainMs, default 5,000 ms, to finish.
+ * Fiber interruption remains interruption and does not drain.
  * Process signals stay opt-in here, because a launcher such as NodeRuntime.runMain already interrupts the program on
  * SIGINT and SIGTERM. Set processSignals to true only when nothing else handles them and a drained stop is wanted.
  * By default a failure or defect that stops the bot, including misuse and a missing token, is also logged once, with

@@ -27,7 +27,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * @remarks
  * Supply decimal community-channel IDs.
  * ID-based writes do not fetch first to verify channel type.
- * Requests share the client's REST or upload slots across assigned shards, four per local shard by default (rest.concurrency).
+ * Requests share the client's REST or upload slots across assigned shards, four per local shard by default, up to 64 (rest.concurrency).
  * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
  * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes).
  * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes capacity, rate-limit and retry waits.
@@ -199,7 +199,8 @@ export interface Channels {
      * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in.
      * On a category, a permissionOverwrites change also writes each child whose overwrites matched the category's old ones, in separate writes.
-     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
+     * A failure can leave some children with the old overwrites.
+     * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * The thread defaults and the forum settings apply to the channel types named on each field. The SDK cannot see the
      * channel's type, so Fluxer ignores a setting that does not belong to it. The availableTags list replaces every tag
      * of a forum or media channel, so channels.createForumTag, editForumTag and deleteForumTag are the safer way to
@@ -246,7 +247,8 @@ export interface Channels {
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageRoles and uses a feature opt-in to set or clear ViewChannelMembers.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
-     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
+     * A failure can leave some children with the old overwrites.
+     * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * No target fetch or inherited-permission calculation is performed
      */
     setPermissionOverwrite(
@@ -260,7 +262,8 @@ export interface Channels {
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageChannels and ManageRoles.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
-     * A failure can leave some children with the old overwrites, and a retry may not reach them because Fluxer picks the children by comparing with the category's overwrites from before the call, so fetch the children again to check.
+     * A failure can leave some children with the old overwrites.
+     * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * An unknown outcome needs an explicit follow-up read
      */
     removePermissionOverwrite(

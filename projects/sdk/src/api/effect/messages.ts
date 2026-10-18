@@ -46,7 +46,9 @@ import type { ChannelPaginateOptions, PageInput, PaginateFailure, PaginateResult
  *
  * A collector with guildId requires that community's local shard to be ready. A channel-only collector requires the client to be Connected. Closing or Closed clients reject new work
  *
- * By default up to four REST or upload requests run at once across this client, regardless of shard, and attachment downloads have four separate slots. The shared queue holds at most 256 requests or 4 MiB of JSON bodies by default. The rest client option changes these limits.
+ * By default this client runs four REST or upload requests at once per local shard, up to 64 (rest.concurrency), and four separate attachment downloads (rest.mediaConcurrency).
+ * Both pools together allow at most 256 waiting requests or 4 MiB of queued JSON bodies by default.
+ * The rest client option changes these limits.
  * Each remote call has a total deadline of rest.defaultTimeoutMs by default (30,000 ms unless configured). Queue, retry and rate-limit waits count toward it. Cleanup is awaited afterward
  *
  * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
@@ -192,7 +194,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Read users who reacted with one selected emoji, in ascending user-ID order.
      * Pass a literal Unicode emoji or custom emoji input, plus maxItems to bound the scan.
      * Like iterateHistory, this is lazy and keeps bounded results.
-     * The timeoutMs option applies to each fetchReactionUsers page, and remote errors keep that operation.
+     * The timeoutMs option applies to each fetchReactionUsers page, and remote errors identify that operation.
      * The scan ends at maxItems or hasMore false, without caching reactors or fetching members.
      * Reactions may change during the scan.
      * Not finding a user within the bound does not prove the user never reacted
@@ -221,7 +223,7 @@ export interface Messages<M extends MessageCore = Message> {
     /**
      * Read pinned messages newest pin first, without adding message cache entries.
      * Pass maxItems to bound the scan, and PinIterationQuery defines the remaining limits.
-     * Like iterateHistory, this is lazy, with timeoutMs applying to each fetchPins page, and remote errors keep that operation.
+     * Like iterateHistory, this is lazy, with timeoutMs applying to each fetchPins page, and remote errors identify that operation.
      * At most maxItems IDs are kept to skip duplicates.
      * Valid items on a stalled page can be delivered before cursorStalled on the next pull.
      * The scan stops at maxItems or hasMore false.
@@ -499,7 +501,7 @@ export interface Messages<M extends MessageCore = Message> {
      * @remarks
      * Collection belongs to the Scope that executes this Effect.
      * Callbacks run with the services available at registration.
-     * Closing the registration Scope stops the collector with partial replies, and client shutdown fails it with ClientClosedError.
+     * Closing the registration Scope stops the collector with partial messages, and client shutdown fails it with ClientClosedError.
      * Interrupting a waiter does not stop collection, and there is no AbortSignal option.
      * Scope closure and client shutdown await callback cleanup, and terminal cleanup defects keep their Cause
      *
@@ -614,11 +616,11 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * The users option is required here, because no message identifies an asker. Pass account IDs, or a check such as `() => true` to let anyone flip.
      * A command context's paginate defaults to the command's author instead.
-     * Adding or removing an arrow both count as one click, so only Add Reactions and Read Message History are needed.
+     * Adding or removing an arrow counts as one click, so only Add Reactions and Read Message History are needed.
      * With removeClicks, only additions count and the bot removes the clicker's arrow after each change, which needs Manage Messages.
      * Clicks are handled one at a time through messages.collectReactions machinery, with its connection requirement, pending-event budget and gateway-loss behavior
      *
-     * Listening stops after idleMs without a click, default 60,000, and at most timeoutMs after registration, default 300,000.
+     * Listening stops after idleMs without a click, 60,000 ms by default, and at most timeoutMs after registration, 300,000 ms by default.
      * Cancellation also stops it, as described in the remarks.
      * However it stops, the bot then removes only its own arrows, and the current page stays shown.
      * Each send, edit and reaction request uses the client's default deadline, rate limits and retry rules, and is never replayed after an unknown outcome
@@ -681,7 +683,8 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * The default total deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes waiting for request capacity and rate limits.
      * The request uses the shared limits and failure rules of this namespace.
-     * By default one client admits four REST and upload requests plus four independent attachment downloads, and both pools share at most 256 pending requests or 4 MiB of pending JSON. The rest client option changes these limits.
+     * By default one client admits four REST and upload requests per local shard, up to 64, plus four independent attachment downloads, and both pools share at most 256 pending requests or 4 MiB of pending JSON.
+     * The rest client option changes these limits.
      * Only confirmed rate-limit rejections can retry automatically, and sends with unknown outcomes never retry.
      * With inline multipart uploads, a confirmed HTTP 429 can replay copied data bytes only, while file and stream inputs fail with rateLimit instead of being read again
      *
@@ -726,7 +729,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Fluxer decides delivery and when the indicator expires.
      * This uses the client's request limits, a dedicated per-channel typing rate limit and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured).
      * Only confirmed rate-limit rejection retries.
-     * A lost response, timeout or cancellation can leave the notice shown.
+     * A lost response, timeout or cancellation can leave the indicator shown.
      * Input, capacity and HTTP failures use MessageOperationError operation typing, and client closure fails with ClientClosedError.
      * Cancellation waits for request cleanup
      */
@@ -762,7 +765,8 @@ export interface Messages<M extends MessageCore = Message> {
      * A plain string replies with only that text, as shorthand for `{ content }`.
      * Pass the target's id and channelId, plus the reply content or files.
      * A missing target fails instead of silently sending an unreferenced message.
-     * Target and explicit reference checks run first, and after client-closure checks, body validation follows send.
+     * An invalid target, or input with its own messageReference, fails before the client-closure check.
+     * The body is then validated as send validates it.
      * Author notifications are off by default.
      * The send method's mention defaults, attachment source handling, size limits, deadline, nonce and retry rules apply, and inline multipart 429 responses do not replay file or stream sources.
      * Eligible replies can enter the message cache.
@@ -885,7 +889,7 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * To keep existing files while adding new uploads, include their IDs in attachments.
      * The supplied list replaces the old one.
-     * [] clears files when nonempty text or embeds remain.
+     * An empty list clears files when nonempty text or embeds remain.
      * Retained file title or description can be replaced or cleared with null.
      * Unknown IDs may be ignored, and a stale list can remove concurrent additions.
      * An attachment:// image or thumbnail URL must match a new image or video upload, not a retained attachment.

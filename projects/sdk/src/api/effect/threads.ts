@@ -34,8 +34,8 @@ import type {
  * retries and rate-limit waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses, and no write is followed by an automatic confirmation fetch
  *
- * Manage Threads is an elevated permission, so in a community that requires two-factor authentication for moderation
- * Fluxer rejects the bot's moderator actions with TWO_FACTOR_REQUIRED.
+ * Manage Threads is an elevated permission.
+ * In a community whose mfaLevel is GuildMfaLevels.Elevated, an action that needs it fails with apiError.code twoFactorRequired, unless the bot owns the community or its application owner has two-factor authentication enabled.
  * The create, createFromMessage, createPost and edit methods accept ChannelAuditOperationOptions, and the other methods
  * reject auditReason. The fetchActive list enters the enabled channel cache, while archived pages, search results,
  * forum posts and member reads do not. The edit, join, leave, addMember and removeMember methods remove their thread
@@ -137,7 +137,7 @@ export interface Threads<M extends MessageCore = Message> {
      * page. Fluxer requires Read Message History.
      * While Fluxer builds the community's search index it answers HTTP 202 with code SEARCH_INDEX_NOT_READY, which this
      * method returns as an indexing page without retrying. Any other HTTP 202 answer fails with reason response.
-     * A turned-off search service fails with reason rejected and apiError.providerCode
+     * While Fluxer's search service is turned off, the call fails with reason rejected and apiError.providerCode
      * FEATURE_TEMPORARILY_DISABLED
      */
     search(

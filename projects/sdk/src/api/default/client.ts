@@ -75,8 +75,8 @@ import { type DirectMessages } from "./direct-messages.js"
  * Otherwise, read value, or call orThrow to get the value and throw the error instead.
  * Expected failures are Err values, and an Err returned from a handler is reported like a thrown error.
  * Local registration and cache lookups return their value directly and throw ConfigurationError when misused.
- * Subscriptions and collectors registered after shutdown began return already-closed handles, because a still-running
- * handler can register during shutdown, while middleware registration on a closing client throws ClientClosedError.
+ * Subscriptions and collectors registered after shutdown began, such as from a handler still running, return already-closed handles.
+ * Middleware registration on a closing client throws ClientClosedError.
  * Unexpected SDK or cleanup failures reject with SdkDefect.
  * Use run for a connection lifetime controlled by its signal.
  * Alternatively, connect for startup, waitForClose for terminal failure, and shutdown for final cleanup.
@@ -113,8 +113,10 @@ import { type DirectMessages } from "./direct-messages.js"
  * The transport enforces this fixed receive ceiling before UTF-8 decoding and JSON parsing. It preserves the previous transport default.
  * This is not a Fluxer server-to-client maximum, an outbound command limit, a subscription budget or a JavaScript heap bound.
  * Larger messages fail with ConnectionError, phase gateway, reason protocol and status 1009. Invalid UTF-8 uses status 1007.
- * Neither rejection retries automatically. Standalone connect failure awaits cleanup and permits another explicit connect,
- * while a managed run or an established connection ends the client lifetime. Later failures are observable through waitForClose
+ * Neither failure retries automatically.
+ * A failed standalone connect waits for cleanup and allows another explicit connect.
+ * A failed managed run or established connection ends the client lifetime.
+ * Use waitForClose to observe later failures
  *
  * @category Client and lifecycle
  */
@@ -471,7 +473,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Pending handshakes are terminated immediately, and forced termination can discard unsent data.
      * Cleanup cannot be abandoned, and this method never exits the application or undoes remote writes.
      * Create a new client to connect again.
-     * Each failed cleanup step is also logged at Error in the lifecycle category and counted in diagnostics().counters.cleanupFailures
+     * A failed cleanup of the client's services, such as an event handler or collector callback whose cancellation cleanup fails, is also logged at Error in the lifecycle category and counted in diagnostics().counters.cleanupFailures.
+     * A failed socket close is not logged or counted
      *
      * @remarks
      * Handlers and callbacks receive cancellation through their signal, and returned collector callback promises are awaited.

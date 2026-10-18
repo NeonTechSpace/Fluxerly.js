@@ -2,7 +2,7 @@ import type { User, UserProfile, UserProfileQuery, UserOperationFailure, UserOpe
 import type * as Effect from "effect/Effect"
 
 /** Read public account information or a privacy-filtered profile.
- * Methods return Effects with shared 30-second default deadlines and at most two eligible transient read retries.
+ * Methods return Effects with the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and at most two eligible transient read retries.
  * Writes retry only confirmed rate-limit rejection, never an unknown outcome. No gateway connection is required.
  * Cancellation and unexpected faults remain in Cause rather than becoming UserOperationError
  *
@@ -20,16 +20,16 @@ export interface Users {
     /**
      * Look up the bot's own public account as the gateway's READY reported it, without a request.
      * The result is undefined until this client's first READY, and also while no READY has carried a complete public account.
-     * A later READY with a complete public account, such as for a new session, replaces it, while an incomplete one keeps
-     * the previous account. Other user updates and fetchSelf results do not change it,
-     * so its username or avatar can be stale. The value remains available after the client stops.
+     * A later READY with a complete public account, such as for a new session, replaces it, while an incomplete one keeps the previous account.
+     * Other user updates and fetchSelf results do not change it, so its username or avatar can be stale.
+     * The value remains available after the client stops.
      * This lookup never fails. Use fetchSelf for a current remote snapshot
      */
     getSelf(): Effect.Effect<User | undefined>
     /**
      * Fetch a public account snapshot by decimal user ID.
      * An unknown user fails with reason notFound rather than an empty result.
-     * An enabled user cache admits this ID independently of unrelated targeted user reads
+     * With the user cache enabled, a concurrent fetch of another user ID does not keep this result from being stored, unless more than 256 user IDs are being read at once
      */
     fetch(id: string, options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
     /**
@@ -59,7 +59,8 @@ export interface Users {
     /**
      * Fetch the authenticated bot's public account data remotely.
      * Private account fields are excluded.
-     * Because its ID is not known before the response, enabled user-cache conflict handling is collection-wide, so a later cache change can prevent the result from being stored
+     * With the user cache enabled, the bot's ID is unknown until the response arrives, so some concurrent user cache changes keep the result out of the cache.
+     * Examples are another users.fetch or users.fetchSelf call, a user update event and a lost gateway connection
      */
     fetchSelf(options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
 }

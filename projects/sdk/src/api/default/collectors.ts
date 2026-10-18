@@ -13,7 +13,7 @@ import type { Message, MessageCore } from "#sdk/messages"
  */
 export interface Collector<M extends MessageCore = Message> {
     /**
-     * Stop accepting messages now, keeping accepted replies for a successful partial result.
+     * Stop accepting messages now, keeping accepted messages for a successful partial result.
      * Repeated calls preserve whichever terminal outcome was recorded first.
      * Use result to await callback cleanup and read the collection
      *
@@ -24,7 +24,7 @@ export interface Collector<M extends MessageCore = Message> {
     /**
      * Wait for the final frozen collection result after timer, queue, filter, listener and callback cleanup.
      * Idle, timeout or stop can succeed with no messages or a partial collection.
-     * Collection cancellation, filter or callback failure, overflow, gateway loss and client closure fail without partial replies.
+     * Collection cancellation, filter or callback failure, overflow, gateway loss and client closure fail without partial messages.
      * Multiple or later waiters receive the same collection outcome.
      * Cancelling this wait affects only the waiter, not collection.
      * Keeping the handle or successful result keeps its message snapshots in memory

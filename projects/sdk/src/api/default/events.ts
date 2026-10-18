@@ -103,7 +103,7 @@ export interface DefaultEventWaitOptions<K extends EventName, M extends MessageC
     extends EventWaitOptions<K, M>, OperationOptions {}
 
 /**
- * Event middleware for the default API, run around every later on handler invocation.
+ * Event middleware for the default API, run around each client.on handler invocation that starts after registration.
  * It receives the invocation, a next function that runs the rest of the chain and the handler, and the invocation's cancellation signal.
  * The promise returned by next resolves when the rest of the chain has finished, whether or not it failed, and never rejects.
  * Failures after next are reported by the SDK where they occur, so middleware can time or trace a handler but cannot hide its failure.

@@ -108,7 +108,7 @@ export interface Members {
     /**
      * Replace one member's entire assigned role list in a single PATCH request.
      * Use 0–250 distinct positive decimal role IDs no greater than 9,223,372,036,854,775,807.
-     * [] clears assigned roles, and the implicit everyone role is rejected as input.
+     * An empty array clears assigned roles, and the implicit everyone role is rejected as input.
      * IDs are copied by index when execution starts, without fetching or merging the old roles.
      * Fluxer requires ManageRoles and checks hierarchy.
      * This can overwrite concurrent role changes
@@ -138,8 +138,8 @@ export interface Members {
      * Without filters, this reads 25 members from offset 0, ordered by newest join time first.
      * Recognized fields, including inherited and nonenumerable fields, are read and filter arrays copied when execution starts.
      * Results can lag membership changes.
-     * An indexing true result means the search is not complete, not that it found no members.
-     * Even an empty indexing false result can mean Fluxer's search service is unavailable.
+     * A result with indexing true means the index is still being built, not that no members matched.
+     * An empty result with indexing false can still mean Fluxer's search service is unavailable.
      * Counts do not guarantee completeness, and hits do not trigger full-member fetches
      *
      * Fluxer requires at least one of ManageGuild, ManageRoles, ManageNicknames, BanMembers, ModerateMembers or KickMembers.
@@ -148,7 +148,7 @@ export interface Members {
      *
      * Join-source and invite filters first fetch the bot's community permissions and require ManageGuild.
      * The three independent precheck reads run concurrently under the same total deadline, and a failure cancels sibling reads.
-     * Known permission denial fails with members.search reason rejected, outcome notDispatched and no HTTP status.
+     * When the precheck finds ManageGuild missing, the call fails with reason rejected, outcome notDispatched and no HTTP status.
      * The precheck prevents knowingly sending ignored filters, but permissions can still change before search.
      * Other queries have no hidden reads.
      * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the whole call, including that precheck.
@@ -171,7 +171,7 @@ export interface Members {
      * Offset advances by the number of hits received.
      * Each user is emitted at most once, keeping at most maxItems IDs to skip duplicates.
      * Index changes can still skip users, so the result is not a complete or consistent membership snapshot.
-     * An indexing response fails with PaginationError indexing instead of pretending the scan ended.
+     * A page with indexing true fails the scan with PaginationError reason indexing instead of ending it early.
      * An empty page before the observed total fails with cursorStalled.
      * Reaching maxItems is normal completion, not exhaustion.
      * Input, pageLimit and cursorStalled are other PaginationError reasons.
@@ -305,7 +305,7 @@ export interface Members {
      * Expiry is calculated when execution starts, so queue and network time consume part of the duration.
      * If expiry is past when Fluxer processes it, the request can clear the timeout.
      * ModerateMembers and Fluxer's hierarchy rules apply, and self and administrator targets are rejected.
-     * Fluxer rejects it with HTTP 400 and apiError.code twoFactorRequired in a community whose mfaLevel is GuildMfaLevels.Elevated, unless the bot owns the community or its application owner has two-factor authentication enabled.
+     * In a community whose mfaLevel is GuildMfaLevels.Elevated, the call fails with reason rejected, HTTP 400 and apiError.code twoFactorRequired, unless the bot owns the community or its application owner has two-factor authentication enabled.
      * The returned frozen member contains communicationDisabledUntil after HTTP 200, without waiting for an event
      *
      * Optional timeoutReason is provider audit metadata, separate from auditReason.
@@ -340,7 +340,7 @@ export interface Members {
     /**
      * Remove a member from the community, succeeding with no value after HTTP 204.
      * Fluxer requires KickMembers and checks hierarchy.
-     * Fluxer rejects it with HTTP 400 and apiError.code twoFactorRequired in a community whose mfaLevel is GuildMfaLevels.Elevated, unless the bot owns the community or its application owner has two-factor authentication enabled.
+     * In a community whose mfaLevel is GuildMfaLevels.Elevated, the call fails with reason rejected, HTTP 400 and apiError.code twoFactorRequired, unless the bot owns the community or its application owner has two-factor authentication enabled.
      * This does not ban the user, restore membership automatically or wait for a removal event.
      * Missing membership is an API error.
      * Dispatched actions invalidate the member cache even on rejection.
@@ -356,14 +356,13 @@ export interface Members {
      * Pass decimal guildId and userId.
      * The default ban is permanent and deletes no messages.
      * Fluxer requires BanMembers and checks role hierarchy.
-     * Fluxer rejects it with HTTP 400 and apiError.code twoFactorRequired in a community whose mfaLevel is GuildMfaLevels.Elevated, unless the bot owns the community or its application owner has two-factor authentication enabled.
+     * In a community whose mfaLevel is GuildMfaLevels.Elevated, the call fails with reason rejected, HTTP 400 and apiError.code twoFactorRequired, unless the bot owns the community or its application owner has two-factor authentication enabled.
      * HTTP 204 succeeds with no value, without waiting for an event
      *
      * Only confirmed HTTP 429 rejection retries.
      * A dispatched failure can leave the ban or queued message deletion applied.
      * Dispatched actions invalidate the cached member even on rejection.
-     * If message cleanup was requested, this author's cached messages are removed across all communities.
-     * That broad removal includes unrelated communities because message data need not contain guild IDs.
+     * When deleteMessagesMs is above 0, the user's cached messages are removed from every community, because cached messages need not carry a guild ID.
      * The deletion job can finish later, so a later cache hit does not prove a message survived
      *
      * Fluxer bans can also block rejoining through IP or email checks.
@@ -511,7 +510,7 @@ export interface Members {
     /**
      * Grant one role to a member without replacing their other roles.
      * Use a decimal role ID, excluding the implicit everyone role.
-     * Fluxer requires MANAGE_ROLES and checks hierarchy.
+     * Fluxer requires ManageRoles and checks hierarchy.
      * HTTP 204 succeeds with no value, not an event acknowledgement or proof the role was previously absent.
      * Fluxer currently accepts auditReason on member-role add and remove routes without retaining it in an audit entry.
      * The example collects one future reaction addition before assigning the role.

@@ -261,7 +261,7 @@ await runBot({
                     const member = { guildId: message.guildId, userId: message.author.id }
                     const canManage = await client.members.fetchCanManage(member)
                     if (canManage.isErr()) return canManage
-                    if (!canManage.value) return reply("The bot's role must rank above yours")
+                    if (!canManage.value) return reply("The bot's highest role must rank above the member's")
                     const added = await client.members.addRole(member, optInRoleId)
                     return added.isErr() ? added : reply("Role added")
                 },

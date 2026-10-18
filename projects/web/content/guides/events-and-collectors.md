@@ -162,7 +162,7 @@ export function showRules(client: Client, channelId: string, userId: string) {
 }
 ```
 
-The returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`. Adding or removing an arrow both turn the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Like a collector, pages need a connected gateway
+The returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Like a collector, pages need a connected gateway
 
 In a command, the context's `paginate(pages)` lets the command's author flip by default, and `sendHelp()` sends the help pages this way. See [help in Commands](/docs/{{version}}/commands/#add-help-from-the-registered-commands)
 

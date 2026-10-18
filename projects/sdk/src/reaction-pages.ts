@@ -36,13 +36,16 @@ export type PageTurners = readonly string[] | ((reaction: MessageReaction) => bo
 
 /** Choose who may turn reaction pages and how long they listen.
  * The bot adds ◀ and ▶ reactions, and each click on one shows the previous or next page, wrapping around at the ends.
- * By default adding or removing an arrow both count as one click, so the bot needs only Add Reactions and Read Message
+ * By default, adding or removing an arrow counts as one click, so the bot needs only Add Reactions and Read Message
  * History. Registration needs a connected gateway, like messages.collectReactions
  *
  * @category Messages
  */
 export interface PaginateOptions {
-    /** Who may turn pages. A command context defaults to the command's author. messages.paginate requires it */
+    /**
+     * Who may turn pages.
+     * Required by messages.paginate, while a command context defaults to the command's author
+     */
     readonly users?: PageTurners
     /** Stop after this many milliseconds without an accepted click. Integer 1 through 2,147,483,647, default 60,000 */
     readonly idleMs?: number

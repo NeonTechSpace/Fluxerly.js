@@ -228,6 +228,6 @@ The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
 Check, version PR, candidate preparation, publication, Preview and daily upstream drift workflows are configured under [.github/workflows](/.github/workflows/).
-Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version. [Releasing](/docs/RELEASING.md) describes each trigger
+Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a daily schedule prepares a nightly build and publishes it when the SDK changed since the previous nightly. [Releasing](/docs/RELEASING.md) describes each trigger.
 Preview releases are published to npm, and the Preview documentation website is live.
 Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for the published versions

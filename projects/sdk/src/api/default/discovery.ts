@@ -44,7 +44,7 @@ export interface Discovery {
     /**
      * Fetch a community's current directory eligibility and application state.
      * Use a decimal guild ID with ManageGuild permission.
-     * An eligible false result can mean discovery is disabled or the member threshold is unmet, without distinguishing them.
+     * A result with eligible false can mean discovery is disabled or the member threshold is unmet, without distinguishing them.
      * Eligibility can change before application.
      * Reviewed or removed applications include their available reasons
      */

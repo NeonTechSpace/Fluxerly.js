@@ -118,7 +118,7 @@ A member is a user's membership in one [community](/docs/{{version}}/glossary/#g
 
 ### MFA
 
-MFA means multi-factor authentication. Fluxer checks MFA rules for some moderation actions, such as banning a member. See [Communities and permissions](/docs/{{version}}/guilds-and-permissions/)
+MFA means multi-factor authentication. A community can require it for moderation actions, such as banning a member. Fluxer then refuses those actions from a bot unless the bot owns the community or the account that owns its application has MFA enabled. See [Communities that require two-factor authentication](/docs/{{version}}/guilds-and-permissions/#communities-that-require-two-factor-authentication)
 
 ### Middleware
 

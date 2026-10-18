@@ -9,11 +9,12 @@ import type {
 import type * as Effect from "effect/Effect"
 
 /** Create and manage webhooks with the bot token, without a gateway connection.
- * No webhook cache, hidden credential persistence or synthesized events.
+ * There is no webhook cache or hidden credential persistence, and no events are synthesized.
  * Successful JSON responses are limited to 16 MiB before parsing. This is not a total memory limit. Malformed or larger responses fail with reason response.
  * If a response fails after a write was sent, the write may still have applied. The SDK does not retry it automatically.
  * Each Effect starts when executed, with Effect interruption and defects.
- * Requests default to a 30-second total deadline, allow bounded read retries and retry writes only after confirmed rate-limit rejection.
+ * The default total deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes capacity, rate-limit and retry waits.
+ * Reads have bounded retries, and writes retry only after a confirmed rate-limit rejection.
  * Shutdown rejects new work and awaits accepted request cleanup. Separate clients do not coordinate rate limits
  *
  * @category Invites and webhooks

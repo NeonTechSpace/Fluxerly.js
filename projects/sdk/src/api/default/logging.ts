@@ -12,8 +12,9 @@ export interface ClientLogging {
      * The settings are validated like level, categories and debug in the logging option of createClient.
      * Omitted level and categories return to their defaults, level info without category levels, as at creation.
      * An omitted debug keeps the current Debug categories, which start as the debug creation setting plus FLUXERLY_DEBUG.
-     * A debug value replaces them, including those from FLUXERLY_DEBUG: true for every category, a list for those
-     * categories, and false or an empty list for none. Debug categories lower their threshold to Debug, never raise it.
+     * A debug value replaces them, including those from FLUXERLY_DEBUG.
+     * Pass true for every category, a list for only those categories, or false or an empty list for none.
+     * Debug categories lower their threshold to Debug, never raise it.
      * It works before, during and after a connection, and changes nothing else about the client
      *
      * @remarks

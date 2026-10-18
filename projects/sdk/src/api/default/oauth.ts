@@ -37,10 +37,11 @@ function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
  * @remarks
  * The secret is copied until shutdown.
  * Calls start immediately and return ResultAsync.
- * At most eight operations run concurrently, without a queue.
+ * At most eight operations run at once.
+ * While eight are running, another operation fails at once with OAuthOperationError reason busy instead of waiting.
  * The timeoutMs option defaults to 30,000 for discovery and the operation, with request cleanup awaited afterward.
  * Responses are capped at 1 MiB and requests are never retried automatically.
- * Discovery throttling returns OAuthOperationError with rateLimit, notDispatched, status 429 and available retryAfterMs
+ * Discovery throttling returns OAuthOperationError with reason rateLimit, outcome notDispatched, status 429 and the server's retryAfterMs when available
  *
  * Expected failures return Err.
  * A throw while reading input or option properties rejects with SdkDefect code application.defect and the thrown value

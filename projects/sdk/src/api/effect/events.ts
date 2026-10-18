@@ -60,7 +60,7 @@ export interface EventHandlerOptions<E = never, R = never, T = unknown> extends 
 }
 
 /**
- * Event middleware for the Effect API, run around every later on handler invocation.
+ * Event middleware for the Effect API, run around each client.on handler invocation that starts after registration.
  * It receives the invocation and a next Effect that runs the rest of the chain and the handler.
  * The next Effect completes when the rest of the chain has finished, whether or not it failed, and never fails.
  * Failures after next are reported by the SDK where they occur, so middleware can time or trace a handler but cannot hide its failure.

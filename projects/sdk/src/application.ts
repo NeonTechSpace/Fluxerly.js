@@ -65,7 +65,7 @@ export class BotApplicationOperationError extends FluxerlyError {
     /** Input validation, full local capacity, HTTP 404 or another rejection, network failure, invalid response, deadline expiry or rate limit */
     readonly reason: OperationReason
     /** Whether the request may have reached Fluxer, described by {@link OperationOutcome}.
-     * This is a read, so an unknown outcome does not mean the application may have changed
+     * The failed operation only reads, so even an unknown outcome cannot have changed the application
      */
     readonly outcome: OperationOutcome
     /** HTTP status when received, otherwise null */

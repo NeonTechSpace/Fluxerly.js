@@ -82,7 +82,7 @@ export async function announceRelease(webhook: WebhookClient, version: string, t
 }
 ```
 
-A webhook that belongs to a forum or media channel must use exactly one of `threadName` and `threadId` on every message, and Fluxer rejects a message with neither. A webhook in a text channel needs neither, and Fluxer rejects `threadName` there. The SDK checks the combinations that it can see before any request: `threadName` and `threadId` cannot be combined, `appliedTagIds` needs `threadName`, and a reply or forward cannot start a post, because the new post holds no earlier message. A post takes at most five tags. Fluxer rejects an unknown tag, a `moderated` tag (a webhook cannot manage threads) and a post without a tag in a channel that requires one
+A webhook that belongs to a forum or media channel must use exactly one of `threadName` and `threadId` on every message, and Fluxer rejects a message with neither. A webhook in a text channel needs neither, and Fluxer rejects `threadName` there. The SDK checks the combinations that it can see before any request: A message cannot combine `threadName` and `threadId`, `appliedTagIds` needs `threadName`, and a reply or forward cannot start a post, because the new post holds no earlier message. A post takes at most five tags. Fluxer rejects an unknown tag, a `moderated` tag (a webhook cannot manage threads) and a post without a tag in a channel that requires one
 
 The `fetchMessage`, `editMessage` and `deleteMessage` methods look in the webhook's channel unless their options carry the `threadId` of the thread that holds the message
 

@@ -28,9 +28,9 @@ export interface Users {
     /**
      * Look up the bot's own public account as the gateway's READY reported it, without a request.
      * The result is undefined until this client's first READY, and also while no READY has carried a complete public account.
-     * A later READY with a complete public account, such as for a new session, replaces it, while an incomplete one keeps
-     * the previous account. Other user updates and fetchSelf results do not change it,
-     * so its username or avatar can be stale. The value remains available after the client stops.
+     * A later READY with a complete public account, such as for a new session, replaces it, while an incomplete one keeps the previous account.
+     * Other user updates and fetchSelf results do not change it, so its username or avatar can be stale.
+     * The value remains available after the client stops.
      * This lookup never fails. Use fetchSelf for a current remote snapshot
      *
      * @remarks
@@ -40,7 +40,7 @@ export interface Users {
     /**
      * Fetch a public account snapshot by decimal user ID.
      * An unknown user fails with reason notFound rather than an empty result.
-     * An enabled user cache admits this ID independently of unrelated targeted user reads
+     * With the user cache enabled, a concurrent fetch of another user ID does not keep this result from being stored, unless more than 256 user IDs are being read at once
      */
     fetch(
         id: string,
@@ -73,7 +73,8 @@ export interface Users {
     /**
      * Fetch the authenticated bot's public account data remotely.
      * Private account fields are excluded.
-     * Because its ID is not known before the response, enabled user-cache conflict handling is collection-wide, so a later cache change can prevent the result from being stored
+     * With the user cache enabled, the bot's ID is unknown until the response arrives, so some concurrent user cache changes keep the result out of the cache.
+     * Examples are another users.fetch or users.fetchSelf call, a user update event and a lost gateway connection
      */
     fetchSelf(
         options?: DefaultUserOperationOptions,

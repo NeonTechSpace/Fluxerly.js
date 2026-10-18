@@ -130,7 +130,7 @@ pnpm docs:dev
 ```
 
 The `docs:dev` script builds the SDK before reference generation and local Astro development.
-The `docs:dev:skip-build` script reuses the existing SDK build, so it leaves `projects/sdk/dist` untouched while other checks use it. Its API reference reflects that build, not later source changes
+The `docs:dev:skip-build` script reuses the existing SDK build, so it leaves `projects/sdk/dist` untouched while other checks use it. Its API reference reflects that build, not later source changes.
 The local preview follows the source manifest's channel. To inspect another planned channel after building the SDK, run `node scripts/generate.js --preview-channel rc` from `projects/web/`. This changes only the local docs label, not the SDK version or release selection.
 For non-interactive validation, run `pnpm check`.
 The aggregate check includes the SDK, release tooling tests and website build, typecheck and local tests

@@ -27,7 +27,8 @@ import { openClient } from "./client.js"
  * token are not counted.
  * It installs no signal handlers and does not terminate the process.
  * After the configured graceful deadline, the parent can terminate only its own unresponsive child and still waits for its exit.
- * A crashed child restarts by default with bounded exponential delays. Set restart to false to turn this off.
+ * A crashed child restarts by default, up to three times in a row with exponentially increasing delays.
+ * Set restart to false to turn this off.
  * The childEnvironment, args and execArgv options configure children but never appear in status or failures.
  * Child output follows childOutput: Lines are forwarded with a child label by default, and inherit or ignore can be chosen instead
  * @example

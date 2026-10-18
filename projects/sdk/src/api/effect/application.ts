@@ -3,7 +3,7 @@ import type * as Effect from "effect/Effect"
 
 /** Read the application associated with this bot token through GET `/oauth2/applications/@me`.
  * No gateway connection is required.
- * Effects start when executed and can be run again, using the caller's services with the shared 30-second total deadline and at most two transient read retries.
+ * Effects start when executed and can be run again, using the caller's services, the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and at most two transient read retries.
  * Returns a frozen set of documented application fields, including the owner's user ID, without caching. Other owner details, redirect URIs, verification keys, client secrets, and nested bot fields are never exposed.
  * Fluxer remains authoritative for application visibility and installability. This read neither manages an application nor opens an authorization page.
  * Input, HTTP, and malformed-response failures use BotApplicationOperationError. Closure uses ClientClosedError. Interruption and defects remain in the Cause

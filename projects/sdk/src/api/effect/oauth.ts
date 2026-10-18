@@ -22,7 +22,8 @@ import { makeOAuthOwner } from "#sdk/internal/oauth"
  *
  * The application handles consent, browser callbacks, state checks, token storage and refresh coordination
  *
- * The client keeps a copy of the secret until shutdown and allows at most eight concurrent operations, without a queue.
+ * The client keeps a copy of the secret until shutdown and runs at most eight operations at once.
+ * While eight are running, another operation fails at once with OAuthOperationError reason busy instead of waiting.
  * Response bodies are capped at 1 MiB. Requests never retry automatically.
  * Discovery throttling fails with OAuthOperationError reason rateLimit, outcome notDispatched, status 429 and the server's retryAfterMs when available
  *

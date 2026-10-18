@@ -552,7 +552,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Pending handshakes are terminated immediately, and forced termination can discard unsent data.
      * Cleanup cannot be abandoned, and this method never exits the application or undoes remote writes.
      * Create a new client to connect again.
-     * Each failed cleanup step is also logged at Error in the lifecycle category and counted in diagnostics().counters.cleanupFailures
+     * A failed cleanup of the client's services, such as an event handler or collector callback whose cancellation cleanup fails, is also logged at Error in the lifecycle category and counted in diagnostics().counters.cleanupFailures.
+     * A failed socket close is not logged or counted
      *
      * @remarks
      * Once shutdown starts, it disables interruption so the caller cannot abandon cleanup.

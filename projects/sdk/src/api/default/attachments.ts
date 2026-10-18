@@ -50,7 +50,7 @@ export interface Attachments {
      * The URL must match this instance's discovered media /attachments/ path.
      * The GET sends no Authorization header, follows no redirects, stores no cached copy and never falls back to proxyUrl.
      * The timeoutMs option defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured, for endpoint discovery, waiting for a media slot and downloading.
-     * Four media downloads can run at once, separately from REST and uploads, without waiting for bot API rate limits.
+     * By default four media downloads can run at once (rest.mediaConcurrency), separately from REST and uploads, without waiting for bot API rate limits.
      * Cancellation waits for response-reader cleanup, but cannot undo bytes already received
      *
      * Size and expiry metadata do not prove that the URL is available or the bytes are safe.

@@ -69,7 +69,7 @@ An unexpected SDK or cleanup failure is not an Err. It rejects the Promise with 
 
 ## Set a request deadline and allow cancellation
 
-Every request has a 30-second deadline by default. Pass `timeoutMs` for a shorter one, and a `signal` to stop waiting when the caller cancels. Create an `AbortController` for that task and pass its `signal` to this helper
+Every request has a 30-second deadline by default. For REST calls, the client option `rest.defaultTimeoutMs` changes that default, while gateway count and member-chunk requests keep their own 30-second default. Pass `timeoutMs` to set the deadline of one call, and a `signal` to stop waiting when the caller cancels. Create an `AbortController` for that task and pass its `signal` to this helper
 
 ```ts
 import type { Client, MessageReference } from "@neontechspace/fluxerly"

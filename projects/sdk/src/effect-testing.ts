@@ -265,8 +265,9 @@ export interface TestClient<M extends MessageCore = Message> {
      * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
      * settles. With timeoutMs it fails with TestTimeoutError when the client is still busy after it.
      * It dies with ClientClosedError after shutdown. Invalid options are a defect carrying ConfigurationError.
-     * Its timers stay real when a test fakes timers. The SDK runs on setImmediate, so fake timers must leave it real,
-     * otherwise idle dies with ConfigurationError instead of settling while no handler can run
+     * The wait's own timers, including timeoutMs, stay real when a test fakes timers.
+     * The SDK runs on setImmediate, so fake timers must leave it real, otherwise idle dies with ConfigurationError
+     * instead of settling while no handler can run
      */
     idle(options?: TestWaitOptions): Effect.Effect<void, TestTimeoutError>
     /**

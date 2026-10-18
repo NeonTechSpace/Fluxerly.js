@@ -79,7 +79,7 @@ export interface WebhookClient {
      * A plain string sends only that text, as shorthand for `{ content }`.
      * The SDK uses wait=true, and mentions are disabled by default.
      * A supplied nonce requests best-effort duplicate suppression for five minutes, not exactly-once delivery.
-     * Omission sends no nonce. Forward source nonces are accepted, but supplying both locations fails before dispatch.
+     * Without a nonce, none is sent unless a forward source supplies one, and a nonce on both the message and its forward source fails before dispatch.
      * Reply references can include files.
      * Forward references preserve only the source snapshot and reject new content or uploads
      *
@@ -133,8 +133,8 @@ export interface WebhookClient {
     /**
      * Delete this webhook's message, succeeding with no value after HTTP 204.
      * For a message in a thread, including a forum post, set options.threadId to the thread's ID.
-     * Success does not prove it previously existed.
-     * A failure with an unknown outcome can follow a completed deletion
+     * Success does not prove the message previously existed.
+     * A failure with an unknown outcome can leave the message deleted
      */
     deleteMessage(
         messageId: string,

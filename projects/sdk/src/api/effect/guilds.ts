@@ -19,7 +19,9 @@ import type * as Stream from "effect/Stream"
  * A guild is a Fluxer community. HTTP methods return Effects and do not require a gateway connection.
  * The REST rules below exclude fetchCounts, which requires gateway readiness and has its own documented contract
  *
- * Guild requests share this client's REST or upload slots with messages, members and roles, regardless of shard. Attachment downloads have separate slots. By default there are four of each, and the shared queue holds at most 256 requests or 4 MiB of JSON bodies. The rest client option changes these limits
+ * Requests share the client's REST or upload slots across all assigned shards, four per local shard by default, up to 64 (rest.concurrency).
+ * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
+ * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
  *
  * The total deadline defaults to the client's rest.defaultTimeoutMs, 30,000 ms unless configured, including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Retry delays are 125–250 ms, then 250–500 ms, or a longer valid Retry-After. Confirmed HTTP 429 waits are separate and never reset the deadline

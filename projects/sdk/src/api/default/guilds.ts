@@ -21,7 +21,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * The fetchCounts method differs because it requires a ready gateway, as described on that method
  *
  * @remarks
- * Requests share the client's REST or upload slots across all assigned shards, four per local shard by default (rest.concurrency).
+ * Requests share the client's REST or upload slots across all assigned shards, four per local shard by default, up to 64 (rest.concurrency).
  * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
  * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
  *

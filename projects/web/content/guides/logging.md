@@ -103,7 +103,7 @@ export function traceRequests(client: Client) {
 
 ## Turn on debug output without changing code
 
-Set the `FLUXERLY_DEBUG` environment variable before starting the bot. `1` enables Debug records for every category, while a comma-separated list such as `gateway,rest` enables only those. The variable is read when the client is created
+Set the `FLUXERLY_DEBUG` environment variable before starting the bot. The value `1` enables Debug records for every category, while a comma-separated list such as `gateway,rest` enables only those. The variable is read when the client is created
 
 ```text
 FLUXERLY_DEBUG=rest,ratelimit node bot.js

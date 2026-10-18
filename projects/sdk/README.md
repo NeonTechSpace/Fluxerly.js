@@ -49,7 +49,7 @@ The installed package also contains the changelog as `CHANGELOG.md`
 
 This bot replies **Pong!** to **!ping**
 
-A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs.
+A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs
 
 To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in the bot's folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. To set up the bot by hand instead:
 

@@ -196,7 +196,7 @@ Some of Fluxer's limits apply to the whole bot account rather than to one proces
 A child that gets no answer from the parent within one second counts only its own member requests and logs `supervisor.memberRequestsLocal` once. Per-route rate limits stay with each child, and processes outside this supervisor that use the same token are not counted
 
 <details>
-<summary>Choose the plan yourself</summary>
+<summary>Shard plans and assignments</summary>
 
 A numeric `totalShards` fixes the total. Use `processes` for a number of children, `shardsPerProcess` for a number of shards per child, or `assignments` to name each child and its shards, such as `[{ id: "a", shardIds: [0, 1] }, { id: "b", shardIds: [2, 3] }]`.
 Children created by `processes` or `shardsPerProcess` are named `process-0`, `process-1` and so on, and each owns a contiguous block of shards.

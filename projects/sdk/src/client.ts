@@ -283,8 +283,10 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * that split shards need an explicit total
      *
      * A client without this setting makes the same move from its one shard when Fluxer closes it with 4011, so a bot that
-     * outgrows one connection keeps running instead of failing. Above that limit, each start first opens a session that
-     * Fluxer rejects, which the value "auto" avoids. An explicit total, including totalShards 1, never moves
+     * outgrows one connection keeps running instead of failing.
+     * Once the bot is in more than 2,500 communities, each start first opens a session that Fluxer rejects, which the
+     * value "auto" avoids.
+     * An explicit total, including totalShards 1, never moves
      */
     readonly sharding?: ShardingOptions | "auto"
 }
@@ -566,7 +568,8 @@ export interface ClientState {
      * process owns that shard. Fluxer calls a community a guild, so the argument is a guild ID.
      * An automatically sized client returns undefined until its first connect has chosen the plan, and the answer can
      * change when automatic sharding moves to a larger plan, including the first move of a client without sharding
-     * settings. snowflakes.shardFor computes the same routing for any plan.
+     * settings.
+     * The snowflakes.shardFor helper computes the same routing for any plan.
      * Throws ConfigurationError when the ID is not a decimal string
      */
     shardIdForGuild(guildId: string): number | undefined

@@ -13,7 +13,8 @@ import type * as Effect from "effect/Effect"
 
 /** Read or change community roles, their permission bits and their ordering.
  * Methods return Effects and share Guilds' HTTP concurrency limits, deadlines and read retries.
- * Writes retry only confirmed 429 rejections. Server permissions/hierarchy apply. No local permission prediction.
+ * Writes retry only confirmed 429 rejections.
+ * Fluxer enforces permissions and hierarchy, and the SDK does not predict permissions locally.
  * Interruption waits for owned cleanup but cannot undo write requests already sent. Success is not a gateway acknowledgement.
  * Expected failures use GuildOperationError or ClientClosedError. Defects and interruption retain Cause.
  * Inputs are copied on execution, not Effect construction. Returned roles contain bigint permissions and require explicit JSON conversion.

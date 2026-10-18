@@ -12,7 +12,7 @@ import type { Message, MessageCore, ReplyInput, DefaultSendOptions } from "#sdk/
 
 /**
  * Open and manage private one-to-one or group conversations with the bot's credentials.
- * Use directMessages.send for open-and-send, or messages with a known private channel ID.
+ * Use directMessages.send to open a conversation and send in one call, or the messages namespace when the private channel ID is known.
  * No gateway connection is required.
  * HTTP calls start immediately with the client's shared default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and eligible read retries.
  * Writes retry only confirmed rate-limit rejection, never an uncertain outcome.
@@ -31,7 +31,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * An inline multipart 429 does not replay file or stream sources.
      * MessageError with outcome notDispatched does not mean opening the conversation was undone.
      * A send with an unknown outcome is never repeated automatically.
-     * Opening by user ID uses collection-wide direct-message cache conflict handling because the channel ID is not known yet.
+     * The opened conversation is cached under the same conditions as open.
      * Reply references are not accepted here.
      * Use messages.reply with an existing channel and message reference
      *
@@ -66,7 +66,8 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * Open or reopen a one-to-one conversation with the selected user.
      * The result is a private channel, not proof a message can be delivered.
      * Privacy checks can still prevent sending after opening succeeds.
-     * Because the channel ID is not known before the response, enabled direct-message cache conflict handling is collection-wide, so a later cache change can prevent the result from being stored
+     * With the direct-message cache enabled, the channel ID is unknown until the response arrives, so some concurrent direct-message cache changes keep the result out of the cache.
+     * Examples are a directMessages.fetch call and a direct-message update event
      */
     open(
         userId: string,
@@ -75,7 +76,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
     /**
      * Fetch a private channel by decimal ID.
      * A community-channel response is rejected as invalid.
-     * An enabled cache admits this ID independently of unrelated targeted private-channel reads
+     * With the direct-message cache enabled, a concurrent fetch of another private channel ID does not keep this result from being stored, unless more than 256 private channel IDs are in flight at once
      */
     fetch(
         id: string,
@@ -94,7 +95,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * Fetch the latest messages for 1–100 selected, distinct private channel IDs through Fluxer's batch endpoint.
      * IDs are copied by index when execution starts.
      * This does not enumerate conversations or fill a cache.
-     * A null message is ambiguous.
+     * A null entry does not prove an empty channel or denied access.
      * The omittedChannelIds field separately lists requested IDs that Fluxer did not return.
      * Do not treat omission as null, an empty channel or denied access.
      * The batch uses POST and is not retried after a dispatched failure with an unknown outcome, even though it reads data

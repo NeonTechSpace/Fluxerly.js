@@ -187,8 +187,9 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
      * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose client never
      * settles. With timeoutMs the promise rejects with TestTimeoutError when the client is still busy after it.
      * It rejects with ClientClosedError after shutdown. Invalid options throw ConfigurationError.
-     * Its timers stay real when a test fakes timers. The SDK runs on setImmediate, so fake timers must leave it real,
-     * otherwise idle rejects with ConfigurationError instead of settling while no handler can run
+     * The wait's own timers, including timeoutMs, stay real when a test fakes timers.
+     * The SDK runs on setImmediate, so fake timers must leave it real, otherwise idle rejects with ConfigurationError
+     * instead of settling while no handler can run
      */
     idle(options?: TestWaitOptions): Promise<void>
     /**
