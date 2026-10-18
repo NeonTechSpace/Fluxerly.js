@@ -41,6 +41,8 @@ function arguments_(args, allowed) {
         if (!/^\d+$/.test(result.number)) throw new Error("Nightly number must be a number")
         result.number = Number(result.number)
     }
+    // The nightly planner checks that the date is real. It stays text because a build date is an identifier, not a count
+    if (result.date !== undefined && !/^\d{8}$/.test(result.date)) throw new Error("Nightly date must be YYYYMMDD")
     return result
 }
 
@@ -154,14 +156,14 @@ function summary(directory, candidate) {
 }
 
 /**
- * Plans a nightly build of the source with its build number
+ * Plans a nightly build of the source with its UTC build date and run number
  * @param {Record<string, any>} options
  */
 async function nightlyPlan(options) {
     if (options.epoch !== undefined || options.line)
         throw new Error("A nightly plan follows the source and takes no epoch or line")
     const inventory = await registries.inventory("@neontechspace/fluxerly")
-    return readNightlyPlan(workspace, inventory.npmVersions, options.number)
+    return readNightlyPlan(workspace, inventory.npmVersions, options.date, options.number)
 }
 
 async function main() {
@@ -178,14 +180,15 @@ async function main() {
             throw new Error("Website-only changes need no SDK fragment, empty release fragments are not used")
         await command(process.execPath, [require.resolve("@changesets/cli/bin.js"), ...args], { interactive: true })
     } else if (action === "plan" || action === "version") {
-        const options = arguments_(args, ["channel", "epoch", "line", "number"])
+        const options = arguments_(args, ["channel", "epoch", "line", "date", "number"])
         if (action === "plan" && options.channel === "nightly") console.log(JSON.stringify(await nightlyPlan(options)))
-        else if (options.number !== undefined) throw new Error("Only a nightly plan takes a number")
+        else if (options.date !== undefined || options.number !== undefined)
+            throw new Error("Only a nightly plan takes a date and a number")
         else if (action === "version") {
             console.log(JSON.stringify(await versionSource({ workspace, options, registries, stage })))
         } else console.log(JSON.stringify((await readSourcePlan(workspace, options)).plan))
     } else if (action === "prepare") {
-        const options = arguments_(args, ["output", "line", "docs", "channel", "number"])
+        const options = arguments_(args, ["output", "line", "docs", "channel", "date", "number"])
         if (!options.output) throw new Error("Prepare needs --output NEW_ABSOLUTE_DIRECTORY")
         console.log(
             JSON.stringify(
@@ -194,6 +197,7 @@ async function main() {
                     line: options.line,
                     docs: options.docs,
                     channel: options.channel,
+                    date: options.date,
                     number: options.number,
                     output: resolve(options.output),
                     registries,

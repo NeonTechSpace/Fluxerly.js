@@ -56,11 +56,12 @@ async function reviewedRelease(workspace, line) {
  * Plans a nightly build of the source, whose version exists only in the candidate and never in source
  * @param {string} workspace
  * @param {any} registries
+ * @param {string | undefined} date
  * @param {number | undefined} number
  */
-async function nightlyRelease(workspace, registries, number) {
+async function nightlyRelease(workspace, registries, date, number) {
     const name = "@neontechspace/fluxerly"
-    const plan = await readNightlyPlan(workspace, (await registries.inventory(name)).npmVersions, number)
+    const plan = await readNightlyPlan(workspace, (await registries.inventory(name)).npmVersions, date, number)
     const changes = await unreleasedNotes(workspace)
     const notes =
         "Automatic nightly build of `main`. It can include breaking changes at any time\n\n" +
@@ -107,9 +108,9 @@ function alreadyPublished({ channel, baselineVersion, baseline, source, fingerpr
 }
 
 /**
- * @param {{ workspace: string, output: string, line?: string, docs?: string, channel?: string, number?: number, registries: any, stage: any }} options
+ * @param {{ workspace: string, output: string, line?: string, docs?: string, channel?: string, date?: string, number?: number, registries: any, stage: any }} options
  */
-export async function prepareCandidate({ workspace, output, line, docs, channel, number, registries, stage }) {
+export async function prepareCandidate({ workspace, output, line, docs, channel, date, number, registries, stage }) {
     if (
         !isAbsolute(output) ||
         resolve(output) === workspace ||
@@ -120,10 +121,11 @@ export async function prepareCandidate({ workspace, output, line, docs, channel,
         throw new Error("Only a nightly candidate selects its channel at preparation, others use the source version")
     if (channel === "nightly" && line)
         throw new Error("A nightly candidate follows the source and takes no release line")
-    if (channel !== "nightly" && number !== undefined) throw new Error("Only a nightly candidate takes a number")
+    if (channel !== "nightly" && (date !== undefined || number !== undefined))
+        throw new Error("Only a nightly candidate takes a date and a number")
     const release =
         channel === "nightly"
-            ? await nightlyRelease(workspace, registries, number)
+            ? await nightlyRelease(workspace, registries, date, number)
             : await reviewedRelease(workspace, line)
     let documentation
     let sourceCommit = null

@@ -213,12 +213,13 @@ test("A nightly candidate versions the next RC target from the npm inventory wit
         await note(root, "feature", "minor", "Add a feature")
         const manifest = await readFile(join(root, "sdk/package.json"))
         const fragment = await readFile(join(root, ".changeset/feature.md"))
-        const version = "1000.3.0-nightly.2"
+        const version = "1000.3.0-nightly.20261019.2"
         const docs = join(root, "snapshot.json")
         await write(docs, { schemaVersion: 1, version, sourceCommit: "a".repeat(40), files: [] })
         const registries = {
             inventory: async () => ({
-                npmVersions: ["1000.2.3", "1000.3.0-nightly.0", "1000.3.0-nightly.1", "1000.2.4-nightly.5"],
+                // Older numbered nightlies and the dated form share one inventory
+                npmVersions: ["1000.2.3", "1000.3.0-nightly.0", "1000.3.0-nightly.1", "1000.3.0-nightly.20261018.7", "1000.2.4-nightly.5"],
             }),
             baseline: async (_name, baseline) => ({
                 version: baseline,
@@ -231,17 +232,18 @@ test("A nightly candidate versions the next RC target from the npm inventory wit
             output,
             docs,
             channel: "nightly",
+            date: "20261019",
             number: 2,
             registries,
             stage: stageFixture(),
         })
         assert.deepEqual(
             [prepared.version, prepared.channel, prepared.line, prepared.baseline],
-            [version, "nightly", "1000.3", "1000.3.0-nightly.1"],
+            [version, "nightly", "1000.3", "1000.3.0-nightly.20261018.7"],
         )
         const candidate = await readCandidate(output, { checksum: prepared.checksum })
         assert.deepEqual([candidate.version, candidate.channel, candidate.line], [version, "nightly", "1000.3"])
-        assert.equal(candidate.baseline.version, "1000.3.0-nightly.1")
+        assert.equal(candidate.baseline.version, "1000.3.0-nightly.20261018.7")
         // The notes lead with a nightly disclaimer and then list the unreleased changes
         const notes = await readFile(join(output, "notes.md"), "utf8")
         const [disclaimer, ...changes] = notes.split("\n\n")
@@ -254,7 +256,7 @@ test("A nightly candidate versions the next RC target from the npm inventory wit
         await write(docs, { schemaVersion: 1, version: "1000.2.3", sourceCommit: "a".repeat(40), files: [] })
         const mismatched = join(root, "mismatched")
         await assert.rejects(
-            prepareCandidate({ workspace: root, output: mismatched, docs, channel: "nightly", number: 2, registries, stage: stageFixture() }),
+            prepareCandidate({ workspace: root, output: mismatched, docs, channel: "nightly", date: "20261019", number: 2, registries, stage: stageFixture() }),
             /Documentation snapshot does not match/,
         )
         await assert.rejects(access(mismatched), { code: "ENOENT" })
@@ -276,12 +278,13 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output,
             channel: "nightly",
-            number: 0,
+            date: "20261019",
+            number: 1,
             // The published source version holds other bytes, so this nightly carries new content
             registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"], "export const value = 0\n"),
             stage: stageFixture(),
         })
-        assert.deepEqual([prepared.version, prepared.baseline], ["1000.0.0-nightly.0", null])
+        assert.deepEqual([prepared.version, prepared.baseline], ["1000.0.0-nightly.20261019.1", null])
         const notes = await readFile(join(output, "notes.md"), "utf8")
         assert.doesNotMatch(notes, /###|Already in an RC/)
         assert.equal(notes.split("\n\n").filter((paragraph) => paragraph.trim() !== "").length, 2)
@@ -290,13 +293,14 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output: unchanged,
             channel: "nightly",
+            date: "20261019",
             number: 4,
             registries: registries(["1000.0.0-rc.1", "1000.0.0-nightly.0"]),
             stage: stageFixture(),
         })
         assert.deepEqual(
             [skipped.skipped, skipped.version, skipped.channel, skipped.line, skipped.baseline],
-            [true, "1000.0.0-nightly.4", "nightly", "1000.0", "1000.0.0-nightly.0"],
+            [true, "1000.0.0-nightly.20261019.4", "nightly", "1000.0", "1000.0.0-nightly.0"],
         )
         await assert.rejects(access(unchanged), { code: "ENOENT" })
         // Without an earlier nightly, bytes that match the source's published RC are not published again
@@ -305,11 +309,12 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output: released,
             channel: "nightly",
+            date: "20261019",
             number: 5,
             registries: registries(["1000.0.0-rc.0", "1000.0.0-rc.1"]),
             stage: stageFixture(),
         })
-        assert.deepEqual([matching.skipped, matching.version, matching.baseline], [true, "1000.0.0-nightly.5", "1000.0.0-rc.1"])
+        assert.deepEqual([matching.skipped, matching.version, matching.baseline], [true, "1000.0.0-nightly.20261019.5", "1000.0.0-rc.1"])
         assert.match(matching.reason, /match 1000.0.0-rc.1/)
         await assert.rejects(access(released), { code: "ENOENT" })
         // A nightly published after the source release, such as a since reverted change, keeps the next nightly due
@@ -329,16 +334,18 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output: join(root, "reverted"),
             channel: "nightly",
+            date: "20261019",
             number: 8,
             registries: times("2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z"),
             stage: stageFixture(),
         })
-        assert.deepEqual([reverted.skipped, reverted.version], [undefined, "1000.0.0-nightly.8"])
+        assert.deepEqual([reverted.skipped, reverted.version], [undefined, "1000.0.0-nightly.20261019.8"])
         // An older nightly than the source release still leaves the source's bytes as already published
         const superseded = await prepareCandidate({
             workspace: root,
             output: join(root, "superseded"),
             channel: "nightly",
+            date: "20261019",
             number: 9,
             registries: times("2026-01-02T00:00:00.000Z", "2026-01-01T00:00:00.000Z"),
             stage: stageFixture(),
@@ -349,11 +356,12 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output: join(root, "unknown"),
             channel: "nightly",
+            date: "20261019",
             number: 10,
             registries: times("not a time", "2026-01-01T00:00:00.000Z"),
             stage: stageFixture(),
         })
-        assert.deepEqual([unknown.skipped, unknown.version], [undefined, "1000.0.0-nightly.10"])
+        assert.deepEqual([unknown.skipped, unknown.version], [undefined, "1000.0.0-nightly.20261019.10"])
         // A failed lookup of the source's published bytes stops before anything is staged
         const failed = join(root, "failed")
         await assert.rejects(
@@ -361,6 +369,7 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
                 workspace: root,
                 output: failed,
                 channel: "nightly",
+                date: "20261019",
                 number: 7,
                 registries: {
                     inventory: async () => ({ npmVersions: ["1000.0.0-rc.1"] }),
@@ -378,17 +387,18 @@ test("A nightly candidate of an RC cycle omits archived notes and skips content 
             workspace: root,
             output: join(root, "pending"),
             channel: "nightly",
+            date: "20261019",
             number: 6,
             registries: registries(["1000.0.0-rc.0"]),
             stage: stageFixture(),
         })
-        assert.deepEqual([pending.skipped, pending.version], [undefined, "1000.0.0-nightly.6"])
+        assert.deepEqual([pending.skipped, pending.version], [undefined, "1000.0.0-nightly.20261019.6"])
     } finally {
         await rm(root, { recursive: true })
     }
 })
 
-test("Only a nightly candidate selects its channel or takes a number, and it takes no release line", async () => {
+test("Only a nightly candidate selects its channel or takes a date and a number, and it takes no release line", async () => {
     const root = await fixture("1000.0.0-rc.1")
     try {
         await write(join(root, "sdk/CHANGELOG.md"), "# SDK\n\n## 1000.0.0-rc.1\n\nFix cancellation\n")
@@ -407,7 +417,11 @@ test("Only a nightly candidate selects its channel or takes a number, and it tak
         )
         await assert.rejects(
             prepareCandidate({ workspace: root, output, number: 3, registries, stage }),
-            /Only a nightly candidate takes a number/,
+            /Only a nightly candidate takes a date and a number/,
+        )
+        await assert.rejects(
+            prepareCandidate({ workspace: root, output, date: "20261019", registries, stage }),
+            /Only a nightly candidate takes a date and a number/,
         )
         await assert.rejects(access(output), { code: "ENOENT" })
     } finally {

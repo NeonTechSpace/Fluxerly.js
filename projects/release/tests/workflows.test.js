@@ -182,6 +182,15 @@ test("Nightly preparation runs daily and starts only Release publish from main f
     const nightly = "github.event_name == 'schedule' || inputs.nightly"
     const candidate = workflow.jobs.prepare.steps.find((step) => step.id === "candidate")
     assert.equal(candidate.env.RELEASE_NIGHTLY, `\${{ ${nightly} }}`)
+    // The github context has no run start time, so the step dates the version with its own UTC clock, read once for
+    // both planning and preparation. The helper loads only for a nightly, so the step itself still runs for an older RC or
+    // Stable source, which must include dated nightly support once a dated nightly is published
+    assert.equal(candidate.env.RELEASE_NIGHTLY_STARTED_AT, undefined)
+    assert.ok(!candidate.run.includes("run_started_at"), "The github context has no run_started_at")
+    assert.ok(!/^\s*import \{[^}]*nightlyDateOf/m.test(candidate.run), "nightlyDateOf must not be a static import")
+    assert.equal(candidate.run.match(/nightlyDateOf\(new Date\(\)\.toISOString\(\)\)/g)?.length, 1)
+    // Its number is the run number
+    assert.equal(candidate.env.RELEASE_NIGHTLY_NUMBER, "${{ github.run_number }}")
     // An unreviewed nightly must build the workflow commit that Release publish checks against main, never source_ref
     const checkout = workflow.jobs.prepare.steps.find((step) => step.id === "checkout")
     assert.equal(checkout.with.ref, `\${{ (${nightly}) && github.sha || inputs.source_ref }}`)

@@ -96,19 +96,20 @@ test("Drafts are skipped without reading assets or source tags", async (t) => {
 })
 
 test("Imports retain Stable history and read only the newest published RC and Nightly snapshots", async (t) => {
-    // Retired Canary releases must still parse, but their assets are never read
+    // Retired Canary releases must still parse, but their assets are never read. The dated nightly is newer than every
+    // older numbered nightly of its core, whatever their numbers
     const items = [release("1000.0.0-nightly.9", 1), release("1000.0.0", 2), release("1000.0.0-rc.0", 3),
         release("1000.0.1", 4), release("1000.0.0-nightly.10", 5), release("1000.0.0-rc.1", 6),
-        release("1000.1.0-canary.4", 8), release("1000.0.0-canary.2", 9)]
+        release("1000.1.0-canary.4", 8), release("1000.0.0-canary.2", 9), release("1000.0.0-nightly.20261019.2", 10)]
     const draft = release("1000.1.0-nightly.0", 7)
     draft.metadata.draft = true
     const f = await fixture(t, [...items, draft], { pages: [items.slice(0, 3).map((item) => item.metadata),
         [...items.slice(3).map((item) => item.metadata), draft.metadata]] })
-    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-nightly.10", "1000.0.0-rc.1"])
-    for (const id of [1, 3, 7, 8, 9]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
+    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-rc.1", "1000.0.0-nightly.20261019.2"])
+    for (const id of [1, 3, 5, 7, 8, 9]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
     assert.ok(!f.calls.some((args) => args.some((arg) => arg.includes("canary"))))
-    assert.deepEqual((await readdir(f.directory)).sort(), ["1000.0.0-nightly.10.json", "1000.0.0-rc.1.json", "1000.0.0.json", "1000.0.1.json"])
-    for (const item of [items[1], items[3], items[4], items[5]]) {
+    assert.deepEqual((await readdir(f.directory)).sort(), ["1000.0.0-nightly.20261019.2.json", "1000.0.0-rc.1.json", "1000.0.0.json", "1000.0.1.json"])
+    for (const item of [items[1], items[3], items[8], items[5]]) {
         const version = item.metadata.tag_name.slice(1)
         assert.deepEqual(await readFile(join(f.directory, `${version}.json`)), item.bytes)
     }

@@ -20,6 +20,15 @@ test("Channel pointers prefer Stable, use rolling prerelease paths and omit abse
         assert.throws(() => channelTargets([version]), /nightly, rc or canary suffix/)
 })
 
+test("Dated nightlies outrank older numbered nightlies of the same core and stay below its RC", () => {
+    const published = ["1000.0.0-nightly.15", "1000.0.0-nightly.20261019.16", "1000.0.0-nightly.20261019.9", "1000.0.0-nightly.13"]
+    assert.equal(channelTargets(published)[0].version, "1000.0.0-nightly.20261019.16")
+    assert.deepEqual(retainedVersions(published), ["1000.0.0-nightly.20261019.16"])
+    assert.equal(defaultVersion([...published, "1000.0.0-rc.0"]), "1000.0.0-rc.0")
+    assert.equal(channelTargets(["1000.0.0-nightly.20261019.2", "1000.0.0-nightly.20261020.1"])[0].version, "1000.0.0-nightly.20261020.1")
+    assert.throws(() => channelTargets(["1000.0.0-nightly.20261319.1"]), /real calendar date/)
+})
+
 test("Retired Canary versions stay parseable but are never channel targets", () => {
     assert.deepEqual(channelTargets(["1000.0.0-canary.10"]), [])
     assert.deepEqual(channelTargets(["1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.1", "1000.3.0-canary.0"]), [

@@ -104,12 +104,14 @@ async function readSourceNotes(workspace) {
 }
 
 /**
- * Plans the nightly build of the current source with its build number, checked against the published npm versions
+ * Plans the nightly build of the current source with its UTC build date and run number, checked against the published
+ * npm versions
  * @param {string} workspace
  * @param {string[]} npmVersions
+ * @param {string | undefined} date
  * @param {number | undefined} number
  */
-export async function readNightlyPlan(workspace, npmVersions, number) {
+export async function readNightlyPlan(workspace, npmVersions, date, number) {
     const { manifest, fragments, pending, state } = await readSourceNotes(workspace)
     return planNightly({
         currentVersion: manifest.version,
@@ -117,6 +119,7 @@ export async function readNightlyPlan(workspace, npmVersions, number) {
         releaseTypes: fragments.map((fragment) => fragment.releases[0].type),
         releaseBase: state?.releaseBase,
         npmVersions,
+        date,
         number,
     })
 }

@@ -95,7 +95,7 @@ test("Latest redirects to the newest stable release while navigation and search 
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     const tree = await islandTree(page)
     expect(tree).toContain("/docs/1000.0.1/api")
-    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.0", "1000.2.0-nightly.1", "rc", "nightly",
+    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.0", "1000.2.0-nightly.20261019.1", "rc", "nightly",
         "1000.3.0-canary.0", "canary"])
         expect(tree).not.toContain(`/docs/${version}/`)
 
@@ -122,7 +122,7 @@ test("Latest redirects to the newest stable release while navigation and search 
     expect(index.headers()["cache-control"]).toBe("public, max-age=31536000, immutable")
     const searchIndex = JSON.stringify(await index.json())
     expect(searchIndex).toContain("/docs/1000.0.1/api/signature")
-    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.1", "1000.3.0-canary.0", "canary"])
+    for (const version of ["latest", "1000.0.0", "1000.1.0-rc.0", "1000.2.0-nightly.20261019.1", "1000.3.0-canary.0", "canary"])
         expect(searchIndex).not.toContain(`/docs/${version}/`)
     expect(new Set(indexes)).toEqual(new Set([indexUrl]))
     expect(errors).toEqual([])
@@ -163,7 +163,7 @@ test("Only channel labels appear and Nightly opens the newest published snapshot
         await expect(page).toHaveURL(path.includes("signature")
             ? /\/docs\/nightly\/api\/signature\/?$/
             : /\/docs\/nightly\/quick-start\/?$/)
-        await expect(page.locator(".version-label")).toHaveText("SDK 1000.2.0-nightly.1")
+        await expect(page.locator(".version-label")).toHaveText("SDK 1000.2.0-nightly.20261019.1")
     }
 })
 
@@ -202,7 +202,7 @@ test("Command preferences persist across exact releases without retaining the pr
 })
 
 test("Numbered prerelease pages and search indexes return 404 without redirects", async ({ request }) => {
-    for (const version of ["1000.1.0-rc.0", "1000.1.0-rc.1", "1000.2.0-nightly.0", "1000.2.0-nightly.1", "1000.3.0-canary.0"]) {
+    for (const version of ["1000.1.0-rc.0", "1000.1.0-rc.1", "1000.2.0-nightly.0", "1000.2.0-nightly.20261019.1", "1000.3.0-canary.0"]) {
         for (const path of [`/docs/${version}/`, `/docs/${version}/api/signature/?from=link`,
             `/docs/${version}/api/removed/`, `/docs/${version}/llms.txt`, `/api/search/${version}.json`]) {
             const response = await request.get(path, { maxRedirects: 0 })
@@ -239,18 +239,18 @@ test("Nightly navigation, search, serialized tree and assistant files stay withi
     await expect(page.locator('astro-island[component-export="Docs"]')).not.toHaveAttribute("ssr")
     const tree = await islandTree(page)
     expect(tree).toContain("/docs/nightly/api")
-    for (const path of ["1000.0.0", "1000.0.1", "1000.2.0-nightly.0", "1000.2.0-nightly.1", "rc", "latest"])
+    for (const path of ["1000.0.0", "1000.0.1", "1000.2.0-nightly.0", "1000.2.0-nightly.20261019.1", "rc", "latest"])
         expect(tree).not.toContain(`/docs/${path}/`)
     const searchIndex = JSON.stringify(await (await request.get(await searchIndexUrl(request, "/docs/nightly/"))).json())
     expect(searchIndex).toContain("Latestnightlymarker")
     expect(searchIndex).not.toContain("Nightlyonlymarker")
     expect(searchIndex).toContain("/docs/nightly/api/signature")
-    expect(searchIndex).not.toContain("/docs/1000.2.0-nightly.1/")
+    expect(searchIndex).not.toContain("/docs/1000.2.0-nightly.20261019.1/")
     const assistant = await (await request.get("/docs/nightly/llms.txt")).text()
     expect(assistant).toContain("/docs/nightly/quick-start.md")
-    expect(assistant).not.toContain("/docs/1000.2.0-nightly.1/")
+    expect(assistant).not.toContain("/docs/1000.2.0-nightly.20261019.1/")
     const twin = await (await request.get("/docs/nightly/quick-start.md")).text()
-    expect(twin).toContain("npm install --save-exact @neontechspace/fluxerly@1000.2.0-nightly.1")
+    expect(twin).toContain("npm install --save-exact @neontechspace/fluxerly@1000.2.0-nightly.20261019.1")
     expect(twin).toContain("(/docs/nightly/api/signature/)")
     await openSearch(page)
     const input = page.getByRole("combobox", { name: "Search Nightly documentation" })

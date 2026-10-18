@@ -23,12 +23,12 @@ const fixtures = [
     ["1000.1.0-rc.0", "Promise<number>", "Previousrcmarker", 1],
     ["1000.1.0-rc.1", "Promise<string>", "Rconlymarker", 1],
     ["1000.2.0-nightly.0", "Promise<{ id: string }>", "Nightlyonlymarker", 1],
-    ["1000.2.0-nightly.1", "Promise<{ id: string }>", "Latestnightlymarker", 2],
+    ["1000.2.0-nightly.20261019.1", "Promise<{ id: string }>", "Latestnightlymarker", 2],
     ["1000.3.0-canary.0", "Promise<{ id: number }>", "Retiredcanarymarker", 2],
 ]
 const markdown = (title, body) => `---\ntitle: ${JSON.stringify(title)}\n---\n\n${body}\n`
 const saved = new Map()
-const deferred = new Set(["1000.1.0-rc.1", "1000.2.0-nightly.1"])
+const deferred = new Set(["1000.1.0-rc.1", "1000.2.0-nightly.20261019.1"])
 const exists = (path) => access(path).then(() => true, () => false)
 try {
     for (const [version, signature, marker, schemaVersion] of fixtures) {

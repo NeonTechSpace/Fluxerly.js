@@ -2,11 +2,13 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { contentFingerprint, exactFiles, readNpmTarball } from "../content.js"
 import {
+    assertNightlyDate,
     assertPublishBaseline,
     assertStablePromotion,
     channelTagState,
     channels,
     compareVersions,
+    nightlyDateOf,
     npmChannelTag,
     parseVersion,
     planNightly,
@@ -98,13 +100,78 @@ test("Versions order nightly, rc and stable within a core, and numerically withi
     assert.equal(compareVersions("1000.0.0-nightly.3", "1000.0.0-nightly.3"), 0)
 })
 
+test("Dated and older numbered nightlies share one SemVer order that always stays below the RC", () => {
+    const versions = [
+        "1000.0.0-nightly.20261020.1",
+        "1000.0.0-rc.0",
+        "1000.0.0-nightly.15",
+        "1000.0.0-nightly.20261019.16",
+        "1000.0.0-nightly.20261019.9",
+        "1000.0.0-nightly.13",
+        "1000.0.0-nightly.20261019",
+    ]
+    // Numeric identifiers compare numerically, and more identifiers sort higher once all earlier ones are equal
+    assert.deepEqual([...versions].sort(compareVersions), [
+        "1000.0.0-nightly.13",
+        "1000.0.0-nightly.15",
+        "1000.0.0-nightly.20261019",
+        "1000.0.0-nightly.20261019.9",
+        "1000.0.0-nightly.20261019.16",
+        "1000.0.0-nightly.20261020.1",
+        "1000.0.0-rc.0",
+    ])
+    assert.ok(compareVersions("1000.0.0-nightly.20261019.16", "1000.0.0-nightly.15") > 0)
+    assert.ok(compareVersions("1000.0.0-nightly.20261019.1", "1000.0.0-nightly.20261018.99") > 0)
+    assert.ok(compareVersions("1000.0.0-nightly.20261231.99", "1000.0.0-rc.0") < 0)
+    assert.ok(compareVersions("1000.0.0-nightly.20261019.1", "1000.0.0") < 0)
+    assert.ok(compareVersions("1000.0.1-nightly.20260101.1", "1000.0.0-nightly.20261019.16") > 0)
+    assert.equal(compareVersions("1000.0.0-nightly.20261019.16", "1000.0.0-nightly.20261019.16"), 0)
+})
+
+test("A dated nightly parses its date and run number, and only a real date can name one", () => {
+    assert.deepEqual(parseVersion("1000.0.0-nightly.20261019.16"), {
+        major: 1000,
+        minor: 0,
+        patch: 0,
+        channel: "nightly",
+        identifiers: [20261019, 16],
+        number: 16,
+        date: "20261019",
+        core: "1000.0.0",
+        line: "1000.0",
+    })
+    assert.deepEqual(
+        [parseVersion("1000.0.0-nightly.15").number, parseVersion("1000.0.0-nightly.15").date],
+        [15, undefined],
+    )
+    for (const version of [
+        "1000.0.0-nightly.20261319.1",
+        "1000.0.0-nightly.20260230.1",
+        "1000.0.0-nightly.2026101.1",
+        "1000.0.0-nightly.202610199.1",
+        "1000.0.0-nightly.20261019.01",
+        "1000.0.0-nightly.20261019.1.2",
+        "1000.0.0-rc.20261019.1",
+        "1000.0.0-canary.20261019.1",
+    ])
+        assert.throws(() => parseVersion(version), /numeric SemVer|calendar date|build date/, version)
+    assert.equal(assertNightlyDate("20240229"), "20240229")
+    for (const date of [undefined, 20261019, "2026-10-19", "20261019 ", "20250229", "20260001", "20260100", "00000101", "00010101", "09991231"])
+        assert.throws(() => assertNightlyDate(date), /YYYYMMDD|calendar date/, String(date))
+    assert.equal(nightlyDateOf("2026-10-19T23:59:59Z"), "20261019")
+    assert.equal(nightlyDateOf("2026-10-20T01:30:00+02:00"), "20261019")
+    assert.throws(() => nightlyDateOf("not a time"), /valid timestamp/)
+})
+
 test("A published legacy Canary still parses and sorts below nightly and RC builds of its version", () => {
     assert.deepEqual(parseVersion("1000.1.0-canary.7"), {
         major: 1000,
         minor: 1,
         patch: 0,
         channel: "canary",
+        identifiers: [7],
         number: 7,
+        date: undefined,
         core: "1000.1.0",
         line: "1000.1",
     })
@@ -133,44 +200,61 @@ test("Preview baselines are isolated by major.minor line and channel, and a firs
 })
 
 test("A nightly targets the core the next RC would and follows the newest published nightly of that core", () => {
-    const nightly = (currentVersion, extra = {}) => planNightly({ currentVersion, npmVersions: [], number: 0, ...extra })
+    const date = "20261019"
+    const nightly = (currentVersion, extra = {}) => planNightly({ currentVersion, npmVersions: [], date, number: 1, ...extra })
     // A stable source with no pending notes still builds toward the next patch, never the published Stable
     assert.deepEqual(nightly("1000.2.3"), {
         currentVersion: "1000.2.3",
-        version: "1000.2.4-nightly.0",
+        version: "1000.2.4-nightly.20261019.1",
         channel: "nightly",
         line: "1000.2",
     })
-    assert.equal(nightly("1000.2.3", { pendingTypes: ["patch", "minor"] }).version, "1000.3.0-nightly.0")
-    assert.equal(nightly("1000.2.3", { pendingTypes: ["major"] }).version, "1001.0.0-nightly.0")
+    assert.equal(nightly("1000.2.3", { pendingTypes: ["patch", "minor"] }).version, "1000.3.0-nightly.20261019.1")
+    assert.equal(nightly("1000.2.3", { pendingTypes: ["major"] }).version, "1001.0.0-nightly.20261019.1")
     // An RC cycle keeps its target, and a later major note escalates it as the next RC would
     const cycle = { releaseBase: "1000.2.3", pendingTypes: [], releaseTypes: ["minor"] }
-    assert.equal(nightly("1000.3.0-rc.1", cycle).version, "1000.3.0-nightly.0")
+    assert.equal(nightly("1000.3.0-rc.1", cycle).version, "1000.3.0-nightly.20261019.1")
     assert.equal(
         nightly("1000.3.0-rc.1", { ...cycle, pendingTypes: ["major"], releaseTypes: ["minor", "major"] }).version,
-        "1001.0.0-nightly.0",
+        "1001.0.0-nightly.20261019.1",
     )
-    assert.equal(nightly("1000.0.0-rc.7", { releaseBase: null }).version, "1000.0.0-nightly.0")
-    // The build number is the nightly number. It must be above published nightlies of the same core, numerically
+    assert.equal(nightly("1000.0.0-rc.7", { releaseBase: null }).version, "1000.0.0-nightly.20261019.1")
+    // The version must sort above every published nightly of the core, in either form
     const npmVersions = [
         "1000.2.3",
         "1000.3.0-nightly.0",
         "1000.3.0-nightly.10",
         "1000.3.0-nightly.2",
+        "1000.3.0-nightly.20261018.7",
         "1000.2.4-nightly.30",
         "1000.4.0-nightly.40",
         "1000.3.0-rc.50",
         "1000.3.0-canary.60",
     ]
-    assert.equal(nightly("1000.3.0-rc.1", { ...cycle, npmVersions, number: 11 }).version, "1000.3.0-nightly.11")
-    assert.equal(nightly("1000.3.0-rc.1", { ...cycle, npmVersions, number: 57 }).version, "1000.3.0-nightly.57")
-    for (const number of [10, 2])
+    const planned = (extra) => nightly("1000.3.0-rc.1", { ...cycle, npmVersions, ...extra }).version
+    assert.equal(planned({ number: 1 }), "1000.3.0-nightly.20261019.1")
+    assert.equal(planned({ number: 57 }), "1000.3.0-nightly.20261019.57")
+    assert.equal(planned({ date: "20261018", number: 8 }), "1000.3.0-nightly.20261018.8")
+    // A later day wins over a lower run number, and the same day needs a higher run number
+    assert.equal(planned({ date: "20261020", number: 1 }), "1000.3.0-nightly.20261020.1")
+    for (const [extra, newest] of [
+        [{ date: "20261018", number: 7 }, "1000.3.0-nightly.20261018.7"],
+        [{ date: "20261018", number: 6 }, "1000.3.0-nightly.20261018.7"],
+        [{ date: "20261017", number: 99 }, "1000.3.0-nightly.20261018.7"],
+    ])
         assert.throws(
-            () => nightly("1000.3.0-rc.1", { ...cycle, npmVersions, number }),
-            new RegExp(`number ${number} must be above the published 1000.3.0-nightly.10`),
+            () => planned(extra),
+            new RegExp(`Nightly 1000.3.0-nightly.${extra.date}.${extra.number} must be above the published ${newest.replaceAll(".", "\\.")}`),
         )
-    for (const number of [undefined, -1, 1.5, "3"])
-        assert.throws(() => nightly("1000.2.3", { number }), /whole build number/)
+    // Older numbered nightlies alone still guard the next one, so a dated nightly passes them whatever their number
+    const legacy = ["1000.3.0-nightly.13", "1000.3.0-nightly.15"]
+    assert.equal(planned({ npmVersions: legacy, number: 16 }), "1000.3.0-nightly.20261019.16")
+    assert.equal(planned({ npmVersions: legacy, number: 1 }), "1000.3.0-nightly.20261019.1")
+    assert.throws(() => planned({ npmVersions: ["1000.3.0-nightly.20270101.1"] }), /must be above the published 1000\.3\.0-nightly\.20270101\.1/)
+    for (const number of [undefined, 0, -1, 1.5, "3"])
+        assert.throws(() => nightly("1000.2.3", { number }), /positive whole run number/, String(number))
+    for (const badDate of [undefined, 20261019, "2026-10-19", "202610", "20261319", "20260230"])
+        assert.throws(() => nightly("1000.2.3", { date: badDate }), /YYYYMMDD|calendar date/, String(badDate))
     for (const npmVersions of [undefined, null, { versions: [] }])
         assert.throws(() => nightly("1000.2.3", { npmVersions }), /Registry version inventory is unavailable/)
     assert.throws(() => nightly("1000.3.0-nightly.0", { releaseBase: "1000.2.3" }), /never committed/)
@@ -310,6 +394,36 @@ test("npm tag confirmation accepts the channel tag or, behind a newer line, only
     // latest follows the newest preview until the first stable release moves it
     assert.deepEqual(channelTagState(stable, { latest: "1000.0.0-rc.0" }), { tag: "latest", confirmed: false })
     assert.deepEqual(channelTagState(stable, { latest: "1000.0.0" }), { tag: "latest", confirmed: true })
+})
+
+test("Dated nightlies move the nightly tag past older numbered ones and keep the staging tag for older lines", async () => {
+    const dated = { version: "1000.0.0-nightly.20261019.16", channel: "nightly", line: "1000.0" }
+    assert.deepEqual(npmChannelTag(dated, { nightly: "1000.0.0-nightly.15" }), {
+        tag: "nightly",
+        advance: true,
+        expectedVersion: dated.version,
+    })
+    assert.equal(npmChannelTag(dated, { nightly: "1000.0.0-nightly.20261019.17" }).advance, false)
+    const older = { version: "1000.0.2-nightly.20261019.16", channel: "nightly", line: "1000.0" }
+    assert.deepEqual(channelTagState(older, { nightly: "1000.1.0-nightly.20261018.3" }), { tag: "nightly-1000-0", confirmed: false })
+    assert.deepEqual(channelTagState(older, { nightly: "1000.1.0-nightly.3", "nightly-1000-0": older.version }), {
+        tag: "nightly-1000-0",
+        confirmed: true,
+    })
+    // A candidate prepared against the older numbered nightly 15 accepts the dated nightly that published meanwhile
+    const baseline = (value) => ({ ...dated, contentFingerprint: "new", baseline: value && { version: value } })
+    const fingerprints = { "1000.0.0-nightly.15": "old", "1000.0.0-nightly.20261019.15": "other" }
+    const check = (candidate, npmVersions) =>
+        assertPublishBaseline(candidate, npmVersions, async (version) => fingerprints[version])
+    await check(baseline("1000.0.0-nightly.15"), ["1000.0.0-nightly.15", "1000.0.0-nightly.20261019.15"])
+    assert.equal(
+        selectBaseline({ npmVersions: ["1000.0.0-nightly.15", "1000.0.0-nightly.20261019.2"], ...dated }),
+        "1000.0.0-nightly.20261019.2",
+    )
+    assert.throws(
+        () => selectBaseline({ npmVersions: ["1000.0.0-nightly.15", "1000.0.0-nightly.20261020.1"], ...dated }),
+        /newer version/,
+    )
 })
 
 test("Publication accepts a nightly baseline that advanced since preparation, but never another changed baseline", async () => {

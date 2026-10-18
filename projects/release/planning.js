@@ -3,31 +3,75 @@
 // Channels a version pull request can select. Nightly versions are computed at preparation and never committed
 export const channels = ["rc", "stable"]
 
+/**
+ * Checks a nightly build date: eight digits that name a real calendar date from year 1000 on, so the version has no
+ * leading zero. The date is the UTC day of the nightly's preparation, so overlapping and later runs sort by day before their run number
+ * @param {unknown} date
+ * @returns {string}
+ */
+export function assertNightlyDate(date) {
+    if (typeof date !== "string" || !/^\d{8}$/.test(date)) throw new Error("A nightly needs a build date as YYYYMMDD")
+    const year = Number(date.slice(0, 4))
+    const month = Number(date.slice(4, 6))
+    const day = Number(date.slice(6))
+    const real = new Date(Date.UTC(year, month - 1, day))
+    if (year < 1000 || real.getUTCFullYear() !== year || real.getUTCMonth() !== month - 1 || real.getUTCDate() !== day)
+        throw new Error("A nightly build date must be a real calendar date")
+    return date
+}
+
+/**
+ * Formats the UTC calendar date of a timestamp as YYYYMMDD, the nightly build date of a preparation that ran then
+ * @param {string} timestamp
+ */
+export function nightlyDateOf(timestamp) {
+    const time = Date.parse(timestamp)
+    if (Number.isNaN(time)) throw new Error("A nightly build date needs a valid timestamp")
+    return new Date(time).toISOString().slice(0, 10).replaceAll("-", "")
+}
+
+// A nightly is `core-nightly.YYYYMMDD.RUN`. Older nightlies have only `core-nightly.RUN`, and both stay readable.
 // Canary is retired, but its published versions must stay readable in registry and GitHub inventories
 export function parseVersion(version) {
-    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(canary|nightly|rc)\.(0|[1-9]\d*))?$/.exec(version)
+    const match =
+        /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(canary|nightly|rc)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?)?$/.exec(version)
     if (!match) throw new Error("Release version must use numeric SemVer with a nightly, rc or canary suffix")
     const [major, minor, patch] = match.slice(1, 4).map(Number)
-    const number = match[5] === undefined ? undefined : Number(match[5])
-    if (![major, minor, patch, number ?? 0].every(Number.isSafeInteger))
+    const channel = match[4] ?? "stable"
+    const identifiers = match.slice(5).filter((value) => value !== undefined).map(Number)
+    if (identifiers.length > 1) {
+        if (channel !== "nightly") throw new Error("Only a nightly version carries a build date")
+        assertNightlyDate(match[5])
+    }
+    if (![major, minor, patch, ...identifiers].every(Number.isSafeInteger))
         throw new Error("Release version exceeds safe integer bounds")
     return {
         major,
         minor,
         patch,
-        channel: match[4] ?? "stable",
-        number,
+        channel,
+        // The numeric prerelease identifiers after the channel name, compared in order like SemVer
+        identifiers,
+        // The run number, which is the last identifier
+        number: identifiers.at(-1),
+        // The nightly build date, absent from older nightlies and from other channels
+        date: identifiers.length > 1 ? match[5] : undefined,
         core: `${major}.${minor}.${patch}`,
         line: `${major}.${minor}`,
     }
 }
 
+// SemVer precedence: the numeric core, then the channel, then prerelease identifiers numerically, where a version with
+// more identifiers sorts higher when every earlier one is equal. A nightly stays below an RC of its core either way
 export function compareVersions(a, b) {
     a = parseVersion(a)
     b = parseVersion(b)
     for (const key of ["major", "minor", "patch"]) if (a[key] !== b[key]) return a[key] - b[key]
     const rank = { canary: 0, nightly: 1, rc: 2, stable: 3 }
-    return rank[a.channel] - rank[b.channel] || (a.number ?? 0) - (b.number ?? 0)
+    if (a.channel !== b.channel) return rank[a.channel] - rank[b.channel]
+    for (let index = 0; index < Math.min(a.identifiers.length, b.identifiers.length); index++)
+        if (a.identifiers[index] !== b.identifiers[index]) return a.identifiers[index] - b.identifiers[index]
+    return a.identifiers.length - b.identifiers.length
 }
 
 export function highestBump(types) {
@@ -128,9 +172,11 @@ export function planVersion({
 }
 
 /**
- * Plans a nightly version without changing the source. Its core is the version the next RC would target, and its
- * number is the preparation run's number, which only grows, so concurrent runs never pick the same version
- * @param {{ currentVersion: string, pendingTypes?: string[], releaseTypes?: string[], releaseBase?: string | null, npmVersions: string[], number?: number }} options
+ * Plans a nightly version without changing the source. Its core is the version the next RC would target. The rest is
+ * `nightly.DATE.NUMBER`, with the UTC date of the preparation as YYYYMMDD and the run's number. Builds sort by
+ * day first, the run number only grows, and concurrent runs never pick the same version. The version must sort above
+ * every published nightly of the core, whether that nightly uses this form or the older `nightly.NUMBER`
+ * @param {{ currentVersion: string, pendingTypes?: string[], releaseTypes?: string[], releaseBase?: string | null, npmVersions: string[], date?: string, number?: number }} options
  */
 export function planNightly({
     currentVersion,
@@ -138,11 +184,13 @@ export function planNightly({
     releaseTypes = pendingTypes,
     releaseBase,
     npmVersions,
+    date,
     number,
 }) {
     if (!Array.isArray(npmVersions)) throw new Error("Registry version inventory is unavailable")
-    if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 0)
-        throw new Error("A nightly needs a whole build number")
+    assertNightlyDate(date)
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1)
+        throw new Error("A nightly needs a positive whole run number")
     const target = planVersion({
         currentVersion,
         channel: "rc",
@@ -152,16 +200,16 @@ export function planNightly({
         allowNoChanges: true,
     })
     const { core } = parseVersion(target.version)
-    const newest = Math.max(
-        -1,
-        ...npmVersions
-            .map((value) => parseVersion(value))
-            .filter((item) => item.channel === "nightly" && item.core === core)
-            .map((item) => item.number ?? 0),
-    )
-    if (number <= newest)
-        throw new Error(`Nightly build number ${number} must be above the published ${core}-nightly.${newest}`)
-    const version = `${core}-nightly.${number}`
+    const version = `${core}-nightly.${date}.${number}`
+    const newest = npmVersions
+        .filter((value) => {
+            const item = parseVersion(value)
+            return item.channel === "nightly" && item.core === core
+        })
+        .sort(compareVersions)
+        .at(-1)
+    if (newest !== undefined && compareVersions(version, newest) <= 0)
+        throw new Error(`Nightly ${version} must be above the published ${newest}`)
     return { currentVersion, version, channel: "nightly", line: parseVersion(version).line }
 }
 

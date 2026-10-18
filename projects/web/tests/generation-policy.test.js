@@ -24,7 +24,7 @@ test("Public generation without a published snapshot fails before replacing exis
 test("Nightly snapshots name their version and list pending notes above the release history", async () => {
     const output = await mkdtemp(join(tmpdir(), "fluxerly-nightly-docs-"))
     if (dirname(resolve(output)) !== resolve(tmpdir())) throw new Error("Unexpected nightly fixture directory")
-    const version = "1000.1.0-nightly.3"
+    const version = "1000.1.0-nightly.20261019.3"
     const source = await readFile(join(webRoot, "../sdk/CHANGELOG.md"), "utf8")
     const [title] = source.split("\n", 1)
     // The released history starts at the first version heading below the title

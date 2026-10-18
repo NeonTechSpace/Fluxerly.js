@@ -64,7 +64,7 @@ test("Existing rolling-channel and Stable exact-version pages delegate without r
 
 test("Numbered prerelease paths return 404 without channel or latest fallback", async () => {
     // Retired Canary paths stay unpublished alongside the current prerelease channels
-    for (const channel of ["canary", "nightly", "rc"]) for (const suffix of [
+    for (const channel of ["canary", "nightly", "nightly.20261019", "rc"]) for (const suffix of [
         "", "/", "/quick-start?from=link", "/space%20guide#section", "/api/interfaces/Client",
         "/missing", "/%ZZ", "/%252Fquick-start", "//quick-start",
     ]) for (const method of ["GET", "HEAD"]) {
@@ -103,7 +103,7 @@ test("Unpublished routes return 404 even when asset storage still has the delete
     const staleAssets = { ASSETS: { fetch() { reads++; return new Response("Stale withdrawn content", { status: 200 }) } } }
     for (const path of ["/docs/latest/migration/", "/docs/rc/migration", "/docs/nightly/migration/",
         "/docs/preview/migration/", "/docs/1000.0.0/migration/", "/docs/1.2.3-canary.4/quick-start/",
-        "/docs/1.2.3-nightly.4/quick-start/", "/docs/1.2.3-rc.4/quick-start/",
+        "/docs/1.2.3-nightly.4/quick-start/", "/docs/1.2.3-nightly.20261019.4/quick-start/", "/docs/1.2.3-rc.4/quick-start/",
         "/docs/latest/%6Digration/", "/docs/1.2.3-rc.4/%ZZ"]) {
         const response = await handler.fetch(request(path), staleAssets)
         assert.equal(response.status, 404, path)
@@ -206,6 +206,7 @@ test("Hosting artifacts inventory emitted pages and run independently of source 
         assert.equal((await emitted.fetch(request("/docs/1000.0.0/old-guide"), assets)).headers.get("location"), null)
         assert.equal((await emitted.fetch(request("/docs/1000.0.0-canary.7/quick-start?old=1"), assets)).status, 404)
         assert.equal((await emitted.fetch(request("/docs/1000.0.0-nightly.7/quick-start"), assets)).status, 404)
+        assert.equal((await emitted.fetch(request("/docs/1000.0.0-nightly.20261019.7/quick-start"), assets)).status, 404)
         assert.equal((await emitted.fetch(request("/docs/canary/quick-start"), assets)).headers.get("location"), "/docs/1000.0.1/quick-start/")
         assert.equal((await emitted.fetch(request("/docs/nightly/missing"), assets)).headers.get("location"), "/docs/nightly/")
         assert.equal((await emitted.fetch(request("/docs/1000.0.0-rc.7/quick-start"), assets)).status, 404)

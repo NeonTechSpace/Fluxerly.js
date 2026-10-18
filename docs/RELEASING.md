@@ -30,7 +30,11 @@ It also publishes nothing when the content matches the published RC or Stable of
 Pending Changesets notes appear as unreleased changes in the nightly's release notes and docs changelog, and they stay pending for the next RC or Stable.
 To publish a nightly sooner, dispatch Release prepare from `main` with `nightly` selected. A nightly always builds the commit the workflow runs from and ignores `source_ref`
 
-Overlapping nightly runs get different versions, because each nightly number is its preparation run number.
+A nightly version is `CORE-nightly.YYYYMMDD.N`, such as `1000.0.0-nightly.20261019.16`.
+The `YYYYMMDD` part is the UTC date of the Release prepare run's preparation step and `N` is that run's number.
+The date comes first so builds sort by day, and the run number then keeps them from ever repeating.
+Overlapping nightly runs get different versions, because each run number is different.
+Nightly versions published before this format use `CORE-nightly.N`. They stay valid and sort below every dated nightly of the same core, and every nightly sorts below the RC of its core.
 A nightly whose content matches one published meanwhile stops without publishing.
 When a pending major or minor note is removed, the next nightly's version can drop below the newest nightly. It then publishes under a staging tag such as `nightly-1000-1`, while the `nightly` tag and `/docs/nightly/` keep the higher build until a later nightly passes it. The [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags) can point `nightly` at the newer build
 
@@ -130,7 +134,8 @@ Whenever an RC of the same version is published, Stable must match the newest on
 
 Nightly builds are exempt from these rules.
 A nightly needs no RC, is never blocked by a pending RC and has no content to match.
-Each nightly number is the preparation workflow's run number.
+A nightly version carries the UTC date of its preparation step and the run number, and it must sort above every published nightly of its core in either form.
+Release version PR and RC or Stable preparation read every published version with the selected source's release tooling, so once a dated nightly is published, the source must include dated nightly support.
 If a later nightly publishes first, the earlier one stops without publishing.
 A nightly publishes under the `nightly` tag without moving `latest` or `rc`
 
@@ -214,7 +219,7 @@ Run these from [projects/](/projects/). The status, verify and publish commands 
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm release:plan --channel CHANNEL` | Show the source-only version proposal without comparing registry bytes |
+| `pnpm release:plan --channel CHANNEL` | Show the source-only version proposal without comparing registry bytes. A nightly plan also reads the registry version list and requires `--date YYYYMMDD` and `--number RUN`, with no default, so a plan never silently uses another day |
 | `pnpm release:inspect CANDIDATE_DIRECTORY` | Check local candidate contents only |
 | `pnpm release:status CANDIDATE_DIRECTORY --checksum SHA256` | Report `published`, `missing` or `different` for the served bytes, plus the distribution tags |
 | `pnpm release:verify CANDIDATE_DIRECTORY --checksum SHA256` | Fail unless npm serves the reviewed bytes |

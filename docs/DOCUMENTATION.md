@@ -155,7 +155,7 @@ The local `/docs/preview/` preview is regenerated from the current SDK build and
 Released docs come from retained snapshots, not the latest declarations relabeled with an old version
 
 Snapshot creation (`projects/web/scripts/snapshot.js`) requires a prepared release version and clean reviewed source checkout.
-A nightly snapshot instead receives its planned nightly version through `--nightly VERSION` and adds the pending Changesets notes to its changelog as unreleased changes.
+A nightly snapshot instead receives its planned nightly version, such as `1000.0.0-nightly.20261019.16`, through `--nightly VERSION` and adds the pending Changesets notes to its changelog as unreleased changes.
 It records the exact version, source commit and generated Markdown and metadata.
 Schema 2 snapshots write documentation links as `/docs/{{version}}/`, filled with each served path. Schema 1 snapshots keep exact-version links, which rolling channels rebase outside code.
 Build-time Markdown transforms list the schemas they read in the [schema registry](/projects/web/scripts/transform-schemas.js). A change to generated syntax needs a new schema while retained snapshots stay readable.

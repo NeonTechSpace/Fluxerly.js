@@ -79,7 +79,9 @@ jobs:
         env:
           RELEASE_LINE: ${{ inputs.line }}
           RELEASE_NIGHTLY: ${{ github.event_name == 'schedule' || inputs.nightly }}
-          # The run number only grows, so overlapping nightly runs never plan the same version
+          # A nightly version is the UTC date of this preparation, then the run number. The number only grows, so
+          # overlapping nightly runs never plan the same version. The github context has no run start time, so the step
+          # reads the date itself
           RELEASE_NIGHTLY_NUMBER: ${{ github.run_number }}
         run: |
           node --input-type=module <<'NODE'
@@ -97,7 +99,10 @@ jobs:
           const args = ['release:prepare', '--output', directory, '--docs', docs]
           if (nightly) {
             // The nightly version exists only in the candidate, so the docs snapshot receives it from the plan
-            const number = ['--number', process.env.RELEASE_NIGHTLY_NUMBER]
+            // Planning and preparation read the same date, so a run that crosses midnight UTC still plans one version.
+            // The helper loads only here, because an RC or Stable source from before dated nightlies lacks it
+            const { nightlyDateOf } = await import('./release/planning.js')
+            const number = ['--date', nightlyDateOf(new Date().toISOString()), '--number', process.env.RELEASE_NIGHTLY_NUMBER]
             const plan = execFileSync('pnpm', ['release:plan', '--channel', 'nightly', ...number], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 120000 })
             snapshot.push('--nightly', JSON.parse(plan.trim().split('\n').at(-1)).version)
             args.push('--channel', 'nightly', ...number)

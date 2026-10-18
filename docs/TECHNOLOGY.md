@@ -49,7 +49,7 @@ The release suffix describes readiness, independently of compatibility changes
 
 | Suffix | Meaning |
 | --- | --- |
-| `-nightly.N` | Automatic build of `main`, published daily when the SDK changed. It can include breaking changes at any time |
+| `-nightly.YYYYMMDD.N` | Automatic build of `main`, published daily when the SDK changed. It can include breaking changes at any time |
 | `-rc.N` | Release candidate for the next Stable, with no known release blockers, under final validation. It can still include breaking changes |
 | No suffix | Stable release supported for public use |
 
@@ -64,7 +64,7 @@ A patch or minor release can go straight to Stable. A new major version or epoch
 While an RC is waiting for Stable, no other Stable at or above its version can be published.
 [Release stages](/docs/RELEASING.md#release-stages) lists the exact rules
 
-A nightly version is never committed. Its core is the version the next RC would target, and its number is the build's run number, such as `1000.1.0-nightly.57`. Numbers only grow but can skip values.
+A nightly version is never committed. Its core is the version the next RC would target, and the rest is the UTC date of its preparation followed by the preparing run's number, such as `1000.1.0-nightly.20261019.57`. The date comes first so builds sort by day, and run numbers only grow but can skip values. A nightly's core can still drop, for example when a pending minor note is removed. Nightly versions from before this format use `-nightly.N` and sort below every dated nightly of their core.
 Nightly builds sit outside the RC and Stable rules, so they never block or wait for another release
 
 The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
@@ -73,7 +73,7 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 | --- | --- |
 | First release candidate | `1000.0.0-rc.0` |
 | First stable release | `1000.0.0` |
-| Nightly build after the first stable release | `1000.0.1-nightly.57` |
+| Nightly build after the first stable release | `1000.0.1-nightly.20261019.57` |
 | Compatible bug fix | `1000.0.1` |
 | Compatible feature | `1000.1.0` |
 | Breaking API change within Epoch 1 | `1001.0.0` |

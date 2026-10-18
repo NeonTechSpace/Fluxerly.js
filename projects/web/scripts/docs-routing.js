@@ -1,5 +1,6 @@
 // This module is also emitted into the Cloudflare Pages worker
-const prereleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:canary|nightly|rc)\.(?:0|[1-9]\d*)$/
+// A nightly is nightly.RUN or nightly.YYYYMMDD.RUN, and the other channels have one number
+const prereleaseVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:(?:canary|rc)\.(?:0|[1-9]\d*)|nightly\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?)$/
 function unpublishedDocsPath(path) {
     let decoded
     try { decoded = decodeURIComponent(path) } catch { decoded = path }
