@@ -33,7 +33,7 @@ import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
 import { nowMs } from "./clock.js"
 import type { ClientLogger } from "./logging.js"
-import { editDistance, unsupportedKeyHint } from "./suggest.js"
+import { closestMatch, unsupportedKeyHint } from "./suggest.js"
 import { identifyCommand } from "./events.js"
 
 const commandName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
@@ -263,12 +263,12 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
         })
         const parsed = this.#options.parse === undefined ? defaultParse(input) : this.#options.parse(input)
         if (parsed === undefined || isParseRejection(parsed)) {
-            const reason = parsed === undefined ? undefined : copyParseRejection(parsed)
+            const rejection = parsed === undefined ? undefined : copyParseRejection(parsed)
             return Object.freeze({
                 prefix,
                 unmatched: Object.freeze({
                     _tag: "CommandParserRejected",
-                    ...(reason === undefined ? {} : { reason }),
+                    ...rejection,
                     ...grouped,
                 }),
             })
@@ -336,19 +336,14 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
      * registration. Hidden entries and entries inside hidden groups are never suggested
      */
     private closestName(parent: readonly string[], name: string): string | undefined {
-        const wanted = this.normalize(name)
-        const limit = wanted.length <= 4 ? 1 : 2
-        let best: { readonly name: string; readonly distance: number } | undefined
+        const candidates: (readonly [string, string])[] = []
         for (const entry of this.visibleEntries) {
             const path = entry.path ?? [entry.name]
             if (!sameCommandPath(path.slice(0, -1), parent)) continue
-            for (const candidate of [entry.name, ...(entry.aliases ?? [])]) {
-                const distance = editDistance(wanted, this.normalize(candidate), limit)
-                if (distance <= limit && (best === undefined || distance < best.distance))
-                    best = { name: entry.name, distance }
-            }
+            for (const candidate of [entry.name, ...(entry.aliases ?? [])])
+                candidates.push([this.normalize(candidate), entry.name])
         }
-        return best?.name
+        return closestMatch(this.normalize(name), candidates)
     }
 
     private matchPrefix(message: M, resolved: unknown): string | undefined {
@@ -1132,17 +1127,24 @@ export function sameCommandPath(left: readonly string[], right: readonly string[
     return left.length === right.length && left.every((name, index) => name === right[index])
 }
 
-/** A parser result with a reason and no name, which declines the text with an explanation instead of naming a command */
+/** A parser result with a reason and no arguments, which declines the text with an explanation instead of naming a command to run */
 function isParseRejection(value: unknown): value is PrefixCommandParseRejection {
-    return typeof value === "object" && value !== null && "reason" in value && !("name" in value)
+    return (
+        typeof value === "object" && value !== null && "reason" in value && !("args" in value) && !("rawArgs" in value)
+    )
 }
 
-function copyParseRejection(value: PrefixCommandParseRejection): string {
-    validateObjectShape(value, ["reason"], "parser", "parser rejection")
-    const reason = value.reason
+function copyParseRejection(value: PrefixCommandParseRejection): {
+    readonly reason: string
+    readonly name?: string
+} {
+    validateObjectShape(value, ["reason", "name"], "parser", "parser rejection")
+    const { reason, name } = value
     if (typeof reason !== "string" || reason.length === 0)
         throw new ConfigurationError("parser", "A parser rejection must have a nonempty string reason")
-    return reason
+    if (name !== undefined && !isCommandName(name))
+        throw new ConfigurationError("parser", "A parser rejection's name must be a valid command name")
+    return name === undefined ? { reason } : { reason, name }
 }
 
 function copyParse(value: PrefixCommandParse): PrefixCommandParse {

@@ -65,10 +65,10 @@ export const permissionBits: PermissionBitHelpers = sharedPermissionBits
 export const colors: ColorHelpers = sharedColors
 
 /**
- * Split a string into frozen pieces without dropping or changing its text.
- * The maxLength option counts UTF-16 code units, as JavaScript string.length does.
- * The pieces are returned directly, and invalid text or options throw HelperError.
- * This helper neither sends the pieces nor repairs Markdown split across them
+ * Split a string into frozen pieces without dropping or changing its text, or truncate it to a length with a marker.
+ * The maxLength option of split and truncate counts UTF-16 code units, as JavaScript string.length does.
+ * The pieces or the truncated string are returned directly, and invalid text or options throw HelperError.
+ * These helpers neither send the result nor repair Markdown cut by it
  *
  * @category Builders and formatting
  */

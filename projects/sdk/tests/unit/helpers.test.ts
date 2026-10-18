@@ -126,6 +126,102 @@ for (const [mode, api] of apis) {
             })
     })
 
+    test(`${mode}: label gives Fluxer's name for every permission and rejects unknown names`, () => {
+        const names = Object.keys(api.Permissions) as defaultApi.PermissionName[]
+        const labels = names.map((name) => api.permissionBits.label(name))
+        // Every permission has its own label
+        expect(new Set(labels).size).toBe(names.length)
+        expect(api.permissionBits.label("ManageGuild")).toBe("Manage community")
+        expect(api.permissionBits.label("ModerateMembers")).toBe("Time out members")
+        expect(api.permissionBits.label("UseVad")).toBe("Use voice activity")
+        expect(api.permissionBits.label("SendTtsMessages")).toBe("Send TTS messages")
+        expect(api.permissionBits.label("MentionEveryone")).toBe("Use @everyone/@here and @roles")
+        expect(api.permissionBits.label("ManageExpressions")).toBe("Manage emoji & stickers")
+        expect(api.permissionBits.label("UpdateRtcRegion")).toBe("Set voice region")
+        for (const name of ["NotAPermission", "toString", 7, undefined])
+            expect(thrown(() => api.permissionBits.label(name as never))).toMatchObject({
+                _tag: "HelperError",
+                operation: "permissionBits.label",
+                reason: "permissionBits",
+            })
+    })
+
+    test(`${mode}: patchOverwrite changes only the named permissions and keeps every other bit`, () => {
+        const { Permissions } = api
+        const send = Permissions.SendMessages
+        const react = Permissions.AddReactions
+        const view = Permissions.ViewChannel
+        const unknown = (1n << 62n) | (1n << 63n)
+        // A missing overwrite counts as nothing allowed or denied
+        expect(api.permissionBits.patchOverwrite(undefined, { allow: ["SendMessages"] })).toEqual({
+            allow: send,
+            deny: 0n,
+        })
+        expect(api.permissionBits.patchOverwrite(undefined, {})).toEqual({ allow: 0n, deny: 0n })
+        const current = { allow: send | view | unknown, deny: react }
+        // Allowing clears the deny, denying clears the allow, and inheriting clears both
+        expect(api.permissionBits.patchOverwrite(current, { allow: ["AddReactions"] })).toEqual({
+            allow: send | view | react | unknown,
+            deny: 0n,
+        })
+        expect(api.permissionBits.patchOverwrite(current, { deny: ["SendMessages"] })).toEqual({
+            allow: view | unknown,
+            deny: react | send,
+        })
+        expect(
+            api.permissionBits.patchOverwrite(current, { inherit: ["SendMessages", "AddReactions", "ViewChannel"] }),
+        ).toEqual({ allow: unknown, deny: 0n })
+        // Lists combine, duplicates within a list are harmless, and an empty change returns the same bits
+        expect(
+            api.permissionBits.patchOverwrite(current, {
+                allow: ["AddReactions", "AddReactions"],
+                deny: ["ViewChannel"],
+                inherit: ["SendMessages"],
+            }),
+        ).toEqual({ allow: react | unknown, deny: view })
+        expect(api.permissionBits.patchOverwrite(current, { allow: [], deny: [], inherit: [] })).toEqual(current)
+        // The input is not changed, and the result is frozen
+        const result = api.permissionBits.patchOverwrite(current, { deny: ["SendMessages"] })
+        expect(current).toEqual({ allow: send | view | unknown, deny: react })
+        expect(Object.isFrozen(result)).toBe(true)
+        // Extra fields of an overwrite as read are ignored
+        expect(
+            api.permissionBits.patchOverwrite({ id: "5", type: "role", allow: 0n, deny: 0n } as never, {
+                deny: ["SendMessages"],
+            }),
+        ).toEqual({ allow: 0n, deny: send })
+    })
+
+    test(`${mode}: patchOverwrite rejects ambiguous or invalid input with a HelperError`, () => {
+        const patch = api.permissionBits.patchOverwrite
+        const rejected: unknown[][] = [
+            // One permission in two lists
+            [undefined, { allow: ["SendMessages"], deny: ["SendMessages"] }],
+            [undefined, { allow: ["SendMessages"], inherit: ["SendMessages"] }],
+            [undefined, { deny: ["SendMessages"], inherit: ["SendMessages"] }],
+            // Unknown names and lists, and keys that the change does not have
+            [undefined, { allow: ["NotAPermission"] }],
+            [undefined, { deny: "SendMessages" }],
+            [undefined, { allows: ["SendMessages"] }],
+            [undefined, undefined],
+            [undefined, null],
+            [undefined, [["SendMessages"]]],
+            // A current overwrite outside the unsigned 64-bit range or of the wrong type
+            [{ allow: -1n, deny: 0n }, {}],
+            [{ allow: 0n, deny: 1n << 64n }, {}],
+            [{ allow: 1, deny: 0n }, {}],
+            [{ allow: 0n }, {}],
+            [null, {}],
+            ["overwrite", {}],
+        ]
+        for (const args of rejected)
+            expect(thrown(() => (patch as (...values: unknown[]) => unknown)(...args))).toMatchObject({
+                _tag: "HelperError",
+                operation: "permissionBits.patchOverwrite",
+                reason: "permissionBits",
+            })
+    })
+
     test(`${mode}: applies display, named permissions, decimal serialization, and hosted guild/direct-message link contracts`, () => {
         expect(api.display.name({ username: "user", displayName: "Display" })).toBe("Display")
         expect(api.display.name({ username: "user", displayName: null }, { nickname: "Guild name" })).toBe("Guild name")

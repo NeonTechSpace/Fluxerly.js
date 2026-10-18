@@ -62,6 +62,8 @@ Every SDK error extends `FluxerlyError` with a stable `code`, an optional fix `h
 - Readable text: The `describeError(error)` function prints the code, hint and cause chain
 - Safe retries: The `errors.isRetryable(error)` function says whether repeating the same call is safe
 - Fluxer's reason: The `errors.apiCode(error)` function returns Fluxer's error code name, such as `"missingPermissions"`, or `undefined`
+- Request reach: The `errors.outcome(error)` function returns `"notDispatched"`, `"rejected"` or `"unknown"`, or `undefined` when the SDK cannot establish it, such as for cancellation. Only `"notDispatched"` shows that a write was not sent, so treat any other value, including `undefined`, as a write that may have applied and check remote state before repeating it
+- Missing resource: The `errors.isNotFound(error, "member")` function is true for an HTTP 404, and with a resource name only when Fluxer named that resource as the missing one. A 404 does not say why, because Fluxer answers `UNKNOWN_CHANNEL` for a missing channel and also for message and reaction requests in a thread from a bot that is no longer in the community, while other requests from such a bot get a 403 `missingPermissions`
 - Missing permissions: For `"missingPermissions"`, `error.details.requiredPermissions` lists the permissions Fluxer checks for the failed operation, such as `ViewChannel` and `SendMessages`, when the SDK knows them
 - Branching: The `errors.match(error, handlers)` function calls the handler named by the error's `_tag`
 

@@ -921,6 +921,32 @@ test.each(modes)(
     },
 )
 
+test.each(modes)(
+    "%s a shutdown while the private conversation opens reports the message as not dispatched",
+    async (mode) => {
+        const opening = Promise.withResolvers<void>()
+        const paths: string[] = []
+        rest((url, init) => {
+            paths.push(new URL(url).pathname)
+            opening.resolve()
+            return new Promise<Response>((_resolve, reject) =>
+                init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+            )
+        })
+        const api = await setup(mode)
+        const pending = api.send("30", { content: "fixture" }).catch((error: unknown) => error)
+        await opening.promise
+        await api.close()
+        // Opening the conversation is preparation, so the message itself was never sent
+        expect(await pending).toMatchObject({
+            _tag: "ClientClosedError",
+            outcome: "notDispatched",
+            details: { outcome: "notDispatched" },
+        })
+        expect(paths).toEqual(["/v1/users/@me/channels"])
+    },
+)
+
 test.each(modes)("%s delivers complete private events and resolves cache conflicts before handlers", async (mode) => {
     const dispatch = await gateway()
     rest(async (url) => {

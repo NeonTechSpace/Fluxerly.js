@@ -17,6 +17,7 @@ import {
     type RgbColor,
     type PermissionBitInspection,
     type TextSplitOptions,
+    type TextTruncateOptions,
     hierarchy,
     ChannelType,
     Permissions,
@@ -376,6 +377,7 @@ export const pureHelperTypes = (bits: bigint) =>
         const input: ColorInput = [255, 136, 0]
         const rgb: RgbColor = [255, 136, 0]
         const options: TextSplitOptions = { maxLength: 2_000 }
+        const truncation: TextTruncateOptions = { maxLength: 100, suffix: "..." }
         const snapshot: PermissionBitInspection = permissionBits.inspect(bits)
         // @ts-expect-error Inspection names are immutable
         snapshot.names.push("ManageRoles")
@@ -389,6 +391,7 @@ export const pureHelperTypes = (bits: bigint) =>
             hex: colors.toHex(0xff8800),
             rgb: colors.toRgb(0xff8800),
             chunks: text.split("text", options),
+            title: text.truncate("text", truncation),
         }
     })
 
@@ -457,6 +460,9 @@ export function optionalCommandTypes(client: Client) {
         })
         const listing: readonly PrefixCommandMetadata[] = extended.commands
         const parsed = commands.parseQuoted({ message: null as never, prefix: "!", source: 'service "two words"' })
+        const closest: string | undefined = commands.suggest("pnig", ["ping", "help"])
+        const minutes: number | undefined = commands.parseArgument("5m", { type: "duration" })
+        void [closest, minutes]
         const originalAttachment: Effect.Effect<unknown, unknown> = Effect.scoped(original.attach(client))
         void originalAttachment
         const needsService = Effect.scoped(extended.attach(client))

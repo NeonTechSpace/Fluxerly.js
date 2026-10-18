@@ -219,6 +219,14 @@ const cases: readonly Case[] = [
     option("members.addRole", (api, o) => api.members.addRole(member, "40", o)),
     option("members.removeRole", (api, o) => api.members.removeRole(member, "40", o)),
     option("permissions.fetch", (api, o) => api.permissions.fetch(member, o)),
+    {
+        name: "permissions.fetch preferCache",
+        target: "client",
+        call: (api) => api.permissions.fetch(member, { preferCahce: true }),
+        path: "options",
+        key: "preferCahce",
+        suggestion: "preferCache",
+    },
     option("roles.setHoistPositions", (api, o) =>
         api.roles.setHoistPositions(guildId, [{ id: "40", hoistPosition: 1 }], o),
     ),

@@ -3,9 +3,10 @@ import { operationErrorMessage } from "./api-errors.js"
 import { err, ok, type Result } from "neverthrow"
 import { Permissions } from "./guilds.js"
 import type { GuildMember } from "./guilds.js"
-import type { GuildChannel } from "./channels.js"
+import type { GuildChannel, PermissionOverwrite } from "./channels.js"
 import type { DirectMessageChannel, User } from "./users.js"
 import type { MessageReference } from "./messages.js"
+import { permissionLabel } from "./internal/permission-labels.js"
 import { guildShardId, maximumShardCount } from "./internal/sharding.js"
 
 const snowflakeEpochMs = 1_420_070_400_000n
@@ -160,10 +161,14 @@ export class HelperError extends FluxerlyError {
             | "permissionBits.missing"
             | "permissionBits.inspect"
             | "permissionBits.toDecimal"
+            | "permissionBits.label"
+            | "permissionBits.patchOverwrite"
             | "colors.parse"
             | "colors.toHex"
             | "colors.toRgb"
             | "text.split"
+            | "text.truncate"
+            | "errors.isNotFound"
             | "links.channel"
             | "links.message"
             | "links.installation"
@@ -171,7 +176,16 @@ export class HelperError extends FluxerlyError {
             | "embed.timestamp",
         /** Invalid input category, without retaining the rejected value */
         readonly reason:
-            "id" | "markup" | "time" | "permissionBits" | "link" | "color" | "text" | "limit" | "shardCount",
+            | "id"
+            | "markup"
+            | "time"
+            | "permissionBits"
+            | "link"
+            | "color"
+            | "text"
+            | "limit"
+            | "shardCount"
+            | "resource",
         /** Optional underlying failure retained as the error's cause */
         options?: { readonly cause?: unknown },
     ) {
@@ -215,6 +229,8 @@ function helperExplanation(operation: HelperError["operation"], reason: HelperEr
             if (operation === "format.timestamp") return "The Date must be valid and after the Unix epoch"
             return "The Date must be valid"
         case "permissionBits":
+            if (operation === "permissionBits.patchOverwrite")
+                return "The current overwrite must be undefined or hold allow and deny as bigints from 0 through 18,446,744,073,709,551,615, and the change may hold only allow, deny and inherit lists of Permissions keys, with each permission in at most one list"
             return "Permission bits must be a bigint from 0 through 18,446,744,073,709,551,615, and permission names must be keys of Permissions"
         case "link":
             if (operation === "links.installation")
@@ -229,9 +245,13 @@ function helperExplanation(operation: HelperError["operation"], reason: HelperEr
         case "text":
             return "Text must be a well-formed string without unpaired surrogates"
         case "limit":
+            if (operation === "text.truncate")
+                return "Truncate options must be an object with only maxLength, a positive safe integer, and an optional suffix, a well-formed string of at most maxLength units"
             return "Split options must be an object with only maxLength, a positive safe integer of at least 2 when the text contains surrogate pairs"
         case "shardCount":
             return "The total shard count must be an integer from 1 through 16,384"
+        case "resource":
+            return 'The resource must be one of the NotFoundResource names, such as "channel" or "message"'
     }
 }
 
@@ -254,6 +274,21 @@ export interface PermissionBitInspection {
     readonly unknownBits: bigint
 }
 
+/**
+ * Changes for permissionBits.patchOverwrite: Which permissions to allow, deny or return to inheritance.
+ * Every list is optional, and a permission may appear in at most one of them
+ *
+ * @category Roles and permissions
+ */
+export interface OverwritePatch {
+    /** Permissions to allow, which also stops denying them */
+    readonly allow?: readonly PermissionName[]
+    /** Permissions to deny, which also stops allowing them */
+    readonly deny?: readonly PermissionName[]
+    /** Permissions to neither allow nor deny, so the role's or member's other permissions decide */
+    readonly inherit?: readonly PermissionName[]
+}
+
 const permissionNames = Object.freeze(Object.keys(Permissions) as PermissionName[])
 const knownPermissionBits = Object.values(Permissions).reduce((bits, flag) => bits | flag, 0n)
 
@@ -273,6 +308,41 @@ function namedPermissions(
         bits |= Permissions[name as PermissionName]
     }
     return ok(bits)
+}
+
+const patchKeys = ["allow", "deny", "inherit"] as const
+
+function patchedOverwrite(
+    current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+    change: OverwritePatch,
+): Result<Readonly<Pick<PermissionOverwrite, "allow" | "deny">>, HelperError> {
+    const operation = "permissionBits.patchOverwrite"
+    if (typeof change !== "object" || change === null || Array.isArray(change))
+        return err(helperError(operation, "permissionBits"))
+    if (Object.keys(change).some((key) => !patchKeys.includes(key as (typeof patchKeys)[number])))
+        return err(helperError(operation, "permissionBits"))
+    // Read each caller field once, so the validated lists are the ones applied
+    const lists = [change.allow, change.deny, change.inherit]
+    const [allowed, denied, inherited] = lists.map((names) =>
+        names === undefined ? ok(0n) : namedPermissions(names, operation),
+    )
+    if (allowed!.isErr()) return err(allowed!.error)
+    if (denied!.isErr()) return err(denied!.error)
+    if (inherited!.isErr()) return err(inherited!.error)
+    const [allow, deny, inherit] = [allowed!.value, denied!.value, inherited!.value]
+    if ((allow & deny) !== 0n || (allow & inherit) !== 0n || (deny & inherit) !== 0n)
+        return err(helperError(operation, "permissionBits"))
+    if (current !== undefined && (typeof current !== "object" || current === null))
+        return err(helperError(operation, "permissionBits"))
+    const before = current === undefined ? { allow: 0n, deny: 0n } : { allow: current.allow, deny: current.deny }
+    if (!validPermissionBits(before.allow) || !validPermissionBits(before.deny))
+        return err(helperError(operation, "permissionBits"))
+    return ok(
+        Object.freeze({
+            allow: (before.allow | allow) & ~(deny | inherit),
+            deny: (before.deny | deny) & ~(allow | inherit),
+        }),
+    )
 }
 
 const timestampStyleValues = new Set<string>(Object.values(TimestampStyles))
@@ -712,6 +782,49 @@ export type PermissionBitHelpers = Readonly<{
      * Throws HelperError for values outside that range
      */
     toDecimal(bits: bigint): string
+    /**
+     * Return the English label that Fluxer's own app shows for a permission, such as "Manage community" for ManageGuild
+     * and "Time out members" for ModerateMembers.
+     * Use it to show a permission to people, because the identifier is not a readable name. The labels are fixed English text
+     * and are not translated.
+     * They are Fluxer's community-scope titles. Inside a channel's permission screen, Fluxer titles ManageChannels
+     * "Manage channel" and ManageRoles "Manage permissions", and every other title is the same there.
+     * Throws HelperError for an unknown permission name
+     */
+    label(name: PermissionName): string
+    /**
+     * Change some permissions of a channel overwrite's allow and deny bits and keep the rest, for channels.setPermissionOverwrite,
+     * which replaces both bit sets.
+     * `current` is the overwrite as read, or undefined when there is none, which counts as nothing allowed or denied.
+     * In `change`, `allow` sets the permissions in allow and clears them from deny, `deny` does the reverse, and
+     * `inherit` clears them from both. Every other bit stays as it was, including bits without a known name.
+     * Returns a frozen object with the new allow and deny.
+     * Throws HelperError when a permission is in more than one list, a name is unknown, `change` has another key or
+     * `current` holds bits outside the unsigned 64-bit range.
+     * An overwrite with both allow and deny at 0n has no effect, so remove it with channels.removePermissionOverwrite.
+     * An overwrite read from Fluxer can carry bit 63, which cannot be written back, and Fluxer can still refuse bits
+     * that the bot itself lacks
+     *
+     * @example
+     * ```ts
+     * import { permissionBits, type Client, type PermissionOverwrite } from "@neontechspace/fluxerly"
+     * export async function muteChannelExample(
+     *     client: Client,
+     *     channelId: string,
+     *     current: PermissionOverwrite | undefined,
+     * ) {
+     *     const { allow, deny } = permissionBits.patchOverwrite(current, {
+     *         deny: ["SendMessages", "AddReactions"],
+     *         inherit: ["ViewChannel"],
+     *     })
+     *     return await client.channels.setPermissionOverwrite(channelId, { id: "20", type: "role", allow, deny })
+     * }
+     * ```
+     */
+    patchOverwrite(
+        current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+        change: OverwritePatch,
+    ): Readonly<Pick<PermissionOverwrite, "allow" | "deny">>
 }>
 
 /** Work with sets of named permissions stored in a bigint bitfield, without writing bitwise expressions by hand.
@@ -753,6 +866,15 @@ export const permissionBits: PermissionBitHelpers = Object.freeze({
         if (!validPermissionBits(bits)) throw helperError("permissionBits.toDecimal", "permissionBits")
         return bits.toString()
     },
+    label(name: PermissionName): string {
+        if (typeof name !== "string" || !Object.hasOwn(Permissions, name))
+            throw helperError("permissionBits.label", "permissionBits")
+        return permissionLabel(name)
+    },
+    patchOverwrite: (
+        current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+        change: OverwritePatch,
+    ): Readonly<Pick<PermissionOverwrite, "allow" | "deny">> => valueOrThrow(patchedOverwrite(current, change)),
 })
 
 /**

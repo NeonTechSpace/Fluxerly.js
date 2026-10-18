@@ -38,6 +38,7 @@ import type {
     GuildListQuery,
     GuildOperationOptions,
     CanManageOptions,
+    GuildMember,
     MemberProfileEdit,
     MemberQuery,
     MemberReference,
@@ -48,6 +49,7 @@ import type {
     RolePosition,
     RoleReference,
     TimeoutOptions,
+    TimeoutStateOptions,
     VoiceConnectionReference,
     VoiceDeafenInput,
     VoiceMuteInput,
@@ -97,7 +99,7 @@ import type {
     ThreadSearchQuery,
 } from "#sdk/threads"
 import type { MemberSearchIterationLimits, MemberSearchQuery } from "#sdk/member-search"
-import type { PermissionInput, PermissionTarget } from "#sdk/permissions"
+import type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
 import type { Attachment, AttachmentDownloadOptions, AttachmentRefreshOptions } from "#sdk/attachments"
 import type { ClientOwner } from "#sdk/internal/client"
 import { defaultCacheOnChange, nativeCacheOnChange } from "#sdk/internal/cache-changes"
@@ -188,6 +190,7 @@ import {
     memberVoiceMove,
 } from "#sdk/internal/moderation"
 import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
+import { memberTimeoutState } from "#sdk/internal/timeout-state"
 import { fetchCanManage } from "#sdk/internal/role-hierarchy-workflow"
 import {
     directMessageClose,
@@ -706,6 +709,13 @@ function defineOperations<M extends MessageCore>() {
             clearTimeout: op(1, (owner: Owner, target: MemberReference, options?: TimeoutOptions) =>
                 owner.guild("members.clearTimeout", () => memberTimeout(target, null, options, true), options),
             ),
+            timeoutState: pure(
+                (
+                    owner: Owner,
+                    member: Pick<GuildMember, "communicationDisabledUntil">,
+                    options?: TimeoutStateOptions,
+                ) => memberTimeoutState(member, options, () => owner.logical.clock.currentTimeMillisUnsafe()),
+            ),
             kick: op(1, (owner: Owner, target: MemberReference, options?: ModerationOptions) =>
                 owner.guild("members.kick", () => memberKick(target, options), options),
             ),
@@ -749,7 +759,7 @@ function defineOperations<M extends MessageCore>() {
         },
         permissions: {
             calculate: pure((_owner: Owner, input: PermissionInput) => calculatePermissions(input)),
-            fetch: op(1, (owner: Owner, target: PermissionTarget, options?: GuildOperationOptions) =>
+            fetch: op(1, (owner: Owner, target: PermissionTarget, options?: PermissionFetchOptions) =>
                 fetchPermissions(owner, target, options),
             ),
         },

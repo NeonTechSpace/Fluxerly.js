@@ -164,7 +164,7 @@ export interface MessageCleanupOptions extends MessageOperationOptions {
 export interface DefaultMessageCleanupOptions extends MessageCleanupOptions, OperationOptions {}
 
 /** Expected preview or cleanup failure classification.
- * The reason filter denotes a bad selection callback, closed denotes client closure, and input denotes invalid settings or plan ownership.
+ * The reason filter denotes a bad selection callback, closed denotes client closure, which keeps the outcome of the step it ended, and input denotes invalid settings or plan ownership.
  * Other values preserve the underlying message operation's failure reason
  *
  * @category Errors

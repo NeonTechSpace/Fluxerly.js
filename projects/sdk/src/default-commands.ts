@@ -17,7 +17,14 @@ import type {
     PrefixCommandUnmatched,
     PrefixCommandsOptions,
 } from "#sdk/commands"
-import type { CommandArgumentDescriptor, CommandArgumentSchema, CommandArgumentValues } from "#sdk/command-arguments"
+import type {
+    CommandArgumentCustom,
+    CommandArgumentDescriptor,
+    CommandArgumentParseOptions,
+    CommandArgumentSchema,
+    CommandArgumentValue,
+    CommandArgumentValues,
+} from "#sdk/command-arguments"
 import type { CommandContextHelpOptions, CommandHelpOptions } from "#sdk/command-help"
 import { commandHelp, contextHelpOptions } from "#sdk/internal/command-help"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
@@ -39,7 +46,8 @@ import {
     validateCommandShape,
     checkBotCommandKeys,
 } from "#sdk/internal/commands"
-import { convertCommandArguments } from "#sdk/internal/command-arguments"
+import { convertCommandArguments, parseCommandArgument } from "#sdk/internal/command-arguments"
+import { suggestName } from "#sdk/internal/suggest"
 import type { SendError } from "#sdk/message-errors"
 import type { DefaultSendOptions, Message, MessageCore, ReplyInput, SendOptions } from "#sdk/messages"
 import * as Cause from "effect/Cause"
@@ -220,7 +228,7 @@ export type DefaultPrefixCommandRejectionFeedback<M extends MessageCore = Messag
 export interface DefaultPrefixCommandsOptions<M extends MessageCore = Message> extends PrefixCommandsOptions<M> {
     /**
      * Handle parser declines, unknown names and groups without a subcommand, optionally sending feedback.
-     * An unknown name carries a `suggestion` when a registered name is close, and a parser decline carries a `reason` when the parser explained a syntax mistake, such as an unclosed quote from `commands.parseQuoted`.
+     * An unknown name carries a `suggestion` when a registered name is close, and a parser decline carries a `reason` and the command `name` when the parser explained a syntax mistake, such as an unclosed quote from `commands.parseQuoted`.
      * Return normally or a promise that completes the work. The router does not interpret a successful return value or send a response.
      * The callback runs for every such message and anyone can cause that, so a reply sent from it needs the application's own limit, and in a channel shared with other bots the prefix may belong to a command of another bot.
      * Throws, rejected promises and returned Err results use the attachment's `onError` reporting, without retry.
@@ -475,12 +483,41 @@ export interface DefaultCommands {
     /**
      * Split a suffix using single or double quotes and backslash escapes, retaining original argument text in `rawArgs`.
      * Use as `create({ prefix: "!", parse: commands.parseQuoted })` to opt in instead of the whitespace-only default.
-     * Returns undefined for empty input or invalid names, and a `PrefixCommandParseRejection` with a fixed `reason` for an unclosed quote or a trailing escape, which `onUnmatched` receives. Empty quotes produce an empty token.
+     * Returns undefined for empty input or invalid names, and a `PrefixCommandParseRejection` with a fixed `reason` and the command `name` for an unclosed quote or a trailing escape, which `onUnmatched` receives. A double quote opens a span anywhere. A single quote opens one only at the start of a word and closes unless a letter or digit follows, so `don't` stays literal and `'Yes', 'No'` is `Yes,` and `No`. Empty quotes produce an empty token.
      * Runs synchronously without client or network work
      */
     parseQuoted<M extends MessageCore = Message>(
         input: PrefixCommandParseInput<M>,
     ): PrefixCommandParse | PrefixCommandParseRejection | undefined
+    /**
+     * Name the candidate closest to a misspelled name, such as `commands.suggest("pnig", ["ping", "help"])`, which returns `"ping"`.
+     * This is the rule behind the `suggestion` of `CommandUnknownName`. It agrees with the router's suggestion for its default case-insensitive matching when the candidates are the registered names of one level.
+     * The router also considers aliases and reports the command's own name for a near alias, whereas this helper returns the candidate that matched. A router created with `caseSensitive: true` compares case.
+     * Case is ignored. A candidate counts when it is within one edit of a name of up to four characters, or within two edits of a longer name,
+     * where an edit inserts, deletes or replaces one character, or swaps two adjacent characters. The closest candidate wins, and the earliest of equally close ones.
+     * Returns the winning candidate as written, or undefined when none is close enough or the name is empty.
+     * The helper applies no hidden-command filter, so pass only names that may be revealed.
+     * Runs synchronously without client or network work.
+     * A name that is not a string, candidates that are not an iterable of strings and a lone string as candidates throw ConfigurationError.
+     * Candidates whose iterator lookup or iterator throws make it throw SdkDefect for `commands` with code `application.defect`, while another unexpected fault uses `sdk.defect`
+     */
+    suggest(name: string, candidates: Iterable<string>): string | undefined
+    /**
+     * Convert one token with a built-in argument descriptor, such as `commands.parseArgument("30m", { type: "duration" })`, which returns `1_800_000`.
+     * The grammar is the router's own, so a token converts here exactly when it converts in a command with that descriptor.
+     * Accepts every descriptor type except `custom`, whose parse function can be called directly.
+     * The result has the descriptor's value type, such as a string for `id` and a MemberReference for `member`.
+     * A rejected token returns undefined, as does a missing token unless the descriptor has a `default`, which is returned instead.
+     * A `member` descriptor needs `options.guildId`, the community the token belongs to, and rejects every token without it.
+     * Runs synchronously without a cache, client or network work.
+     * A bad descriptor, a `custom` descriptor, a token that is neither a string nor undefined and bad options throw ConfigurationError.
+     * A throwing getter or proxy trap in the descriptor or options throws SdkDefect for `commands` with code `application.defect`, while another unexpected fault uses `sdk.defect`
+     */
+    parseArgument<const D extends Exclude<CommandArgumentDescriptor, CommandArgumentCustom>>(
+        token: string | undefined,
+        descriptor: D,
+        options?: CommandArgumentParseOptions,
+    ): CommandArgumentValue<D> | undefined
     /**
      * Create an empty in-memory cooldown store with a default limit of 10,000 keys, to share one store between routers.
      * An optional positive safe integer `maxEntries` changes that limit. A full store makes room rather than refusing a
@@ -507,6 +544,12 @@ export const defaultCommands: DefaultCommands = Object.freeze({
             )
         }),
     parseQuoted: parseQuotedPrefixCommand,
+    suggest: (name: string, candidates: Iterable<string>) => attempt(() => suggestName(name, candidates)),
+    parseArgument: <const D extends Exclude<CommandArgumentDescriptor, CommandArgumentCustom>>(
+        token: string | undefined,
+        descriptor: D,
+        options?: CommandArgumentParseOptions,
+    ) => attempt(() => parseCommandArgument(descriptor, token, options) as CommandArgumentValue<D> | undefined),
     memoryCooldowns: (options: MemoryCooldownOptions | undefined) =>
         attempt(() => defaultMemoryCooldownStore(createMemoryCooldownStore(options))),
 })

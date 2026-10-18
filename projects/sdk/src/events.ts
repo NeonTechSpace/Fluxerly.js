@@ -806,6 +806,7 @@ export interface HandlerOptions<T = unknown> extends EventBufferOptions {
      * Events with the same key run one at a time in receive order, each starting after the previous one with that key finished.
      * An event whose key is busy waits in the queue while later events with other keys start.
      * The value guild keys each event by its community, which the API calls a guild, and a direct message by its channel.
+     * An invite creation is keyed by its destination community, or by its channel for a group invite.
      * The value channel keys each event by its channel, or by its community when it has no channel.
      * A function receives the event and returns its key as a string.
      * Events without a key, including those for which the function returns undefined, share one key.

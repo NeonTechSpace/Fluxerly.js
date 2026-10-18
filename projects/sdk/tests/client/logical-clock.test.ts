@@ -115,65 +115,86 @@ test("TestClock expires cache TTLs in the background and diagnostics report rele
     )
 })
 
+const permissionGuild = { id: "20", ownerId: "99", name: "fixture", features: [], icon: null }
+const permissionMember = {
+    guildId: "20",
+    userId: "30",
+    username: "fixture",
+    isBot: true,
+    roleIds: ["40"],
+    joinedAt: "2026-09-08T12:00:00Z",
+    nickname: null,
+    avatar: null,
+}
+const permissionRole = (id: string, permissions: bigint) => ({
+    guildId: "20",
+    id,
+    name: id === "20" ? "everyone" : "member",
+    color: 0,
+    position: id === "20" ? 0 : 1,
+    permissions,
+    hoist: false,
+    mentionable: false,
+})
+
+/** An owner whose remote reads each take 10 ms of test time and record the deadline they were given */
+const permissionOwner = (
+    logical: LogicalScheduler,
+    timeouts: number[],
+    cached: { readonly resources?: Record<string, unknown>; readonly channel?: unknown } = {},
+) =>
+    ({
+        logical,
+        getResource: (kind: string, target: unknown) =>
+            Effect.succeed(cached.resources?.[kind === "roles" ? `roles:${(target as { id: string }).id}` : kind]),
+        getChannel: () => Effect.succeed(cached.channel),
+        guild: (operation: string, _request: unknown, options: { timeoutMs?: number }) =>
+            Effect.gen(function* () {
+                timeouts.push(options.timeoutMs!)
+                yield* TestClock.adjust(10)
+                if (operation === "guilds.fetch") return permissionGuild
+                if (operation === "members.fetch") return permissionMember
+                return [permissionRole("20", 0n), permissionRole("40", 4n)]
+            }),
+        channel: (_operation: string, _request: unknown, options: { timeoutMs?: number }) =>
+            Effect.gen(function* () {
+                timeouts.push(options.timeoutMs!)
+                yield* TestClock.adjust(10)
+                return { id: "50", guildId: "20", type: 0, permissionOverwrites: [] }
+            }),
+    }) as unknown as Parameters<typeof fetchPermissions>[0]
+
 test("composed owner workflows decrement one creation-Clock budget", async () => {
     await withTestClock(
         Effect.gen(function* () {
             const clock = yield* Clock.Clock
-            const logical = new LogicalScheduler(clock)
             const timeouts: number[] = []
-            const owner = {
-                logical,
-                guild: (operation: string, _request: unknown, options: { timeoutMs?: number }) =>
-                    Effect.gen(function* () {
-                        timeouts.push(options.timeoutMs!)
-                        yield* TestClock.adjust(10)
-                        if (operation === "guilds.fetch")
-                            return { id: "20", ownerId: "99", name: "fixture", features: [], icon: null }
-                        if (operation === "members.fetch")
-                            return {
-                                guildId: "20",
-                                userId: "30",
-                                username: "fixture",
-                                isBot: true,
-                                roleIds: ["40"],
-                                joinedAt: "2026-09-08T12:00:00Z",
-                                nickname: null,
-                                avatar: null,
-                            }
-                        return [
-                            {
-                                guildId: "20",
-                                id: "20",
-                                name: "everyone",
-                                color: 0,
-                                position: 0,
-                                permissions: 0n,
-                                hoist: false,
-                                mentionable: false,
-                            },
-                            {
-                                guildId: "20",
-                                id: "40",
-                                name: "member",
-                                color: 0,
-                                position: 1,
-                                permissions: 4n,
-                                hoist: false,
-                                mentionable: false,
-                            },
-                        ]
-                    }),
-                channel: (_operation: string, _request: unknown, options: { timeoutMs?: number }) =>
-                    Effect.gen(function* () {
-                        timeouts.push(options.timeoutMs!)
-                        yield* TestClock.adjust(10)
-                        return { id: "50", guildId: "20", type: 0, permissionOverwrites: [] }
-                    }),
-            } as unknown as Pick<ClientOwner, "channel" | "guild" | "logical">
+            const owner = permissionOwner(new LogicalScheduler(clock), timeouts)
             expect(
                 yield* fetchPermissions(owner, { guildId: "20", userId: "30", channelId: "50" }, { timeoutMs: 100 }),
             ).toBe(4n)
             expect(timeouts).toEqual([100, 90, 80, 70])
+        }),
+    )
+})
+
+test("cache-first permission reads charge only their remote reads to the deadline", async () => {
+    await withTestClock(
+        Effect.gen(function* () {
+            const clock = yield* Clock.Clock
+            const timeouts: number[] = []
+            // The guild and member are cached, but only the everyone role is, so one list read replaces the roles
+            const owner = permissionOwner(new LogicalScheduler(clock), timeouts, {
+                resources: { guilds: permissionGuild, members: permissionMember, "roles:20": permissionRole("20", 0n) },
+            })
+            expect(
+                yield* fetchPermissions(
+                    owner,
+                    { guildId: "20", userId: "30", channelId: "50" },
+                    { timeoutMs: 100, preferCache: true },
+                ),
+            ).toBe(4n)
+            expect(timeouts).toEqual([100, 90])
         }),
     )
 })

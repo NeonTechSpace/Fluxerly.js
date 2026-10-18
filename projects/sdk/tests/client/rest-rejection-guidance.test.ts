@@ -92,44 +92,66 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
             operation: "channels.edit",
             call: (client: AnyClient) => client.channels.edit("20", { name: "renamed" }),
             permissions: ["ViewChannel", "ManageChannels"],
-            labels: ["View Channel", "Manage Channels"],
+            labels: ["View channel", "Manage channels"],
+        },
+        {
+            operation: "channels.setPermissionOverwrite",
+            call: (client: AnyClient) =>
+                client.channels.setPermissionOverwrite("20", { id: "50", type: "role", allow: 1n, deny: 0n }),
+            permissions: ["ManageRoles"],
+            // A channel's permission overrides show this permission under another title, so the hint names both
+            labels: ["Manage roles", "Manage permissions"],
+        },
+        {
+            operation: "channels.edit",
+            call: (client: AnyClient) =>
+                client.channels.edit("20", { permissionOverwrites: [{ id: "50", type: "role", allow: 1n, deny: 0n }] }),
+            permissions: ["ViewChannel", "ManageChannels"],
+            labels: ["Manage channels", "Manage roles", "Manage permissions"],
+        },
+        {
+            operation: "channels.reorder",
+            call: (client: AnyClient) =>
+                client.channels.reorder("30", [{ id: "20", position: 1, syncPermissionsOnMove: true }]),
+            permissions: ["ManageChannels"],
+            labels: ["syncPermissionsOnMove", "Manage roles", "Manage permissions"],
         },
         {
             operation: "send",
             call: (client: AnyClient) => client.messages.send("20", "x"),
             permissions: ["ViewChannel", "SendMessages"],
-            labels: ["View Channel", "Send Messages"],
+            labels: ["View channel", "Send messages"],
         },
         {
             operation: "pin",
             call: (client: AnyClient) => client.messages.pin({ id: "10", channelId: "20" }),
             permissions: ["ViewChannel", "PinMessages"],
-            labels: ["View Channel", "Pin Messages"],
+            labels: ["View channel", "Pin messages"],
         },
         {
             operation: "webhooks.create",
             call: (client: AnyClient) => client.webhooks.create("20", { name: "Relay" }),
             permissions: ["ViewChannel", "ManageWebhooks"],
-            labels: ["View Channel", "Manage Webhooks"],
+            labels: ["View channel", "Manage webhooks"],
         },
         {
             operation: "invites.fetchForGuild",
             call: (client: AnyClient) => client.invites.fetchForGuild("30"),
             permissions: ["ManageGuild"],
-            labels: ["Manage Guild"],
+            labels: ["Manage community"],
         },
         {
             operation: "roles.create",
             call: (client: AnyClient) => client.roles.create("30", { name: "Helpers" }),
             permissions: ["ManageRoles"],
-            labels: ["Manage Roles"],
+            labels: ["Manage roles"],
         },
         {
             operation: "members.ban",
             call: (client: AnyClient) => client.members.ban({ guildId: "30", userId: "40" }),
             permissions: ["BanMembers"],
             // A moderation rejection can also come from role hierarchy, so the hint says so
-            labels: ["Ban Members", "highest role"],
+            labels: ["Ban members", "highest role"],
         },
     ])(
         "a missing-permission rejection of $operation names the permissions it needs",
@@ -165,7 +187,7 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         stubFetchWithHostedDiscovery(async () => Response.json({ code: "MISSING_ACCESS" }, { status: 403 }))
         const error = (await expectErr((await setup(mode)).channels.edit("20", { name: "renamed" }))) as FluxerlyError
         expect(error.details).not.toHaveProperty("requiredPermissions")
-        expect(error.hint).not.toContain("Manage Channels")
+        expect(error.hint).not.toContain("Manage channels")
     })
 
     test("an unrecognized Fluxer code is kept in details and the message instead of being dropped", async () => {

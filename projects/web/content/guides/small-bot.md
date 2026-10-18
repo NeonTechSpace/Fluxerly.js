@@ -72,7 +72,7 @@ The router keeps cooldowns in memory, so they reset when the bot restarts. The [
 
 A [guard](/docs/{{version}}/glossary/#guard) decides whether a command may run. The `announce` command uses `guards.requirePermissions(["ManageMessages"])`, which allows it only for members who have the `ManageMessages` permission in that channel. It checks the person who sent the command, not the bot, and it denies the command in direct messages
 
-The guard looks up the community, member, roles and channel, reading them from Fluxer when they are not cached. A denied member gets a reply such as `Using this command requires these permissions: ManageMessages`, at most once every 5 seconds. The [communities and permissions guide](/docs/{{version}}/guilds-and-permissions/) explains how permissions are calculated
+The guard looks up the community, member, roles and channel, reading them from Fluxer when they are not cached. A denied member gets a reply such as `Using this command requires these permissions: Manage messages`, at most once every 5 seconds. The [communities and permissions guide](/docs/{{version}}/guilds-and-permissions/) explains how permissions are calculated
 
 ### An embed reply
 

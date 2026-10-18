@@ -55,6 +55,11 @@ async function restClient(
     return { client, calls, request }
 }
 
+const shutdown = async (mode: Mode, client: unknown) => {
+    if (mode === "default") await (client as import("../../src/index.js").Client).shutdown()
+    else await Effect.runPromise((client as import("../../src/effect.js").Client).shutdown())
+}
+
 const rejection = async (operation: Parameters<typeof expectErr>[0]) =>
     (await expectErr(operation)) as RestRequestFailure
 
@@ -323,14 +328,125 @@ describeBothApis("rest.request", (mode) => {
         expect(calls).toHaveLength(1)
     })
 
-    test("fails with ClientClosedError after shutdown", async () => {
+    test("fails with ClientClosedError after shutdown, before anything is sent", async () => {
         const { client, calls, request } = await restClient(mode, () => Response.json({}))
-        if (mode === "default") await (client as import("../../src/index.js").Client).shutdown()
-        else await Effect.runPromise((client as import("../../src/effect.js").Client).shutdown())
+        await shutdown(mode, client)
         expect(await rejection(request({ method: "GET", path: "/users/@me" }))).toMatchObject({
             _tag: "ClientClosedError",
+            outcome: "notDispatched",
+            details: { outcome: "notDispatched" },
         })
         expect(calls).toHaveLength(0)
+    })
+
+    test("a shutdown during the wait for a 429 retry reports a rejected outcome", async () => {
+        const clock = sdkClock()
+        const { client, calls, request } = await restClient(mode, () =>
+            rateLimitedResponse({ retryAfterSeconds: 0.02 }),
+        )
+        const pending = rejection(request({ method: "POST", path: "/channels/20/messages", body: { content: "x" } }))
+        await clock.waiting(20)
+        await shutdown(mode, client)
+        // Fluxer refused the first attempt and the retry never started
+        expect(await pending).toMatchObject({
+            _tag: "ClientClosedError",
+            outcome: "rejected",
+            details: { outcome: "rejected" },
+        })
+        expect(calls).toHaveLength(1)
+    })
+
+    test("a shutdown while the request is in flight reports an unknown outcome and a hint to check", async () => {
+        const { client, calls, request } = await restClient(
+            mode,
+            (_url, init) =>
+                new Promise<Response>((_resolve, reject) =>
+                    init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+                ),
+        )
+        const pending = rejection(request({ method: "POST", path: "/channels/20/custom", body: {} }))
+        await vi.waitFor(() => expect(calls).toHaveLength(1))
+        await shutdown(mode, client)
+        const closed = await pending
+        expect(closed).toMatchObject({ _tag: "ClientClosedError", outcome: "unknown", details: { outcome: "unknown" } })
+        expect(closed.hint).toContain("Check whether Fluxer applied the change")
+    })
+
+    test("a shutdown while a read is in flight records details.read and gives no hint to check for a change", async () => {
+        const { client, calls, request } = await restClient(
+            mode,
+            (_url, init) =>
+                new Promise<Response>((_resolve, reject) =>
+                    init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+                ),
+        )
+        const pending = rejection(request({ method: "GET", path: "/users/@me" }))
+        await vi.waitFor(() => expect(calls).toHaveLength(1))
+        await shutdown(mode, client)
+        const closed = await pending
+        expect(closed).toMatchObject({
+            _tag: "ClientClosedError",
+            outcome: "unknown",
+            details: { outcome: "unknown", read: true },
+        })
+        // A read cannot have changed anything, so there is no applied change to look for
+        expect(closed.hint).not.toContain("Check whether")
+    })
+
+    test.each([
+        ["messages.search", (client: any) => client.messages.search({ channelId: "20" })],
+        ["members.search", (client: any) => client.members.search("20", {})],
+        ["attachments.refreshUrls", (client: any) => client.attachments.refreshUrls(["https://cdn.example/a.png"])],
+    ])("a shutdown while the POST read %s is in flight records details.read", async (_name, call) => {
+        const { client, calls } = await restClient(
+            mode,
+            (_url, init) =>
+                new Promise<Response>((_resolve, reject) =>
+                    init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+                ),
+        )
+        const pending = rejection(call(client))
+        await vi.waitFor(() => expect(calls).toHaveLength(1))
+        expect(calls[0]!.init.method).toBe("POST")
+        await shutdown(mode, client)
+        const closed = await pending
+        expect(closed).toMatchObject({
+            _tag: "ClientClosedError",
+            outcome: "unknown",
+            details: { outcome: "unknown", read: true },
+        })
+        expect(closed.hint).not.toContain("Check whether")
+    })
+
+    test("a shutdown while a 2xx response body is being read reports an unknown outcome", async () => {
+        const reading = Promise.withResolvers<void>()
+        const { client, request } = await restClient(
+            mode,
+            (_url, init) =>
+                new Response(
+                    new ReadableStream(
+                        {
+                            // The body ends only through the abort that shutdown raises, like a connection that stalls
+                            start: (controller) =>
+                                init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason), {
+                                    once: true,
+                                }),
+                            pull: () => {
+                                reading.resolve()
+                                return new Promise<void>(() => {})
+                            },
+                        },
+                        // With no buffer, the stream is pulled only once the SDK reads the body
+                        { highWaterMark: 0 },
+                    ),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                ),
+        )
+        const pending = rejection(request({ method: "POST", path: "/channels/20/custom", body: {} }))
+        await reading.promise
+        await shutdown(mode, client)
+        // Fluxer accepted the write and answered, so the change may have applied before the body was lost
+        expect(await pending).toMatchObject({ _tag: "ClientClosedError", outcome: "unknown" })
     })
 })
 

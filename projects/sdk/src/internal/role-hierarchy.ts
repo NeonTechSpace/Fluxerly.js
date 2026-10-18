@@ -3,8 +3,8 @@
  * Invariant: Comparisons use position and then ID, and invalid or cross-guild roles compare as unknown.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import type { GuildMember, GuildRole } from "#sdk/guilds"
-import type { RoleHierarchyInput } from "#sdk/role-hierarchy"
+import type { Guild, GuildMember, GuildRole } from "#sdk/guilds"
+import type { RoleHierarchyInput, RoleManagementInput } from "#sdk/role-hierarchy"
 import { identifier } from "./decode/primitives.js"
 
 const validRole = (value: unknown): value is GuildRole =>
@@ -61,25 +61,69 @@ function validMember(value: unknown, guildId: string): value is GuildMember {
     return true
 }
 
+/** The IDs of unique, valid roles of one community, or undefined when any role is malformed, foreign or repeated */
+function roleIdsOf(value: unknown, guildId: string): ReadonlySet<string> | undefined {
+    if (!Array.isArray(value)) return undefined
+    const roleIds = new Set<string>()
+    for (const role of value) {
+        if (!validRole(role) || role.guildId !== guildId || roleIds.has(role.id)) return undefined
+        roleIds.add(role.id)
+    }
+    return roleIds
+}
+
+function validGuild(value: unknown): value is Guild {
+    return (
+        typeof value === "object" &&
+        value !== null &&
+        identifier((value as Guild).id) &&
+        identifier((value as Guild).ownerId)
+    )
+}
+
 function validInput(value: unknown): value is RoleHierarchyInput {
     if (typeof value !== "object" || value === null) return false
     const input = value as RoleHierarchyInput
     if (
-        !input.guild ||
-        !identifier(input.guild.id) ||
-        !identifier(input.guild.ownerId) ||
+        !validGuild(input.guild) ||
         !validMember(input.actor, input.guild.id) ||
-        !validMember(input.target, input.guild.id) ||
-        !Array.isArray(input.roles)
+        !validMember(input.target, input.guild.id)
     )
         return false
+    const roleIds = roleIdsOf(input.roles, input.guild.id)
+    return (
+        roleIds !== undefined &&
+        [...input.actor.roleIds, ...input.target.roleIds].every((roleId) => roleIds.has(roleId))
+    )
+}
 
-    const roleIds = new Set<string>()
-    for (const role of input.roles) {
-        if (!validRole(role) || role.guildId !== input.guild.id || roleIds.has(role.id)) return false
-        roleIds.add(role.id)
-    }
-    return [...input.actor.roleIds, ...input.target.roleIds].every((roleId) => roleIds.has(roleId))
+/**
+ * The member's highest explicit role, wrapped so that a member with no explicit role is distinct from malformed input,
+ * which gives undefined. The implicit everyone role is not considered
+ */
+export function evaluateHighestRole(
+    member: unknown,
+    roles: unknown,
+): { readonly role: GuildRole | undefined } | undefined {
+    if (typeof member !== "object" || member === null || !identifier((member as GuildMember).guildId)) return undefined
+    const snapshot = member as GuildMember
+    if (!validMember(snapshot, snapshot.guildId)) return undefined
+    const roleIds = roleIdsOf(roles, snapshot.guildId)
+    if (roleIds === undefined || !snapshot.roleIds.every((roleId) => roleIds.has(roleId))) return undefined
+    const roleById = new Map((roles as readonly GuildRole[]).map((role) => [role.id, role]))
+    return { role: highestExplicitRole(snapshot.roleIds, roleById) }
+}
+
+/** Whether the actor's rank allows managing the role, or undefined when the snapshots are malformed */
+export function evaluateRoleManagement(input: RoleManagementInput): boolean | undefined {
+    if (typeof input !== "object" || input === null || !validGuild(input.guild)) return undefined
+    const { guild, actor, role, roles } = input
+    // The role need not be in the list, because only the actor's own roles must be covered
+    if (!validRole(role) || role.guildId !== guild.id) return undefined
+    const highest = evaluateHighestRole(actor, roles)
+    if (highest === undefined || actor.guildId !== guild.id) return undefined
+    if (actor.userId === guild.ownerId) return true
+    return highest.role !== undefined && isRoleAboveInHierarchy(highest.role, role) === true
 }
 
 function highestExplicitRole(roleIds: readonly string[], roles: ReadonlyMap<string, GuildRole>): GuildRole | undefined {

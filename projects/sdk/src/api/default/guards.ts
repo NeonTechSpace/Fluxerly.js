@@ -1,18 +1,15 @@
-import type { DefaultPrefixCommandContext, DefaultPrefixCommandGuard } from "#sdk/default-commands"
+import type { DefaultPrefixCommandGuard } from "#sdk/default-commands"
 import type { PermissionName } from "#sdk/helpers"
 import type { Message, MessageCore } from "#sdk/messages"
-import type { GuildRole } from "#sdk/guilds"
-import { isThreadChannel } from "#sdk/channels"
 import {
     applicationOwners,
-    cachedPermissionChannel,
-    fetchedPermissionChannel,
     guardDenials,
     inGuild,
     missingPermissions,
     notPrivateChannel,
     ownerIds as validOwnerIds,
     permissionNames,
+    unconfirmedPermissions,
 } from "#sdk/internal/command-guards"
 import { orThrow } from "./results.js"
 
@@ -78,18 +75,23 @@ export interface DefaultGuards {
     ownerOnly<M extends MessageCore = Message>(ownerIds: string | readonly string[]): DefaultPrefixCommandGuard<M>
     /**
      * Allow the command only when the invoking member has every named permission in the message's channel, and deny it in
-     * direct messages. The guard reads the community, member, roles and channel from enabled caches first and fetches only
-     * what is missing, at most once each per invocation, then applies permissions.calculate.
+     * direct messages. The guard decides with permissions.fetch and preferCache: It reads the community, member, roles and
+     * channel from enabled caches first and fetches only what is missing, at most once each per invocation, then applies
+     * permissions.calculate. The reads share one deadline, rest.defaultTimeoutMs, and only fetches count toward it.
+     * Cached observations reflect the last applied gateway events, so a permission change that Fluxer has made but the
+     * gateway has not yet delivered is not seen. Where a stale grant matters, check again with permissions.fetch before acting.
      * A cached channel without its overwrite list is read again instead of being treated as having no overwrites.
-     * A channel read that Fluxer answers without an overwrite list has no channel overwrites, so the member's role
-     * permissions decide.
      * In a thread, the guard also reads the thread's parent channel the same way, cache first, and decides as Fluxer
      * does: From the parent channel's permissions, with SendMessages granted exactly when SendMessagesInThreads is.
      * It does not check whether the member can see a private thread or whether the thread is archived or locked.
-     * A channel of a type this SDK version does not know can take its permissions from elsewhere, so a read of one
-     * without an overwrite list denies the command rather than guessing.
-     * A failed read fails the command, which is reported with the command name.
-     * The decision does not guarantee that Fluxer allows a later action
+     * Fluxer sends a channel's permission overwrite list, empty when there are none. When Fluxer sent the channel
+     * without its permission overwrite list, its permissions cannot be confirmed, so the guard denies the command
+     * rather than guessing.
+     * Every other failed read fails the command, which is reported with the command name.
+     * The decision does not guarantee that Fluxer allows a later action. A timed-out member keeps its permission bits,
+     * but Fluxer blocks sending, editing and publishing own messages, reacting, uploading, typing, changing the own
+     * nickname, writing in threads and joining voice, so check members.timeoutState as well.
+     * The denial names each missing permission by Fluxer's label, such as Manage community
      */
     requirePermissions<M extends MessageCore = Message>(names: readonly PermissionName[]): DefaultPrefixCommandGuard<M>
 }
@@ -135,39 +137,16 @@ export const guards: DefaultGuards = Object.freeze({
     },
     requirePermissions: <M extends MessageCore>(names: readonly PermissionName[]): DefaultPrefixCommandGuard<M> => {
         const required = permissionNames(names)
-        return async (context) => {
-            if (!inGuild(context.message)) return { deny: guardDenials.guildOnly }
-            const bits = await memberPermissions(context)
-            if (bits === undefined) return { deny: guardDenials.unconfirmedChannel }
+        return async ({ client, message, signal }) => {
+            if (!inGuild(message)) return { deny: guardDenials.guildOnly }
+            const read = await client.permissions.fetch(
+                { guildId: message.guildId, userId: message.author.id, channelId: message.channelId },
+                { preferCache: true, signal },
+            )
+            if (read.isErr() && unconfirmedPermissions(read.error)) return { deny: guardDenials.unconfirmedChannel }
+            const bits = orThrow(read)
             const missing = missingPermissions(bits, required)
             return missing.length === 0 || { deny: guardDenials.missing(missing) }
         }
     },
 })
-
-/**
- * Calculate the invoking member's channel permissions, reading each resource from the cache before fetching it.
- * Undefined means the channel's permissions cannot be confirmed
- */
-async function memberPermissions<M extends MessageCore>(
-    context: DefaultPrefixCommandContext<M>,
-): Promise<bigint | undefined> {
-    const { client, message, signal } = context
-    const guildId = message.guildId!
-    const target = { guildId, userId: message.author.id }
-    const options = { signal }
-    const guild = client.guilds.get(guildId) ?? orThrow(await client.guilds.fetch(guildId, options))
-    const member = client.members.get(target) ?? orThrow(await client.members.fetch(target, options))
-    const cached = [guildId, ...member.roleIds].map((id) => client.roles.get({ guildId, id }))
-    const roles = cached.every((role): role is GuildRole => role !== undefined)
-        ? cached
-        : orThrow(await client.roles.fetchAll(guildId, options))
-    const readChannel = async (channelId: string) =>
-        cachedPermissionChannel(client.channels.get(channelId)) ??
-        fetchedPermissionChannel(orThrow(await client.channels.fetch(channelId, options)))
-    const channel = await readChannel(message.channelId)
-    if (!isThreadChannel(channel)) return channel && client.permissions.calculate({ guild, member, roles, channel })
-    // A thread takes its permissions from its parent channel
-    const parentChannel = await readChannel(channel.parentId)
-    return parentChannel && client.permissions.calculate({ guild, member, roles, channel, parentChannel })
-}

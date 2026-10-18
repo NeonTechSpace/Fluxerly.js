@@ -7,6 +7,7 @@ import {
 } from "./errors.js"
 import type { InputValidationDetail } from "./input-validation.js"
 import { record } from "#sdk/internal/decode/primitives"
+import { permissionLabel as label } from "#sdk/internal/permission-labels"
 import {
     permissionRequirement,
     requiredPermissionsHint,
@@ -609,8 +610,7 @@ export function unrecognizedProviderCode(body: unknown): string | null {
 const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     missingPermissions:
         "Grant the bot's role the permission this operation needs in the community settings or the channel's permission overrides",
-    missingAccess:
-        "Give the bot's role View Channel for this channel or its category, and check that the bot is still in the community",
+    missingAccess: `Give the bot's role ${label("ViewChannel")} for this channel or its category, and check that the bot is still in the community`,
     unknownResource: "Check the ID. The resource may be deleted or not visible to this bot",
     notFound: "Check the ID. The resource may be deleted or not visible to this bot",
     unauthorized:
@@ -705,8 +705,7 @@ export type RequestAction = "message" | "moderation" | "other"
 
 /** Missing-permission fixes for actions whose needs are known */
 const missingPermissionHints: Readonly<Record<Exclude<RequestAction, "other">, string>> = {
-    message:
-        "Grant the bot's role View Channel and Send Messages in this channel, plus Embed Links or Attach Files when the message has them, in the community settings or the channel's permission overrides",
+    message: `Grant the bot's role ${label("ViewChannel")} and ${label("SendMessages")} in this channel, plus ${label("EmbedLinks")} or ${label("AttachFiles")} when the message has them, in the community settings or the channel's permission overrides`,
     moderation:
         "Grant the bot's role the permission this operation needs in the community settings, and move the bot's highest role above the highest role of the member it acts on",
 }

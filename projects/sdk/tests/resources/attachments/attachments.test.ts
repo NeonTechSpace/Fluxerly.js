@@ -748,6 +748,32 @@ test.each(modes)("%s holds upload admission through active work and cancellation
     expect(calls).toBe(2)
 })
 
+test.each(modes)("%s reports the message as not dispatched when shutdown interrupts an upload", async (mode) => {
+    const uploading = Promise.withResolvers<void>()
+    const fetch = transport({
+        put: async (init) => {
+            uploading.resolve()
+            return new Promise<Response>((_resolve, reject) =>
+                init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true }),
+            )
+        },
+    })
+    const api = await driver(mode)
+    const pending = api.send({ attachments: [{ data: new Uint8Array(4), filename: "file.bin" }] }).then(
+        () => undefined,
+        (error: unknown) => error,
+    )
+    await uploading.promise
+    await api.close()
+    // The upload is preparation, so the message request itself was never sent
+    expect(await pending).toMatchObject({
+        _tag: "ClientClosedError",
+        outcome: "notDispatched",
+        details: { outcome: "notDispatched" },
+    })
+    expect(fetch.mock.calls.filter(([url]) => String(url).endsWith("/messages"))).toHaveLength(0)
+})
+
 test.each(modes)(
     "%s reserves queued uploads, replays only 429 with the snapshot and releases on timeout",
     async (mode) => {

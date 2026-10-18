@@ -124,26 +124,38 @@ const channelSelfEvents: ReadonlySet<EventName> = new Set([
 /**
  * The partition key of one event. The guild partition uses the community ID, else the channel ID, so direct messages are
  * ordered per conversation, and the channel partition uses the channel ID, else the community ID. A thread member
- * change's channel is its thread. An event with neither uses the empty key, shared by all such events. A function's
- * undefined also selects the empty key
+ * change's channel is its thread. An invite creation describes its destination in nested objects, so its community is
+ * guild.id and its channel is channel.id, and a group invite has no community. An event with neither uses the empty
+ * key, shared by all such events. A function's undefined also selects the empty key
  */
 function partitionKey(partition: NonNullable<Limits["partition"]>, event: EventName, payload: unknown): unknown {
     if (typeof partition === "function") return partition(payload as never)
-    const value = payload as {
-        readonly id?: unknown
-        readonly guildId?: unknown
-        readonly channelId?: unknown
-        readonly threadId?: unknown
+    let guild: unknown
+    let channel: unknown
+    if (event === "inviteCreate") {
+        const invite = payload as {
+            readonly guild?: { readonly id?: unknown }
+            readonly channel?: { readonly id?: unknown }
+        }
+        guild = invite.guild?.id
+        channel = invite.channel?.id
+    } else {
+        const value = payload as {
+            readonly id?: unknown
+            readonly guildId?: unknown
+            readonly channelId?: unknown
+            readonly threadId?: unknown
+        }
+        guild = typeof value.guildId === "string" ? value.guildId : guildSelfEvents.has(event) ? value.id : undefined
+        channel =
+            typeof value.channelId === "string"
+                ? value.channelId
+                : typeof value.threadId === "string"
+                  ? value.threadId
+                  : channelSelfEvents.has(event)
+                    ? value.id
+                    : undefined
     }
-    const guild = typeof value.guildId === "string" ? value.guildId : guildSelfEvents.has(event) ? value.id : undefined
-    const channel =
-        typeof value.channelId === "string"
-            ? value.channelId
-            : typeof value.threadId === "string"
-              ? value.threadId
-              : channelSelfEvents.has(event)
-                ? value.id
-                : undefined
     const key = partition === "guild" ? (guild ?? channel) : (channel ?? guild)
     return typeof key === "string" ? key : undefined
 }

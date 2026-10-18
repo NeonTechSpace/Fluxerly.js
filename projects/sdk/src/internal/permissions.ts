@@ -6,10 +6,12 @@
 import * as Effect from "effect/Effect"
 import { isThreadChannel } from "#sdk/channels"
 import type { ChannelOperationFailure, GuildChannel, PermissionOverwrite } from "#sdk/channels"
-import type { GuildOperationFailure, GuildOperationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure, GuildOperationOptions, GuildRole } from "#sdk/guilds"
+import { ClientClosedError } from "#sdk/errors"
 import { GuildOperationError, Permissions } from "#sdk/guilds"
+import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { composedStepFacts } from "#sdk/api-errors"
-import type { PermissionInput, PermissionTarget } from "#sdk/permissions"
+import type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
 import { channelFetch } from "./channels.js"
 import type { ClientOwner } from "./client.js"
 import { guildFetch, memberFetch, roleList } from "./guilds.js"
@@ -303,10 +305,15 @@ function validateTarget(value: unknown): ValidatedTarget | InputValidationFailur
     return { guildId, userId, channelId }
 }
 
-function validateOptions(value: unknown): GuildOperationOptions | InputValidationFailure {
+function validateOptions(value: unknown): PermissionFetchOptions | InputValidationFailure {
     if (value === undefined) return {}
     if (!record(value)) return inputValidationFailure("options", "type", "Permission fetch options must be an object")
-    const unsupported = unsupportedKeyFailure(value, ["timeoutMs", "signal"], "options", "the permission fetch options")
+    const unsupported = unsupportedKeyFailure(
+        value,
+        ["timeoutMs", "signal", "preferCache"],
+        "options",
+        "the permission fetch options",
+    )
     if (unsupported) return unsupported
     const signal = value.signal
     if (
@@ -317,6 +324,9 @@ function validateOptions(value: unknown): GuildOperationOptions | InputValidatio
             typeof signal.removeEventListener !== "function")
     )
         return inputValidationFailure("options.signal", "type", "Permission fetch signal must be an AbortSignal")
+    const preferCache = value.preferCache
+    if (preferCache !== undefined && typeof preferCache !== "boolean")
+        return inputValidationFailure("options.preferCache", "type", "Permission fetch preferCache must be a boolean")
     const timeoutMs = value.timeoutMs
     if (
         timeoutMs !== undefined &&
@@ -330,8 +340,8 @@ function validateOptions(value: unknown): GuildOperationOptions | InputValidatio
             "range",
             "Permission fetch timeout must be an integer from 1 through 2,147,483,647 ms",
         )
-    // Keep only the validated timeout: The requests use their own remaining deadlines
-    return timeoutMs === undefined ? {} : { timeoutMs }
+    // Keep only the validated settings: The requests use their own remaining deadlines
+    return { ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(preferCache === undefined ? {} : { preferCache }) }
 }
 
 function remainingOptions(deadline: number, now: () => number): GuildOperationOptions | undefined {
@@ -352,16 +362,64 @@ function remoteCalculationFailure(error: GuildOperationError): GuildOperationErr
 }
 
 /**
+ * A cached channel observation usable for permission calculation, or undefined when it must be read.
+ * A thread needs only its parent ID, because it takes its permissions from its parent channel, which is read
+ * separately. A cached channel without its overwrite list is read again, because calculating without unknown overwrites
+ * could grant a permission that the channel denies
+ */
+const cachedPermissionChannel = (channel: GuildChannel | undefined): GuildChannel | undefined =>
+    isThreadChannel(channel) || channel?.permissionOverwrites !== undefined ? channel : undefined
+
+/**
+ * Failures of permissions.fetch whose channel permissions cannot be confirmed: Fluxer sent a non-thread channel without
+ * its permission overwrite list. Fluxer sends the list empty when there are no overwrites, so a missing list is never
+ * read as "none"
+ */
+const unconfirmedFailures = new WeakSet<object>()
+
+/** Whether an error is a permissions.fetch failure because the channel's permissions cannot be confirmed */
+export const isUnconfirmedPermissions = (error: unknown): boolean =>
+    typeof error === "object" && error !== null && unconfirmedFailures.has(error)
+
+function unconfirmedFailure(channelId: string): GuildOperationError {
+    // The channel read was sent and answered, so the failure follows other unusable responses of a read: Unknown outcome,
+    // marked as a read, so it cannot have changed anything
+    const failure = new GuildOperationError({
+        operation: "permissions.fetch",
+        reason: "response",
+        outcome: "unknown",
+        status: 200,
+        responseField: "permissionOverwrites",
+        read: true,
+    })
+    // Name the channel and the way out, which the shared error options have no place for
+    Object.assign(failure, {
+        hint: "Fluxer sent this channel without its permission overwrite list, so its permissions cannot be confirmed. Check the channel's permissions in Fluxer, or update the SDK if its channel type is new",
+        details: Object.freeze({ ...failure.details, channelId }),
+    })
+    unconfirmedFailures.add(failure)
+    return failure
+}
+
+/** Map a cache lookup refused by a closing client to the closure that REST reads report, as no request was sent */
+const closedBeforeRead = <A, E>(lookup: Effect.Effect<A, E>) =>
+    lookup.pipe(Effect.mapError((error) => (error instanceof ClientClosedError ? closedBeforeSend() : error)))
+
+/**
  * Fetches independent guild, member, role, and optional channel observations, then calculates their raw bitfield.
  * A thread channel adds a read of its parent channel, whose permissions the thread takes
  *
- * This always reads remotely without consulting local caches. Its deadline covers the whole composition, but the
- * resulting observations are not transactional and do not establish access, hierarchy, timeouts, or action success
+ * By default this reads remotely without consulting local caches. With preferCache, each observation comes from an
+ * enabled cache when it can be used and is read remotely otherwise. Its deadline covers the whole composition and
+ * is checked only before a remote read. The resulting observations are not transactional and do not establish access,
+ * hierarchy, timeouts, or action success
  */
 export function fetchPermissions(
-    owner: Pick<ClientOwner, "guild" | "channel" | "logical"> & { readonly defaultTimeoutMs?: number },
+    owner: Pick<ClientOwner, "guild" | "channel" | "logical" | "getResource" | "getChannel"> & {
+        readonly defaultTimeoutMs?: number
+    },
     target: PermissionTarget,
-    options?: GuildOperationOptions,
+    options?: PermissionFetchOptions,
 ): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure> {
     // Reading and validating the caller target and options is marked as application input
     return suspendInput(() => {
@@ -371,39 +429,54 @@ export function fetchPermissions(
         const validatedOptions = validateOptions(options)
         if (validatedOptions instanceof InputValidationFailure)
             return Effect.fail(inputFailure("permissions.fetch", validatedOptions))
-        const timedOut = () => Effect.fail(timeoutFailure())
+        const { guildId, userId, channelId } = targetSnapshot
+        const preferCache = validatedOptions.preferCache === true
         return Effect.gen(function* () {
             const now = () => owner.logical.now()
             const deadline = now() + (validatedOptions.timeoutMs ?? owner.defaultTimeoutMs ?? 30_000)
-            const requestOptions = () => remainingOptions(deadline, now)
-            const guildOptions = requestOptions()
-            if (!guildOptions) return yield* timedOut()
-            const guild = yield* owner.guild("guilds.fetch", () => guildFetch(targetSnapshot.guildId), guildOptions)
-
-            const memberOptions = requestOptions()
-            if (!memberOptions) return yield* timedOut()
-            const member = yield* owner.guild("members.fetch", () => memberFetch(targetSnapshot), memberOptions)
-
-            const roleOptions = requestOptions()
-            if (!roleOptions) return yield* timedOut()
-            const roles = yield* owner.guild("roles.fetchAll", () => roleList(targetSnapshot.guildId), roleOptions)
-
-            let channel: GuildChannel | undefined
-            const channelId = targetSnapshot.channelId
-            if (channelId !== undefined) {
-                const channelOptions = requestOptions()
-                if (!channelOptions) return yield* timedOut()
-                channel = yield* owner.channel("channels.fetch", () => channelFetch(channelId), channelOptions)
+            // Each remote read gets the time left, and none starts once the deadline has passed. Cache reads need no time
+            const remote = <A, E>(run: (budget: GuildOperationOptions) => Effect.Effect<A, E>) => {
+                const remaining = remainingOptions(deadline, now)
+                return remaining ? run(remaining) : Effect.fail(timeoutFailure())
             }
+            const readChannel = (id: string) =>
+                Effect.gen(function* () {
+                    const cached = preferCache
+                        ? cachedPermissionChannel(yield* closedBeforeRead(owner.getChannel(id)))
+                        : undefined
+                    if (cached) return cached
+                    const fetched = yield* remote((budget) =>
+                        owner.channel("channels.fetch", () => channelFetch(id), budget),
+                    )
+                    // Only a thread takes its permissions from elsewhere, so any other channel needs its overwrite list
+                    if (!isThreadChannel(fetched) && fetched.permissionOverwrites === undefined)
+                        return yield* Effect.fail(unconfirmedFailure(id))
+                    return fetched
+                })
 
+            const guild =
+                (preferCache ? yield* closedBeforeRead(owner.getResource("guilds", guildId)) : undefined) ??
+                (yield* remote((budget) => owner.guild("guilds.fetch", () => guildFetch(guildId), budget)))
+
+            const member =
+                (preferCache
+                    ? yield* closedBeforeRead(owner.getResource("members", { guildId, userId }))
+                    : undefined) ??
+                (yield* remote((budget) => owner.guild("members.fetch", () => memberFetch(targetSnapshot), budget)))
+
+            // The everyone role and every member role must be cached, or one list read replaces them all
+            let roles: GuildRole[] | undefined
+            if (preferCache) {
+                const cached = yield* Effect.forEach([guildId, ...member.roleIds], (id) =>
+                    closedBeforeRead(owner.getResource("roles", { guildId, id })),
+                )
+                if (cached.every((role): role is GuildRole => role !== undefined)) roles = cached
+            }
+            roles ??= [...(yield* remote((budget) => owner.guild("roles.fetchAll", () => roleList(guildId), budget)))]
+
+            const channel = channelId === undefined ? undefined : yield* readChannel(channelId)
             // A thread takes its permissions from its parent channel, read under the same deadline
-            let parentChannel: GuildChannel | undefined
-            if (isThreadChannel(channel)) {
-                const parentId = channel.parentId
-                const parentOptions = requestOptions()
-                if (!parentOptions) return yield* timedOut()
-                parentChannel = yield* owner.channel("channels.fetch", () => channelFetch(parentId), parentOptions)
-            }
+            const parentChannel = isThreadChannel(channel) ? yield* readChannel(channel.parentId) : undefined
 
             return yield* calculatePermissions({
                 guild,

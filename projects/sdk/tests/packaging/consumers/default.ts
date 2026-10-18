@@ -16,6 +16,7 @@ import {
     type RgbColor,
     type PermissionBitInspection,
     type TextSplitOptions,
+    type TextTruncateOptions,
     hierarchy,
     ChannelType,
     Permissions,
@@ -331,6 +332,7 @@ export function pureHelperTypes(bits: bigint) {
     const input: ColorInput = [255, 136, 0]
     const rgb: RgbColor = [255, 136, 0]
     const options: TextSplitOptions = { maxLength: 2_000 }
+    const truncation: TextTruncateOptions = { maxLength: 100, suffix: "..." }
     const snapshot: PermissionBitInspection = permissionBits.inspect(bits)
     // @ts-expect-error Inspection names are immutable
     snapshot.names.push("ManageRoles")
@@ -346,6 +348,7 @@ export function pureHelperTypes(bits: bigint) {
         hex: colors.toHex(0xff8800),
         rgb: colors.toRgb(0xff8800),
         chunks: text.split("text", options),
+        title: text.truncate("text", truncation),
     }
 }
 /** Packed declaration coverage for explicit self-hosted selection and lifetime discovery */
@@ -411,8 +414,15 @@ export function optionalCommandTypes(client: Client) {
     })
     const listing: readonly PrefixCommandMetadata[] = extended.commands
     const parsed = commands.parseQuoted({ message: null as never, prefix: "!", source: 'ping "two words"' })
+    const closest: string | undefined = commands.suggest("pnig", ["ping", "help"])
+    const minutes: number | undefined = commands.parseArgument("5m", { type: "duration" })
+    const target: import("@neontechspace/fluxerly").MemberReference | undefined = commands.parseArgument(
+        "<@30>",
+        { type: "member" },
+        { guildId: "40" } satisfies import("@neontechspace/fluxerly").CommandArgumentParseOptions,
+    )
     const attachment: import("@neontechspace/fluxerly").Subscription = extended.attach(client)
-    return { listing, parsed, attachment }
+    return { listing, parsed, closest, minutes, target, attachment }
 }
 
 /** Packed event waits infer their payload and keep cancellation in the default error union */

@@ -257,6 +257,8 @@ describe.each(modes)("%s command syntax mistakes", (mode) => {
             expect(reason).not.toContain("Ada")
         }
         expect(new Set(reasons).size).toBe(3)
+        // Each rejection says which command the mistake was for, so a reply can name it
+        expect(unmatched.map((outcome) => (outcome as { name?: string }).name)).toEqual(["greet", "greet", "greet"])
         const records = connected.logs.withCode("commands.unmatched")
         expect(records).toHaveLength(3)
         records.forEach((record, index) => expect(record.message).toContain(reasons[index]!))
@@ -276,6 +278,7 @@ describe.each(modes)("%s command syntax mistakes", (mode) => {
                 const text = source.trim()
                 if (text === "") return undefined
                 if (text.includes("|")) return { reason: "Separate arguments with spaces" }
+                if (text.includes("~")) return { reason: "Tildes are not allowed", name: text.split(/\s+/)[0]! }
                 const [name = "", ...args] = text.split(/\s+/)
                 return { name, args, rawArgs: args.join(" ") }
             },
@@ -287,8 +290,9 @@ describe.each(modes)("%s command syntax mistakes", (mode) => {
             .register({ name: "inspect", execute }, { group: ["admin"] })
         await attach(connected, router, { concurrency: 1 })
 
-        for (const content of ["!", "!ping|1", "!admin inspect|1"]) remote.deliver(content)
-        await vi.waitFor(() => expect(unmatched).toHaveLength(3))
+        for (const content of ["!", "!ping|1", "!admin inspect|1", "!PING ~", "!admin inspect ~"])
+            remote.deliver(content)
+        await vi.waitFor(() => expect(unmatched).toHaveLength(5))
 
         expect(unmatched[0]).toEqual({ _tag: "CommandParserRejected" })
         expect(Object.hasOwn(unmatched[0]!, "reason")).toBe(false)
@@ -298,12 +302,23 @@ describe.each(modes)("%s command syntax mistakes", (mode) => {
             reason: "Separate arguments with spaces",
             path: ["admin"],
         })
+        // A rejection that names a command passes the name through as typed, without looking it up, and keeps the group path
+        expect(unmatched[3]).toEqual({ _tag: "CommandParserRejected", reason: "Tildes are not allowed", name: "PING" })
+        expect(unmatched[4]).toEqual({
+            _tag: "CommandParserRejected",
+            reason: "Tildes are not allowed",
+            name: "inspect",
+            path: ["admin"],
+        })
+        expect(Object.isFrozen(unmatched[3])).toBe(true)
     })
 
     test.each([
         ["an empty reason", { reason: "" }],
         ["a reason that is not text", { reason: 5 }],
         ["an unsupported key", { reason: "Not valid", extra: true }],
+        ["a name that is not command-name syntax", { reason: "Not valid", name: "two words" }],
+        ["a name that is not text", { reason: "Not valid", name: 5 }],
         ["a command name beside the reason", { reason: "Not valid", name: "ping", args: [], rawArgs: "" }],
     ])("a parser result with %s is reported as a failure and never reaches onUnmatched", async (_label, result) => {
         const remote = await commandFixture()

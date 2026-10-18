@@ -1,26 +1,27 @@
 /**
  * Built-in command guard rules shared by both API styles: Deny reasons, owner and permission-name validation, the
- * application owner behind ownerOnly without IDs, the private-channel confirmation behind dmOnly and the cache-first
- * permission reads behind requirePermissions.
- * Invariant: Guards read at most the guild, member, roles, channel and a thread's parent channel once per invocation,
- * using enabled caches before a request, never allow on an unconfirmed channel kind, and never retain a decision. The
- * only retained read is the application owner ID, kept per client after its first successful read
+ * application owner behind ownerOnly without IDs and the private-channel confirmation behind dmOnly.
+ * Invariant: Guards never allow on an unconfirmed channel kind and never retain a decision. The permission reads behind
+ * requirePermissions are permissions.fetch with preferCache. The only retained read is the application owner ID, kept per
+ * client after its first successful read
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import { isThreadChannel, type GuildChannel } from "#sdk/channels"
 import { ConfigurationError } from "#sdk/errors"
 import { Permissions } from "#sdk/guilds"
 import type { PermissionName } from "#sdk/helpers"
 import type { MessageCore } from "#sdk/messages"
 import { UserOperationError } from "#sdk/users"
+import { permissionLabel } from "./permission-labels.js"
+import { isUnconfirmedPermissions } from "./permissions.js"
 
 /** Deny reasons the built-in guards return, written for a reply to the invoking user */
 export const guardDenials = Object.freeze({
     guildOnly: "This command works only in a community",
     dmOnly: "This command works only in direct messages",
     ownerOnly: "This command is restricted to the bot owner",
-    missing: (names: readonly string[]) => `Using this command requires these permissions: ${names.join(", ")}`,
-    unconfirmedChannel: "This command cannot check permissions in this kind of channel",
+    missing: (names: readonly PermissionName[]) =>
+        `Using this command requires these permissions: ${names.map((name) => permissionLabel(name)).join(", ")}`,
+    unconfirmedChannel: "This command cannot confirm this channel's permissions",
 })
 
 /** Validate owner IDs when the guard is created, so a misconfigured guard fails at startup rather than per message */
@@ -74,23 +75,8 @@ export const notPrivateChannel = (error: unknown): boolean =>
     error instanceof UserOperationError && error.reason === "response"
 
 /**
- * A cached channel observation usable for permission calculation, or undefined when it must be read.
- * A thread needs only its parent ID, because it takes its permissions from its parent channel, which is read
- * separately. A cached channel without its overwrite list is read again, because calculating without unknown overwrites
- * could grant a permission that the channel denies
+ * Whether a failed permission read proved that the member's permissions in the channel cannot be confirmed.
+ * Fluxer sent the channel without its permission overwrite list. Other failures, such as network errors, timeouts,
+ * rejections or snapshots that do not fit together, fail the command
  */
-export const cachedPermissionChannel = (channel: GuildChannel | undefined): GuildChannel | undefined =>
-    isThreadChannel(channel) || channel?.permissionOverwrites !== undefined ? channel : undefined
-
-/**
- * A freshly read channel prepared for permission calculation, or undefined when its permissions cannot be confirmed.
- * A thread is used as read, because its permissions come from its parent channel. Fluxer's own response is
- * authoritative for a channel that holds its own overwrites, so a read without an overwrite list has no channel
- * overwrites and the member's role permissions apply unchanged. A channel of a type this SDK version does not know may
- * take its permissions from elsewhere, so a missing list there leaves them unknown
- */
-export const fetchedPermissionChannel = (channel: GuildChannel): GuildChannel | undefined => {
-    if (isThreadChannel(channel) || channel.permissionOverwrites !== undefined) return channel
-    if (channel.type === "unknown") return undefined
-    return Object.freeze({ ...channel, permissionOverwrites: Object.freeze([]) }) as GuildChannel
-}
+export const unconfirmedPermissions = isUnconfirmedPermissions

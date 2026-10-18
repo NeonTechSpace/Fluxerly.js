@@ -8,6 +8,7 @@ import { createClient as createNative } from "../../../src/effect.js"
 import { modes } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
+import { rateLimitedResponse } from "../../support/rest-server.js"
 
 const configuration = { token: "fixture-only-not-a-credential" }
 const wire = (id: string, authorId = "30") => ({
@@ -369,6 +370,36 @@ test.each(modes)("%s cleanup reports a closed client as known non-dispatch", asy
     })
     expect(calls.filter((call) => call.method === "POST")).toHaveLength(0)
 })
+
+test.each(modes)(
+    "%s cleanup closed by shutdown during a rate-limit wait keeps the step's rejected outcome",
+    async (mode) => {
+        const clock = sdkClock()
+        const calls: RequestInit[] = []
+        stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+            calls.push(init)
+            return init.method === "GET"
+                ? Response.json([wire("30")])
+                : rateLimitedResponse({ retryAfterSeconds: 0.02 })
+        })
+        const api = await cleanupApi(mode)
+        const plan = await api.preview("20", { authorId: "30", maxScanned: 1, maxSelected: 1 })
+        const failure = api.cleanup(plan).then(
+            () => undefined,
+            (error: unknown) => error,
+        )
+        await clock.waiting(20)
+        await api.close()
+        // Fluxer refused the batch and the retry never started, so the outcome is not the unknown of a lost response
+        expect(await failure).toMatchObject({
+            _tag: "MessageCleanupError",
+            phase: "cleanup",
+            reason: "closed",
+            outcome: "rejected",
+        })
+        expect(calls.filter((call) => call.method !== "GET")).toHaveLength(1)
+    },
+)
 
 test.each(modes)(
     "%s bounds preview scans and selections, uses default options, and permits an empty exact plan",

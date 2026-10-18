@@ -1,22 +1,21 @@
 import * as Effect from "effect/Effect"
-import type { NativePrefixCommandContext, NativePrefixCommandGuard } from "#sdk/native-commands"
+import type { NativePrefixCommandGuard } from "#sdk/native-commands"
 import type { PrefixCommandGuardResult } from "#sdk/commands"
 import type { PermissionName } from "#sdk/helpers"
 import type { Message, MessageCore } from "#sdk/messages"
-import { isThreadChannel, type ChannelOperationFailure } from "#sdk/channels"
-import type { GuildOperationFailure, GuildRole } from "#sdk/guilds"
+import type { ChannelOperationFailure } from "#sdk/channels"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { UserOperationFailure } from "#sdk/users"
 import type { BotApplicationOperationFailure } from "#sdk/application"
 import {
     applicationOwners,
-    cachedPermissionChannel,
-    fetchedPermissionChannel,
     guardDenials,
     inGuild,
     missingPermissions,
     notPrivateChannel,
     ownerIds as validOwnerIds,
     permissionNames,
+    unconfirmedPermissions,
 } from "#sdk/internal/command-guards"
 
 /**
@@ -64,18 +63,23 @@ export interface NativeGuards {
     ): NativePrefixCommandGuard<never, never, M>
     /**
      * Allow the command only when the invoking member has every named permission in the message's channel, and deny it in
-     * direct messages. The guard reads the community, member, roles and channel from enabled caches first and fetches only
-     * what is missing, at most once each per invocation, then applies permissions.calculate.
+     * direct messages. The guard decides with permissions.fetch and preferCache: It reads the community, member, roles and
+     * channel from enabled caches first and fetches only what is missing, at most once each per invocation, then applies
+     * permissions.calculate. The reads share one deadline, rest.defaultTimeoutMs, and only fetches count toward it.
+     * Cached observations reflect the last applied gateway events, so a permission change that Fluxer has made but the
+     * gateway has not yet delivered is not seen. Where a stale grant matters, check again with permissions.fetch before acting.
      * A cached channel without its overwrite list is read again instead of being treated as having no overwrites.
-     * A channel read that Fluxer answers without an overwrite list has no channel overwrites, so the member's role
-     * permissions decide.
      * In a thread, the guard also reads the thread's parent channel the same way, cache first, and decides as Fluxer
      * does: From the parent channel's permissions, with SendMessages granted exactly when SendMessagesInThreads is.
      * It does not check whether the member can see a private thread or whether the thread is archived or locked.
-     * A channel of a type this SDK version does not know can take its permissions from elsewhere, so a read of one
-     * without an overwrite list denies the command rather than guessing.
-     * A failed read fails the command, which is reported with the command name.
-     * The decision does not guarantee that Fluxer allows a later action
+     * Fluxer sends a channel's permission overwrite list, empty when there are none. When Fluxer sent the channel
+     * without its permission overwrite list, its permissions cannot be confirmed, so the guard denies the command
+     * rather than guessing.
+     * Every other failed read fails the command, which is reported with the command name.
+     * The decision does not guarantee that Fluxer allows a later action. A timed-out member keeps its permission bits,
+     * but Fluxer blocks sending, editing and publishing own messages, reacting, uploading, typing, changing the own
+     * nickname, writing in threads and joining voice, so check members.timeoutState as well.
+     * The denial names each missing permission by Fluxer's label, such as Manage community
      */
     requirePermissions<M extends MessageCore = Message>(
         names: readonly PermissionName[],
@@ -149,46 +153,23 @@ export const guards: NativeGuards = Object.freeze({
         names: readonly PermissionName[],
     ): NativePrefixCommandGuard<GuildOperationFailure | ChannelOperationFailure, never, M> => {
         const required = permissionNames(names)
-        return (context) =>
-            inGuild(context.message)
-                ? memberPermissions(context).pipe(
-                      Effect.map((bits) => {
-                          if (bits === undefined) return { deny: guardDenials.unconfirmedChannel }
-                          const missing = missingPermissions(bits, required)
-                          return missing.length === 0 || { deny: guardDenials.missing(missing) }
-                      }),
-                  )
+        return ({ client, message }) =>
+            inGuild(message)
+                ? client.permissions
+                      .fetch(
+                          { guildId: message.guildId, userId: message.author.id, channelId: message.channelId },
+                          { preferCache: true },
+                      )
+                      .pipe(
+                          Effect.map((bits): PrefixCommandGuardResult => {
+                              const missing = missingPermissions(bits, required)
+                              return missing.length === 0 || { deny: guardDenials.missing(missing) }
+                          }),
+                          // The unconfirmed channel is an expected denial, any other failure fails the command
+                          Effect.catchIf(unconfirmedPermissions, () =>
+                              Effect.succeed<PrefixCommandGuardResult>({ deny: guardDenials.unconfirmedChannel }),
+                          ),
+                      )
                 : Effect.succeed({ deny: guardDenials.guildOnly })
     },
 })
-
-/**
- * Calculate the invoking member's channel permissions, reading each resource from the cache before fetching it.
- * Undefined means the channel's permissions cannot be confirmed
- */
-function memberPermissions<M extends MessageCore>(
-    context: NativePrefixCommandContext<M>,
-): Effect.Effect<bigint | undefined, GuildOperationFailure | ChannelOperationFailure> {
-    const { client, message } = context
-    const guildId = message.guildId!
-    const target = { guildId, userId: message.author.id }
-    const cachedOr = <A, E>(cached: Effect.Effect<A | undefined>, fetch: () => Effect.Effect<A, E>) =>
-        cached.pipe(Effect.flatMap((value) => (value === undefined ? fetch() : Effect.succeed(value))))
-    return Effect.gen(function* () {
-        const guild = yield* cachedOr(client.guilds.get(guildId), () => client.guilds.fetch(guildId))
-        const member = yield* cachedOr(client.members.get(target), () => client.members.fetch(target))
-        const cached = yield* Effect.forEach([guildId, ...member.roleIds], (id) => client.roles.get({ guildId, id }))
-        const roles = cached.every((role): role is GuildRole => role !== undefined)
-            ? cached
-            : yield* client.roles.fetchAll(guildId)
-        const readChannel = (channelId: string) =>
-            cachedOr(client.channels.get(channelId).pipe(Effect.map(cachedPermissionChannel)), () =>
-                client.channels.fetch(channelId).pipe(Effect.map(fetchedPermissionChannel)),
-            )
-        const channel = yield* readChannel(message.channelId)
-        if (!isThreadChannel(channel)) return channel && client.permissions.calculate({ guild, member, roles, channel })
-        // A thread takes its permissions from its parent channel
-        const parentChannel = yield* readChannel(channel.parentId)
-        return parentChannel && client.permissions.calculate({ guild, member, roles, channel, parentChannel })
-    })
-}

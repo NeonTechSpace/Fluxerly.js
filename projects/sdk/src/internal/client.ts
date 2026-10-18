@@ -80,6 +80,7 @@ import {
     type ConnectError,
     type ConnectionFailure,
 } from "#sdk/errors"
+import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { type Configuration, validateConfiguration } from "./configuration.js"
 import { InstanceResolver } from "./instance.js"
 import type { LinkHelpers } from "#sdk/helpers"
@@ -1069,7 +1070,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     ) {
         return suspendInput(() => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+                return Effect.fail(closedBeforeSend())
             const request = build()
             if (request instanceof InputValidationFailure)
                 return Effect.fail(
@@ -1191,7 +1192,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.application(this.#configuration.token, operation, build, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1225,7 +1226,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.request<T>(this.#configuration.token, input)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1299,7 +1300,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.webhook(this.#configuration.token, operation, build, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1307,7 +1308,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.guild(this.#configuration.token, operation, build, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1334,7 +1335,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.channel(this.#configuration.token, operation, build, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1399,7 +1400,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             if (request instanceof MessageError) return Effect.fail(request)
             return this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.reply(this.#configuration.token, request.target, request.input, options)
-                : Effect.fail(new ClientClosedError())
+                : Effect.fail(closedBeforeSend())
         })
     }
 
@@ -1407,7 +1408,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.send(this.#configuration.token, channelId, input, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
     refreshAttachmentUrls(
@@ -1417,7 +1418,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.refreshAttachmentUrls(this.#configuration.token, urls, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
     downloadAttachment(
@@ -1445,14 +1446,14 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.forward(this.#configuration.token, channelId, input, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
     sendDirectMessage(userId: string, input: MessageInput | string, options?: SendOptions) {
         return suspendInput((): Effect.Effect<M, SendError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+                return Effect.fail(closedBeforeSend())
             if (!identifier(userId))
                 return Effect.fail(
                     new MessageError({
@@ -1488,7 +1489,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.fetchReactionUsers(this.#configuration.token, target, emoji, query, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1502,7 +1503,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.reaction(this.#configuration.token, operation, target, emoji, options, userId)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1510,7 +1511,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.fetch(this.#configuration.token, target, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1518,7 +1519,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.publish(this.#configuration.token, target, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1526,7 +1527,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.fetchCrosspostSource(this.#configuration.token, target, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1534,7 +1535,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.typing(this.#configuration.token, channelId, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1608,7 +1609,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.pin(this.#configuration.token, operation, target, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1616,7 +1617,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.fetchPins(this.#configuration.token, channel, query, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1624,7 +1625,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.fetchHistory(this.#configuration.token, channelId, query, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1632,7 +1633,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.search(this.#configuration.token, context, query, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1640,7 +1641,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.edit(this.#configuration.token, target, input, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1648,7 +1649,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.delete(this.#configuration.token, target, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1656,7 +1657,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.deleteAttachment(this.#configuration.token, target, attachmentId, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
@@ -1664,14 +1665,14 @@ export class ClientOwner<M extends MessageCore = Message> {
         return Effect.suspend(() =>
             this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
                 ? this.rest.deleteMany(this.#configuration.token, channelId, ids, options)
-                : Effect.fail(new ClientClosedError()),
+                : Effect.fail(closedBeforeSend()),
         )
     }
 
     deleteOwnMessages(channelId: string, options: unknown) {
         return suspendInput(() => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+                return Effect.fail(closedBeforeSend())
             const checked = ownDeletionOptions<MessageOperationOptions>(options)
             if (checked instanceof InputValidationFailure)
                 return Effect.fail(

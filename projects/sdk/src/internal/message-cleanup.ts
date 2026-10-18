@@ -136,7 +136,16 @@ function wrappedFailure(
             cause: source,
         })
     }
-    return error({ phase, reason: "closed", outcome: "unknown", scannedCount, ids, submitted, terminal, cause: source })
+    return error({
+        phase,
+        reason: "closed",
+        outcome: source.outcome ?? "unknown",
+        scannedCount,
+        ids,
+        submitted,
+        terminal,
+        cause: source,
+    })
 }
 
 function validOptions(value: unknown, progress: boolean): PreviewOptions | InputValidationFailure {

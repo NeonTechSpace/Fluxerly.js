@@ -399,14 +399,14 @@ describe.each(modes)("%s built-in guards", (mode) => {
             { _tag: "CommandGuardRejected", reason: guardDenials.missing(["BanMembers", "KickMembers"]) },
         ])
         const reason = rejected[0]!._tag === "CommandGuardRejected" ? rejected[0]!.reason : undefined
-        expect(reason).toContain("BanMembers")
-        expect(reason).toContain("KickMembers")
-        expect(reason).not.toContain("SendMessages")
+        expect(reason).toContain("Ban members")
+        expect(reason).toContain("Kick members")
+        expect(reason).not.toContain("Send messages")
         expect(executed).toEqual(["purge"])
         expect(reports).toEqual([])
     })
 
-    test("requirePermissions decides from role permissions in a channel whose read has no overwrites", async () => {
+    test("requirePermissions denies a channel whose read has no overwrite list, as Fluxer always sends one", async () => {
         const remote = await commandFixture((call) =>
             call.method === "GET" && call.path === "/v1/channels/20"
                 ? Response.json(channelWithoutOverwrites)
@@ -418,22 +418,43 @@ describe.each(modes)("%s built-in guards", (mode) => {
         const router = createRouter(mode, { prefix: "!" }).registerMany({
             purge: {
                 guard: guardSet.requirePermissions(["ManageMessages"]),
-                execute: () => act(mode, () => void executed.push("purge")),
-            },
-            ban: {
-                guard: guardSet.requirePermissions(["BanMembers"]),
                 onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
                     act(mode, () => void rejected.push(rejection)),
-                execute: () => act(mode, () => void executed.push("ban")),
+                execute: () => act(mode, () => void executed.push("purge")),
             },
         })
         const reports = await attach(connected, router, { concurrency: 1 })
         remote.deliver("!purge", { guildId })
-        remote.deliver("!ban", { guildId })
-        await vi.waitFor(() => expect(executed.length + rejected.length).toBe(2))
-        expect(executed).toEqual(["purge"])
-        expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.missing(["BanMembers"]) }])
+        await vi.waitFor(() => expect(rejected).toHaveLength(1))
+        // The member holds the permission, but a missing list leaves the channel's overwrites unknown
+        expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.unconfirmedChannel }])
+        expect(executed).toEqual([])
         expect(reports).toEqual([])
+    })
+
+    test("requirePermissions fails the command, rather than denying it, when the snapshots do not fit together", async () => {
+        // The member holds role 77, which the role list lacks, as when a role is deleted between the two reads
+        const remote = await commandFixture((call) =>
+            call.method === "GET" && call.path === `/v1/guilds/${guildId}/members/30`
+                ? Response.json({ ...memberWire, roles: ["41", "77"] })
+                : permissionRoutes(call),
+        )
+        const connected = await connect(mode)
+        const executed: string[] = []
+        const rejected: PrefixCommandRejection[] = []
+        const router = createRouter(mode, { prefix: "!" }).register({
+            name: "purge",
+            guard: guardSet.requirePermissions(["ManageMessages"]),
+            onReject: (_context: unknown, rejection: PrefixCommandRejection) =>
+                act(mode, () => void rejected.push(rejection)),
+            execute: () => act(mode, () => void executed.push("purge")),
+        })
+        const reports = await attach(connected, router, { concurrency: 1 })
+        remote.deliver("!purge", { guildId })
+        await vi.waitFor(() => expect(reports).toHaveLength(1))
+        expect(reports[0]).toMatchObject({ kind: "handler", command: "purge" })
+        expect(rejected).toEqual([])
+        expect(executed).toEqual([])
     })
 
     test("requirePermissions decides in a thread from its parent channel, where SendMessages follows SendMessagesInThreads", async () => {

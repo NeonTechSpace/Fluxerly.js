@@ -1,6 +1,12 @@
 import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
-import { SdkDefect, hierarchy, createClient, type RoleHierarchyInput } from "../../../src/index.js"
+import {
+    SdkDefect,
+    hierarchy,
+    createClient,
+    type RoleHierarchyInput,
+    type RoleManagementInput,
+} from "../../../src/index.js"
 import { createClient as createNative, hierarchy as nativeHierarchy } from "../../../src/effect.js"
 import { GuildOperationError } from "../../../src/guilds.js"
 import { modes } from "../../support/both-apis.js"
@@ -66,7 +72,12 @@ function value<A>(result: { readonly isOk: () => boolean; readonly value?: A; re
 
 function expectInputError(
     run: () => unknown,
-    operation: "hierarchy.compare" | "hierarchy.isAbove" | "hierarchy.canManage",
+    operation:
+        | "hierarchy.compare"
+        | "hierarchy.isAbove"
+        | "hierarchy.canManage"
+        | "hierarchy.highestRole"
+        | "hierarchy.canManageRole",
 ) {
     let thrown: unknown
     try {
@@ -374,4 +385,91 @@ test.each(modes)("%s fetchCanManage checks the member named by actorUserId inste
         inputValidation: { path: "options.actorUserId", constraint: "format" },
     })
     expect(calls).toEqual([])
+})
+
+const management = (actor = member("2", ["100"]), target = role("101", 1)): RoleManagementInput => ({
+    guild: guild(),
+    actor,
+    role: target,
+    roles: [role("20", 0), role("100", 2), role("101", 1), role("102", 3)],
+})
+
+test.each([
+    ["default", hierarchy],
+    ["native", nativeHierarchy],
+])("%s highestRole picks the highest explicit role and ignores the everyone role", (_mode, helpers) => {
+    const roles = [role("20", 0), role("100", 2), role("101", 1), role("102", 2)]
+    expect(helpers.highestRole(member("2", ["101", "100"]), roles)).toBe(roles[1])
+    // Equal positions rank the smaller ID higher, whatever the order of the member's roles
+    expect(helpers.highestRole(member("2", ["102", "100"]), roles)).toBe(roles[1])
+    expect(helpers.highestRole(member("2", ["100", "102"]), roles)).toBe(roles[1])
+    // A member with no explicit roles has no rank, with or without the everyone role in the list
+    expect(helpers.highestRole(member("2"), roles)).toBeUndefined()
+    expect(helpers.highestRole(member("2"), [])).toBeUndefined()
+})
+
+test.each([
+    ["default", hierarchy],
+    ["native", nativeHierarchy],
+])("%s canManageRole checks rank alone, with owner, tie and own-role rules", (_mode, helpers) => {
+    // Position 2 outranks position 1, and the target role need not be in the list
+    expect(helpers.canManageRole(management())).toBe(true)
+    expect(helpers.canManageRole({ ...management(), role: role("500", 1) })).toBe(true)
+    expect(helpers.canManageRole({ ...management(), role: role("102", 3) })).toBe(false)
+    // The owner passes without any role, and a member with no roles fails
+    expect(helpers.canManageRole(management(member("1"), role("102", 3)))).toBe(true)
+    expect(helpers.canManageRole(management(member("2"), role("101", 1)))).toBe(false)
+    // At an equal position the smaller ID ranks higher
+    expect(helpers.canManageRole({ ...management(), role: role("99", 2) })).toBe(false)
+    expect(helpers.canManageRole({ ...management(), role: role("101", 2) })).toBe(true)
+    // Holding the target role as the highest role is not enough, and the everyone role ranks lowest
+    expect(helpers.canManageRole({ ...management(), role: role("100", 2) })).toBe(false)
+    expect(helpers.canManageRole({ ...management(), role: role("20", 0) })).toBe(true)
+})
+
+test("canManageRole gives Administrator no rank, because Fluxer applies rank to every non-owner", () => {
+    const administrator = { ...role("100", 1), permissions: 1n << 3n }
+    const above = role("101", 5)
+    expect(
+        hierarchy.canManageRole({
+            guild: guild(),
+            actor: member("2", ["100"]),
+            role: above,
+            roles: [administrator, above],
+        }),
+    ).toBe(false)
+})
+
+test("highestRole and canManageRole reject malformed input in both APIs", () => {
+    const roles = [role("20", 0), role("100", 2)]
+    for (const helpers of [hierarchy, nativeHierarchy]) {
+        const bad: (() => unknown)[] = [
+            // Roles that do not cover the member's roles
+            () => helpers.highestRole(member("2", ["100", "101"]), roles),
+            // Duplicate, cross-community and malformed role snapshots
+            () => helpers.highestRole(member("2", ["100"]), [...roles, role("100", 2)]),
+            () => helpers.highestRole(member("2", ["100"]), [role("100", 2, "21")]),
+            () => helpers.highestRole(member("2", ["100"]), [role("100", -1)]),
+            () => helpers.highestRole(member("2", ["100"]), "roles" as never),
+            // A member that lists the everyone role, or belongs to another community
+            () => helpers.highestRole(member("2", ["20", "100"]), roles),
+            () => helpers.highestRole({ ...member("2", ["100"]), guildId: "21" }, roles),
+            () => helpers.highestRole(undefined as never, roles),
+        ]
+        for (const run of bad) expectInputError(run, "hierarchy.highestRole")
+        const input = management()
+        const badInput: RoleManagementInput[] = [
+            { ...input, actor: member("2", ["100", "103"]) },
+            { ...input, roles: [...input.roles, role("100", 2)] },
+            { ...input, roles: [role("100", 2, "21")] },
+            { ...input, actor: member("2", ["20", "100"]) },
+            { ...input, actor: { ...member("2", ["100"]), guildId: "21" } },
+            { ...input, role: role("101", 1, "21") },
+            { ...input, role: { ...role("101", 1), position: 1.5 } },
+            { ...input, guild: { ...guild(), id: "21" } },
+            { ...input, guild: undefined as never },
+            undefined as never,
+        ]
+        for (const value of badInput) expectInputError(() => helpers.canManageRole(value), "hierarchy.canManageRole")
+    }
 })

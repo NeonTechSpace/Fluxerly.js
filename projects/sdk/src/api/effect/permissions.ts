@@ -1,5 +1,5 @@
-import type { PermissionInput, PermissionTarget } from "#sdk/permissions"
-import type { GuildOperationFailure, GuildOperationOptions } from "#sdk/guilds"
+import type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type * as Effect from "effect/Effect"
 import type { ChannelOperationFailure } from "#sdk/channels"
 
@@ -19,7 +19,10 @@ export interface PermissionHelpers {
      * A thread uses the overwrites of the parentChannel supplied with it, then grants SendMessages exactly when
      * SendMessagesInThreads is granted, as Fluxer does. A thread without its parentChannel, or with any other channel as
      * parentChannel, is rejected.
-     * Missing or inconsistent input is misuse and throws GuildOperationError for permissions.calculate with reason input in both APIs
+     * Missing or inconsistent input is misuse and throws GuildOperationError for permissions.calculate with reason input in both APIs.
+     * A timed-out member keeps its permission bits, but Fluxer blocks sending messages, editing and publishing the member's
+     * own messages, reacting, uploading, typing, changing the member's own nickname, writing in threads and joining voice,
+     * so check members.timeoutState as well
      *
      * @remarks
      * Returns the value synchronously, as in the default API, because the calculation is pure
@@ -27,18 +30,29 @@ export interface PermissionHelpers {
     calculate(input: PermissionInput): bigint
     /**
      * Fetch guild, member, role and optional channel data, then calculate their permission flags.
-     * No gateway connection or cache-first lookup is needed.
+     * No gateway connection is needed, and by default every observation is read fresh without consulting a cache.
+     * Set `preferCache` to take each observation from an enabled cache when it is there and fetch only what is missing.
+     * A cached channel without its overwrite list is fetched, and so are all roles when any needed role is not cached.
+     * Cached observations reflect the last applied gateway events, which can differ from Fluxer, and they can come from
+     * different moments.
+     * Cached entries stay while a shard can resume and are cleared when a new session starts, after which they are fetched.
+     * Use the default right before an action where a stale grant matters. With caches disabled, `preferCache` behaves as the default.
      * A thread channel adds a read of its parent channel, and the result follows Fluxer's thread rule as in calculate.
-     * Underlying reads can enter enabled caches, but the calculated result is not cached.
+     * Underlying fetches can enter enabled caches, but the calculated result is not cached.
      * The sequential reads are separate observations, so the result does not guarantee a later action will succeed.
      * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the whole helper with shared read retries and awaited cancellation cleanup.
-     * Invalid target or deadline fails with permissions.fetch reason input.
+     * Only fetches count toward it, so reads served by a cache need no time.
+     * Invalid target, deadline or a `preferCache` that is not a boolean fails with permissions.fetch reason input.
      * Resource errors keep their GuildOperationError or ChannelOperationError.
-     * A channel from another community fails instead of mixing guild data.
-     * Client closure fails with ClientClosedError
+     * A channel from another community fails instead of mixing guild data, and so does a channel other than a thread that
+     * Fluxer sends without its permission overwrite list, with permissions.fetch reason response, outcome unknown, details.read
+     * and details.channelId.
+     * Client closure fails with ClientClosedError. Its outcome is notDispatched when the client closes before a read is
+     * sent or during a cache lookup, including when every observation is cached, rejected while a read waits out a 429
+     * before its retry, and unknown with details.read while a read is in flight
      */
     fetch(
         target: PermissionTarget,
-        options?: GuildOperationOptions,
+        options?: PermissionFetchOptions,
     ): Effect.Effect<bigint, GuildOperationFailure | ChannelOperationFailure>
 }

@@ -100,6 +100,7 @@ operation|default|Members.setMute|(target: MemberReference, input: VoiceMuteInpu
 operation|default|Members.setNickname|(member: MemberReference, nickname: string | null, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.setRoles|(member: MemberReference, roleIds: readonly string[], options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.timeout|(target: MemberReference, durationMs: number, options?: DefaultTimeoutOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.timeoutState|(member: Pick<GuildMember, "communicationDisabledUntil">, options?: TimeoutStateOptions | undefined) => MemberTimeoutState
 operation|default|Members.unban|(target: MemberReference, options?: DefaultModerationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Messages.addReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.cleanup|(plan: MessageCleanupPlan<M>, options?: DefaultMessageCleanupOptions | undefined) => ResultAsync<MessageCleanupReport, CancelledError | ConfigurationError | MessageCleanupError>
@@ -145,7 +146,7 @@ operation|default|OAuthClient.refresh|(refreshToken: string, options?: DefaultOA
 operation|default|OAuthClient.revoke|(input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token"; }, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | OAuthOperationFailure>
 operation|default|OAuthClient.shutdown|() => ResultAsync<void, never>
 operation|default|PermissionHelpers.calculate|(input: PermissionInput) => bigint
-operation|default|PermissionHelpers.fetch|(target: PermissionTarget, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<bigint, CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
+operation|default|PermissionHelpers.fetch|(target: PermissionTarget, options?: DefaultPermissionFetchOptions | undefined) => ResultAsync<bigint, CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
 operation|default|Presence.set|(input: PresenceInput) => Result<void, PresenceFailure>
 operation|default|Presence.setMembers|(guildId: string, memberIds: readonly string[]) => Result<void, PresenceFailure>
 operation|default|RestRequests.request|<T = unknown>(input: DefaultRestRequest) => ResultAsync<RestResponse<T>, CancelledError | ConfigurationError | RestRequestFailure>
@@ -301,6 +302,7 @@ operation|native|Members.setMute|(target: MemberReference, input: VoiceMuteInput
 operation|native|Members.setNickname|(member: MemberReference, nickname: string | null, options?: GuildAuditOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.setRoles|(member: MemberReference, roleIds: readonly string[], options?: GuildAuditOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.timeout|(target: MemberReference, durationMs: number, options?: TimeoutOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.timeoutState|(member: Pick<GuildMember, "communicationDisabledUntil">, options?: TimeoutStateOptions | undefined) => MemberTimeoutState
 operation|native|Members.unban|(target: MemberReference, options?: ModerationOptions | undefined) => Effect<void, GuildOperationFailure, never>
 operation|native|Messages.addReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.cleanup|(plan: MessageCleanupPlan<M>, options?: MessageCleanupOptions | undefined) => Effect<MessageCleanupReport, MessageCleanupError, never>
@@ -346,7 +348,7 @@ operation|native|OAuthClient.refresh|(refreshToken: string, options?: OAuthOpera
 operation|native|OAuthClient.revoke|(input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token"; }, options?: OAuthOperationOptions | undefined) => Effect<void, OAuthOperationFailure, never>
 operation|native|OAuthClient.shutdown|() => Effect<void, never, never>
 operation|native|PermissionHelpers.calculate|(input: PermissionInput) => bigint
-operation|native|PermissionHelpers.fetch|(target: PermissionTarget, options?: GuildOperationOptions | undefined) => Effect<bigint, ChannelOperationError | ClientClosedError | GuildOperationError, never>
+operation|native|PermissionHelpers.fetch|(target: PermissionTarget, options?: PermissionFetchOptions | undefined) => Effect<bigint, ChannelOperationError | ClientClosedError | GuildOperationError, never>
 operation|native|Presence.set|(input: PresenceInput) => Effect<void, PresenceFailure, never>
 operation|native|Presence.setMembers|(guildId: string, memberIds: readonly string[]) => Effect<void, PresenceFailure, never>
 operation|native|RestRequests.request|<T = unknown>(input: RestRequest) => Effect<RestResponse<T>, RestRequestFailure, never>
@@ -629,6 +631,7 @@ field|shared|AttachmentDownloadFailure.code|string|optional=false|nullable=false
 field|shared|AttachmentDownloadFailure.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|AttachmentDownloadFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|AttachmentDownloadFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
+field|shared|AttachmentDownloadFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|AttachmentDownloadFailure.reason|"busy" | "input" | "network" | "response" | "timeout" | "tooLarge" | "untrustedUrl" | undefined|optional=true|nullable=false
 field|shared|AttachmentDownloadFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|AttachmentDownloadFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
@@ -995,6 +998,7 @@ field|shared|ClientClosedError._tag|"ClientClosedError"|optional=false|nullable=
 field|shared|ClientClosedError.code|string|optional=false|nullable=false
 field|shared|ClientClosedError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|ClientClosedError.hint|string | undefined|optional=true|nullable=false
+field|shared|ClientClosedError.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|ClientClosedError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|shared|ClientCounters.cacheChangesDropped|number|optional=false|nullable=false
 field|shared|ClientCounters.cleanupFailures|number|optional=false|nullable=false
@@ -1040,6 +1044,7 @@ field|shared|CollectorFailure.code|string|optional=false|nullable=false
 field|shared|CollectorFailure.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|CollectorFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|CollectorFailure.limit|"maxBytes" | "maxPendingBytes" | "maxPendingMessages" | null | undefined|optional=true|nullable=true
+field|shared|CollectorFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|CollectorFailure.reason|"connectionLost" | "filter" | "handler" | "notConnected" | "overflow" | undefined|optional=true|nullable=false
 field|shared|CollectorFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|native|CollectorOptions.filter|((message: M) => boolean) | undefined|optional=true|nullable=false
@@ -1064,6 +1069,7 @@ field|shared|ConnectError.code|string|optional=false|nullable=false
 field|shared|ConnectError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|ConnectError.failure|AuthenticationError | ConnectionError | ConnectionTimeoutError | RateLimitError | undefined|optional=true|nullable=false
 field|shared|ConnectError.hint|string | undefined|optional=true|nullable=false
+field|shared|ConnectError.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|ConnectError.phase|"discovery" | "gateway" | undefined|optional=true|nullable=false
 field|shared|ConnectError.reason|"closed" | "network" | "protocol" | undefined|optional=true|nullable=false
 field|shared|ConnectError.retryAfterMs|null | number | undefined|optional=true|nullable=true
@@ -1113,6 +1119,7 @@ field|shared|CountOperationFailure.details|Readonly<Record<string, unknown>>|opt
 field|shared|CountOperationFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|CountOperationFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
 field|shared|CountOperationFailure.operation|CountOperation | undefined|optional=true|nullable=false
+field|shared|CountOperationFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|CountOperationFailure.reason|"busy" | "connectionLost" | "input" | "notConnected" | "response" | "timeout" | undefined|optional=true|nullable=false
 field|shared|CountOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|native|CountOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
@@ -1205,6 +1212,9 @@ field|default|DefaultOAuthOperationOptions.timeoutMs|number | undefined|optional
 field|default|DefaultOwnMessageDeletionOptions.confirm|true|optional=false|nullable=false
 field|default|DefaultOwnMessageDeletionOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|DefaultOwnMessageDeletionOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|default|DefaultPermissionFetchOptions.preferCache|boolean | undefined|optional=true|nullable=false
+field|default|DefaultPermissionFetchOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|default|DefaultPermissionFetchOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|default|DefaultReactionCollectorOptions.emoji|ReactionEmojiInput | undefined|optional=true|nullable=false
 field|default|DefaultReactionCollectorOptions.filter|((reaction: MessageReaction) => boolean) | undefined|optional=true|nullable=false
 field|default|DefaultReactionCollectorOptions.guildId|string | undefined|optional=true|nullable=false
@@ -1520,6 +1530,7 @@ field|shared|EventWaitFailure.details|Readonly<Record<string, unknown>>|optional
 field|shared|EventWaitFailure.field|"aliases" | "args" | "assignments" | "attemptTimeoutMs" | "cache" | "cacheObserverOptions" | "categories" | "channelId" | "channels" | "childEnvironment" | "childId" | "childOutput" | "collectorOptions" | "command" | "commands" | "concurrency" | "configuration" | "connection" | "cooldown" | "debug" | "dedupe" | "defaultTimeoutMs" | "delayMs" | "diagnosticsIntervalMs" | "directMessages" | "drainMs" | "embedField" | "emoji" | "emojis" | "entry" | "event" | "eventOptions" | "execArgv" | "fetch" | "filter" | "flags" | "format" | "gateway" | "guildId" | "guilds" | "handler" | "healthyResetMs" | "help" | "identify" | "idleMs" | "ignoredEvents" | "instance" | "intervalMs" | "key" | "kind" | "level" | "limit" | "listener" | "logging" | "maxAgeMs" | "maxAttempts" | "maxBytes" | "maxDelayMs" | "maxEntries" | "maxMessages" | "maxPendingBytes" | "maxPendingChanges" | "maxPendingMessages" | "maxQueued" | "maxReactions" | "maxStartupAttempts" | "mediaConcurrency" | "members" | "message" | "messageFields" | "messages" | "middleware" | "minDelayMs" | "minimumSpacingMs" | "next" | "observe" | "onError" | "onMalformedDispatch" | "onMessage" | "onReaction" | "overflow" | "pages" | "paginateOptions" | "parser" | "partition" | "prefix" | "presence" | "processes" | "queuedJsonMaxBytes" | "recovery" | "removeClicks" | "rest" | "restart" | "roles" | "schedule" | "sessions" | "shardIds" | "sharding" | "shardsPerProcess" | "shutdownTimeoutMs" | "signal" | "sink" | "startupTimeoutMs" | "stickers" | "supervisor" | "task" | "timeoutMs" | "token" | "totalShards" | "transport" | "unsafe" | "uploads" | "userAgent" | "users" | "webSocket" | undefined|optional=true|nullable=false
 field|shared|EventWaitFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|EventWaitFailure.limit|"bytes" | "messages" | undefined|optional=true|nullable=false
+field|shared|EventWaitFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|EventWaitFailure.reason|"filter" | "timeout" | undefined|optional=true|nullable=false
 field|shared|EventWaitFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|native|EventWaitOptions.filter|((event: EventMap<M>[K]) => boolean) | undefined|optional=true|nullable=false
@@ -1630,6 +1641,7 @@ field|shared|GatewaySendFailure.details|Readonly<Record<string, unknown>>|option
 field|shared|GatewaySendFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|GatewaySendFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
 field|shared|GatewaySendFailure.opcode|null | number | undefined|optional=true|nullable=true
+field|shared|GatewaySendFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|GatewaySendFailure.reason|"busy" | "input" | "notOwned" | "notReady" | "reserved" | undefined|optional=true|nullable=false
 field|shared|GatewaySendFailure.shardId|null | number | undefined|optional=true|nullable=true
 field|shared|GatewaySendFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
@@ -2140,6 +2152,7 @@ field|shared|InstanceResolveError.code|string|optional=false|nullable=false
 field|shared|InstanceResolveError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|InstanceResolveError.field|"aliases" | "args" | "assignments" | "attemptTimeoutMs" | "cache" | "cacheObserverOptions" | "categories" | "channelId" | "channels" | "childEnvironment" | "childId" | "childOutput" | "collectorOptions" | "command" | "commands" | "concurrency" | "configuration" | "connection" | "cooldown" | "debug" | "dedupe" | "defaultTimeoutMs" | "delayMs" | "diagnosticsIntervalMs" | "directMessages" | "drainMs" | "embedField" | "emoji" | "emojis" | "entry" | "event" | "eventOptions" | "execArgv" | "fetch" | "filter" | "flags" | "format" | "gateway" | "guildId" | "guilds" | "handler" | "healthyResetMs" | "help" | "identify" | "idleMs" | "ignoredEvents" | "instance" | "intervalMs" | "key" | "kind" | "level" | "limit" | "listener" | "logging" | "maxAgeMs" | "maxAttempts" | "maxBytes" | "maxDelayMs" | "maxEntries" | "maxMessages" | "maxPendingBytes" | "maxPendingChanges" | "maxPendingMessages" | "maxQueued" | "maxReactions" | "maxStartupAttempts" | "mediaConcurrency" | "members" | "message" | "messageFields" | "messages" | "middleware" | "minDelayMs" | "minimumSpacingMs" | "next" | "observe" | "onError" | "onMalformedDispatch" | "onMessage" | "onReaction" | "overflow" | "pages" | "paginateOptions" | "parser" | "partition" | "prefix" | "presence" | "processes" | "queuedJsonMaxBytes" | "recovery" | "removeClicks" | "rest" | "restart" | "roles" | "schedule" | "sessions" | "shardIds" | "sharding" | "shardsPerProcess" | "shutdownTimeoutMs" | "signal" | "sink" | "startupTimeoutMs" | "stickers" | "supervisor" | "task" | "timeoutMs" | "token" | "totalShards" | "transport" | "unsafe" | "uploads" | "userAgent" | "users" | "webSocket" | undefined|optional=true|nullable=false
 field|shared|InstanceResolveError.hint|string | undefined|optional=true|nullable=false
+field|shared|InstanceResolveError.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|InstanceResolveError.phase|"discovery" | "gateway" | undefined|optional=true|nullable=false
 field|shared|InstanceResolveError.reason|"closed" | "network" | "protocol" | undefined|optional=true|nullable=false
 field|shared|InstanceResolveError.retryAfterMs|null | number | undefined|optional=true|nullable=true
@@ -2238,6 +2251,7 @@ field|shared|MemberChunkFailure.details|Readonly<Record<string, unknown>>|option
 field|shared|MemberChunkFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|MemberChunkFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
 field|shared|MemberChunkFailure.operation|"members.iterateChunks" | undefined|optional=true|nullable=false
+field|shared|MemberChunkFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|MemberChunkFailure.reason|"busy" | "connectionLost" | "input" | "notConnected" | "overflow" | "rateLimit" | "response" | "timeout" | undefined|optional=true|nullable=false
 field|shared|MemberChunkFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|MemberChunkFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
@@ -2604,7 +2618,7 @@ field|shared|OAuthOperationFailure.hint|string | undefined|optional=true|nullabl
 field|shared|OAuthOperationFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
 field|shared|OAuthOperationFailure.oauthError|null | string | undefined|optional=true|nullable=true
 field|shared|OAuthOperationFailure.operation|OAuthOperation | undefined|optional=true|nullable=false
-field|shared|OAuthOperationFailure.outcome|"notDispatched" | "rejected" | "unknown" | undefined|optional=true|nullable=false
+field|shared|OAuthOperationFailure.outcome|"notDispatched" | "rejected" | "unknown" | OperationOutcome | undefined|optional=true|nullable=false
 field|shared|OAuthOperationFailure.reason|"busy" | "input" | "network" | "rateLimit" | "rejected" | "response" | "timeout" | undefined|optional=true|nullable=false
 field|shared|OAuthOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|OAuthOperationFailure.status|null | number | undefined|optional=true|nullable=true
@@ -2655,6 +2669,8 @@ field|shared|PaginationError.inputValidation|InputValidationDetail | null|option
 field|shared|PaginationError.operation|PaginationOperation|optional=false|nullable=false
 field|shared|PaginationError.reason|"cursorStalled" | "indexing" | "input" | "pageLimit"|optional=false|nullable=false
 field|shared|PaginationError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
+field|native|PermissionFetchOptions.preferCache|boolean | undefined|optional=true|nullable=false
+field|native|PermissionFetchOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|PermissionInput.channel|GuildChannel | undefined|optional=true|nullable=false
 field|shared|PermissionInput.guild|Guild|optional=false|nullable=false
 field|shared|PermissionInput.member|GuildMember|optional=false|nullable=false
@@ -2683,6 +2699,7 @@ field|shared|PresenceFailure.code|string|optional=false|nullable=false
 field|shared|PresenceFailure.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|PresenceFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|PresenceFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
+field|shared|PresenceFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|PresenceFailure.reason|"input" | "limit" | undefined|optional=true|nullable=false
 field|shared|PresenceFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
 field|shared|PresenceInput.customStatus|CustomStatusInput | null | undefined|optional=true|nullable=true
@@ -2989,6 +3006,7 @@ field|shared|ThreadSearchResultsPage.total|number|optional=false|nullable=false
 field|native|TimeoutOptions.auditReason|string | undefined|optional=true|nullable=false
 field|native|TimeoutOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|native|TimeoutOptions.timeoutReason|null | string | undefined|optional=true|nullable=true
+field|shared|TimeoutStateOptions.now|Date | undefined|optional=true|nullable=false
 field|shared|TypingStart.channelId|string|optional=false|nullable=false
 field|shared|TypingStart.guildId|string | undefined|optional=true|nullable=false
 field|shared|TypingStart.timestamp|number|optional=false|nullable=false

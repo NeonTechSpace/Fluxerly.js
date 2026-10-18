@@ -41,7 +41,7 @@ An expected SDK error, such as a rejected request, prints its code, hint and det
 ```text
 2026-09-26 21:27:52.804 ERROR events     [events.handlerFailed] The messageCreate handler failed: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) event=messageCreate subscriptionId=messageCreate#1 messageId=1456074443980800006 channelId=1456074443980800002 guildId=1456074443980800001
     MessageError [message.send.rejected]: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)
-      Hint: The bot needs View Channel and Send Messages for this operation. Grant them to the bot's role in the community settings or the channel's permission overrides. Embeds also need Embed Links, files need Attach Files, and a forward needs View Channel in its source channel
+      Hint: The bot needs View channel and Send messages for this operation. Grant them to the bot's role in the community settings or the channel's permission overrides. Embeds also need Embed links, files need Attach files, and a forward needs View channel in its source channel
       Details: operation=send reason=rejected outcome=rejected status=403 apiError=MISSING_PERMISSIONS requiredPermissions=["ViewChannel","SendMessages"]
 ```
 
@@ -50,7 +50,7 @@ A 401 or 403 rejection waits up to one second for its handler to finish. If the 
 When the handler handles such a rejection itself, or passes it to an `onError` hook, the `rest.rejected` Warn still appears, because it usually points at a token or permission problem that persists. Repeats of it [collapse](/docs/{{version}}/logging/#collapse-repeated-errors) like other Warn records
 
 ```text
-2026-09-26 21:27:52.802 WARN  rest       [rest.rejected] POST /channels/:id/messages was rejected for channel 1456074443980800002: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) route=/channels/:id/messages status=403 method=POST apiError=MISSING_PERMISSIONS hint="Grant the bot's role View Channel and Send Messages in this channel, plus Embed Links or Attach Files when the message has them, in the community settings or the channel's permission overrides"
+2026-09-26 21:27:52.802 WARN  rest       [rest.rejected] POST /channels/:id/messages was rejected for channel 1456074443980800002: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) route=/channels/:id/messages status=403 method=POST apiError=MISSING_PERMISSIONS hint="Grant the bot's role View channel and Send messages in this channel, plus Embed links or Attach files when the message has them, in the community settings or the channel's permission overrides"
 ```
 
 ## Look up a record code

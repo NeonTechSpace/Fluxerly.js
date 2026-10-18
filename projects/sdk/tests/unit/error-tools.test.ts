@@ -2,12 +2,20 @@ import { setImmediate as turn } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { setFlagsFromString } from "node:v8"
 import { runInNewContext } from "node:vm"
-import { Cause, Effect, Exit, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Scope } from "effect"
+import { TestClock } from "effect/testing"
 import { expect, onTestFinished, test, vi } from "vitest"
 import {
     ApplicationError,
     commands,
+    AttachmentDownloadError,
+    AttachmentRefreshError,
     AuthenticationError,
+    BotApplicationOperationError,
+    CancelledError,
+    ChannelOperationError,
+    ClientClosedError,
+    CollectorError,
     ConfigurationError,
     ConnectionError,
     createClient,
@@ -16,12 +24,21 @@ import {
     errors,
     FluxerlyError,
     GuildOperationError,
+    HelperError,
+    MessageCleanupError,
     MessageError,
+    MessageOperationError,
+    OAuthOperationError,
     RateLimitError,
+    RestRequestError,
     SdkDefect,
     ShardConnectionError,
+    UserOperationError,
+    WebhookOperationError,
+    type NotFoundResource,
 } from "../../src/index.js"
 import * as native from "../../src/effect.js"
+import { apiErrorDetail } from "../../src/api-errors.js"
 import { ExpiryQueue } from "../../src/internal/expiry-queue.js"
 import { fixtureToken } from "../support/both-apis.js"
 import { modes, setup } from "../support/both-apis.js"
@@ -405,4 +422,262 @@ test.each([
         .split("\n")
         .filter((line) => /^\s+at /.test(line))
     expect(frames[0]).toContain("error-tools.test.ts")
+})
+
+const outcomes = ["notDispatched", "rejected", "unknown"] as const
+
+/** One error of every SDK class that reports an outcome, built with the given outcome */
+const outcomeErrors: readonly (readonly [string, (outcome: (typeof outcomes)[number]) => unknown])[] = [
+    [
+        "GuildOperationError",
+        (outcome) => new GuildOperationError({ operation: "roles.edit", reason: "network", outcome }),
+    ],
+    [
+        "ChannelOperationError",
+        (outcome) => new ChannelOperationError({ operation: "channels.fetch", reason: "network", outcome }),
+    ],
+    [
+        "WebhookOperationError",
+        (outcome) => new WebhookOperationError({ operation: "webhooks.fetch", reason: "network", outcome }),
+    ],
+    [
+        "UserOperationError",
+        (outcome) => new UserOperationError({ operation: "users.fetch", reason: "network", outcome }),
+    ],
+    [
+        "BotApplicationOperationError",
+        (outcome) => new BotApplicationOperationError({ operation: "application.fetch", reason: "network", outcome }),
+    ],
+    ["RestRequestError", (outcome) => new RestRequestError({ operation: "rest.request", reason: "network", outcome })],
+    [
+        "AttachmentRefreshError",
+        (outcome) => new AttachmentRefreshError({ operation: "attachments.refreshUrls", reason: "network", outcome }),
+    ],
+    [
+        "MessageOperationError",
+        (outcome) => new MessageOperationError({ operation: "fetch", reason: "network", outcome }),
+    ],
+    ["MessageError", (outcome) => new MessageError({ reason: "network", outcome })],
+    [
+        "OAuthOperationError",
+        (outcome) => new OAuthOperationError({ operation: "oauth.refresh", reason: "network", outcome }),
+    ],
+    [
+        "MessageCleanupError",
+        (outcome) =>
+            new MessageCleanupError({
+                phase: "cleanup",
+                reason: "network",
+                outcome,
+                status: null,
+                retryAfterMs: null,
+                scannedCount: 0,
+                selectedMessageIds: [],
+                submittedBatches: [],
+                terminalBatchIds: null,
+            }),
+    ],
+    ["ClientClosedError", (outcome) => new ClientClosedError({ outcome })],
+]
+
+test.each(outcomeErrors)("outcome reads the outcome of %s", (_name, make) => {
+    for (const outcome of outcomes) expect(errors.outcome(make(outcome))).toBe(outcome)
+})
+
+test("outcome is undefined where the SDK cannot establish one", () => {
+    const failure = new GuildOperationError({ operation: "roles.edit", reason: "network", outcome: "unknown" })
+    for (const value of [
+        new ClientClosedError(),
+        new CancelledError("presence.set"),
+        new SdkDefect("run", [{ kind: "Defect", defect: failure, origin: "sdk" }]),
+        new AttachmentDownloadError({ reason: "network" }),
+        new CollectorError("notConnected"),
+        new Error("application"),
+        // A look-alike is not an SDK error
+        Object.assign(new Error("look-alike"), { outcome: "unknown" }),
+        { outcome: "unknown" },
+        "text",
+        undefined,
+        null,
+    ])
+        expect(errors.outcome(value)).toBeUndefined()
+    expect(native.errors.outcome).toBe(errors.outcome)
+})
+
+test("outcome of an Effect Cause is the least certain outcome when every failure has one", () => {
+    const operation = (outcome: (typeof outcomes)[number]) =>
+        new GuildOperationError({ operation: "roles.edit", reason: "network", outcome })
+    const fail = (outcome: (typeof outcomes)[number]) => Cause.makeFailReason(operation(outcome))
+    expect(errors.outcome(Cause.fail(operation("rejected")))).toBe("rejected")
+    expect(errors.outcome(Cause.fromReasons([fail("notDispatched"), fail("rejected")]))).toBe("rejected")
+    expect(errors.outcome(Cause.fromReasons([fail("rejected"), fail("unknown"), fail("notDispatched")]))).toBe(
+        "unknown",
+    )
+    expect(errors.outcome(Cause.fromReasons([fail("notDispatched"), fail("notDispatched")]))).toBe("notDispatched")
+    // A failure, defect or interruption without a known outcome leaves the whole Cause unknown to the SDK
+    expect(
+        errors.outcome(Cause.fromReasons([fail("unknown"), Cause.makeDieReason(new Error("cleanup"))])),
+    ).toBeUndefined()
+    expect(errors.outcome(Cause.fromReasons([fail("rejected"), Cause.makeInterruptReason()]))).toBeUndefined()
+    expect(
+        errors.outcome(Cause.fromReasons([fail("rejected"), Cause.makeFailReason(new Error("application"))])),
+    ).toBeUndefined()
+    expect(errors.outcome(Cause.interrupt())).toBeUndefined()
+    expect(errors.outcome(Cause.die(new Error("defect")))).toBeUndefined()
+    expect(errors.outcome(Cause.fromReasons([]))).toBeUndefined()
+    expect(errors.outcome(Cause.fail(new Cause.TimeoutError()))).toBeUndefined()
+})
+
+test("a closed client records its outcome in details and tells an unknown write to be checked", () => {
+    const bare = new ClientClosedError()
+    expect(bare.outcome).toBeUndefined()
+    expect(bare.details).not.toHaveProperty("outcome")
+    expect(bare.code).toBe("client.closed")
+    const unknown = new ClientClosedError({ outcome: "unknown" })
+    expect(unknown).toMatchObject({ code: "client.closed", outcome: "unknown", details: { outcome: "unknown" } })
+    expect(unknown.hint).toContain("Check whether Fluxer applied the change")
+    expect(describeError(unknown)).toContain("outcome=unknown")
+    expect(unknown.toJSON().details).toMatchObject({ outcome: "unknown" })
+    for (const outcome of ["notDispatched", "rejected"] as const) {
+        const closed = new ClientClosedError({ outcome })
+        expect(closed.details).toMatchObject({ outcome })
+        expect(closed.hint).toBe(bare.hint)
+    }
+    // A read has no change to check, so it keeps the plain hint and records details.read
+    const read = new ClientClosedError({ outcome: "unknown", read: true })
+    expect(read.details).toEqual({ outcome: "unknown", read: true })
+    expect(read.hint).toBe(bare.hint)
+    expect(errors.isRetryable(unknown)).toBe(false)
+})
+
+test("isNotFound is true for a 404 status and, with a resource, only for that resource's Fluxer code", () => {
+    const guild = new MessageOperationError({
+        operation: "fetch",
+        reason: "notFound",
+        outcome: "rejected",
+        status: 404,
+        apiError: apiErrorDetail({ code: "UNKNOWN_GUILD" }),
+    })
+    expect(errors.isNotFound(guild)).toBe(true)
+    expect(errors.isNotFound(guild, "guild")).toBe(true)
+    expect(errors.isNotFound(guild, "member")).toBe(false)
+    // A 404 reported as a rejection still counts, and one without a recognized code names no resource
+    const rejected404 = new MessageError({ reason: "rejected", outcome: "rejected", status: 404 })
+    expect(errors.isNotFound(rejected404)).toBe(true)
+    expect(errors.isNotFound(rejected404, "channel")).toBe(false)
+    const forbidden = new MessageError({ reason: "rejected", outcome: "rejected", status: 403 })
+    expect(errors.isNotFound(forbidden)).toBe(false)
+    expect(errors.isNotFound(new Error("application"))).toBe(false)
+    expect(errors.isNotFound({ status: 404 })).toBe(false)
+    expect(errors.isNotFound(undefined, "guild")).toBe(false)
+    expect(native.errors.isNotFound).toBe(errors.isNotFound)
+})
+
+test("isNotFound accepts every NotFoundResource and throws HelperError for another resource", () => {
+    const codes: Record<NotFoundResource, string> = {
+        application: "UNKNOWN_APPLICATION",
+        channel: "UNKNOWN_CHANNEL",
+        emoji: "UNKNOWN_EMOJI",
+        forumTag: "UNKNOWN_FORUM_TAG",
+        guild: "UNKNOWN_GUILD",
+        invite: "UNKNOWN_INVITE",
+        member: "UNKNOWN_MEMBER",
+        message: "UNKNOWN_MESSAGE",
+        role: "UNKNOWN_ROLE",
+        sticker: "UNKNOWN_STICKER",
+        threadMember: "UNKNOWN_THREAD_MEMBER",
+        user: "UNKNOWN_USER",
+        webhook: "UNKNOWN_WEBHOOK",
+    }
+    const resources = Object.keys(codes) as NotFoundResource[]
+    for (const resource of resources) {
+        const error = new GuildOperationError({
+            operation: "roles.edit",
+            reason: "notFound",
+            outcome: "rejected",
+            status: 404,
+            apiError: apiErrorDetail({ code: codes[resource] }),
+        })
+        for (const other of resources) expect(errors.isNotFound(error, other)).toBe(other === resource)
+    }
+    for (const invalid of ["thread", "Guild", "", "toString", null, 5, ["channel"], { toString: () => "guild" }]) {
+        expect(() => errors.isNotFound(new Error("x"), invalid as never)).toThrow(
+            expect.objectContaining({ _tag: "HelperError", operation: "errors.isNotFound", reason: "resource" }),
+        )
+    }
+    expect(new HelperError("errors.isNotFound", "resource").code).toBe("helper.resource")
+})
+
+test.each(modes)(
+    "%s isNotFound separates a missing guild from a missing member and a deleted channel",
+    async (mode) => {
+        onTestFinished(() => void vi.unstubAllGlobals())
+        stubFetchWithHostedDiscovery(async (url) =>
+            Response.json(
+                url.includes("/channels/")
+                    ? { code: "UNKNOWN_CHANNEL", message: "Unknown Channel" }
+                    : { code: "UNKNOWN_GUILD", message: "Unknown Guild" },
+                { status: 404 },
+            ),
+        )
+        const client = await setup(mode)
+        const member = await settle<unknown, unknown>(client.members.fetch({ guildId: "20", userId: "30" })).then(
+            () => expect.fail("The fetch should find no guild"),
+            (error: unknown) => error,
+        )
+        expect(errors.isNotFound(member)).toBe(true)
+        expect(errors.isNotFound(member, "guild")).toBe(true)
+        expect(errors.isNotFound(member, "member")).toBe(false)
+        // The send reports its 404 as a rejection, so only the status identifies a missing channel
+        const sent = await settle<unknown, unknown>(client.messages.send("20", { content: "Hello" })).then(
+            () => expect.fail("The send should find no channel"),
+            (error: unknown) => error,
+        )
+        expect(sent).toMatchObject({ reason: "rejected", status: 404 })
+        expect(errors.isNotFound(sent)).toBe(true)
+        expect(errors.isNotFound(sent, "channel")).toBe(true)
+        expect(errors.isNotFound(sent, "guild")).toBe(false)
+        expect(errors.outcome(sent)).toBe("rejected")
+    },
+)
+
+test("wrapping a native SDK write in Effect.timeout gives no outcome, while the operation's timeoutMs keeps it", async () => {
+    onTestFinished(() => void vi.unstubAllGlobals())
+    // Each request signals when it reaches fetch, so the controlled clock moves only once the write is in flight
+    let signalDispatch = () => {}
+    stubFetchWithHostedDiscovery((_url, init) => {
+        signalDispatch()
+        return new Promise<Response>((_resolve, reject) =>
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason)),
+        )
+    })
+    const expireInFlight = <A, E>(write: Effect.Effect<A, E>) =>
+        Effect.gen(function* () {
+            const dispatched = new Promise<void>((resolve) => (signalDispatch = resolve))
+            const fiber = yield* Effect.forkChild(Effect.exit(write))
+            yield* Effect.promise(() => dispatched)
+            yield* Effect.yieldNow
+            yield* TestClock.adjust(25)
+            return yield* Fiber.join(fiber)
+        })
+    const { bounded, kept } = await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* native.createClient({ token: fixtureToken })
+                const bounded = yield* expireInFlight(
+                    client.messages.send("20", { content: "Hello" }).pipe(Effect.timeout(25)),
+                )
+                const kept = yield* expireInFlight(client.messages.send("20", { content: "Hello" }, { timeoutMs: 25 }))
+                return { bounded, kept }
+            }),
+        ).pipe(Effect.provide(TestClock.layer({ warningDelay: "10 seconds" }))),
+    )
+    expect(Exit.isFailure(bounded) ? bounded.cause.reasons.map((reason) => reason._tag) : undefined).toEqual(["Fail"])
+    expect(
+        Exit.isFailure(bounded) && bounded.cause.reasons[0]?._tag === "Fail"
+            ? Cause.isTimeoutError(bounded.cause.reasons[0].error)
+            : false,
+    ).toBe(true)
+    expect(Exit.isFailure(bounded) ? errors.outcome(bounded.cause) : "succeeded").toBeUndefined()
+    expect(Exit.isFailure(kept) ? errors.outcome(kept.cause) : "succeeded").toBe("unknown")
 })

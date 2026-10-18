@@ -108,8 +108,9 @@ export const errorCodes = {
     },
     "client.closed": {
         error: "ClientClosedError",
-        meaning: "The client is shutting down or has shut down, so it cannot do more work",
-        action: "Create a new client to connect again",
+        meaning:
+            "The client is shutting down or has shut down, so it cannot do more work. For a REST request, details.outcome says whether the request may have reached Fluxer",
+        action: "Create a new client to connect again. When details.outcome is unknown, check whether Fluxer applied the change first",
     },
     "operation.cancelled": {
         error: "CancelledError",
@@ -272,8 +273,8 @@ export const errorCodes = {
     },
     "helper.<reason>": {
         error: "HelperError",
-        values: ["id", "markup", "time", "permissionBits", "link", "color", "text", "limit", "shardCount"],
-        meaning: "A formatting or parsing helper received a value it cannot use",
+        values: ["id", "markup", "time", "permissionBits", "link", "color", "text", "limit", "shardCount", "resource"],
+        meaning: "A formatting, parsing, text or error helper received a value it cannot use",
         action: "Pass a value of the documented form",
     },
     "asset.<reason>": {

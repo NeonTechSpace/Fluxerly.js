@@ -5,10 +5,11 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     ChannelType,
     createClient,
+    errors,
     GuildOperationError,
     Permissions,
     type ClientOptions,
-    type DefaultGuildOperationOptions,
+    type DefaultPermissionFetchOptions,
     type GuildPublicThreadChannel,
     type PermissionInput,
     type PermissionTarget,
@@ -92,7 +93,7 @@ async function setup(mode: Mode) {
         native,
         calculate: (value: PermissionInput): bigint =>
             defaultApi ? defaultApi.permissions.calculate(value) : native!.permissions.calculate(value),
-        fetch: async (value: PermissionTarget, options?: DefaultGuildOperationOptions) =>
+        fetch: async (value: PermissionTarget, options?: DefaultPermissionFetchOptions) =>
             defaultApi
                 ? unwrap(await defaultApi.permissions.fetch(value, options))
                 : run(native!.permissions.fetch(value, options)),
@@ -602,11 +603,172 @@ test.each(modes)("%s gives a thread's parent read only the shared deadline remai
     })
 })
 
+// permissions.fetch with preferCache: Each observation comes from an enabled cache when it can be used
+function cacheRest(options: { channelOverwrites?: readonly unknown[] | undefined; channelType?: number } = {}) {
+    const calls: string[] = []
+    let roleReads = 0
+    rest(async (url) => {
+        const path = new URL(url).pathname.replace("/v1", "")
+        calls.push(path)
+        if (path === "/guilds/20") return Response.json(wireGuild())
+        if (path === "/guilds/20/members/30") return Response.json(wireMember())
+        if (path === "/guilds/20/members/31") return Response.json(wireMember("31", ["40", "41"]))
+        // Role 41 appears only from the second list read, so a first read leaves it uncached
+        if (path === "/guilds/20/roles")
+            return Response.json([
+                wireRole("20", 2n),
+                wireRole("40", 4n),
+                ...(++roleReads > 1 ? [wireRole("41", 16n)] : []),
+            ])
+        if (path === "/channels/60") return Response.json(wireThread())
+        if (path === "/channels/50")
+            return Response.json({
+                ...wireChannel("channelOverwrites" in options ? options.channelOverwrites : []),
+                ...(options.channelType === undefined ? {} : { type: options.channelType }),
+            })
+        throw Error(`Unexpected request ${path}`)
+    })
+    return calls
+}
+
+test.each(modes)("%s preferCache makes no requests when every observation is cached", async (mode) => {
+    const calls = cacheRest()
+    const api = await setup(mode)
+    const fresh = await api.fetch(target)
+    expect(calls).toHaveLength(4)
+    expect(await api.fetch(target, { preferCache: true })).toBe(fresh)
+    expect(await api.fetch({ guildId: "20", userId: "30" }, { preferCache: true })).toBe(fresh)
+    expect(calls).toHaveLength(4)
+    // The default stays a fresh read, and an explicit false matches it
+    await api.fetch(target)
+    await api.fetch(target, { preferCache: false })
+    expect(calls).toHaveLength(12)
+})
+
+test.each(modes)("%s preferCache fetches only what the caches lack, with one list read for roles", async (mode) => {
+    const calls = cacheRest()
+    const api = await setup(mode)
+    await api.fetch(target)
+    calls.length = 0
+    // Member 31 holds role 41, which no cache has, so one list read replaces every role lookup
+    expect(await api.fetch({ ...target, userId: "31" }, { preferCache: true })).toBe(2n | 4n | 16n)
+    expect(calls).toEqual(["/guilds/20/members/31", "/guilds/20/roles"])
+    calls.length = 0
+    // Role 41 is cached now, so the same member needs no further request
+    expect(await api.fetch({ ...target, userId: "31" }, { preferCache: true })).toBe(2n | 4n | 16n)
+    expect(calls).toEqual([])
+})
+
+test.each(modes)("%s preferCache reads a cached channel again when it lacks its overwrite list", async (mode) => {
+    const calls = cacheRest({ channelOverwrites: undefined })
+    const api = await setup(mode)
+    // The fresh read caches a channel without its overwrite list, which cannot settle the calculation
+    await expect(api.fetch(target)).rejects.toMatchObject({ operation: "permissions.fetch", reason: "response" })
+    calls.length = 0
+    // The cached channel is not used, so it is read again and still fails, rather than reading as "no overwrites"
+    await expect(api.fetch(target, { preferCache: true })).rejects.toMatchObject({
+        operation: "permissions.fetch",
+        reason: "response",
+    })
+    expect(calls).toEqual(["/channels/50"])
+})
+
+test.each(modes)("%s a channel of a known type without overwrites fails as a response on both paths", async (mode) => {
+    cacheRest({ channelOverwrites: undefined })
+    const api = await setup(mode)
+    for (const options of [undefined, { preferCache: true }])
+        await expect(api.fetch(target, options)).rejects.toMatchObject({
+            _tag: "GuildOperationError",
+            operation: "permissions.fetch",
+            reason: "response",
+        })
+})
+
+test.each(modes)(
+    "%s a channel without overwrites fails as an unknown-outcome read that names the channel",
+    async (mode) => {
+        cacheRest({ channelOverwrites: undefined })
+        const api = await setup(mode)
+        const failure = await api.fetch(target).then(
+            () => undefined,
+            (error: unknown) => error as GuildOperationError,
+        )
+        // The channel read was sent and answered, so the failure is a read with an unknown outcome and is not retryable
+        expect(failure).toMatchObject({
+            reason: "response",
+            outcome: "unknown",
+            details: { channelId: "50", read: true, responseField: "permissionOverwrites" },
+        })
+        expect(failure?.hint).toEqual(expect.any(String))
+        expect(errors.isRetryable(failure)).toBe(false)
+    },
+)
+
+test.each(modes)("%s preferCache uses a cached thread and its cached parent without requests", async (mode) => {
+    const calls = cacheRest()
+    const api = await setup(mode)
+    const threadTarget = { ...target, channelId: "60" }
+    await api.fetch(threadTarget)
+    calls.length = 0
+    expect(await api.fetch(threadTarget, { preferCache: true })).toBe(2n | 4n)
+    expect(calls).toEqual([])
+})
+
+test.each(modes)("%s preferCache reads only the thread when its parent channel is cached", async (mode) => {
+    const calls = cacheRest()
+    const api = await setup(mode)
+    await api.fetch(target)
+    calls.length = 0
+    expect(await api.fetch({ ...target, channelId: "60" }, { preferCache: true })).toBe(2n | 4n)
+    expect(calls.filter((call) => call.startsWith("/channels/"))).toEqual(["/channels/60"])
+})
+
+test.each(modes)(
+    "%s a channel of an unknown type without overwrites fails as a response on both paths",
+    async (mode) => {
+        cacheRest({ channelOverwrites: undefined, channelType: 99 })
+        const api = await setup(mode)
+        for (const options of [undefined, { preferCache: true }])
+            await expect(api.fetch(target, options)).rejects.toMatchObject({
+                _tag: "GuildOperationError",
+                operation: "permissions.fetch",
+                reason: "response",
+            })
+    },
+)
+
+test.each(modes)(
+    "%s preferCache fails with ClientClosedError on a closed client, even when all is cached",
+    async (mode) => {
+        cacheRest()
+        const api = await setup(mode)
+        await api.fetch(target)
+        await api.shutdown()
+        // No request was sent, so the closure reports the same outcome as a fresh read that finds the client closed
+        const expected = { _tag: "ClientClosedError", outcome: "notDispatched" }
+        await expect(api.fetch(target, { preferCache: true })).rejects.toMatchObject(expected)
+        await expect(api.fetch(target)).rejects.toMatchObject(expected)
+    },
+)
+
+test.each(modes)("%s preferCache rejects a value that is not a boolean", async (mode) => {
+    const calls = cacheRest()
+    const api = await setup(mode)
+    for (const preferCache of ["yes", 1, null])
+        await expect(api.fetch(target, { preferCache } as never)).rejects.toMatchObject({
+            _tag: "GuildOperationError",
+            operation: "permissions.fetch",
+            reason: "input",
+            inputValidation: { path: "options.preferCache" },
+        })
+    expect(calls).toEqual([])
+})
+
 const wireThread = () => fixtures.thread({ id: "60", guild_id: "20", parent_id: "50", owner_id: "30" })
 const wireGuild = () => ({ id: "20", owner_id: "99", name: "fixture", features: [], icon: null })
-const wireMember = () => ({
-    user: { id: "30", username: "fixture", bot: true },
-    roles: ["40"],
+const wireMember = (userId = "30", roles: readonly string[] = ["40"]) => ({
+    user: { id: userId, username: "fixture", bot: true },
+    roles,
     joined_at: "2026-09-08T12:00:00Z",
     nick: null,
     avatar: null,
@@ -620,9 +782,9 @@ const wireRole = (id: string, permissions: bigint) => ({
     hoist: false,
     mentionable: false,
 })
-const wireChannel = (permissionOverwrites: readonly unknown[], guildId = "20") => ({
+const wireChannel = (permissionOverwrites: readonly unknown[] | undefined, guildId = "20") => ({
     id: "50",
     guild_id: guildId,
     type: 0,
-    permission_overwrites: permissionOverwrites,
+    ...(permissionOverwrites === undefined ? {} : { permission_overwrites: permissionOverwrites }),
 })

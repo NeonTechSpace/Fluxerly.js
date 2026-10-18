@@ -51,6 +51,8 @@ export interface GuildRequest<A> {
     readonly timeoutReason?: true
     readonly deleteAuthorId?: string
     readonly invalidateMessages?: true
+    /** A POST that only reads, so its failures count as reads like those of a GET */
+    readonly read?: true
     /** Private client capabilities required for one explicit provider-gated replacement */
     readonly features?: readonly string[]
     /** REST supplies the immutable endpoint snapshot after request admission. One-argument decoders ignore it */

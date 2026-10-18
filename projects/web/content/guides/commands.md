@@ -47,7 +47,7 @@ Commands keep the order of the object's own string keys. Omit `arguments` to rec
 
 ## Convert arguments before execution
 
-The router converts the words after the command name into typed values before running it. By default it splits the text on whitespace and keeps quote characters, so `!greet "Ada Lovelace"` arrives as the two words `"Ada` and `Lovelace"`. The option `parse: commands.parseQuoted` opts in to quoting: Single or double quotes keep words together and are removed from the argument, and a backslash writes the next character literally. This bot uses it to accept `!greet "Ada Lovelace"` and `!remind 10m Stretch`
+The router converts the words after the command name into typed values before running it. By default it splits the text on whitespace and keeps quote characters, so `!greet "Ada Lovelace"` arrives as the two words `"Ada` and `Lovelace"`. The option `parse: commands.parseQuoted` opts in to quoting: Single or double quotes keep words together and are removed from the argument, and a backslash writes the next character literally. A double quote opens a span anywhere. A single quote opens one only at the start of a word and closes it unless a letter or digit follows, so an apostrophe inside a word, as in `!say don't`, stays literal, `'it's fine'` is `it's fine` and `'Yes', 'No'` is `Yes,` and `No`. A word that begins with an apostrophe, such as `'twas`, opens a span, so write `\'twas`. This bot uses it to accept `!greet "Ada Lovelace"` and `!remind 10m Stretch`
 
 ```ts
 import { commands, runBot } from "@neontechspace/fluxerly"
@@ -98,6 +98,8 @@ Other argument types include:
 
 Accepting an ID does not mean the user may act on that resource
 
+To convert a single word outside a command, such as a button label or a stored setting, `commands.parseArgument("5m", { type: "duration" })` applies a descriptor with the same rules as the router. It returns `undefined` for a rejected word and the descriptor's `default` for a missing one. A `member` descriptor also needs `{ guildId }` as its third parameter
+
 <details>
 <summary>How are ID and member arguments checked?</summary>
 
@@ -112,7 +114,7 @@ A message that starts with the prefix but runs no command is ignored by default.
 
 - `CommandUnknownName` for a name that is not registered. Its `suggestion` names the closest registered command when one is similar
 - `CommandMissingSubcommand` for a group such as `admin` typed without a subcommand. Its `path` names the group
-- `CommandParserRejected` when the parser could not read the text. With `commands.parseQuoted`, its `reason` explains a quote that never closes or a backslash at the end. The `reason` is absent when the text is not a command at all, such as `!` alone
+- `CommandParserRejected` when the parser could not read the text. With `commands.parseQuoted`, its `reason` explains a quote that never closes or a backslash at the end. The `reason` is absent when the text is not a command at all, such as `!` alone. Its `name` holds the command name the parser read, as typed, so a reply can say which command the mistake was for
 
 This bot answers a syntax mistake with the parser's own explanation. Without the callback, `!greet "Ada` is ignored
 
@@ -140,7 +142,7 @@ await runBot({
 
 The router never replies to these messages by itself. The callback runs for every one of them and anyone can cause that, so an application that replies should limit how often. A channel may also hold other bots with the same prefix, so reply to an unknown name or a syntax mistake only when this bot should answer for that prefix. A custom `parse` function can give its own explanation by returning `{ reason: "Separate the words with spaces" }` instead of `undefined`. The reason reaches `onUnmatched` unchanged, so it should be fixed text that leaves the sender's input out
 
-An apostrophe in plain text opens a quote for `commands.parseQuoted`, so `!say don't` is rejected as an unclosed single quote. Write `don\'t` or use double quotes around the text
+To suggest a name in a reply of the application's own, `commands.suggest("pnig", ["ping", "help"])` applies the rule behind `suggestion` to any list of names and returns `"ping"`. Pass only names that may be revealed, because the helper does not know which commands are hidden
 
 Each unmatched message is also logged at Debug with the code `commands.unmatched` and the fields `reason`, `messageId`, `channelId` and, when there is one, `suggestion`. The `reason` field holds the `_tag`, and for a rejected parse the log message ends with the parser's explanation
 
@@ -191,7 +193,7 @@ A guard returns `true` to allow the command, `false` to deny it without an autom
 <details>
 <summary>How the built-in guards read data</summary>
 
-The `requirePermissions` guard reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. In a thread, it also reads the parent channel the same way and decides from the parent's permissions as Fluxer does, with `SendMessages` granted exactly when `SendMessagesInThreads` is. A failed read fails the command, which is reported with the command name. In a channel of a type this SDK version does not know, the guard denies the command when it cannot confirm the channel's permissions. Its decision does not guarantee that Fluxer allows a later action.
+The `requirePermissions` guard decides with `permissions.fetch` and `preferCache`: It reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. Cached values follow the gateway events applied so far, so check again with a fresh `permissions.fetch` before an action where a stale grant matters. The denial names each missing permission by Fluxer's label, such as `Manage community`. In a thread, it also reads the parent channel the same way and decides from the parent's permissions as Fluxer does, with `SendMessages` granted exactly when `SendMessagesInThreads` is. A failed read fails the command, which is reported with the command name. When Fluxer sent the channel without its permission overwrite list, the guard denies the command because it cannot confirm the channel's permissions. Its decision does not guarantee that Fluxer allows a later action.
 The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name. Enable `cache.directMessages` to avoid a read for each command in the same conversation.
 The `ownerOnly()` guard reads the application's owner from Fluxer on the first command and keeps it for the client's lifetime. A failed read fails the command, and the next command reads again
 

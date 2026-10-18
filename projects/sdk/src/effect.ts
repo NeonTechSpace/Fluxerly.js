@@ -68,7 +68,7 @@ export type {
     ChannelMemberCountsResult,
 } from "./counts.js"
 export type { ColorInput, RgbColor } from "./colors.js"
-export type { TextSplitOptions } from "./text.js"
+export type { TextSplitOptions, TextTruncateOptions } from "./text.js"
 export { AssetFormats, AssetUrlError } from "./assets.js"
 export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
 export { HelperError, TimestampStyles } from "./helpers.js"
@@ -79,6 +79,7 @@ export type {
     Mention,
     PermissionName,
     PermissionBitInspection,
+    OverwritePatch,
     TimestampMarkup,
     TimestampStyle,
 } from "./helpers.js"
@@ -86,8 +87,8 @@ export type { GuildListQuery, GuildListSummary } from "./guilds.js"
 export type { GuildIterationQuery } from "./pagination.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
-export type { PermissionInput, PermissionTarget } from "./permissions.js"
-export type { HierarchyHelpers, RoleHierarchyInput } from "./role-hierarchy.js"
+export type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "./permissions.js"
+export type { HierarchyHelpers, RoleHierarchyInput, RoleManagementInput } from "./role-hierarchy.js"
 export { BotApplicationOperationError } from "./application.js"
 export type {
     BotApplication,
@@ -272,6 +273,7 @@ export type {
     CommandArgumentCustom,
     CommandArgumentValues,
     CommandArgumentValue,
+    CommandArgumentParseOptions,
     CommandArgumentRejectionReason,
 } from "./command-arguments.js"
 export type { CommandContextHelpOptions, CommandHelpOptions } from "./command-help.js"
@@ -508,7 +510,14 @@ export type {
     CanManageOptions,
     GuildAuditOperationOptions,
 } from "./guilds.js"
-export type { BanInput, GuildBan, ModerationOptions, TimeoutOptions } from "./guilds.js"
+export type {
+    BanInput,
+    GuildBan,
+    MemberTimeoutState,
+    ModerationOptions,
+    TimeoutOptions,
+    TimeoutStateOptions,
+} from "./guilds.js"
 export type { MessageCacheOptions, MessageCacheSettings } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
 export type {
@@ -640,7 +649,7 @@ export type {
     OperationReason,
 } from "./errors.js"
 export { describeError, errors } from "./error-tools.js"
-export type { DescribeErrorOptions, ErrorTools } from "./error-tools.js"
+export type { DescribeErrorOptions, ErrorTools, NotFoundResource } from "./error-tools.js"
 export type { ShardingOptions, ShardRecoveryDiagnostic, ShardState } from "./sharding.js"
 export type {
     CallCreate,

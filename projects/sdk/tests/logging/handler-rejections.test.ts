@@ -86,7 +86,7 @@ test.each(modes)(
         expect(problems(bot).map((record) => record.code)).toEqual(["events.handlerFailed", "commands.failed"])
         for (const record of problems(bot)) {
             const hint = (record.error as { hint?: string }).hint
-            expect(hint).toMatch(/Send Messages/)
+            expect(hint).toMatch(/Send messages/)
             // Role position matters for moderation, not for a message
             expect(hint).not.toMatch(/highest role/)
         }
@@ -105,7 +105,7 @@ test.each(modes)("%s a failed reply the handler handles still logs one rest.reje
             code: "rest.rejected",
             fields: expect.objectContaining({
                 apiError: "MISSING_PERMISSIONS",
-                hint: expect.stringMatching(/Send Messages/),
+                hint: expect.stringMatching(/Send messages/),
             }),
         }),
     ])

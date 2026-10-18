@@ -295,9 +295,9 @@ export const colors: ColorHelpers = Object.freeze({
 })
 
 /**
- * Split long text into length-bounded pieces without losing its contents.
- * The caller chooses the length limit, how to send the pieces and any Markdown handling.
- * The split method returns the pieces directly, without sending them.
+ * Split long text into length-bounded pieces without losing its contents, or truncate it to a length with a marker.
+ * The caller chooses the length limit, how to send the result and any Markdown handling.
+ * The split and truncate methods return their result directly, without sending it.
  * Invalid text or options throw HelperError, and such a throw inside Effect code becomes a defect
  *
  * @example
@@ -314,6 +314,7 @@ export const colors: ColorHelpers = Object.freeze({
  *             inspection: permissionBits.inspect(bits),
  *             color,
  *             chunks: text.split(content, { maxLength: 2_000 }),
+ *             title: text.truncate(content, { maxLength: 100 }),
  *         }
  *     })
  * }

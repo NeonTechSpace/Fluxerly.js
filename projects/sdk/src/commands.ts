@@ -153,6 +153,11 @@ export type PrefixCommandUnmatched =
            * Absent when the parser returned undefined, which is also the result for ordinary chat that merely starts with the prefix
            */
           readonly reason?: string
+          /**
+           * The command name the parser read before it declined, exactly as returned and before case-insensitive lookup, such as `say` for a quote that never closes in `!say "hi`.
+           * It may name a command that is not registered. Absent when the parser returned undefined or a rejection without a name
+           */
+          readonly name?: string
           /** Registered parent group names already consumed before the parser declined. Absent at root */
           readonly path?: readonly string[]
       }
@@ -224,16 +229,33 @@ export interface PrefixCommandParse {
 export interface PrefixCommandParseRejection {
     /** Nonempty explanation, such as `A double quote was opened but never closed`. Any other value is reported as a parser failure */
     readonly reason: string
+    /**
+     * The command name the parser read before the mistake, in command-name syntax, which `onUnmatched` receives as `name` so a reply can say which command the mistake was for.
+     * Omit it when no name was read. Any other value is reported as a parser failure
+     */
+    readonly name?: string
+}
+
+/**
+ * Whether a single-quoted span ends at the single quote at this index. It does unless a letter or digit follows, because
+ * then the quote is an apostrophe inside a word. The end of the input, whitespace, quotes and punctuation all end the span
+ */
+const endsSingleQuotedSpan = (text: string, index: number): boolean => {
+    const next = text.codePointAt(index + 1)
+    return next === undefined || !/[\p{L}\p{N}]/u.test(String.fromCodePoint(next))
 }
 
 /**
  * Split arguments while keeping quoted words together, such as `repeat "hello world" 3`.
  * Single and double quotes delimit text, and a backslash escapes the next character inside or outside quotes.
+ * A double quote opens a span anywhere and closes at the next double quote, and text that touches a span joins its word, so `a"b c"` is `ab c`, `"a""b"` is `ab` and `key="a b"` is `key=a b`.
+ * A single quote opens a span only at the start of a word, which is the start of the input, after whitespace or right after a closed span.
+ * Inside a single-quoted span a single quote closes it unless the next character is a letter or digit, so the end of the input, whitespace, quotes and punctuation all close it. A single quote anywhere else in a word is an apostrophe and stays literal, so `say don't` is `don't`, `it's Ada's` is `it's` and `Ada's`, `'it's fine'` is `it's fine`, `'don't'` is `don't` and `'Yes', 'No'` is `Yes,` and `No`.
  * Quotes and escapes are removed from `args`, but `rawArgs` retains the text after command-name separator whitespace.
  * Empty quotes produce an empty token, which a text argument descriptor rejects.
  * Returns undefined for empty input or an invalid command name.
- * For a quote that never closes or a trailing backslash, it returns a `PrefixCommandParseRejection` with a fixed `reason`, which `onUnmatched` receives.
- * An apostrophe in plain text opens a quote too, so `say don't` is rejected unless it is escaped as `don\'t`.
+ * For a quote that never closes or a trailing backslash, it returns a `PrefixCommandParseRejection` with a fixed `reason` and the command `name`, which `onUnmatched` receives.
+ * A word that begins with an apostrophe, such as `'twas`, opens a span, so write it as `\'twas` to keep the apostrophe literal.
  * This synchronous helper does not inspect the message or change the router's whitespace-only default.
  * Use the public `commands.parseQuoted` helper as the router's `parse` option to opt in
  */
@@ -250,17 +272,22 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
     let current = ""
     let quote: "'" | '"' | undefined
     let started = false
+    // Index of the quote that last closed a span, so a single quote right after it can open the next span
+    let closedAt = -1
     for (let index = 0; index < rawArgs.length; index += 1) {
         const character = rawArgs[index]!
         if (character === "\\") {
-            if (index + 1 === rawArgs.length) return { reason: "A backslash at the end has nothing to escape" }
+            if (index + 1 === rawArgs.length) return { reason: "A backslash at the end has nothing to escape", name }
             current += rawArgs[index + 1]!
             started = true
             index += 1
         } else if (quote !== undefined) {
-            if (character === quote) quote = undefined
-            else current += character
-        } else if (character === "'" || character === '"') {
+            // A single quote is also an apostrophe, so it stays literal when a letter or digit follows it
+            if (character === quote && (quote === '"' || endsSingleQuotedSpan(rawArgs, index))) {
+                quote = undefined
+                closedAt = index
+            } else current += character
+        } else if (character === '"' || (character === "'" && (!started || closedAt === index - 1))) {
             quote = character
             started = true
         } else if (/\s/.test(character)) {
@@ -275,7 +302,7 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
         }
     }
     if (quote !== undefined)
-        return { reason: `A ${quote === '"' ? "double" : "single"} quote was opened but never closed` }
+        return { reason: `A ${quote === '"' ? "double" : "single"} quote was opened but never closed`, name }
     if (started) args.push(current)
     return { name, rawArgs, args }
 }

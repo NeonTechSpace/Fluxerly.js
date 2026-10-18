@@ -12,6 +12,11 @@
  * The SDK does not look up existing attachments, so an existing attachment ID cannot supply an attachment URL.
  * Fluxer moves referenced uploads into embed media, so they are not returned in the message's attachment list
  *
+ * Fluxer also limits the combined text of all embeds in one message to 6,000 UTF-16 code units: Every title, description,
+ * footer text, author name, field name and field value counts, measured after normalization. Some bots receive a higher
+ * limit, so the SDK does not check this locally. A message over the limit fails remotely with reason rejected and an
+ * apiError with code invalidFormBody, so shorten long text, for example with `text.truncate`, or send fewer embeds
+ *
  * Fluxer fetches remote media and may normalize text. Permissions and instance-specific limits remain server-owned
  * @example
  * ```ts

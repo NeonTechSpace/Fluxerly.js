@@ -35,6 +35,11 @@ import {
 import { classifyResponse, RestFailure, type Outcome, type RateLimitDetails } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 
+/** Whether the request only reads remote state, which makes its failures retryable and its closure a read */
+export function isReadRequest(request: { readonly method: string; readonly read?: true }): boolean {
+    return request.method === "GET" || request.read === true
+}
+
 /**
  * One REST request as the owner schedules it: Routing, cache coordination, upload handling and decoding.
  * The owner fills instance, sources and the cache guards before the first attempt
@@ -57,6 +62,8 @@ export type Request<A> = {
     bucket?: string
     /** A false value skips message-cache coordination for requests that never read or change cached messages */
     cache?: false
+    /** A POST that only reads, such as a search, so its failures count as reads like those of a GET */
+    read?: true
     /** Explicit message mutation for methods such as POST that do not otherwise imply one to the cache guard */
     messageMutation?: true
     /** Message ID the request reads or changes, used by the message-cache guard and deletion */

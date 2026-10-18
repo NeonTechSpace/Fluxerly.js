@@ -83,7 +83,7 @@ export type {
     ChannelMemberCountsResult,
 } from "./counts.js"
 export type { ColorInput, RgbColor } from "./colors.js"
-export type { TextSplitOptions } from "./text.js"
+export type { TextSplitOptions, TextTruncateOptions } from "./text.js"
 export { AssetFormats, AssetUrlError } from "./assets.js"
 export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
 export { HelperError, TimestampStyles } from "./helpers.js"
@@ -94,6 +94,7 @@ export type {
     Mention,
     PermissionName,
     PermissionBitInspection,
+    OverwritePatch,
     TimestampMarkup,
     TimestampStyle,
 } from "./helpers.js"
@@ -101,9 +102,14 @@ export type { GuildListQuery, GuildListSummary } from "./guilds.js"
 export type { GuildIterationQuery } from "./pagination.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
-export type { PermissionInput, PermissionTarget } from "./permissions.js"
+export type {
+    DefaultPermissionFetchOptions,
+    PermissionFetchOptions,
+    PermissionInput,
+    PermissionTarget,
+} from "./permissions.js"
 export { hierarchy } from "./role-hierarchy.js"
-export type { HierarchyHelpers, RoleHierarchyInput } from "./role-hierarchy.js"
+export type { HierarchyHelpers, RoleHierarchyInput, RoleManagementInput } from "./role-hierarchy.js"
 export { BotApplicationOperationError } from "./application.js"
 export type {
     BotApplication,
@@ -351,6 +357,7 @@ export type {
     CommandArgumentCustom,
     CommandArgumentValues,
     CommandArgumentValue,
+    CommandArgumentParseOptions,
     CommandArgumentRejectionReason,
 } from "./command-arguments.js"
 export type { CommandContextHelpOptions, CommandHelpOptions } from "./command-help.js"
@@ -434,7 +441,7 @@ export type {
 } from "./observer.js"
 export type { FailureKind, FailureMessageReference, FailureReport } from "./failures.js"
 export { describeError, errors } from "./error-tools.js"
-export type { DescribeErrorOptions, ErrorTools } from "./error-tools.js"
+export type { DescribeErrorOptions, ErrorTools, NotFoundResource } from "./error-tools.js"
 export type { MessageCacheSettings, MessageCacheOptions } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
 export { ChannelOperationError, ChannelType } from "./channels.js"
@@ -554,6 +561,8 @@ export type {
     DefaultModerationOptions,
     TimeoutOptions,
     DefaultTimeoutOptions,
+    TimeoutStateOptions,
+    MemberTimeoutState,
 } from "./guilds.js"
 export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
 export type {

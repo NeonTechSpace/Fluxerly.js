@@ -14,6 +14,7 @@ import type {
     CommandArgumentUser,
 } from "#sdk/command-arguments"
 import { ConfigurationError } from "#sdk/errors"
+import { readCaller } from "./defects.js"
 import { snowflakes } from "#sdk/helpers"
 import * as Effect from "effect/Effect"
 import { throwIfErr } from "./failures.js"
@@ -127,6 +128,49 @@ export function convertCommandArguments(
     }
     if (position < args.length) return rejected("arguments", "Unexpected")
     return Object.freeze({ _tag: "Converted", values: Object.freeze(values) })
+}
+
+/**
+ * Convert one token against one built-in descriptor, with the router's own snapshot and conversion so the grammar is
+ * identical. A missing token gives the descriptor's default or undefined, and a rejected token gives undefined.
+ * Misuse throws ConfigurationError: A bad descriptor, a custom descriptor, a token that is neither a string nor
+ * undefined, or bad options
+ */
+export function parseCommandArgument(descriptor: unknown, token: unknown, options: unknown): unknown {
+    if (token !== undefined && typeof token !== "string")
+        throw new ConfigurationError("commands", "The token must be a string or undefined")
+    const context = parseOptions(options)
+    const snapshot = readCaller(() => {
+        // Check the snapshot, not the caller's descriptor, because a getter can answer differently on each read
+        const copy = snapshotDescriptor(descriptor)
+        if (copy.type === "custom")
+            throw new ConfigurationError("command", "A custom argument cannot be parsed on its own", {
+                hint: "Call its parse function directly",
+            })
+        return copy
+    })
+    if (token === undefined) return hasBounds(snapshot) ? snapshot.default : undefined
+    const result = convertDescriptor(snapshot, token, context)
+    return result._tag === "Converted" ? result.value : undefined
+}
+
+function parseOptions(options: unknown): CommandArgumentContext {
+    if (options === undefined) return {}
+    if (!isObject(options)) throw new ConfigurationError("commands", "The parse options must be an object")
+    // Listing the keys can run an application proxy trap
+    for (const key of readCaller(() => Reflect.ownKeys(options)))
+        if (key !== "guildId")
+            throw new ConfigurationError(
+                "commands",
+                typeof key === "string"
+                    ? `Unsupported key ${JSON.stringify(key)} in the parse options`
+                    : "The parse options must not have symbol keys",
+                { hint: "The only supported key is guildId" },
+            )
+    const guildId = readCaller(() => options.guildId)
+    if (guildId !== undefined && (typeof guildId !== "string" || !isArgumentId(guildId)))
+        throw new ConfigurationError("guildId", 'The option "guildId" must be a community ID string')
+    return { guildId }
 }
 
 /** Snapshot one descriptor, naming its argument in a configuration error */

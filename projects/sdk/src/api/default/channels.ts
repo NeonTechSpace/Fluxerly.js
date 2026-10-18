@@ -260,7 +260,7 @@ export interface Channels {
      * Remove one explicit permission overwrite by decimal role or member target ID.
      * Other overwrites remain unchanged.
      * HTTP 204 succeeds with no value.
-     * Fluxer requires ManageChannels and ManageRoles.
+     * Fluxer requires ManageRoles, and a bot without Administrator can remove an overwrite only when it has every permission that overwrite denies.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
      * A failure can leave some children with the old overwrites.
      * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.

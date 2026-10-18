@@ -11,6 +11,7 @@
  */
 import type { Operation } from "#sdk/errors"
 import type { PermissionName } from "#sdk/helpers"
+import { channelScreenLabel, permissionLabel as label } from "./permission-labels.js"
 
 /**
  * Where Fluxer reads a permission: In the channel, where permission overrides apply, community-wide from the bot's
@@ -38,6 +39,12 @@ const memberHierarchy =
     "Fluxer also requires the bot's highest role to be above the member's highest role, and never allows acting on the community owner"
 const ownPermissions = "the bot can allow, or stop denying, only permissions it has"
 
+/** A permission label followed by the different title that a channel's permission screen shows for it, if any */
+const withChannelTitle = (name: PermissionName): string => {
+    const title = channelScreenLabel(name)
+    return title === undefined ? label(name) : `${label(name)} (titled "${title}" in a channel's permission overrides)`
+}
+
 /** Requirement of each operation whose permission checks the pinned source ties to one set */
 export const permissionRequirements: Readonly<Partial<Record<Operation, PermissionRequirement>>> = {
     // channel/services/channel_data/ChannelOperationsService.ts:114
@@ -48,13 +55,13 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "channels.create": requires(
         "guild",
         ["ManageChannels"],
-        "Setting permission overwrites also needs Manage Roles, and the bot can allow only permissions it has",
+        `Setting permission overwrites also needs ${withChannelTitle("ManageRoles")}, and the bot can allow only permissions it has`,
     ),
     // channel/services/channel_data/ChannelOperationsService.ts:164, 189, 219-258
     "channels.edit": requires(
         "channel",
         ["ViewChannel", "ManageChannels"],
-        `Changing permission overwrites also needs Manage Roles, and ${ownPermissions}. Changing a voice region also needs Update RTC Region`,
+        `Changing permission overwrites also needs ${withChannelTitle("ManageRoles")}, and ${ownPermissions}. Changing a voice region also needs ${label("UpdateRtcRegion")}`,
     ),
     // channel/services/channel_data/ChannelOperationsService.ts:418
     "channels.delete": requires("channel", ["ViewChannel", "ManageChannels"]),
@@ -62,7 +69,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "channels.reorder": requires(
         "guild",
         ["ManageChannels"],
-        `Moving a channel with syncPermissionsOnMove also needs Manage Roles, and ${ownPermissions}`,
+        `Moving a channel with syncPermissionsOnMove also needs ${withChannelTitle("ManageRoles")}, and ${ownPermissions}`,
     ),
     // channel/services/channel_data/ChannelOperationsService.ts:647-676
     "channels.setPermissionOverwrite": requires("channel", ["ManageRoles"], `Also, ${ownPermissions}`),
@@ -76,7 +83,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "channels.follow": requires(
         "guildAndChannel",
         ["ViewChannel", "ManageWebhooks"],
-        "Fluxer checks View Channel in both channels and Manage Webhooks in the destination",
+        `Fluxer checks ${label("ViewChannel")} in both channels and ${label("ManageWebhooks")} in the destination`,
     ),
     // Upstream 4749eb7f, channel/services/ChannelRequestService.ts:164-171, where the three tag routes in
     // channel/controllers/ForumController.ts check Manage Channels before changing the channel's tags
@@ -113,7 +120,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "invites.delete": requires(
         "guild",
         ["ManageGuild"],
-        "Deleting an invite the bot created needs no Manage Guild. For a group direct message invite, only the group owner can delete it",
+        `Deleting an invite the bot created needs no ${label("ManageGuild")}. For a group direct message invite, only the group owner can delete it`,
     ),
     // guild/services/content/EmojiService.ts:102. Editing and deleting need Create Expressions for the bot's own
     // emoji and Manage Expressions otherwise, so they have no entry
@@ -173,7 +180,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "members.move": requires(
         "guild",
         ["MoveMembers"],
-        `${memberHierarchy}. The bot and the member also need Connect in the destination channel`,
+        `${memberHierarchy}. The bot and the member also need ${label("Connect")} in the destination channel`,
     ),
     // guild/services/member/GuildMemberOperationsService.ts:880-896
     "members.disconnect": requires("guild", ["MoveMembers"], memberHierarchy),
@@ -223,7 +230,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     send: requires(
         "channel",
         ["ViewChannel", "SendMessages"],
-        "Embeds also need Embed Links, files need Attach Files, and a forward needs View Channel in its source channel",
+        `Embeds also need ${label("EmbedLinks")}, files need ${label("AttachFiles")}, and a forward needs ${label("ViewChannel")} in its source channel`,
     ),
     // channel/services/MessageInteractionService.ts:75-76
     typing: requires("channel", ["ViewChannel", "SendMessages"]),
@@ -234,13 +241,13 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     edit: requires(
         "channel",
         ["ViewChannel"],
-        "Adding embeds also needs Embed Links, and adding files needs Attach Files",
+        `Adding embeds also needs ${label("EmbedLinks")}, and adding files needs ${label("AttachFiles")}`,
     ),
     // channel/services/message/MessageDeleteService.ts:67-77, channel/services/message/MessageValidationService.ts:249-255
     delete: requires(
         "channel",
         ["ViewChannel", "ManageMessages"],
-        "Deleting the bot's own message needs no Manage Messages, and Fluxer does not allow deleting some system messages",
+        `Deleting the bot's own message needs no ${label("ManageMessages")}, and Fluxer does not allow deleting some system messages`,
     ),
     // channel/services/message/MessageDeleteService.ts:179-184
     deleteMany: requires("channel", ["ViewChannel", "ManageMessages"]),
@@ -256,7 +263,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     publish: requires(
         "channel",
         ["ViewChannel", "SendMessages"],
-        "Publishing another author's message also needs Manage Messages",
+        `Publishing another author's message also needs ${label("ManageMessages")}`,
     ),
     // channel/services/MessageInteractionService.ts:115, channel/services/interaction/MessagePinService.ts:155
     pin: requires("channel", ["ViewChannel", "PinMessages"]),
@@ -270,7 +277,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     addReaction: requires(
         "channel",
         ["ViewChannel", "AddReactions"],
-        "Adding to an existing reaction needs no Add Reactions, and a new reaction with a custom emoji also needs Use External Emojis",
+        `Adding to an existing reaction needs no ${label("AddReactions")}, and a new reaction with a custom emoji also needs ${label("UseExternalEmojis")}`,
     ),
     // channel/services/MessageInteractionService.ts:227, channel/services/interaction/MessageReactionService.ts:276-278
     removeReaction: requires("channel", ["ViewChannel"]),
@@ -294,7 +301,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "threads.create": requires(
         "channel",
         ["ViewChannel", "CreatePublicThreads"],
-        "A private thread needs Create Private Threads instead",
+        `A private thread needs ${label("CreatePrivateThreads")} instead`,
     ),
     // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadCreationService.ts:120, 378,
     // packages/constants/src/ThreadPermissionUtils.ts:222-225
@@ -304,7 +311,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "threads.createPost": requires(
         "channel",
         ["ViewChannel", "SendMessages"],
-        "Embeds in the first message also need Embed Links, and files need Attach Files",
+        `Embeds in the first message also need ${label("EmbedLinks")}, and files need ${label("AttachFiles")}`,
     ),
     // channel/services/thread/ThreadModifyService.ts:137, packages/constants/src/ThreadPermissionUtils.ts:124-158
     "threads.edit": requires(
@@ -317,7 +324,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "threads.fetchArchived": requires(
         "channel",
         ["ViewChannel", "ReadMessageHistory"],
-        "Listing private archived threads also needs Manage Threads",
+        `Listing private archived threads also needs ${label("ManageThreads")}`,
     ),
     // channel/services/BaseChannelAuthService.ts:248, channel/services/thread/ThreadForumService.ts:217
     "threads.search": requires("channel", ["ViewChannel", "ReadMessageHistory"]),
@@ -325,7 +332,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "threads.addMember": requires(
         "channel",
         ["SendMessagesInThreads"],
-        "Adding to a private thread that is not invitable also needs Manage Threads, unless the added member has it",
+        `Adding to a private thread that is not invitable also needs ${label("ManageThreads")}, unless the added member has it`,
     ),
     // channel/services/thread/ThreadMemberService.ts:105, packages/constants/src/ThreadPermissionUtils.ts:195-201
     "threads.removeMember": requires(
@@ -340,18 +347,21 @@ export function permissionRequirement(operation: string): PermissionRequirement 
     return Object.hasOwn(permissionRequirements, operation) ? permissionRequirements[operation as Operation] : undefined
 }
 
-/** Readable name of a permission, such as Manage Channels for ManageChannels */
-const permissionLabel = (name: PermissionName) => name.replace(/([a-z])([A-Z])/g, "$1 $2")
-
 /** The suggested fix for a missing-permission rejection of an operation with a known requirement */
 export function requiredPermissionsHint(requirement: PermissionRequirement): string {
-    const labels = requirement.permissions.map(permissionLabel)
+    const labels = requirement.permissions.map((name) => label(name))
     const list = labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`
     const them = labels.length === 1 ? "it" : "them"
+    // A channel's permission overrides title some permissions differently, so name those titles to be found there
+    const titled = requirement.permissions.flatMap((name) => {
+        const title = channelScreenLabel(name)
+        return title === undefined ? [] : [`${label(name)} is titled "${title}"`]
+    })
+    const channelTitles = titled.length === 0 ? "" : `, where ${titled.join(" and ")}`
     const where = {
-        channel: `Grant ${them} to the bot's role in the community settings or the channel's permission overrides`,
+        channel: `Grant ${them} to the bot's role in the community settings or the channel's permission overrides${channelTitles}`,
         guild: `Grant ${them} to the bot's role in the community settings`,
-        guildAndChannel: `Grant ${them} to the bot's role in the community settings, and check that the channel's permission overrides do not deny ${them}`,
+        guildAndChannel: `Grant ${them} to the bot's role in the community settings, and check that the channel's permission overrides do not deny ${them}${channelTitles}`,
     }[requirement.scope]
     return [`The bot needs ${list} for this operation`, where, requirement.also]
         .filter((part) => part !== undefined)

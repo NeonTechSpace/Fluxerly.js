@@ -21,6 +21,8 @@ import type {
     DefaultGuildAuditOperationOptions,
     DefaultModerationOptions,
     DefaultTimeoutOptions,
+    TimeoutStateOptions,
+    MemberTimeoutState,
 } from "#sdk/guilds"
 import type { PaginationError, UserIterationQuery } from "#sdk/pagination"
 import type { ResultAsync, Result } from "neverthrow"
@@ -337,6 +339,35 @@ export interface Members {
         target: MemberReference,
         options?: DefaultTimeoutOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
+    /**
+     * Report whether a member is timed out, from the member's communicationDisabledUntil and a moment in time.
+     * Returns `"active"` when the expiry is later than the moment, `"none"` when the member has no timeout or the expiry is
+     * at or before the moment, and `"unknown"` when the member omits the field, as a gateway member or cached
+     * member can. Use members.fetch, which always includes the field, to settle an unknown state.
+     * The moment is options.now, otherwise the wall time of the Clock that the client was created with. No request or cache
+     * read is made, and connection state is irrelevant, including after client shutdown.
+     * A timed-out member keeps its permission bits, but Fluxer blocks sending messages, editing and publishing the member's
+     * own messages, reacting, uploading, typing, changing the member's own nickname, writing in threads and joining voice,
+     * so check this beside permissions.calculate.
+     * A value that is not an object, an expiry that is neither null nor an ISO 8601 timestamp, or an invalid `now` is
+     * misuse and throws GuildOperationError for members.timeoutState with reason input in both APIs
+     *
+     * @remarks
+     * Returns the value synchronously.
+     * Unexpected failures throw SdkDefect
+     *
+     * @example
+     * ```ts
+     * import type { Client, GuildMember } from "@neontechspace/fluxerly"
+     * function timeoutExample(client: Client, member: GuildMember) {
+     *     return client.members.timeoutState(member) === "active"
+     * }
+     * ```
+     */
+    timeoutState(
+        member: Pick<GuildMember, "communicationDisabledUntil">,
+        options?: TimeoutStateOptions,
+    ): MemberTimeoutState
     /**
      * Remove a member from the community, succeeding with no value after HTTP 204.
      * Fluxer requires KickMembers and checks hierarchy.

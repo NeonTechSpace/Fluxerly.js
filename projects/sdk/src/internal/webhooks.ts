@@ -8,7 +8,8 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Redacted from "effect/Redacted"
 import * as Scope from "effect/Scope"
-import { ClientClosedError, ConfigurationError } from "#sdk/errors"
+import { ConfigurationError } from "#sdk/errors"
+import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { MessageError } from "#sdk/message-errors"
 import type { Message, MessageOperationOptions, MessageReference } from "#sdk/messages"
 import {
@@ -585,9 +586,7 @@ class WebhookOwner {
         options?: MessageOperationOptions,
     ) {
         return Effect.suspend(() =>
-            this.#token
-                ? this.rest.webhook(this.#token, operation, build, options)
-                : Effect.fail(new ClientClosedError()),
+            this.#token ? this.rest.webhook(this.#token, operation, build, options) : Effect.fail(closedBeforeSend()),
         )
     }
     shutdown() {

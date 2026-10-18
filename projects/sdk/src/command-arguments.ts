@@ -380,6 +380,16 @@ export type CommandArgumentOptionalValue<D extends CommandArgumentDescriptor, V>
       : V
 
 /**
+ * Settings for `commands.parseArgument` that a message would otherwise supply
+ *
+ * @category Commands
+ */
+export interface CommandArgumentParseOptions {
+    /** Community ID that a `member` descriptor puts in its reference, normally the message's `guildId`. Without it a `member` token is rejected, as in a direct message */
+    readonly guildId?: string
+}
+
+/**
  * Frozen converted values keyed by the command's argument names, such as `values.count`.
  * Available to execution and cooldown-key callbacks only after the entire schema converts successfully.
  * Optional descriptors add undefined to their value type. Guards and rejection callbacks receive raw context instead

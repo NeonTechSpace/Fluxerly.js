@@ -171,4 +171,83 @@ for (const [mode, api] of [
             })
         expect(thrown(() => api.text.split(1 as never, { maxLength: 2 }))).toMatchObject({ reason: "text" })
     })
+
+    test(`${mode}: truncates to the limit with a suffix, keeping surrogate pairs whole`, () => {
+        vi.stubGlobal("fetch", () => {
+            throw Error("Pure helpers must not fetch")
+        })
+        // Text that fits is returned unchanged, even when it ends exactly at the limit
+        expect(api.text.truncate("abc", { maxLength: 3 })).toBe("abc")
+        expect(api.text.truncate("", { maxLength: 1 })).toBe("")
+        expect(api.text.truncate("abcdef", { maxLength: 4 })).toBe("abc…")
+        expect(api.text.truncate("abcdef", { maxLength: 4, suffix: "..." })).toBe("a...")
+        expect(api.text.truncate("abcdef", { maxLength: 4, suffix: "" })).toBe("abcd")
+        expect(api.text.truncate("abcdef", { maxLength: 4, suffix: undefined as never })).toBe("abc…")
+        // No trimming or word boundary: The cut is exact
+        expect(api.text.truncate("ab cd", { maxLength: 4 })).toBe("ab …")
+        // The pair at the cut is dropped rather than split, which leaves the result one unit short
+        expect(api.text.truncate("ab😀c", { maxLength: 4 })).toBe("ab…")
+        expect(api.text.truncate("ab😀cde", { maxLength: 5 })).toBe("ab😀…")
+        expect(api.text.truncate("ab😀c", { maxLength: 3, suffix: "" })).toBe("ab")
+        // With no room for text before the suffix, the suffix alone is returned
+        expect(api.text.truncate("😀😀", { maxLength: 2 })).toBe("…")
+        expect(api.text.truncate("😀😀", { maxLength: 2, suffix: "ab" })).toBe("ab")
+        expect(api.text.truncate("😀😀", { maxLength: 1 })).toBe("…")
+        expect(api.text.truncate("abc", { maxLength: 1, suffix: "" })).toBe("a")
+        // A seeded sequence of mixed text always fits, stays well formed and keeps a prefix of the input
+        let seed = 12_345
+        const next = (limit: number) => {
+            seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+            return seed % limit
+        }
+        const alphabet = ["a", " ", "\n", "é", "😀", "👨‍👩‍👧‍👦", "́"]
+        for (let round = 0; round < 500; round++) {
+            const content = Array.from({ length: next(30) }, () => alphabet[next(alphabet.length)]).join("")
+            const suffix = ["…", "", "...", "😀"][next(4)]!
+            const maxLength = Math.max(1, suffix.length) + next(12)
+            const result = api.text.truncate(content, { maxLength, suffix })
+            expect(result.length).toBeLessThanOrEqual(maxLength)
+            expect(result.isWellFormed()).toBe(true)
+            if (content.length <= maxLength) {
+                expect(result).toBe(content)
+                continue
+            }
+            expect(result.endsWith(suffix)).toBe(true)
+            const kept = result.slice(0, result.length - suffix.length)
+            expect(content.startsWith(kept)).toBe(true)
+            // Only a pair that straddles the cut may shorten the kept text, and then by one unit
+            expect(maxLength - suffix.length - kept.length).toBeLessThanOrEqual(1)
+        }
+    })
+
+    test(`${mode}: truncate rejects invalid text and options with HelperError`, () => {
+        expect(thrown(() => api.text.truncate("\ud800", { maxLength: 4 }))).toMatchObject({
+            operation: "text.truncate",
+            reason: "text",
+        })
+        expect(thrown(() => api.text.truncate(1 as never, { maxLength: 4 }))).toMatchObject({ reason: "text" })
+        expect(api.text.truncate("\ud800".toWellFormed(), { maxLength: 4 })).toBe("�")
+        for (const options of [
+            undefined,
+            null,
+            [],
+            { maxLength: 0 },
+            { maxLength: -1 },
+            { maxLength: 1.5 },
+            { maxLength: "4" },
+            { maxLength: Infinity },
+            { maxLength: 4, unknown: true },
+            { maxLength: 4, suffix: 1 },
+            { maxLength: 4, suffix: null },
+            { maxLength: 4, suffix: "\ud800" },
+            // The suffix must fit in the limit
+            { maxLength: 2, suffix: "..." },
+        ])
+            expect(thrown(() => api.text.truncate("private-text", options as never))).toMatchObject({
+                operation: "text.truncate",
+                reason: "limit",
+            })
+        const error = thrown(() => api.text.truncate("private-text", { maxLength: 0 })) as Error
+        expect(error.message).not.toContain("private-text")
+    })
 }

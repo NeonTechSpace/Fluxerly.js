@@ -7,6 +7,7 @@
 import * as Effect from "effect/Effect"
 import * as Stream from "effect/Stream"
 import { ClientClosedError } from "#sdk/errors"
+import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { PaginationError, type PaginationOperation } from "#sdk/pagination"
 import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { OperationOptions } from "#sdk/client"
@@ -103,7 +104,7 @@ export class Pagination<A, E> {
             if (this.done) return undefined
             while (true) {
                 if (this.owner.state === "Closing" || this.owner.state === "Closed")
-                    return yield* Effect.fail(new ClientClosedError())
+                    return yield* Effect.fail(closedBeforeSend())
                 while (this.#index < this.#items.length) {
                     const item = this.#items[this.#index]!
                     this.#items[this.#index++] = undefined

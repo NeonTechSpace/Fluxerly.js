@@ -1,5 +1,6 @@
 import type { GuildChannel } from "./channels.js"
-import type { Guild, GuildMember, GuildRole, MemberReference } from "./guilds.js"
+import type { OperationOptions } from "./client.js"
+import type { Guild, GuildMember, GuildOperationOptions, GuildRole, MemberReference } from "./guilds.js"
 
 /**
  * Calculate a member's community or channel permission bits from supplied guild, member, role and channel data
@@ -58,10 +59,11 @@ export interface PermissionInput {
 }
 
 /**
- * Choose whose permission bits permissions.fetch should calculate from fresh REST reads
+ * Choose whose permission bits permissions.fetch should calculate, by default from fresh REST reads
  *
  * Supply `channelId` to include a separate target-channel read, or omit it for community-level bits.
- * The client reads guild, member, roles and optional channel in that order under one total deadline, without consulting caches.
+ * The client reads guild, member, roles and optional channel in that order under one total deadline, without consulting
+ * caches unless `preferCache` is set.
  * When the channel is a thread, the client also reads its parent channel under the same deadline and calculates as
  * Fluxer does for the thread.
  * Resources can change between reads. The result is not one simultaneous snapshot and does not guarantee that Fluxer will allow an action
@@ -72,3 +74,31 @@ export interface PermissionTarget extends MemberReference {
     /** Decimal community-channel ID for a channel-scoped calculation */
     readonly channelId?: string
 }
+
+/**
+ * Settings for permissions.fetch: The shared deadline of its reads, and whether enabled caches may replace them
+ *
+ * @category Options
+ */
+export interface PermissionFetchOptions extends GuildOperationOptions {
+    /**
+     * Read each observation from an enabled cache before fetching it, such as to decide for every command without a
+     * request. Default false, which fetches every observation fresh.
+     * The guild, member and channel come from their caches when present, and the roles when the everyone role and every
+     * member role are all cached, otherwise one list read replaces all of them. A cached channel without its overwrite
+     * list is fetched, and a thread's parent channel is read the same way. Only fetches count toward the deadline.
+     * Cached observations reflect the last applied gateway events, so they can differ from Fluxer, and their snapshots can
+     * come from different moments.
+     * Cached entries stay while a shard can resume and are cleared when a new session starts, after which they are fetched.
+     * Use the default right before an action where a stale grant matters. With the caches disabled, the call behaves
+     * as it does by default. A value that is not a boolean fails with reason input
+     */
+    readonly preferCache?: boolean
+}
+
+/**
+ * Default API settings for permissions.fetch. Abort cancels only this call and awaits owned cleanup
+ *
+ * @category Options
+ */
+export interface DefaultPermissionFetchOptions extends PermissionFetchOptions, OperationOptions {}

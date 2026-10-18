@@ -1,6 +1,12 @@
 import { GuildOperationError } from "./guilds.js"
 import type { Guild, GuildMember, GuildRole } from "./guilds.js"
-import { compareRoleHierarchy, evaluateMemberHierarchy, isRoleAboveInHierarchy } from "#sdk/internal/role-hierarchy"
+import {
+    compareRoleHierarchy,
+    evaluateHighestRole,
+    evaluateMemberHierarchy,
+    evaluateRoleManagement,
+    isRoleAboveInHierarchy,
+} from "#sdk/internal/role-hierarchy"
 import { inputValidationFailure } from "./input-validation.js"
 
 /** Check whether one community member outranks another using guild, member and role snapshots already held by the caller.
@@ -20,7 +26,29 @@ export interface RoleHierarchyInput {
     readonly roles: readonly GuildRole[]
 }
 
-type HierarchyOperation = "hierarchy.compare" | "hierarchy.isAbove" | "hierarchy.canManage"
+/** Check whether a community member's rank allows managing one role using guild, member and role snapshots already held by the caller.
+ * Supply the actor who would manage the role and the role they would act on.
+ * The hierarchy.canManageRole function checks rank only, without fetching resources or authorizing role changes
+ *
+ * @category Roles and permissions
+ */
+export interface RoleManagementInput {
+    /** Community that owns the actor, role, and supplied role observations */
+    readonly guild: Guild
+    /** Member whose hierarchy rank is being evaluated */
+    readonly actor: GuildMember
+    /** Role the actor would need to outrank. It need not appear in `roles` */
+    readonly role: GuildRole
+    /** Role observations for every explicit role assigned to the actor */
+    readonly roles: readonly GuildRole[]
+}
+
+type HierarchyOperation =
+    | "hierarchy.compare"
+    | "hierarchy.isAbove"
+    | "hierarchy.canManage"
+    | "hierarchy.highestRole"
+    | "hierarchy.canManageRole"
 
 const inputFailure = (operation: HierarchyOperation, path: string, explanation: string) =>
     new GuildOperationError({
@@ -68,6 +96,32 @@ export type HierarchyHelpers = Readonly<{
      * membership or concurrent remote changes. To fetch fresh data and check in one call, use members.fetchCanManage
      */
     canManage(input: RoleHierarchyInput): boolean
+    /**
+     * Find the role that gives a member the highest rank, from supplied snapshots.
+     * The implicit everyone role is ignored, so a member with no explicit roles gives undefined.
+     * Equal positions are ordered by numeric ID, with the smaller ID higher.
+     * The `roles` list must include one same-community observation for every role ID of the member and may include the
+     * everyone role, as the output of `roles.fetchAll` does. The member must not list everyone as an explicit role.
+     * Malformed, incomplete, duplicate or cross-community snapshots throw GuildOperationError hierarchy.highestRole/input
+     * without retaining the input.
+     * This reports rank only, not the member's permissions
+     */
+    highestRole(member: GuildMember, roles: readonly GuildRole[]): GuildRole | undefined
+    /**
+     * Check the rank requirement for one member to manage one role, such as to assign or edit it, from supplied snapshots.
+     * The community owner passes. Any other actor passes only when the actor's highest explicit role outranks the role,
+     * with equal positions ordered by numeric ID and the smaller ID higher. An actor with no explicit roles fails, and so
+     * does an actor whose highest role is the role itself. Administrator does not bypass rank in Fluxer.
+     * The `roles` list must include one same-community observation for every actor role ID, and the role need not be in it.
+     * Members must not list everyone as an explicit role.
+     * Malformed, incomplete, duplicate or cross-community snapshots throw GuildOperationError hierarchy.canManageRole/input
+     * without retaining the input.
+     * A true result confirms only the rank requirement and does not authorize an action.
+     * Fluxer also requires the ManageRoles permission, which
+     * `permissionBits.has(permissions.calculate(...), "ManageRoles")` checks. Neither check covers multi-factor
+     * authentication (MFA), endpoint-specific requirements or concurrent remote changes
+     */
+    canManageRole(input: RoleManagementInput): boolean
 }>
 
 /**
@@ -121,6 +175,26 @@ export const hierarchy: HierarchyHelpers = Object.freeze({
                 "hierarchy.canManage",
                 "input",
                 "Hierarchy input must contain consistent guild, member, and unique role snapshots covering both members",
+            )
+        return manageable
+    },
+    highestRole(member: GuildMember, roles: readonly GuildRole[]): GuildRole | undefined {
+        const highest = evaluateHighestRole(member, roles)
+        if (highest === undefined)
+            throw inputFailure(
+                "hierarchy.highestRole",
+                "input",
+                "Hierarchy input must contain a member and unique role snapshots of its community that cover the member's roles",
+            )
+        return highest.role
+    },
+    canManageRole(input: RoleManagementInput): boolean {
+        const manageable = evaluateRoleManagement(input)
+        if (manageable === undefined)
+            throw inputFailure(
+                "hierarchy.canManageRole",
+                "input",
+                "Hierarchy input must contain consistent guild, actor, role and unique role snapshots covering the actor",
             )
         return manageable
     },

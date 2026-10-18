@@ -344,7 +344,13 @@ test("a full outgoing queue rejects only new work, queued cancellation releases 
     const admitted = client.messages.send("20", { content: "newly admitted" })
     await settle(client.shutdown())
     const stopped = await Promise.all([...active, admitted])
-    expect(stopped.every((result) => result.isErr() && result.error._tag === "ClientClosedError")).toBe(true)
+    // The closure keeps how far each send got: Four were in flight, and the last never left the queue
+    const outcomes = stopped.map((result) =>
+        result.isErr() && result.error._tag === "ClientClosedError" ? result.error.outcome : "not closed",
+    )
+    expect(outcomes).toEqual(["unknown", "unknown", "unknown", "unknown", "notDispatched"])
+    const first = stopped[0]
+    expect(first?.isErr() && first.error.details).toMatchObject({ outcome: "unknown" })
     expect(server.requests).toHaveLength(4)
     await vi.waitFor(() => expect(server.control.closed).toBe(4))
 })

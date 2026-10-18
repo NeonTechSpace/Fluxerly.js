@@ -143,6 +143,10 @@ The helper returns `true` or `false` from the supplied data. It throws `GuildOpe
 
 A thread has no permission overwrites of its own, because Fluxer calculates its permissions in its parent channel. To check a thread, supply the thread as `channel` and its parent channel as `parentChannel`. The calculation then uses the parent's overwrites and grants `SendMessages` exactly when `SendMessagesInThreads` is granted, as Fluxer does. A thread without its parent, or with another channel as `parentChannel`, fails with reason `input`. The [`permissions.fetch`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#fetch) method reads the parent itself when its `channelId` names a thread
 
+To decide without requests, call `client.permissions.fetch(target, { preferCache: true })`. It takes each part from an enabled cache and fetches only what is missing, which is how `guards.requirePermissions` decides. Cached parts follow the gateway events applied so far and can come from different moments, so keep the default fresh read for the moment right before an action where a stale grant matters
+
+A timed-out member keeps their permission bits, while Fluxer blocks sending messages, editing and publishing their own messages, reacting, uploading, typing, changing their own nickname, writing in threads and joining voice. The `client.members.timeoutState(member)` method returns `"active"`, `"none"` or `"unknown"`. A member without the `communicationDisabledUntil` field is `"unknown"`, and `members.fetch` always includes it. To show a permission to people, `permissionBits.label("ManageGuild")` gives Fluxer's own name for it, "Manage community". These are community-scope titles, and a channel's permission screen calls `ManageChannels` "Manage channel" and `ManageRoles` "Manage permissions"
+
 <details>
 <summary>What does a calculated permission not cover?</summary>
 
@@ -151,6 +155,24 @@ In a thread, the result also does not show whether the member can see a private 
 For prefix commands, the `guards.requirePermissions` guard in the [commands guide](/docs/{{version}}/commands/) performs this check from cached or fetched data
 
 </details>
+
+## Change part of a channel overwrite
+
+The `channels.setPermissionOverwrite` method replaces both bit sets of an overwrite. The `permissionBits.patchOverwrite` helper changes only the named permissions and keeps every other bit
+
+```ts
+import { permissionBits, type Client, type PermissionOverwrite } from "@neontechspace/fluxerly"
+
+export async function quietRole(client: Client, channelId: string, roleId: string, current?: PermissionOverwrite) {
+    const { allow, deny } = permissionBits.patchOverwrite(current, {
+        deny: ["SendMessages", "AddReactions"],
+        inherit: ["ViewChannel"],
+    })
+    return await client.channels.setPermissionOverwrite(channelId, { id: roleId, type: "role", allow, deny })
+}
+```
+
+Pass the overwrite as read from the channel, or `undefined` when there is none. In the change, `allow` also stops denying, `deny` also stops allowing and `inherit` clears both. A permission in more than one list throws `HelperError`. A result with `allow` and `deny` both `0n` has no effect, so remove such an overwrite with `channels.removePermissionOverwrite`
 
 ## Grant a configured opt-in role
 
@@ -215,7 +237,7 @@ The [`members.kick`](/docs/{{version}}/api/interfaces/js-ts.Members/#kick) and `
 <details>
 <summary>Compare ranks from data already held</summary>
 
-The `fetchCanManage` method fetches fresh community, member and role data for each check. When the application already holds that data, the `hierarchy` helpers compare it without a request: `hierarchy.canManage({ guild, actor, target, roles })` checks one member against another, and `hierarchy.compare` and `hierarchy.isAbove` order two roles. Like `fetchCanManage`, they check rank only, not permissions
+The `fetchCanManage` method fetches fresh community, member and role data for each check. When the application already holds that data, the `hierarchy` helpers compare it without a request: `hierarchy.canManage({ guild, actor, target, roles })` checks one member against another, and `hierarchy.compare` and `hierarchy.isAbove` order two roles. Like `fetchCanManage`, they check rank only, not permissions. For roles, `hierarchy.highestRole(member, roles)` returns a member's highest explicit role, and `hierarchy.canManageRole({ guild, actor, role, roles })` checks whether the actor outranks a role. Administrator does not bypass rank, so also check the `ManageRoles` permission for the permission half
 
 </details>
 

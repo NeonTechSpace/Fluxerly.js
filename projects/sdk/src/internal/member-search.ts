@@ -265,6 +265,7 @@ export function memberSearch(
         bucket: "guild:members",
         path: `/guilds/${guildId}/members-search`,
         method: "POST",
+        read: true,
         status: 200,
         json: encoded.json,
         decode: (value) => decodeMemberSearchPage(value, guildId, encoded),

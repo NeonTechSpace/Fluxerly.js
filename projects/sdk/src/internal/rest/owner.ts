@@ -16,6 +16,7 @@ import * as Exit from "effect/Exit"
 import * as Random from "effect/Random"
 import type * as Redacted from "effect/Redacted"
 import { ClientClosedError } from "#sdk/errors"
+import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { responseFieldText } from "#sdk/api-errors"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { InputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
@@ -102,7 +103,7 @@ import {
     type RestRequestFailure,
     type RestResponse,
 } from "#sdk/rest"
-import { completeCleanup, runAttempt, type Request } from "./attempt.js"
+import { completeCleanup, isReadRequest, runAttempt, type Request } from "./attempt.js"
 import { encodeRestRequest, readRestResponse } from "./request.js"
 import {
     inputFailure,
@@ -383,7 +384,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: AttachmentRefreshOptions,
     ): Effect.Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure> {
         return suspendInput((): Effect.Effect<readonly RefreshedAttachmentUrl[], RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = attachmentRefresh(urls)
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
             const invalid = timeoutOptionsFailure(options)
@@ -394,6 +395,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     channel: "attachments",
                     bucket: "attachments:refresh",
                     cache: false,
+                    read: true,
                     path: input.path,
                     method: input.method,
                     status: input.status,
@@ -475,7 +477,7 @@ export class RestOwner<M extends MessageCore = Message> {
         directMessageUser?: string,
     ): Effect.Effect<M, SendError> {
         return suspendInput((): Effect.Effect<M, SendError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const body = encode()
             if (body instanceof MessageError) return Effect.fail(body)
             return this.#execute(
@@ -557,7 +559,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             if (!identifier(channel))
                 return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
             const invalid = timeoutOptionsFailure(options)
@@ -586,7 +588,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<readonly M[], MessageOperationFailure> {
         return suspendInput((): Effect.Effect<readonly M[], RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const encoded = encodeHistory(channel, query)
             if (encoded instanceof InputValidationFailure) return Effect.fail(inputFailure(encoded.detail))
             return this.#execute(
@@ -614,7 +616,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<MessageSearchPage<M>, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const encoded = encodeMessageSearch(context, query)
             if (encoded instanceof InputValidationFailure) return Effect.fail(inputFailure(encoded.detail))
             return this.#execute(
@@ -624,6 +626,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     channel: encoded.context.channelId ?? encoded.context.guildId!,
                     bucket: "search",
                     cache: false,
+                    read: true,
                     path: "/search/messages",
                     body: { json: encoded.json, files: [] },
                     status: 200,
@@ -666,7 +669,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const ref = snapshotReference(target)
             if (ref === undefined)
                 return Effect.fail(
@@ -699,7 +702,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageAuditOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             if (!identifier(channelId))
                 return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
             if (!Array.isArray(ids))
@@ -742,7 +745,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             if (!identifier(channelId))
                 return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
             const invalid = timeoutOptionsFailure(options)
@@ -773,7 +776,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<ReactionUsersPage, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const encoded = encodeReactionEmoji(emoji)
             const page = encodeReactionUsersQuery(query)
             const ref = snapshotReference(target)
@@ -815,7 +818,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
     ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<MessagePinsPage<M>, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const page = encodePinsQuery(channel, query)
             if (page instanceof InputValidationFailure) return Effect.fail(inputFailure(page.detail))
             return this.#execute(
@@ -845,7 +848,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: MessageAuditOperationOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const ref = snapshotReference(target)
             if (ref === undefined)
                 return Effect.fail(
@@ -881,7 +884,7 @@ export class RestOwner<M extends MessageCore = Message> {
         userId?: string,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const encoded = operation === "clearReactions" ? "" : encodeReactionEmoji(emoji as ReactionEmojiInput)
             const ref = snapshotReference(target)
             if (ref === undefined)
@@ -930,7 +933,7 @@ export class RestOwner<M extends MessageCore = Message> {
         observe?: (value: A, guard: CacheRequest) => void,
     ): Effect.Effect<A, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const ref = snapshotReference(target)
             if (ref === undefined)
                 return Effect.fail(
@@ -1358,7 +1361,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: GuildOperationOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
             if (options !== undefined && !record(options))
@@ -1389,6 +1392,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     ...(input.deleteAuthorId === undefined ? {} : { deleteAuthorId: input.deleteAuthorId }),
                     ...(input.invalidateMessages === undefined ? {} : { invalidateMessages: input.invalidateMessages }),
                     ...(input.features === undefined ? {} : { features: input.features }),
+                    ...(input.read === undefined ? {} : { read: input.read }),
                     path: input.path,
                     method: input.method,
                     status: input.status,
@@ -1411,7 +1415,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: ChannelOperationOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
             if (options !== undefined && !record(options))
@@ -1457,7 +1461,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: UserOperationOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
             const invalid = timeoutOptionsFailure(options)
@@ -1489,7 +1493,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: BotApplicationOperationOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             const invalid = timeoutOptionsFailure(options)
             if (invalid) return Effect.fail(invalid)
@@ -1519,7 +1523,7 @@ export class RestOwner<M extends MessageCore = Message> {
         options?: WebhookOperationOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
             if (options !== undefined && !record(options))
@@ -1566,7 +1570,7 @@ export class RestOwner<M extends MessageCore = Message> {
         const owner = this
         const runtime = this.#runtime
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
-            if (runtime.closed) return Effect.fail(new ClientClosedError())
+            if (runtime.closed) return Effect.fail(closedBeforeSend())
             let requested: ReturnType<typeof deadlineOption>
             let unsupported: RestFailure | undefined
             try {
@@ -1717,6 +1721,13 @@ export class RestOwner<M extends MessageCore = Message> {
                 }
                 return yield* owner.#exchange(token, { request, progress, generation, deadline })
             }).pipe(
+                // Admission and the attempt close without knowing how far the request got, so the progress decides:
+                // Queued is notDispatched, waiting out a 429 is rejected and in flight is unknown
+                mapFailureCause((error) =>
+                    error instanceof ClientClosedError && error.outcome === undefined
+                        ? new ClientClosedError({ outcome: progress.outcome, read: isReadRequest(request) })
+                        : error,
+                ),
                 withDeadline(timeout, () => new RestFailure({ reason: "timeout", outcome: progress.outcome })),
                 Effect.provideService(Clock.Clock, runtime.logical.clock),
                 Effect.ensuring(
@@ -1764,7 +1775,7 @@ export class RestOwner<M extends MessageCore = Message> {
             // Mark it in place: The failure's Cause, including any cleanup defects beside it, stays unchanged
             Effect.onExit((exit) =>
                 Effect.sync(() => {
-                    if (request.method !== "GET" || Exit.isSuccess(exit)) return
+                    if (!isReadRequest(request) || Exit.isSuccess(exit)) return
                     for (const reason of exit.cause.reasons)
                         if (reason._tag === "Fail" && reason.error instanceof RestFailure) reason.error.read = true
                 }),
@@ -1782,7 +1793,7 @@ export class RestOwner<M extends MessageCore = Message> {
         input: RestRequest | DefaultRestRequest,
     ): Effect.Effect<RestResponse<T>, RestRequestFailure> {
         return suspendInput((): Effect.Effect<RestResponse<T>, RestFailure | ClientClosedError> => {
-            if (this.#runtime.closed) return Effect.fail(new ClientClosedError())
+            if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const encoded = encodeRestRequest(input)
             if (encoded instanceof InputValidationFailure) return Effect.fail(inputFailure(encoded.detail))
             return this.#execute(

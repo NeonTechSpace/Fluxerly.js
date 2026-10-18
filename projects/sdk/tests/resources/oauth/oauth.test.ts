@@ -1204,6 +1204,51 @@ describe("oauth", () => {
         await made.shutdown()
     })
 
+    test("a shutdown during instance discovery reports that nothing was sent", async () => {
+        const { base, requests } = await fixture("discoveryStall")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        const pending = made.fetchIdentity("access")
+        await waitUntil(() => requests.some((request) => request.path === "/.well-known/fluxer"), {
+            message: "Discovery did not reach the stalled fixture",
+        })
+        await made.shutdown()
+        const result = await pending
+        expect(result.isErr()).toBe(true)
+        if (result.isErr())
+            expect(result.error).toMatchObject({
+                _tag: "ClientClosedError",
+                outcome: "notDispatched",
+                details: { outcome: "notDispatched" },
+            })
+        expect(requests.filter((request) => request.path === "/users/@me")).toHaveLength(0)
+    })
+
+    test("a shutdown while a code exchange is in flight is an unknown network failure, not a closed client", async () => {
+        const { base, requests } = await fixture("stall")
+        const made = defaultApi.create({
+            clientId: "1",
+            clientSecret: "secret",
+            instance: { url: base, allowInsecure: true },
+        })
+        const pending = made.exchangeCode({
+            code: "code",
+            redirectUri: "http://localhost/callback",
+            codeVerifier: "a".repeat(43),
+        })
+        await waitUntil(() => requests.some((request) => request.path === "/oauth2/token"), {
+            message: "The OAuth request did not reach the stalled fixture",
+        })
+        await made.shutdown()
+        const result = await pending
+        expect(result.isErr()).toBe(true)
+        if (result.isErr())
+            expect(result.error).toMatchObject({ _tag: "OAuthOperationError", reason: "network", outcome: "unknown" })
+    })
+
     test.each(["clientId", "clientSecret", "instance", "instance.url"] as const)(
         "preserves unexpected OAuth %s getter failures through both creation APIs",
         (field) => {

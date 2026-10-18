@@ -24,6 +24,7 @@ import { loggingConfiguration, type ClientLogger } from "#sdk/internal/logging"
 import type * as Context from "effect/Context"
 import { apiErrorDetail, unrecognizedProviderCode } from "#sdk/api-errors"
 import { ClientClosedError, ConfigurationError, RateLimitError } from "#sdk/errors"
+import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { mapFailureCause, TransportError, withDeadline } from "#sdk/internal/effect-failures"
 import { nowMs } from "#sdk/internal/clock"
 import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transport/index"
@@ -432,7 +433,7 @@ export class OAuthOwner {
                             "OAuth operation options may contain only a timeoutMs integer from 1 through 2,147,483,647",
                         ),
                     )
-                if (this.#closed || !this.#secret) return Effect.fail(new ClientClosedError())
+                if (this.#closed || !this.#secret) return Effect.fail(closedBeforeSend())
                 if (this.#active >= maximumConcurrentRequests)
                     return Effect.fail(new OAuthError({ operation, reason: "busy", outcome: "notDispatched" }))
                 this.#active += 1
@@ -449,28 +450,33 @@ export class OAuthOwner {
                         () => new OAuthError({ operation, reason: "timeout", outcome: "notDispatched" }),
                     ),
                     mapFailureCause((error) =>
-                        error instanceof OAuthError || error instanceof ClientClosedError
+                        error instanceof OAuthError
                             ? error
-                            : this.#closed
-                              ? new ClientClosedError()
-                              : error instanceof RateLimitError
-                                ? new OAuthError({
-                                      operation,
-                                      reason: "rateLimit",
-                                      outcome: "notDispatched",
-                                      status: 429,
-                                      retryAfterMs: error.retryAfterMs,
-                                  })
-                                : new OAuthError({
-                                      operation,
-                                      reason: "network",
-                                      outcome: "notDispatched",
-                                      cause: new TransportError(error),
-                                  }),
+                            : error instanceof ClientClosedError
+                              ? // Discovery closes without a request, so the closure reports that nothing was sent
+                                error.outcome === undefined
+                                  ? closedBeforeSend()
+                                  : error
+                              : this.#closed
+                                ? closedBeforeSend()
+                                : error instanceof RateLimitError
+                                  ? new OAuthError({
+                                        operation,
+                                        reason: "rateLimit",
+                                        outcome: "notDispatched",
+                                        status: 429,
+                                        retryAfterMs: error.retryAfterMs,
+                                    })
+                                  : new OAuthError({
+                                        operation,
+                                        reason: "network",
+                                        outcome: "notDispatched",
+                                        cause: new TransportError(error),
+                                    }),
                     ),
                     Effect.flatMap((endpoints): Effect.Effect<A, OAuthOperationError | ClientClosedError> =>
                         this.#closed || !this.#secret
-                            ? Effect.fail(new ClientClosedError())
+                            ? Effect.fail(closedBeforeSend())
                             : task(endpoints.apiPublic, endpoints.webapp, this.#secret, progress).pipe(
                                   withDeadline(
                                       Math.max(1, deadline - (nowMs(clock) - started)),

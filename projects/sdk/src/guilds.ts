@@ -707,6 +707,24 @@ export interface TimeoutOptions extends ModerationOptions {
  */
 export interface DefaultTimeoutOptions extends TimeoutOptions, OperationOptions {}
 
+/**
+ * Whether a member is timed out: `"active"` while the expiry is in the future, `"none"` when the member has no timeout or
+ * it has ended, and `"unknown"` when the member snapshot does not say
+ *
+ * @category Guilds and members
+ */
+export type MemberTimeoutState = "none" | "active" | "unknown"
+
+/**
+ * Settings for members.timeoutState
+ *
+ * @category Options
+ */
+export interface TimeoutStateOptions {
+    /** Moment to evaluate the timeout at, such as to test a snapshot or a future time. Default the wall time of the Clock that the client was created with */
+    readonly now?: Date
+}
+
 /** Ban an account from a community permanently or for a provider-managed duration, optionally deleting recent messages.
  * The server owns expiry and any requested deletion job. Removing or expiring a ban does not restore membership
  * or deleted messages
@@ -1013,7 +1031,7 @@ export interface RoleHoistPosition {
 export type GuildOperation =
     | "permissions.calculate"
     | "permissions.fetch"
-    | `hierarchy.${"compare" | "isAbove" | "canManage"}`
+    | `hierarchy.${"compare" | "isAbove" | "canManage" | "highestRole" | "canManageRole"}`
     | "members.search"
     | `discovery.${"search" | "fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`
     | `invites.${"fetch" | "create" | "fetchForChannel" | "fetchForGuild" | "delete"}`
@@ -1034,6 +1052,7 @@ export type GuildOperation =
     | "members.fetchBans"
     | "members.timeout"
     | "members.clearTimeout"
+    | "members.timeoutState"
     | "members.kick"
     | "members.fetch"
     | "members.fetchSelf"

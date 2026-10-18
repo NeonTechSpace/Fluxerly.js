@@ -581,11 +581,68 @@ test("quoted parsing splits quoted and escaped arguments and rejects an untermin
     const single = commands.parseQuoted({ message: {} as never, prefix: "!", source: "run 'unterminated" })
     const escape = commands.parseQuoted({ message: {} as never, prefix: "!", source: "run trailing\\" })
     // A rejection explains the mistake and has no command to run. Each mistake gets its own explanation
-    for (const rejected of [double, single, escape]) expect(rejected).toEqual({ reason: expect.any(String) })
+    for (const rejected of [double, single, escape])
+        expect(rejected).toEqual({ reason: expect.any(String), name: "run" })
     expect(new Set([double, single, escape].map((rejected) => (rejected as { reason: string }).reason)).size).toBe(3)
     // Text that cannot be a command is still a plain decline, so chat that happens to start with the prefix gets no reason
     expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: "  " })).toBeUndefined()
     expect(commands.parseQuoted({ message: {} as never, prefix: "!", source: '"not a name' })).toBeUndefined()
+})
+
+test.each([
+    // A single quote is an apostrophe inside a word, so it is literal there
+    ["don't", ["don't"]],
+    ["it's Ada's", ["it's", "Ada's"]],
+    ["it'", ["it'"]],
+    ["a'b c'", ["a'b", "c'"]],
+    // A single-quoted span ends at a single quote unless a letter or digit follows it
+    ["'it's fine'", ["it's fine"]],
+    ["'don't'", ["don't"]],
+    ["'Yes', 'No'", ["Yes,", "No"]],
+    ["'the dogs' bowl'", ["the dogs", "bowl'"]],
+    ["'a'.", ["a."]],
+    ["'a'-b", ["a-b"]],
+    ["'a'(b)", ["a(b)"]],
+    ["'x'y'", ["x'y"]],
+    ["'日本' 語", ["日本", "語"]],
+    ["'a'b'c'", ["a'b'c"]],
+    ["'a''b'", ["ab"]],
+    ["\"a\"'b c'", ["ab c"]],
+    ['"it\'s fine"', ["it's fine"]],
+    ["'say \"hi\"'", ['say "hi"']],
+    ["\"don't\" won't", ["don't", "won't"]],
+    // A double quote keeps its original rules: It opens a span anywhere, and text that touches a span joins its word
+    ['"a b"c', ["a bc"]],
+    ['a"b c"', ["ab c"]],
+    ['"a""b"', ["ab"]],
+    ['key="a b"', ["key=a b"]],
+    // Escapes still write a quote literally, inside or outside a span
+    ['\\"quoted\\"', ['"quoted"']],
+    ["\\'x", ["'x"]],
+    ['"it\\"s"', ['it"s']],
+    ['""', [""]],
+    ['"" x', ["", "x"]],
+])("quoted parsing of %s gives %j", (source, args) => {
+    const parsed = commands.parseQuoted({ message: {} as never, prefix: "!", source: `say ${source}` })
+    expect(parsed).toEqual({ name: "say", rawArgs: source, args })
+    expect(nativeCommands.parseQuoted({ message: {} as never, prefix: "!", source: `say ${source}` })).toEqual(parsed)
+})
+
+test.each([
+    ["don't 'open", "single"],
+    ["it's \"open", "double"],
+    ["a'b 'c", "single"],
+    ["'it's", "single"],
+    // A span followed directly by a letter or digit is not closed by that quote
+    ["'a'b", "single"],
+    ["'a b'c", "single"],
+    ["''a", "single"],
+    ["'a'1", "single"],
+    ["'日本'語", "single"],
+    ['5" pipe', "double"],
+])("quoted parsing of %s still rejects the span that never closes, with the command name", (source, kind) => {
+    const rejected = commands.parseQuoted({ message: {} as never, prefix: "!", source: `Say ${source}` })
+    expect(rejected).toEqual({ reason: `A ${kind} quote was opened but never closed`, name: "Say" })
 })
 
 test("default unmatched feedback receives frozen outcomes after dynamic prefix matching without bot or chat noise", async () => {

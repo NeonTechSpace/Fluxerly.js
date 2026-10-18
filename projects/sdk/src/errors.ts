@@ -638,18 +638,52 @@ export class ClientBusyError extends FluxerlyError {
 }
 
 /**
- * The client is permanently closing or closed, so reconnecting requires a new client
+ * The client is permanently closing or closed, so reconnecting requires a new client.
+ * A REST call that this error ends reports whether its request may have reached Fluxer in outcome, so a write cut off
+ * in flight is not repeated blindly. An OAuth request that closure cuts off in flight fails with OAuthError reason
+ * network and outcome unknown instead
  *
  * @category Errors
  */
 export class ClientClosedError extends FluxerlyError {
     /** Discriminator for identifying permanent client closure */
     readonly _tag = "ClientClosedError"
-    constructor() {
+    /** Whether the REST request that this closure ended may have reached Fluxer.
+     * The outcome is notDispatched when the client was already closed or the request was still queued, rejected when
+     * closure came while waiting out a rate limit before a retry, and unknown when the request was in flight.
+     * An unknown write may already have applied, so check remote state before repeating it with a new client.
+     * The preparation steps of a message send, namely opening a direct message and uploading attachments, count as not
+     * sent for the message, so a closure during them reports notDispatched for the message request even if the earlier
+     * step took effect.
+     * Undefined for closures that are not a REST request, such as gateway commands, collectors, waits, counts, member
+     * chunks, downloads and connecting. Also recorded as details.outcome when defined
+     */
+    readonly outcome: OperationOutcome | undefined
+    constructor(
+        /** Settings for the closure. The outcome defaults to undefined and read to false */
+        options?: {
+            /** Whether the closed REST request may have reached Fluxer */
+            readonly outcome?: OperationOutcome | undefined
+            /** Whether the closed REST request was a read, which cannot have changed anything. Recorded as details.read
+             * when true, and a read gets no hint to check whether Fluxer applied a change
+             */
+            readonly read?: boolean | undefined
+        },
+    ) {
+        const outcome = options?.outcome
+        const read = options?.read === true
         super("The client is shutting down or has shut down, so it cannot do more work", {
             code: "client.closed",
-            hint: "Create a new client to connect again",
+            hint:
+                outcome === "unknown" && !read
+                    ? "Check whether Fluxer applied the change before repeating it with a new client"
+                    : "Create a new client to connect again",
+            details:
+                outcome === undefined && !read
+                    ? undefined
+                    : { ...(outcome === undefined ? {} : { outcome }), ...(read ? { read } : {}) },
         })
+        this.outcome = outcome
         this.name = this._tag
     }
 }
