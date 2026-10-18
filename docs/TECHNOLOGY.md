@@ -192,7 +192,6 @@ Documentation placement and the public API documentation completion gate are in 
 | Package manager | pnpm 12 |
 | Workspace | One pnpm workspace and lockfile under [projects/](/projects/) |
 | Development Node version | One shared version source in [projects/.node-version](/projects/.node-version) |
-| Editor defaults | [EditorConfig](/.editorconfig) |
 | Git line endings | [Git attributes](/.gitattributes) |
 | License | [Apache-2.0](/LICENSE) for the SDK, website code and authored documentation |
 
@@ -212,7 +211,7 @@ It ignores `effect`, whose development pin and public peer minimum are updated s
 The SDK runtime dependencies `neverthrow` and `ws` are grouped into their own pull request, so their update can carry a Changeset
 
 Prettier is an SDK development dependency, with its version recorded in the manifest and lockfile.
-Its [configuration](/projects/sdk/.prettierrc.json) selects a 120-column target and no optional semicolons, with 4-space indentation and LF endings inherited from EditorConfig.
+Its [configuration](/projects/sdk/.prettierrc.json) selects a 120-column target, 4-space indentation, LF endings and no optional semicolons.
 Other formatting options use Prettier's stable defaults, without plugins or experimental formatting
 
 The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation and linting.

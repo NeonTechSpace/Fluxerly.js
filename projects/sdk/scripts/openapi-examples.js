@@ -455,7 +455,7 @@ export async function writeExamples({
         schemas: Object.fromEntries(decodedSchemas.map((root) => [root.name, schemaExamples(spec, root, facts)])),
         probes: factProbes(spec, facts),
     }
-    const options = await resolveConfig(fixtureFile, { editorconfig: true })
+    const options = await resolveConfig(fixtureFile)
     const text = await format(JSON.stringify(fixture), { ...options, filepath: fixtureFile })
     const size = Buffer.byteLength(text)
     if (size > maximumFixtureBytes)

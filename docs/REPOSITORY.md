@@ -68,7 +68,6 @@ Run shared pnpm commands from that directory
 | [projects/pnpm-workspace.yaml](/projects/pnpm-workspace.yaml) | Includes the SDK, release tooling and website in one workspace |
 | [projects/pnpm-lock.yaml](/projects/pnpm-lock.yaml) | Shared, generated dependency lockfile for the workspace |
 | [projects/.node-version](/projects/.node-version) | One development Node.js version source |
-| [.editorconfig](/.editorconfig) | Shared editor formatting defaults |
 | [.gitattributes](/.gitattributes) | Shared Git text and line-ending rules |
 | [.github/CODEOWNERS](/.github/CODEOWNERS) | Review ownership for the repository, workflows and release tooling |
 | [SECURITY.md](/docs/SECURITY.md) | Supported versions and private vulnerability reporting |
