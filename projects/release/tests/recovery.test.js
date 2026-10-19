@@ -45,7 +45,7 @@ function setup({ version = "1000.0.0-nightly.0", channel = "nightly", line = "10
     }
     state.assertBaseline = async () => {
         state.baselineChecks++
-        return state.registries.inventory(candidate.name, { allowMissing: true })
+        return { inventory: await state.registries.inventory(candidate.name, { allowMissing: true }) }
     }
     state.publisher = async (tag) => {
         state.calls++
@@ -145,6 +145,53 @@ test("A version whose channel tag never moves fails at the deadline without repu
     await assert.rejects(publishCandidate(state.candidate, state), /nightly tag does not point to it/)
     assert.equal(state.calls, 1)
     assert.equal(state.elapsed, state.timeout)
+})
+
+test("A nightly superseded by identical published content uploads and polls nothing", async () => {
+    const state = setup()
+    state.assertBaseline = async () => {
+        state.baselineChecks++
+        const inventory = await state.registries.inventory(state.candidate.name, { allowMissing: true })
+        return { inventory, superseded: "1000.0.0-nightly.1" }
+    }
+    state.wait = async () => assert.fail("A superseded nightly must not poll")
+    const result = await publishCandidate(state.candidate, state)
+    assert.deepEqual(result, { outcome: "superseded", supersededBy: "1000.0.0-nightly.1" })
+    assert.equal(state.calls, 0)
+    assert.equal(state.baselineChecks, 1)
+    // Only the initial read and the baseline read touch npm
+    assert.equal(state.reads, 2)
+    assert.deepEqual(state.tags, {})
+})
+
+// A rerun can read the candidate as missing, then find it published next to an earlier matching nightly
+function publishedMeanwhile(state, tags) {
+    state.assertBaseline = async () => {
+        state.baselineChecks++
+        state.published = true
+        Object.assign(state.tags, tags)
+        const inventory = await state.registries.inventory(state.candidate.name, { allowMissing: true })
+        return { inventory: { ...inventory, npmVersions: ["1000.0.0-nightly.1", ...inventory.npmVersions] }, superseded: "1000.0.0-nightly.1" }
+    }
+}
+
+test("Supersession never bypasses verification of a candidate version that appeared meanwhile", async () => {
+    const different = setup()
+    publishedMeanwhile(different, { nightly: different.candidate.version })
+    different.served = Buffer.from("Unreviewed bytes")
+    await assert.rejects(publishCandidate(different.candidate, different), /different bytes/)
+    assert.equal(different.calls, 0)
+
+    const untagged = setup()
+    publishedMeanwhile(untagged, {})
+    await assert.rejects(publishCandidate(untagged.candidate, untagged), /nightly tag does not point to it/)
+    assert.equal(untagged.calls, 0)
+
+    const confirmed = setup()
+    publishedMeanwhile(confirmed, { nightly: confirmed.candidate.version })
+    const result = await publishCandidate(confirmed.candidate, confirmed)
+    assert.deepEqual([result.npm, result.published, result.tag], ["published", "already", "nightly"])
+    assert.equal(confirmed.calls, 0)
 })
 
 test("A superseded release on the same line recovers without republishing or restoring the channel tag", async () => {

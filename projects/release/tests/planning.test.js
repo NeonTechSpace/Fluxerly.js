@@ -437,23 +437,36 @@ test("Publication accepts a nightly baseline that advanced since preparation, bu
     const fingerprints = { "1000.1.0-nightly.55": "old", "1000.1.0-nightly.56": "older" }
     const check = (candidate, npmVersions) =>
         assertPublishBaseline(candidate, npmVersions, async (version) => fingerprints[version])
-    await check(nightly("1000.1.0-nightly.56"), published)
+    assert.equal(await check(nightly("1000.1.0-nightly.56"), published), undefined)
     // Run 56 published while run 57 was being prepared against 55, or against no earlier nightly
-    await check(nightly("1000.1.0-nightly.55"), published)
-    await check(nightly(null), published)
-    // Content identical to the nightly that published meanwhile is not published again
+    assert.equal(await check(nightly("1000.1.0-nightly.55"), published), undefined)
+    assert.equal(await check(nightly(null), published), undefined)
+    // Content identical to the nightly that published meanwhile is superseded, not an error, and is not published again
     fingerprints["1000.1.0-nightly.56"] = "new"
-    await assert.rejects(check(nightly("1000.1.0-nightly.55"), published), /matches 1000.1.0-nightly.56/)
+    assert.deepEqual(await check(nightly("1000.1.0-nightly.55"), published), { superseded: "1000.1.0-nightly.56" })
     // A baseline that disappeared or moved backwards is not an earlier nightly finishing
     await assert.rejects(check(nightly("1000.1.0-nightly.56"), ["1000.1.0-nightly.55"]), /baseline changed/)
     await assert.rejects(check(nightly("1000.1.0-nightly.55"), []), /baseline changed/)
-    // A newer nightly on the line already won
+    // A newer nightly on the line with other content already won, and one with the same content supersedes this run
+    fingerprints["1000.1.0-nightly.58"] = "other"
     await assert.rejects(
         check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58"]),
         /newer version is already published/,
     )
+    fingerprints["1000.1.0-nightly.58"] = "new"
+    assert.deepEqual(await check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58"]), {
+        superseded: "1000.1.0-nightly.58",
+    })
+    // Only the newest nightly of the line counts, and other lines and channels never supersede
+    fingerprints["1000.1.0-nightly.59"] = "other"
+    await assert.rejects(check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58", "1000.1.0-nightly.59"]), /newer version/)
+    fingerprints["1000.2.0-nightly.1"] = "new"
+    assert.equal(await check(nightly("1000.1.0-nightly.56"), [...published, "1000.2.0-nightly.1"]), undefined)
     // Reviewed channels keep the exact baseline they were reviewed against
     const rc = { version: "1000.1.0-rc.2", channel: "rc", contentFingerprint: "new", baseline: { version: "1000.1.0-rc.0" } }
     await assert.rejects(check(rc, ["1000.1.0-rc.0", "1000.1.0-rc.1"]), /baseline changed/)
     await check(rc, ["1000.1.0-rc.0"])
+    // A newer RC with identical content is still an error
+    fingerprints["1000.1.0-rc.3"] = "new"
+    await assert.rejects(check(rc, ["1000.1.0-rc.0", "1000.1.0-rc.3"]), /newer version/)
 })

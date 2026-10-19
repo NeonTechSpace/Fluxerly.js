@@ -79,6 +79,9 @@ jobs:
       contents: read
       actions: read
       id-token: write
+    outputs:
+      superseded: ${{ steps.publish.outputs.superseded }}
+      superseded_by: ${{ steps.publish.outputs.superseded_by }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
@@ -120,10 +123,11 @@ jobs:
           steps: ${{ toJSON(steps) }}
           details: >-
             {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Candidate source": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "Reviewed checksum input": ${{ toJSON(inputs.candidate_checksum) }}}
-          next: The registry install checks run next. Rerun this workflow with the same inputs after any failure, publication reads npm before uploading
+          next: ${{ steps.publish.outputs.superseded == 'true' && format('Superseded by {0}, which has the same content, so nothing was published. The registry install, announcement and docs jobs are skipped', steps.publish.outputs.superseded_by) || 'The registry install checks run next. Rerun this workflow with the same inputs after any failure, publication reads npm before uploading' }}
   smoke:
     name: ${{ matrix.name }}
     needs: [inspect, publish]
+    if: needs.publish.outputs.superseded != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -162,6 +166,7 @@ jobs:
   reconcile:
     name: Announce the GitHub release
     needs: [inspect, publish, smoke]
+    if: needs.publish.outputs.superseded != 'true'
     concurrency:
       group: package-release-reconcile
       cancel-in-progress: false

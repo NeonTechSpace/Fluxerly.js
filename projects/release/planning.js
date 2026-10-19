@@ -308,22 +308,38 @@ export function stagingTag(candidate) {
 /**
  * Checks at publication that the candidate's baseline is still the newest earlier version on its channel and line. A
  * nightly prepared while an earlier nightly was still publishing may find that nightly as its baseline now, because
- * nightly content is never reviewed against its baseline. It still stops when its content matches that nightly
+ * nightly content is never reviewed against its baseline. When its content matches that nightly, or the newest
+ * nightly of its line published after it, it reports the nightly that superseded it, so nothing is published
  * @param {{ version: string, channel: string, contentFingerprint: string, baseline?: { version: string } | null }} candidate
  * @param {string[]} npmVersions
  * @param {(version: string) => Promise<string>} fingerprintOf Content fingerprint of a published version
+ * @returns {Promise<{ superseded: string } | undefined>}
  */
 export async function assertPublishBaseline(candidate, npmVersions, fingerprintOf) {
+    if (candidate.channel === "nightly") {
+        const line = parseVersion(candidate.version).line
+        const higher = npmVersions
+            .filter(
+                (value) =>
+                    parseVersion(value).line === line &&
+                    parseVersion(value).channel === "nightly" &&
+                    compareVersions(value, candidate.version) > 0,
+            )
+            .sort(compareVersions)
+            .at(-1)
+        // Content that differs keeps the newer version error that the baseline selection raises
+        if (higher && (await fingerprintOf(higher)) === candidate.contentFingerprint) return { superseded: higher }
+    }
     const version = selectBaseline({ npmVersions, version: candidate.version, channel: candidate.channel })
     const reviewed = candidate.baseline?.version ?? null
-    if (version === reviewed) return
+    if (version === reviewed) return undefined
     const advanced = version !== null && (reviewed === null || compareVersions(version, reviewed) > 0)
     if (candidate.channel !== "nightly" || !advanced)
         throw new Error(
             "Published baseline changed since review, prepare a new candidate without changing an existing version",
         )
-    if ((await fingerprintOf(version)) === candidate.contentFingerprint)
-        throw new Error(`Nightly content matches ${version}, published after preparation, so nothing is published`)
+    if ((await fingerprintOf(version)) === candidate.contentFingerprint) return { superseded: version }
+    return undefined
 }
 
 /**

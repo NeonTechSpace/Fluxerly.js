@@ -105,6 +105,19 @@ test("Release tooling runs from the workflow commit and the release App token st
     assert.deepEqual(reconcile.needs, ["inspect", "publish", "smoke"])
 })
 
+test("A superseded nightly publication skips the install checks, the announcement and the docs preview", () => {
+    const { jobs } = workflows["release-publish.yml"]
+    assert.deepEqual(Object.keys(jobs.publish.outputs).sort(), ["superseded", "superseded_by"])
+    for (const name of Object.keys(jobs.publish.outputs))
+        assert.equal(jobs.publish.outputs[name], `\${{ steps.publish.outputs.${name} }}`)
+    // Without a status function, the default success requirement still applies to these conditions
+    for (const id of ["smoke", "reconcile"]) assert.equal(jobs[id].if, "needs.publish.outputs.superseded != 'true'", id)
+    assert.equal(jobs["docs-preview"].needs, "reconcile")
+    assert.equal(jobs["docs-preview"].if, undefined)
+    const summary = jobs.publish.steps.find((step) => step.name === "Summarize npm publication")
+    assert.match(summary.with.next, /steps\.publish\.outputs\.superseded == 'true'.*steps\.publish\.outputs\.superseded_by/)
+})
+
 test("Every external action and container is pinned to an immutable digest", () => {
     for (const { where, step } of steps()) {
         if (!step.uses) continue

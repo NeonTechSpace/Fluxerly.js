@@ -544,7 +544,7 @@ export function createGithub(repository, request = command) {
 /**
  * @param {Record<string, string | number | boolean>} values
  */
-async function writeOutputs(values) {
+export async function writeOutputs(values) {
     const path = process.env.GITHUB_OUTPUT
     if (!path) return
     for (const [name, value] of Object.entries(values)) {

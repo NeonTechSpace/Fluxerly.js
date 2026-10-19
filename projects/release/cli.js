@@ -6,6 +6,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { withReleaseAuthentication } from "./authentication.js"
 import { prepareCandidate, readCandidate } from "./candidate.js"
+import { writeOutputs } from "./github.js"
 import { assertPublishBaseline } from "./planning.js"
 import { forwardRedacted } from "./redact.js"
 import { createRegistries } from "./registries.js"
@@ -108,12 +109,12 @@ async function stage(options) {
 
 async function assertBaseline(candidate) {
     const inventory = await registries.inventory(candidate.name)
-    await assertPublishBaseline(
+    const result = await assertPublishBaseline(
         candidate,
         inventory.npmVersions,
         async (version) => (await registries.baseline(candidate.name, version)).contentFingerprint,
     )
-    return inventory
+    return { inventory, superseded: result?.superseded }
 }
 
 async function publish(directory, candidate, env) {
@@ -139,6 +140,10 @@ async function publish(directory, candidate, env) {
             ),
     })
     console.log(JSON.stringify({ ...summary(directory, candidate), ...result }))
+    const superseded = result.outcome === "superseded"
+    if (superseded)
+        console.error(`Nightly content matches ${result.supersededBy}, published after preparation, so nothing is published`)
+    await writeOutputs(superseded ? { superseded: true, superseded_by: result.supersededBy } : { superseded: false })
 }
 
 function summary(directory, candidate) {

@@ -197,4 +197,4 @@ jobs:
           steps: ${{ toJSON(steps) }}
           details: >-
             {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate SHA256": ${{ toJSON(needs.prepare.outputs.checksum) }}}
-          next: Follow the Release publish run, which publishes, checks registry installs, announces the prerelease and deploys the Docs preview
+          next: Follow the Release publish run, which publishes, checks registry installs, announces the prerelease and deploys the Docs preview, unless a nightly with the same content was published meanwhile

@@ -49,14 +49,16 @@ function differentBytes(candidate) {
 
 /**
  * Publishes a reviewed candidate at most once per run and is safe to rerun. An existing version with the reviewed bytes
- * is accepted, a missing version is submitted and polled, and an existing version with other bytes fails
+ * is accepted, a missing version is submitted and polled, and an existing version with other bytes fails. A nightly
+ * whose content matches a nightly published after its preparation is superseded and uploads nothing, unless its own
+ * version appeared meanwhile. `assertBaseline` returns the fresh registry inventory and any superseding version
  */
 export async function publishCandidate(
     candidate,
     {
         registries,
         publisher,
-        assertBaseline = async () => registries.inventory(candidate.name, { allowMissing: true }),
+        assertBaseline = async () => ({ inventory: await registries.inventory(candidate.name, { allowMissing: true }) }),
         wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
         now = () => performance.now(),
         timeout = 20 * 60_000,
@@ -72,14 +74,19 @@ export async function publishCandidate(
     let submitted = false
     let providerFailed = false
     if (initial.npm === "missing") {
-        const inventory = await assertBaseline()
-        const channel = npmChannelTag(candidate, inventory.npmTags ?? {})
-        const tag = channel.advance ? channel.tag : stagingTag(candidate)
-        submitted = true
-        try {
-            await publisher(tag)
-        } catch {
-            providerFailed = true
+        const { inventory, superseded } = await assertBaseline()
+        // A candidate version that appeared meanwhile is confirmed below instead of uploaded or superseded
+        const appeared = inventory.npmVersions.includes(candidate.version)
+        if (superseded && !appeared) return { outcome: "superseded", supersededBy: superseded }
+        if (!appeared) {
+            const channel = npmChannelTag(candidate, inventory.npmTags ?? {})
+            const tag = channel.advance ? channel.tag : stagingTag(candidate)
+            submitted = true
+            try {
+                await publisher(tag)
+            } catch {
+                providerFailed = true
+            }
         }
     } else progress(`${candidate.version} is already published with the reviewed bytes, confirming its npm tag`)
     const started = now()

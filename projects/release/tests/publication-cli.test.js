@@ -7,20 +7,24 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
 import { prepareCandidate } from "../candidate.js"
-import { fixture, stageFixture, write } from "./helpers.js"
+import { fixture, packages, stageFixture, tarball, write } from "./helpers.js"
 
 const cli = fileURLToPath(new URL("../cli.js", import.meta.url))
 const name = "@neontechspace/fluxerly"
 const version = "1000.0.0-rc.1"
+const nightlyVersion = "1000.0.0-nightly.20261019.2"
+const supersedingVersion = "1000.0.0-nightly.20261019.1"
+const higherVersion = "1000.0.0-nightly.20261019.3"
 const npmToken = `npm_${"a".repeat(36)}`
 
-async function candidateFixture() {
+async function candidateFixture({ nightly = false } = {}) {
+    const candidateVersion = nightly ? nightlyVersion : version
     const root = await fixture(version)
     await write(join(root, "sdk/CHANGELOG.md"), `# SDK\n\n## ${version}\n\nRelease candidate\n`)
     const docs = join(root, "snapshot.json")
     await write(docs, {
         schemaVersion: 1,
-        version,
+        version: candidateVersion,
         sourceCommit: "a".repeat(40),
         files: [{ path: "guides/index.md", content: "Guide\n" }],
     })
@@ -29,14 +33,15 @@ async function candidateFixture() {
         workspace: root,
         output: directory,
         docs,
+        ...(nightly ? { channel: "nightly", date: "20261019", number: 2 } : {}),
         registries: { inventory: async () => ({ npmVersions: [] }) },
         stage: stageFixture(),
     })
-    return { root, directory, checksum: candidate.checksum }
+    return { root, directory, checksum: candidate.checksum, version: candidateVersion }
 }
 
 // The preload replaces npm registry access and the publisher subprocess inside the CLI process
-function preload({ trace, published, different, tarball }) {
+function preload({ trace, published, different, tarball, version, superseding, supersedingTarball }) {
     return `
         import { EventEmitter } from "node:events"
         import { createHash } from "node:crypto"
@@ -48,6 +53,8 @@ function preload({ trace, published, different, tarball }) {
         const name = ${JSON.stringify(name)}
         const version = ${JSON.stringify(version)}
         const trace = ${JSON.stringify(trace)}
+        const superseding = ${JSON.stringify(superseding ?? null)}
+        const supersedingPath = ${JSON.stringify(supersedingTarball ?? null)}
         const served = ${JSON.stringify(Boolean(different))} ? Buffer.from("Unreviewed bytes") : fs.readFileSync(${JSON.stringify(tarball)})
         const tarballUrl = "https://registry.npmjs.org/@neontechspace/fluxerly/-/fluxerly-" + version + ".tgz"
         const integrity = "sha512-" + createHash("sha512").update(served).digest("base64")
@@ -61,8 +68,17 @@ function preload({ trace, published, different, tarball }) {
             const url = new URL(String(input))
             state.requests.push(url.href)
             if (url.href === tarballUrl) return new Response(served)
+            const dist = { tarball: tarballUrl, integrity }
+            const supersedingUrl = tarballUrl + ".superseding"
+            const supersedingDist = supersedingPath
+                ? { tarball: supersedingUrl, integrity: "sha512-" + createHash("sha512").update(fs.readFileSync(supersedingPath)).digest("base64") }
+                : dist
+            if (supersedingPath && url.href === supersedingUrl) return new Response(fs.readFileSync(supersedingPath))
+            if (superseding && url.origin === "https://registry.npmjs.org" && decodeURIComponent(url.pathname.slice(1)) === name + "/" + superseding)
+                return new Response(JSON.stringify({ name, version: superseding, dist: supersedingDist }))
             if (url.origin === "https://registry.npmjs.org" && decodeURIComponent(url.pathname.slice(1)) === name) {
-                const versions = state.published ? { [version]: { dist: { tarball: tarballUrl, integrity } } } : {}
+                const versions = state.published ? { [version]: { dist } } : {}
+                if (superseding) versions[superseding] = { dist: supersedingDist }
                 return new Response(JSON.stringify({ name, versions, "dist-tags": state.tags }))
             }
             throw new Error("Unexpected registry request")
@@ -98,7 +114,7 @@ function preload({ trace, published, different, tarball }) {
     `
 }
 
-function runCli(candidate, args, { published = false, different = false, oidc = true, trace = join(candidate.root, "trace.json") } = {}) {
+function runCli(candidate, args, { published = false, different = false, oidc = true, superseding, supersedingTarball, trace = join(candidate.root, "trace.json") } = {}) {
     const environment = {
         ...process.env,
         RUNNER_TEMP: tmpdir(),
@@ -106,6 +122,7 @@ function runCli(candidate, args, { published = false, different = false, oidc = 
         NODE_AUTH_TOKEN: "test-node-auth-token",
         NPM_CONFIG_USERCONFIG: "inherited-npmrc",
         npm_execpath: "fake-pnpm",
+        GITHUB_OUTPUT: join(candidate.root, "output.txt"),
     }
     if (oidc) Object.assign(environment, {
         GITHUB_ACTIONS: "true",
@@ -120,7 +137,8 @@ function runCli(candidate, args, { published = false, different = false, oidc = 
     const result = spawnSync(
         process.execPath,
         ["--import", `data:text/javascript,${encodeURIComponent(preload({
-            trace, published, different, tarball: join(candidate.directory, "sdk.tgz"),
+            trace, published, different, superseding, supersedingTarball, version: candidate.version ?? version,
+            tarball: join(candidate.directory, "sdk.tgz"),
         }))}`, cli, ...args],
         { encoding: "utf8", timeout: 10_000, windowsHide: true, env: environment },
     )
@@ -142,6 +160,7 @@ test("npm publication passes only OIDC authentication to its publisher and surfa
         assert.equal(output.directory, candidate.directory)
         assert.equal(output.checksum, candidate.checksum)
         assert.deepEqual([output.npm, output.complete, output.tag, output.published], ["published", true, "rc", "now"])
+        assert.equal(readFileSync(join(candidate.root, "output.txt"), "utf8"), "superseded=false\n")
         assert.deepEqual(result.trace.spawns.length, 1)
         assertNpmOnly(result.trace)
         const [spawn] = result.trace.spawns
@@ -154,6 +173,51 @@ test("npm publication passes only OIDC authentication to its publisher and surfa
         assert.match(result.stderr, /npm notice publishing/)
         assert.match(result.stderr, /npm notice using \[redacted\]/)
         assert.doesNotMatch(result.stderr, new RegExp(`${npmToken}|test-oidc-token`))
+    } finally {
+        await rm(candidate.root, { recursive: true })
+    }
+})
+
+test("A nightly whose content matches a nightly published after preparation succeeds without publishing", async () => {
+    const candidate = await candidateFixture({ nightly: true })
+    try {
+        const result = runCli(candidate, ["publish", candidate.directory, "--checksum", candidate.checksum], {
+            superseding: supersedingVersion,
+        })
+        assert.equal(result.status, 0, result.stderr)
+        const output = JSON.parse(result.stdout)
+        assert.deepEqual([output.version, output.outcome, output.supersededBy], [nightlyVersion, "superseded", supersedingVersion])
+        assert.match(result.stderr, new RegExp(`Nightly content matches ${supersedingVersion}, published after preparation, so nothing is published`))
+        assert.deepEqual(result.trace.spawns, [])
+        assert.equal(
+            readFileSync(join(candidate.root, "output.txt"), "utf8"),
+            `superseded=true\nsuperseded_by=${supersedingVersion}\n`,
+        )
+    } finally {
+        await rm(candidate.root, { recursive: true })
+    }
+})
+
+test("A nightly is also superseded by identical content at a higher version, and differing content still fails", async () => {
+    const candidate = await candidateFixture({ nightly: true })
+    try {
+        const result = runCli(candidate, ["publish", candidate.directory, "--checksum", candidate.checksum], {
+            superseding: higherVersion,
+            trace: join(candidate.root, "higher-trace.json"),
+        })
+        assert.equal(result.status, 0, result.stderr)
+        assert.equal(JSON.parse(result.stdout).supersededBy, higherVersion)
+        assert.deepEqual(result.trace.spawns, [])
+        const otherTarball = join(candidate.root, "other.tgz")
+        await write(otherTarball, tarball(packages(higherVersion, "export const value = 2\n")))
+        const different = runCli(candidate, ["publish", candidate.directory, "--checksum", candidate.checksum], {
+            superseding: higherVersion,
+            supersedingTarball: otherTarball,
+            trace: join(candidate.root, "differs-trace.json"),
+        })
+        assert.equal(different.status, 1)
+        assert.match(different.stderr, /newer version is already published/)
+        assert.deepEqual(different.trace.spawns, [])
     } finally {
         await rm(candidate.root, { recursive: true })
     }
