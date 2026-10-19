@@ -711,7 +711,15 @@ export function openClient<E = never, R = never, const F extends MessageFields |
                     Effect.gen(function* () {
                         const callerScope = yield* Effect.scope
                         const source = yield* owner.events
-                            .on(event, handler, options, options?.onError, callerScope)
+                            .on(
+                                event,
+                                handler,
+                                options,
+                                options?.onError,
+                                callerScope,
+                                undefined,
+                                options?.partitionReady,
+                            )
                             .pipe(Effect.orDie)
                         return nativeSubscription(source)
                     }),

@@ -28,7 +28,7 @@ import {
     type ConnectionFailure,
 } from "#sdk/errors"
 import { makeClient } from "#sdk/internal/client"
-import { defaultMiddleware, type EventSource, waitForEvent } from "#sdk/internal/events"
+import { defaultMiddleware, defaultPartitionReady, type EventSource, waitForEvent } from "#sdk/internal/events"
 import { type EventWaitFailure } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageFields, SelectedMessage } from "#sdk/messages"
 import type { EventBufferOptions, EventContext, EventInvocation, EventMap, EventName } from "#sdk/events"
@@ -704,6 +704,14 @@ export function createClient<const F extends MessageFields | undefined = undefin
                             return Effect.fail(
                                 new ConfigurationError("onError", 'The option "onError" must be a function'),
                             )
+                        const partitionReady = options?.partitionReady
+                        if (partitionReady !== undefined && typeof partitionReady !== "function")
+                            return Effect.fail(
+                                new ConfigurationError(
+                                    "partitionReady",
+                                    'The option "partitionReady" must be a function',
+                                ),
+                            )
                         return owner.events
                             .on(
                                 event,
@@ -726,6 +734,8 @@ export function createClient<const F extends MessageFields | undefined = undefin
                                 options,
                                 reporter ? promiseHook(reporter) : undefined,
                                 scope,
+                                undefined,
+                                partitionReady ? defaultPartitionReady(partitionReady) : undefined,
                             )
                             .pipe(Effect.map(subscription))
                     }),

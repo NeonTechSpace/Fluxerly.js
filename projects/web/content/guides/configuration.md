@@ -95,6 +95,8 @@ Each event handler has a small queue. By default `messageCreate` runs up to eigh
 
 Running several handlers at a time can finish events out of order. The `partition` setting keeps related events in order: With `partition: "channel"`, the messages of one channel run one after another while other channels run beside them, and `partition: "guild"` does the same for each community, which the API calls a guild. A partitioned handler runs up to eight events at a time unless `concurrency` says otherwise
 
+A partitioned handler can also hold a key's events until that key is ready, with `partitionReady`, which takes the key and returns a promise or Effect. See the [events guide](/docs/{{version}}/events-and-collectors/) for the hook and for how a full partitioned queue drops events from the longest backlog
+
 ## Logging and errors
 
 The client prints startup, readiness, lost connections, long rate-limit waits, shutdown and every application error by default. Set `logging.level` or per-category levels to change what appears, and `logging.sink` to forward records to an existing logger. Set the `FLUXERLY_DEBUG` environment variable to turn on Debug records without changing code. The [logging guide](/docs/{{version}}/logging/) shows the output and every setting

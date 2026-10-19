@@ -1,3 +1,5 @@
+import type { EventName } from "#sdk/events"
+
 /**
  * Severity of an SDK log record, from most to least verbose
  *
@@ -212,6 +214,12 @@ export interface ClientCounters {
          */
         readonly closed: number
     }
+    /** Events not delivered, by event name, counted at the same places as eventsDropped. A name appears after its first drop.
+     * Drops that have no known event name are counted only in the eventsDropped reasons, so the sum here can be lower than the sum there.
+     * That covers a malformed dispatch whose type several events share, such as CHANNEL_CREATE, which delivers both
+     * guildChannelCreate and directMessageCreate
+     */
+    readonly eventsDroppedByEvent: Readonly<Partial<Record<EventName, number>>>
     /** Cache changes not delivered to a cache.onChange listener because its waiting changes reached maxPendingChanges */
     readonly cacheChangesDropped: number
     /** Gateway messages rejected as invalid protocol data, including skipped malformed dispatches */

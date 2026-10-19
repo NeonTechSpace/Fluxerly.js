@@ -33,6 +33,10 @@ export function explain(error: unknown): string {
     return errors.isRetryable(error) ? `retry: ${describeError(error, { stack: false })}` : describeError(error)
 }
 
+export function droppedMessages(counters: ClientCounters): number {
+    return counters.eventsDroppedByEvent.messageCreate ?? 0
+}
+
 export function droppedEvents(counters: ClientCounters): number {
     return counters.eventsDropped.overflow + counters.eventsDropped.malformed + counters.eventsDropped.collector
 }

@@ -279,7 +279,7 @@ export class MessageCollector<M extends MessageCore = Message> {
         if (this.#busy && this.#messages.length === this.#settings!.maxMessages) {
             // The collector is full and finishing its last callback, so later events cannot join the result
             this.#logger?.drop(
-                { event: "collector" },
+                { event: "collector", eventName: "messageCreate" },
                 {
                     level: "debug",
                     category: "collectors",

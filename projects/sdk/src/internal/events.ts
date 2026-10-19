@@ -8,6 +8,10 @@
  * invocations only, with the list registered when an invocation starts, and every failure inside the chain is reported where it
  * occurs, so middleware cannot hide a handler failure. A partitioned handler starts events in receive order per key and runs
  * at most one invocation per key, selecting from its own bounded queue so queue limits still cover every waiting event.
+ * Its keys are computed when an event is admitted, and the source counts waiting events per key. With dropOldest, a full queue
+ * discards from the longest backlog rather than the oldest event overall, so one key's backlog cannot take room from a
+ * shorter one. A partitionReady hook runs outside the queue scan and the handler slots, holding a key's events in the queue
+ * until it settles, and its readiness lasts only while the key has waiting or running events.
  * A draining shutdown seals the bus: New events and registrations are refused while running and queued handler work
  * continues until the client stops the bus, which records how many refused events had a subscription. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
@@ -99,9 +103,13 @@ interface Delivery<A> {
     readonly shardId: number
     /** The shard's session epoch when the event was admitted, so a later new session does not relabel a queued event */
     readonly sessionEpoch: number
-    /** Partition key, computed once when a partitioned handler first considers this event, or the failure computing it */
-    key?: string | { readonly failure: unknown }
+    /** Partition key of a partitioned handler, computed once when the event is admitted, or the failure computing it */
+    readonly key?: string | { readonly failure: unknown }
 }
+/** Eviction bucket of events whose partition function failed, which share no key */
+const failedKeys = Symbol("failedPartitionKeys")
+type Group = string | typeof failedKeys
+const groupOf = (delivery: Delivery<unknown>): Group => (typeof delivery.key === "string" ? delivery.key : failedKeys)
 type Resume<A> = (value: Effect.Effect<Delivery<A> | null, EventOverflowError>) => void
 type Limits = Required<Omit<HandlerOptions, "partition">> & { readonly partition: HandlerOptions["partition"] }
 
@@ -363,6 +371,8 @@ export class EventSource<A = Message> {
     readonly limits: Limits
     #pending: Delivery<A>[] = []
     #bytes = 0
+    /** Waiting events per partition key, or for the failed-key bucket, kept only for a partitioned source */
+    #waiting = new Map<Group, number>()
     #waiters = new Set<Resume<A>>()
     #active = true
     #reading = false
@@ -370,7 +380,7 @@ export class EventSource<A = Message> {
     #stopWorker: (() => void) | undefined
     #managed = false
     #cleanupCause: Cause.Cause<never> = Cause.empty
-    #arrival: (() => void) | undefined
+    #arrival: ((key: string | undefined) => void) | undefined
     readonly meta: SourceMeta
 
     constructor(
@@ -396,8 +406,21 @@ export class EventSource<A = Message> {
         return this.#pending.length
     }
 
-    /** Call this function after each event that enters the queue, for a worker that selects events with takeFirst */
-    onArrival(callback: () => void) {
+    /** Events of this key waiting in the queue, not counting one that started */
+    waitingFor(key: string): number {
+        return this.#waiting.get(key) ?? 0
+    }
+
+    /** Keys with at least one waiting event, for a partitioned source */
+    waitingKeys(): string[] {
+        return [...this.#waiting.keys()].filter((key): key is string => typeof key === "string")
+    }
+
+    /**
+     * Call this function after each event that enters the queue, for a worker that selects events with takeFirst.
+     * It receives the event's partition key, or undefined when computing the key failed
+     */
+    onArrival(callback: (key: string | undefined) => void) {
         this.#arrival = callback
     }
 
@@ -406,9 +429,124 @@ export class EventSource<A = Message> {
         if (!this.#active) return undefined
         const index = this.#pending.findIndex(accept)
         if (index === -1) return undefined
+        return this.#remove(index)
+    }
+
+    /** Remove and return every waiting event of this key in receive order */
+    takeKey(key: string): Delivery<A>[] {
+        if (!this.#active) return []
+        const taken: Delivery<A>[] = []
+        const kept: Delivery<A>[] = []
+        for (const delivery of this.#pending) (delivery.key === key ? taken : kept).push(delivery)
+        for (const delivery of taken) this.#forget(delivery)
+        this.#pending = kept
+        return taken
+    }
+
+    /** Drop one waiting event from the accounting */
+    #forget(delivery: Delivery<A>) {
+        this.#bytes -= delivery.bytes
+        if (this.limits.partition === undefined) return
+        const group = groupOf(delivery)
+        const count = this.#waiting.get(group)! - 1
+        if (count > 0) this.#waiting.set(group, count)
+        else this.#waiting.delete(group)
+    }
+
+    #remove(index: number): Delivery<A> {
         const [delivery] = this.#pending.splice(index, 1)
-        this.#bytes -= delivery!.bytes
-        return delivery
+        this.#forget(delivery!)
+        return delivery!
+    }
+
+    /** Queue one admitted event and tell the worker */
+    #push(delivery: Delivery<A>) {
+        this.#pending.push(delivery)
+        this.#bytes += delivery.bytes
+        if (this.limits.partition !== undefined) {
+            const group = groupOf(delivery)
+            this.#waiting.set(group, (this.#waiting.get(group) ?? 0) + 1)
+        }
+        this.#arrival?.(typeof delivery.key === "string" ? delivery.key : undefined)
+    }
+
+    /** The partition key of an event. A throwing or invalid partition function becomes the event's failure */
+    #keyOf(message: A): string | { readonly failure: unknown } {
+        try {
+            const value = partitionKey(this.limits.partition!, this.meta.event, message)
+            return value === undefined
+                ? ""
+                : typeof value === "string"
+                  ? value
+                  : {
+                        failure: new ConfigurationError(
+                            "partition",
+                            "The partition function must return a string or undefined",
+                        ),
+                    }
+        } catch (error) {
+            return { failure: error }
+        }
+    }
+
+    #delivery(message: A, bytes: number, shardId: number, sessionEpoch: number): Delivery<A> {
+        return this.limits.partition === undefined
+            ? { message, bytes, shardId, sessionEpoch }
+            : { message, bytes, shardId, sessionEpoch, key: this.#keyOf(message) }
+    }
+
+    /**
+     * The waiting event to discard so that an arriving event of this group fits, or undefined when the arriving event
+     * itself goes. A group's backlog counts the arriving event. Another group's oldest event goes only when its backlog is
+     * longer, with ties going to the group whose oldest waiting event is oldest, and otherwise the group's own oldest.
+     * The taken indices and count changes describe events an earlier step of the same plan already chose
+     */
+    #victim(group: Group, taken: ReadonlySet<number>, delta: ReadonlyMap<Group, number>): number | undefined {
+        const count = (other: Group) => (this.#waiting.get(other) ?? 0) + (delta.get(other) ?? 0)
+        const own = count(group) + 1
+        let longest = -1
+        let longestCount = 0
+        let ownOldest = -1
+        for (let index = 0; index < this.#pending.length; index++) {
+            if (taken.has(index)) continue
+            const other = groupOf(this.#pending[index]!)
+            if (other === group) {
+                if (ownOldest === -1) ownOldest = index
+                continue
+            }
+            const backlog = count(other)
+            if (backlog > longestCount) {
+                longest = index
+                longestCount = backlog
+            }
+        }
+        if (longestCount > own) return longest
+        return ownOldest === -1 ? undefined : ownOldest
+    }
+
+    /**
+     * Plan the eviction that makes room for an arriving event without changing anything: The indices of the waiting events
+     * to discard, or undefined when the arriving event itself is the one to discard, in which case no waiting event goes.
+     * Without a partition the plan takes the oldest events
+     */
+    #plan(group: Group | undefined, bytes: number): number[] | undefined {
+        const victims: number[] = []
+        const taken = new Set<number>()
+        const delta = new Map<Group, number>()
+        let length = this.#pending.length
+        let used = this.#bytes
+        while (length >= this.limits.maxPendingMessages || bytes > this.limits.maxPendingBytes - used) {
+            if (length === 0) break
+            const index = group === undefined ? victims.length : this.#victim(group, taken, delta)
+            if (index === undefined) return undefined
+            victims.push(index)
+            taken.add(index)
+            const victim = this.#pending[index]!
+            length--
+            used -= victim.bytes
+            if (group !== undefined) delta.set(groupOf(victim), (delta.get(groupOf(victim)) ?? 0) - 1)
+        }
+        return victims
     }
 
     /** Admit one event received by a shard during the given session epoch, in a frame of the given byte length */
@@ -423,23 +561,32 @@ export class EventSource<A = Message> {
         const full = () =>
             this.#pending.length >= this.limits.maxPendingMessages || bytes > this.limits.maxPendingBytes - this.#bytes
         if (!full()) {
-            this.#pending.push({ message, bytes, shardId, sessionEpoch })
-            this.#bytes += bytes
-            this.#arrival?.()
+            this.#push(this.#delivery(message, bytes, shardId, sessionEpoch))
             return
         }
         const limit = this.#pending.length >= this.limits.maxPendingMessages ? "messages" : "bytes"
         const policy = this.limits.overflow
         if (policy === "dropOldest" && bytes <= this.limits.maxPendingBytes) {
-            let dropped = 0
-            while (full() && this.#pending.length) {
-                this.#bytes -= this.#pending.shift()!.bytes
-                dropped++
+            const arriving = this.#delivery(message, bytes, shardId, sessionEpoch)
+            const victims = this.#plan(this.limits.partition === undefined ? undefined : groupOf(arriving), bytes)
+            if (victims === undefined) {
+                // Nothing the arrival could displace is worth more than it, so it alone goes
+                this.#dropped(1, "the arriving event", limit)
+                return
             }
-            this.#pending.push({ message, bytes, shardId, sessionEpoch })
-            this.#bytes += bytes
-            this.#dropped(dropped, dropped === 1 ? "the oldest waiting event" : "the oldest waiting events", limit)
-            this.#arrival?.()
+            for (const index of victims.toSorted((left, right) => right - left)) this.#remove(index)
+            this.#push(arriving)
+            this.#dropped(
+                victims.length,
+                this.limits.partition === undefined
+                    ? victims.length === 1
+                        ? "the oldest waiting event"
+                        : "the oldest waiting events"
+                    : victims.length === 1
+                      ? "the oldest waiting event of the longest backlog"
+                      : "the oldest waiting events of the longest backlogs",
+                limit,
+            )
             return
         }
         if (policy !== "stop") {
@@ -452,7 +599,7 @@ export class EventSource<A = Message> {
             limit === "messages" ? this.limits.maxPendingMessages : this.limits.maxPendingBytes,
         )
         const logger = this.meta.logger?.()
-        logger?.countDrop("overflow", discarded)
+        logger?.countDrop("overflow", discarded, this.meta.event)
         if (!this.meta.managed)
             logger?.log({
                 level: "warn",
@@ -471,7 +618,7 @@ export class EventSource<A = Message> {
         const logger = this.meta.logger?.()
         if (!logger) return
         logger.drop(
-            { event: "overflow", amount: count },
+            { event: "overflow", amount: count, eventName: this.meta.event },
             {
                 level: "warn",
                 category: "events",
@@ -496,6 +643,7 @@ export class EventSource<A = Message> {
         // An overflow stop has already recorded and counted the events it discarded
         if (!failure && this.#pending.length) this.#discarded(this.#pending.length, reason)
         this.#pending = []
+        this.#waiting.clear()
         this.#bytes = 0
         for (const resume of this.#waiters) resume(failure ? Effect.fail(failure) : Effect.succeed(null))
         this.#waiters.clear()
@@ -506,7 +654,7 @@ export class EventSource<A = Message> {
     /** Count the waiting events a stop discards and log one summary: Info when the client closes, Debug when the subscription closes */
     #discarded(count: number, reason: "clientClosed" | "subscriptionClosed") {
         const logger = this.meta.logger?.()
-        logger?.countDrop("closed", count)
+        logger?.countDrop("closed", count, this.meta.event)
         logger?.log({
             level: reason === "clientClosed" ? "info" : "debug",
             category: "events",
@@ -536,6 +684,7 @@ export class EventSource<A = Message> {
     finish(exit: Exit.Exit<unknown, unknown>) {
         this.#active = false
         this.#pending = []
+        this.#waiting.clear()
         this.#bytes = 0
         this.#stopWorker = undefined
         this.#arrival = undefined
@@ -560,11 +709,7 @@ export class EventSource<A = Message> {
         return Effect.suspend(() => {
             if (this.#failure) return Effect.fail(this.#failure)
             if (!this.#active) return Effect.succeed(null)
-            const item = this.#pending.shift()
-            if (item) {
-                this.#bytes -= item.bytes
-                return Effect.succeed(item)
-            }
+            if (this.#pending.length) return Effect.succeed(this.#remove(0))
             return Effect.callback<Delivery<A> | null, EventOverflowError>((resume) => {
                 this.#waiters.add(resume)
                 return Effect.sync(() => {
@@ -662,6 +807,52 @@ class EventWait<K extends EventName, M extends MessageCore = Message> implements
     }
 }
 
+/**
+ * A partitionReady hook in its Effect form, started with the key and a signal that aborts when the subscription stops.
+ * The default API adapts its promise hook with defaultPartitionReady, and the Effect API passes its hook unchanged
+ */
+export type PartitionReady<E = unknown, R = never> = (key: string, signal: AbortSignal) => Effect.Effect<unknown, E, R>
+
+/** Check a partitionReady hook against the registration's partition, returning the ConfigurationError for misuse */
+function partitionReadyError(hook: unknown, partition: unknown): ConfigurationError | undefined {
+    if (hook === undefined) return undefined
+    if (typeof hook !== "function")
+        return new ConfigurationError("partitionReady", 'The option "partitionReady" must be a function')
+    if (partition === undefined)
+        return new ConfigurationError("partitionReady", 'The option "partitionReady" needs the option "partition"', {
+            hint: 'Set partition to "guild", "channel" or a function, since the hook runs once per partition key',
+        })
+    return undefined
+}
+
+/**
+ * Adapt a default-API partitionReady hook. It runs synchronously, so a hook that returns a plain value marks its key
+ * ready with no extra turn. A returned or resolved Err result fails like a throw of its error
+ */
+export function defaultPartitionReady(hook: (key: string, signal: AbortSignal) => unknown): PartitionReady {
+    return (key, signal) =>
+        // @effect-diagnostics-next-line unknownInEffectCatch:off
+        Effect.try({
+            try: () => {
+                const result = hook(key, signal)
+                throwIfErr(result)
+                return result
+            },
+            // Keep the thrown value itself for the failure report
+            catch: (error) => error,
+        }).pipe(
+            Effect.flatMap((result) =>
+                typeof (result as PromiseLike<unknown> | null | undefined)?.then === "function"
+                    ? // @effect-diagnostics-next-line unknownInEffectCatch:off
+                      Effect.tryPromise({
+                          try: () => Promise.resolve(result as PromiseLike<unknown>).then(throwIfErr),
+                          catch: (error) => error,
+                      })
+                    : Effect.void,
+            ),
+        )
+}
+
 export class EventBus<M extends MessageCore = Message> {
     constructor(
         private readonly logging?: () => ClientLogger,
@@ -684,7 +875,7 @@ export class EventBus<M extends MessageCore = Message> {
      */
     listenReactions(
         target: MessageReference,
-        listener: (reaction: MessageReaction | MessageReactionBatch, bytes: number) => void,
+        listener: (reaction: MessageReaction | MessageReactionBatch, bytes: number, event: EventName) => void,
         shardId?: number,
         removals = false,
     ) {
@@ -697,7 +888,16 @@ export class EventBus<M extends MessageCore = Message> {
             sourceShard: number,
             removal: boolean,
         ) => {
-            if ((removals || !removal) && (shardId === undefined || shardId === sourceShard)) listener(message, bytes)
+            if ((removals || !removal) && (shardId === undefined || shardId === sourceShard))
+                listener(
+                    message,
+                    bytes,
+                    removal
+                        ? "messageReactionRemove"
+                        : "reactions" in message
+                          ? "messageReactionAddMany"
+                          : "messageReactionAdd",
+                )
         }
         listeners.add(offer)
         if (removals) this.#reactionRemovalListeners += 1
@@ -816,8 +1016,8 @@ export class EventBus<M extends MessageCore = Message> {
     #closed = false
     /** Whether intake stopped for a draining shutdown: New events and registrations are refused, admitted work continues */
     #sealed = false
-    /** Events refused after sealing that an open subscription or collector would have received, reported once when the bus stops */
-    #refused = 0
+    /** Events refused after sealing that an open subscription or collector would have received, by name, reported once when the bus stops */
+    #refused = new Map<EventName, number>()
     /** Handler invocations started and not yet finished, counted from admission so a drain never misses one about to start */
     #running = 0
     /** Released and replaced whenever a handler invocation finishes, so a drain can wait for progress */
@@ -876,6 +1076,8 @@ export class EventBus<M extends MessageCore = Message> {
             readonly managed?: boolean
             readonly whenClosed?: "closed" | "fail"
             readonly defaultOverflow?: Limits["overflow"]
+            /** A partitionReady hook to check against the partition, before the closed check like other misuse */
+            readonly partitionReady?: unknown
         } = {},
     ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError> {
         const { managed = false, whenClosed = "closed", defaultOverflow = "stop" } = behavior
@@ -889,6 +1091,8 @@ export class EventBus<M extends MessageCore = Message> {
                 return Effect.failCause(inputDefect(error))
             }
             if (settings instanceof ConfigurationError) return Effect.fail(settings)
+            const misuse = partitionReadyError(behavior.partitionReady, settings.partition)
+            if (misuse) return Effect.fail(misuse)
             // A draining client receives no new events, so a new registration is as closed as after shutdown
             if (this.#closed || this.#sealed)
                 return whenClosed === "fail"
@@ -946,7 +1150,8 @@ export class EventBus<M extends MessageCore = Message> {
                 : undefined
         if (this.#sealed) {
             // Collectors count too, so an event only a collector would have received is still recorded
-            if (this.#sources[event].size || reactionCollectors || messageCollectors) this.#refused++
+            if (this.#sources[event].size || reactionCollectors || messageCollectors)
+                this.#refused.set(event, (this.#refused.get(event) ?? 0) + 1)
             return
         }
         for (const offer of reactionCollectors ?? [])
@@ -957,15 +1162,19 @@ export class EventBus<M extends MessageCore = Message> {
     stop() {
         if (this.#closed) return
         this.#closed = true
-        if (this.#refused) {
+        if (this.#refused.size) {
             const logger = this.logging?.()
-            logger?.countDrop("closed", this.#refused)
+            let refused = 0
+            for (const [event, count] of this.#refused) {
+                logger?.countDrop("closed", count, event)
+                refused += count
+            }
             logger?.log({
                 level: "info",
                 category: "events",
                 code: "events.refused",
-                message: `The draining shutdown refused ${this.#refused} received ${this.#refused === 1 ? "event" : "events"} that open subscriptions or collectors would have received, because it accepts no new events`,
-                fields: { refused: this.#refused },
+                message: `The draining shutdown refused ${refused} received ${refused === 1 ? "event" : "events"} that open subscriptions or collectors would have received, because it accepts no new events`,
+                fields: { refused },
             })
         }
         this.#closingSources = Object.values(this.#sources).flatMap((sources) => [...sources])
@@ -1015,6 +1224,7 @@ export class EventBus<M extends MessageCore = Message> {
         onError: ((report: InternalReport) => Effect.Effect<unknown, E2, R2>) | undefined,
         scope: Scope.Scope,
         command?: string,
+        partitionReady?: PartitionReady<E2, R2>,
     ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError, R | R2> {
         const bus = this
         return Effect.uninterruptible(
@@ -1026,19 +1236,26 @@ export class EventBus<M extends MessageCore = Message> {
                         new ConfigurationError("onError", 'The option "onError" must be a function'),
                     )
                 // Handlers drop the oldest waiting event by default, so one burst never ends a long-lived handler
-                const source = yield* bus.open(event, options, { managed: true, defaultOverflow: "dropOldest" })
+                const source = yield* bus.open(event, options, {
+                    managed: true,
+                    defaultOverflow: "dropOldest",
+                    partitionReady,
+                })
                 // A registration after shutdown began gets an already-closed subscription with no worker or hook queue
                 if (!source.active) return source
                 // The subscription's own hook gets a bounded queue with one worker in the registration context, so
                 // reporting only enqueues: Hooks run one at a time in order and never hold a handler slot or shutdown
                 let hooks: HookQueue | undefined
+                const context =
+                    onError !== undefined || partitionReady !== undefined
+                        ? ((yield* Effect.context<R2>()) as Context.Context<never>)
+                        : undefined
                 if (onError !== undefined) {
                     const hook = onError as (report: InternalReport) => Effect.Effect<unknown, unknown>
-                    const context = (yield* Effect.context<R2>()) as Context.Context<never>
                     const failures = bus.failures?.()
                     hooks = failures
-                        ? failures.subscriptionQueue(hook, context)
-                        : standaloneHookQueue(() => bus.logging?.(), hook, context)
+                        ? failures.subscriptionQueue(hook, context!)
+                        : standaloneHookQueue(() => bus.logging?.(), hook, context!)
                 }
                 const report = (kind: "handler" | "overflow", cause: Cause.Cause<unknown>, message?: unknown) =>
                     Effect.withFiber((fiber) => {
@@ -1180,6 +1397,49 @@ export class EventBus<M extends MessageCore = Message> {
                 const partition = source.limits.partition
                 /** Partition keys with a running invocation, so later events of the same key wait their turn */
                 const busyKeys = new Set<string>()
+                /** Aborts when the subscription stops, which includes a draining shutdown giving up, for partitionReady hooks */
+                const closing = new AbortController()
+                /**
+                 * One readiness attempt per key with queued or running work. The entry is the attempt's token: A
+                 * completion whose entry is no longer the key's current one is ignored. A key's events leave the queue
+                 * only by starting, which needs a ready key, or by this attempt's failure, and an arriving event never
+                 * evicts the last waiting event of another key, so a key with a pending attempt always keeps one
+                 */
+                interface Readiness {
+                    ready: boolean
+                    started: boolean
+                }
+                const readiness = partitionReady === undefined ? undefined : new Map<string, Readiness>()
+                /** Keys with an attempt that has not started its hook yet, started by the loop outside the queue scan */
+                const unstarted: string[] = []
+                const track = (key: string) => {
+                    if (readiness === undefined || readiness.has(key)) return
+                    readiness.set(key, { ready: false, started: false })
+                    unstarted.push(key)
+                }
+                /** Forget a ready key that has no waiting or running events, so the map holds only keys with queued or running work */
+                const forgetIdle = (key: string) => {
+                    if (readiness?.get(key)?.ready && !busyKeys.has(key) && source.waitingFor(key) === 0)
+                        readiness.delete(key)
+                }
+                /** Whether this key may start: Not running and, with a hook, ready */
+                const isReady = (key: string) => readiness === undefined || readiness.get(key)?.ready === true
+                /** Free a slot's key, and the key's readiness when that left it idle */
+                const finished = (fiberId: number, key: string | undefined) => {
+                    bus.#handlerFibers.delete(fiberId)
+                    active--
+                    if (key !== undefined) {
+                        busyKeys.delete(key)
+                        forgetIdle(key)
+                    }
+                    bus.#invocationFinished()
+                    wake()
+                }
+                // An event whose key is running or not ready waits, while a later event of another key can start before it
+                const eligible = (delivery: Delivery<EventMap<M>[K]>) => {
+                    const key = delivery.key
+                    return typeof key !== "string" || (!busyKeys.has(key) && isReady(key))
+                }
                 const worker = (delivery: Delivery<EventMap<M>[K]>) =>
                     Effect.withFiber((fiber) => {
                         const { message } = delivery
@@ -1228,49 +1488,85 @@ export class EventBus<M extends MessageCore = Message> {
                             ),
                         )
                     })
-                /** Release an invocation's slot and key. Runs as a fiber observer, so it also runs for a worker interrupted before it started */
-                const finished = (fiberId: number, key: string | undefined) => {
-                    bus.#handlerFibers.delete(fiberId)
-                    active--
-                    if (key !== undefined) busyKeys.delete(key)
-                    bus.#invocationFinished()
-                    wake()
-                }
-                /** The partition key of a waiting event, computed once. A throwing or invalid partition function becomes the event's failure */
-                const keyOf = (delivery: Delivery<EventMap<M>[K]>): string | { readonly failure: unknown } => {
-                    if (delivery.key !== undefined) return delivery.key
-                    let key: string | { readonly failure: unknown }
-                    try {
-                        const value = partitionKey(partition!, event, delivery.message)
-                        key =
-                            value === undefined
-                                ? ""
-                                : typeof value === "string"
-                                  ? value
-                                  : {
-                                        failure: new ConfigurationError(
-                                            "partition",
-                                            "The partition function must return a string or undefined",
-                                        ),
-                                    }
-                    } catch (error) {
-                        key = { failure: error }
-                    }
-                    delivery.key = key
-                    return key
-                }
-                // An event whose key is running waits, while a later event of another key can start before it
-                const eligible = (delivery: Delivery<EventMap<M>[K]>) => {
-                    const key = keyOf(delivery)
-                    return typeof key !== "string" || !busyKeys.has(key)
-                }
+                /**
+                 * Run the hook of one attempt. A hook that completes at once marks the key ready before the next scan.
+                 * A failed attempt reports each waiting event of the key as a failure of its handler and forgets the key.
+                 * A defect in the cleanup of an interrupted hook joins the subscription's outcome, like a handler's
+                 */
+                const settle = (key: string, entry: Readiness) =>
+                    Effect.suspend((): Effect.Effect<unknown, unknown> => {
+                        const result = (partitionReady as PartitionReady<unknown>)(key, closing.signal)
+                        return Effect.isEffect(result)
+                            ? result
+                            : Effect.fail(
+                                  new ConfigurationError(
+                                      "partitionReady",
+                                      'The option "partitionReady" must return an Effect',
+                                  ),
+                              )
+                    }).pipe(
+                        Effect.scoped,
+                        Effect.provideContext(context!),
+                        Effect.onExit((exit) =>
+                            Effect.sync(() => {
+                                source.recordCleanup(exit)
+                            }),
+                        ),
+                        Effect.exit,
+                        Effect.flatMap((exit) => {
+                            if (!source.active || readiness!.get(key) !== entry) return Effect.void
+                            if (Exit.isSuccess(exit)) {
+                                entry.ready = true
+                                forgetIdle(key)
+                                wake()
+                                return Effect.void
+                            }
+                            readiness!.delete(key)
+                            return Effect.forEach(
+                                source.takeKey(key),
+                                (held) => report("handler", exit.cause, held.message),
+                                { discard: true },
+                            ).pipe(
+                                Effect.andThen(
+                                    Effect.sync(() => {
+                                        bus.#signalProgress()
+                                        wake()
+                                    }),
+                                ),
+                            )
+                        }),
+                    )
+                /** Start the hook of every key that has none yet, including keys that a hook admits while it runs */
+                const startReadiness = () =>
+                    Effect.gen(function* () {
+                        while (unstarted.length) {
+                            for (const key of unstarted.splice(0)) {
+                                const entry = readiness?.get(key)
+                                if (!entry || entry.started) continue
+                                entry.started = true
+                                // Scope-bound, so a stopping subscription interrupts every running hook
+                                yield* Effect.forkScoped(settle(key, entry), { startImmediately: true })
+                            }
+                        }
+                    })
                 // Allocate work only for received messages, not one idle fiber for every configured concurrency slot
                 const program = Effect.scoped(
                     Effect.gen(function* () {
-                        if (partition !== undefined) source.onArrival(wake)
+                        if (partition !== undefined) {
+                            source.onArrival((key) => {
+                                if (key !== undefined) track(key)
+                                wake()
+                            })
+                            // Events that arrived before this loop started
+                            for (const key of source.waitingKeys()) track(key)
+                        }
                         while (source.active) {
+                            if (readiness) yield* startReadiness()
                             if (active >= source.limits.concurrency) {
-                                yield* Deferred.await(capacity)
+                                const latch = capacity
+                                // A hook may have admitted a key while the loop yielded, and its wake-up is already spent
+                                if (unstarted.length) continue
+                                yield* Deferred.await(latch)
                                 continue
                             }
                             let delivery: Delivery<EventMap<M>[K]> | null | undefined
@@ -1281,12 +1577,13 @@ export class EventBus<M extends MessageCore = Message> {
                             } else {
                                 // Nothing can arrive or finish between this scan and the wait, so no wake-up is missed
                                 const latch = capacity
+                                if (unstarted.length) continue
                                 delivery = source.takeFirst(eligible)
                                 if (delivery === undefined) {
                                     yield* Deferred.await(latch)
                                     continue
                                 }
-                                const selected = keyOf(delivery)
+                                const selected = delivery.key ?? ""
                                 if (typeof selected !== "string") {
                                     // The handler cannot run without a key, so the failure is reported in its place
                                     yield* report("handler", Cause.fail(selected.failure), delivery.message)
@@ -1307,7 +1604,14 @@ export class EventBus<M extends MessageCore = Message> {
                             const selectedKey = key
                             invocation.addObserver(() => finished(invocation.id, selectedKey))
                         }
-                    }).pipe(Effect.onExit(() => Effect.sync(() => source.stop()))),
+                    }).pipe(
+                        Effect.onExit(() =>
+                            Effect.sync(() => {
+                                source.stop()
+                                closing.abort()
+                            }),
+                        ),
+                    ),
                 ).pipe(
                     Effect.interruptible,
                     Effect.onExit((exit) =>

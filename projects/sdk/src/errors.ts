@@ -254,6 +254,7 @@ export class ConfigurationError extends FluxerlyError {
             | "eventOptions"
             | "concurrency"
             | "partition"
+            | "partitionReady"
             | "maxPendingMessages"
             | "maxPendingBytes"
             | "maxPendingChanges"

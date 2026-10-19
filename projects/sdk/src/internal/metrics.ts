@@ -22,7 +22,7 @@ const reconnects = Metric.counter("fluxerly_gateway_reconnects_total", {
     incremental: true,
 })
 const eventsDropped = Metric.counter("fluxerly_events_dropped_total", {
-    description: "Events not delivered to a subscription, by reason",
+    description: "Events not delivered to a subscription, by reason and, where known, by event",
     incremental: true,
 })
 const handlerFailures = Metric.counter("fluxerly_handler_failures_total", {
@@ -46,8 +46,11 @@ export const metrics = {
     reconnect(context: Context.Context<never> = empty) {
         reconnects.updateUnsafe(1, context)
     },
-    dropped(reason: string, amount: number, context: Context.Context<never> = empty) {
-        Metric.withAttributes(eventsDropped, { reason }).updateUnsafe(amount, context)
+    dropped(reason: string, amount: number, event: string | undefined, context: Context.Context<never> = empty) {
+        Metric.withAttributes(eventsDropped, event === undefined ? { reason } : { reason, event }).updateUnsafe(
+            amount,
+            context,
+        )
     },
     handlerFailure(event: string, context: Context.Context<never> = empty) {
         Metric.withAttributes(handlerFailures, { event }).updateUnsafe(1, context)

@@ -79,6 +79,10 @@ export interface BotEventOptions<
     readonly handler: BotEventHandler<K, E, R, M>
     /** Receive this handler's failures instead of the client-level onError */
     readonly onError?: (report: FailureReport) => Effect.Effect<unknown, E, R>
+    /** Hold the events of a partition key until its own setup is done, as the client.on option partitionReady does.
+     * Valid only together with partition, otherwise runBot dies with ConfigurationError before any client exists
+     */
+    readonly partitionReady?: (key: string) => Effect.Effect<unknown, E, R>
 }
 
 /** One optional handler per event, as a function or an object with a handler and delivery settings.
@@ -197,7 +201,7 @@ export type BotOptions<
     }
 
 /**
- * The services required by one runBot event handler H, including its onError hook
+ * The services required by one runBot event handler H, including its onError and partitionReady hooks
  *
  * @category Client and lifecycle
  */
@@ -208,8 +212,12 @@ export type HandlerServices<H> = H extends (...args: never[]) => Effect.Effect<u
             readonly handler: (...args: never[]) => Effect.Effect<unknown, unknown, infer R>
             /** Optional failure hook of an options-object entry */
             readonly onError?: infer Hook
+            /** Optional partition readiness hook of an options-object entry */
+            readonly partitionReady?: infer Ready
         }
-      ? R | (Hook extends (...args: never[]) => Effect.Effect<unknown, unknown, infer R2> ? R2 : never)
+      ? | R
+        | (Hook extends (...args: never[]) => Effect.Effect<unknown, unknown, infer R2> ? R2 : never)
+        | (Ready extends (...args: never[]) => Effect.Effect<unknown, unknown, infer R3> ? R3 : never)
       : never
 
 /**

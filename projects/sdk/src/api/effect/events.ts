@@ -38,8 +38,8 @@ export interface Subscription {
     waitForClose(): Effect.Effect<void, EventOverflowError>
 }
 
-/** Set event-handler queue limits, concurrency, ordering, overflow policy and an optional failure hook.
- * Reporting uses the services available when the handler is registered.
+/** Set event-handler queue limits, concurrency, ordering, overflow policy, an optional failure hook and an optional partition readiness hook.
+ * Reporting and the readiness hook use the services available when the handler is registered.
  * The type parameter T is the event payload that a partition function receives
  *
  * @category Events and collectors
@@ -57,6 +57,45 @@ export interface EventHandlerOptions<E = never, R = never, T = unknown> extends 
      * with "interrupted", and later reports still reach the hook
      */
     readonly onError?: (report: FailureReport) => Effect.Effect<unknown, E, R>
+    /**
+     * Hold the events of a partition key until that key is ready, without using a handler slot.
+     * Valid only together with partition, otherwise registration dies with ConfigurationError.
+     * Before the first waiting event of a key starts, the SDK calls this hook with the key.
+     * The key's events stay in the queue until the hook's Effect completes, while events of other keys keep starting.
+     * A held event does not use one of the concurrency slots, but it counts toward maxPendingMessages and maxPendingBytes, so a
+     * bot that waits for many keys at once needs a larger maxPendingMessages than the default 256.
+     * Held events also count as waiting work for a draining shutdown, so a hook that never completes makes the drain wait
+     * until its limit.
+     * The hook returns an Effect, which the SDK runs with the services available when the handler is registered.
+     * An Effect that completes without waiting marks the key ready at once, and one that waits holds the key until it completes.
+     * The SDK remembers that a key is ready only while it has waiting or running events.
+     * After the key went idle, its next event calls the hook again, so memory stays bounded by the keys with queued work.
+     * Hooks for different keys run at the same time, and every burst of events after an idle period calls the hook again.
+     * Keep it a cheap, idempotent check that answers at once when the key is already ready, such as an Effect that
+     * succeeds at once.
+     * Events without a key share the key "", and the hook receives "".
+     * With partition "guild", a direct message has no community, so its key is its channel ID. A hook should treat keys it
+     * does not know as ready.
+     * A hook that fails or dies reports every waiting event of that key as a failure of that event's handler,
+     * as a throwing partition function does, and those handlers do not run.
+     * The key is then forgotten, so a later event calls the hook again.
+     * The hook is interrupted when the subscription stops, which includes closing it, client shutdown and a draining
+     * shutdown that reaches its drain limit
+     *
+     * @example
+     * ```ts
+     * import { Effect } from "effect"
+     * import type { Client } from "@neontechspace/fluxerly/effect"
+     * export function afterServerSetup(client: Client, setups: Map<string, Effect.Effect<void>>) {
+     *     // A server whose setup is unknown, such as a direct message channel, is ready at once
+     *     return client.on("messageCreate", (message) => Effect.sync(() => void message.content), {
+     *         partition: "guild",
+     *         partitionReady: (key) => setups.get(key) ?? Effect.void,
+     *     })
+     * }
+     * ```
+     */
+    readonly partitionReady?: (key: string) => Effect.Effect<unknown, E, R>
 }
 
 /**

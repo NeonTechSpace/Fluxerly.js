@@ -713,6 +713,14 @@ export function registerReply(client: Client) {
     )
 }
 
+/** Typechecked partition readiness hook that waits for a per-server setup without holding a handler slot */
+export function registerAfterSetup(client: Client, setups: Map<string, Effect.Effect<void>>) {
+    return client.on("messageCreate", (message) => Effect.sync(() => void message.content), {
+        partition: "guild",
+        partitionReady: (key) => setups.get(key) ?? Effect.void,
+    })
+}
+
 /** Typechecked typing calls and ephemeral gateway delivery through the packed native package. */
 export function typingOperations(client: Client, channelId: string) {
     return Effect.gen(function* () {

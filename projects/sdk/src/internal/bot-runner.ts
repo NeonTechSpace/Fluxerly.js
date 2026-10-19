@@ -41,6 +41,7 @@ const handlerOptionKeys = [
     "maxPendingMessages",
     "maxPendingBytes",
     "onError",
+    "partitionReady",
 ]
 
 /** Check one event name and its delivery settings with the event bus's own rules, on a detached bus that no client
@@ -48,8 +49,8 @@ const handlerOptionKeys = [
  * stay identical to client.on without keeping a second list of event names
  */
 function validateBotEvent(event: string, options: Readonly<Record<string, unknown>>, bus: EventBus) {
-    const { onError, ...delivery } = options
-    const opened = Effect.runSyncExit(bus.open(event as EventName, delivery))
+    const { onError, partitionReady, ...delivery } = options
+    const opened = Effect.runSyncExit(bus.open(event as EventName, delivery, { partitionReady }))
     if (Exit.isFailure(opened)) {
         const reason = opened.cause.reasons.find((reason) => reason._tag === "Fail")
         if (reason?._tag === "Fail" && reason.error instanceof ConfigurationError) throw reason.error

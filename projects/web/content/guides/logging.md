@@ -215,7 +215,9 @@ Identical Warn, Error and Fatal records within one minute are printed once. Reco
 
 ## Count what happened
 
-The `client.diagnostics().counters` object keeps running totals since the client was created: Handler and hook failures, dropped events by reason, rejected gateway messages, unknown dispatches and opcodes, REST retries, rate-limit waits, reconnects, resumes, sink failures, cleanup failures and command rejections
+The `client.diagnostics().counters` object keeps running totals since the client was created: Handler and hook failures, dropped events by reason and by event name, rejected gateway messages, unknown dispatches and opcodes, REST retries, rate-limit waits, reconnects, resumes, sink failures, cleanup failures and command rejections
+
+The `eventsDroppedByEvent` object counts the same drops by event name, such as `messageCreate`, so a bot can see which handler loses events. Drops that have no known event name appear only in the reason totals of `eventsDropped`, so the per-event sum can be lower
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -313,7 +315,7 @@ export function runObservedBot(token: string | undefined, meter: Meter) {
 
 The SDK calls `observe` while it finishes the measured work, so the function should only record values and leave sending them to the exporter. An `observe` function that throws does not change what the bot does, and each throw is counted in `diagnostics().counters.sinkFailures`
 
-In a native program, the SDK also opens spans named `fluxerly.gateway.connect`, `fluxerly.rest.request`, `fluxerly.event.handle` and `fluxerly.command.execute`, and updates the metrics `fluxerly_rest_duration_ms`, `fluxerly_ratelimit_wait_ms`, `fluxerly_gateway_reconnects_total`, `fluxerly_events_dropped_total` and `fluxerly_handler_failures_total`. A command span covers its middleware, guards, argument conversion, cooldown and execution. Command failure metrics use the canonical command name. Without a tracer or metric exporter they cost almost nothing. Provide the Layer from `@effect/opentelemetry`, the Effect value that supplies the exporter, to the native program to export them
+In a native program, the SDK also opens spans named `fluxerly.gateway.connect`, `fluxerly.rest.request`, `fluxerly.event.handle` and `fluxerly.command.execute`, and updates the metrics `fluxerly_rest_duration_ms`, `fluxerly_ratelimit_wait_ms`, `fluxerly_gateway_reconnects_total`, `fluxerly_events_dropped_total` and `fluxerly_handler_failures_total`. The dropped-events metric carries the attribute `reason` and, where the event name is known, `event`. A command span covers its middleware, guards, argument conversion, cooldown and execution. Command failure metrics use the canonical command name. Without a tracer or metric exporter they cost almost nothing. Provide the Layer from `@effect/opentelemetry`, the Effect value that supplies the exporter, to the native program to export them
 
 ```ts
 import { Effect, type Layer } from "effect"

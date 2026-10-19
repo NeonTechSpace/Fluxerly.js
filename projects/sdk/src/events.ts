@@ -857,7 +857,10 @@ export interface HandlerOptions<T = unknown> extends EventBufferOptions {
      * The value channel keys each event by its channel, or by its community when it has no channel.
      * A function receives the event and returns its key as a string.
      * Events without a key, including those for which the function returns undefined, share one key.
-     * A function that throws or returns another value is reported as a failure of that event's handler, which then does not run
+     * A function that throws or returns another value is reported as a failure of that event's handler, which then does not run.
+     * The function runs once per event, when the event is received.
+     * With overflow dropOldest, a full queue discards from the longest backlog of one key, as described at overflow.
+     * The client.on option partitionReady holds a key's events until that key's own setup is done
      *
      * @example
      * ```ts
@@ -871,8 +874,20 @@ export interface HandlerOptions<T = unknown> extends EventBufferOptions {
     readonly partition?: "guild" | "channel" | ((event: T) => string | undefined)
     /** What happens when an event arrives while the waiting queue is full.
      * The default, dropOldest, discards the oldest waiting events to make room, and dropNewest discards the arriving event.
-     * Both drop policies keep the subscription running, log a Warn record and count the drop in diagnostics().counters.eventsDropped.
-     * The policy stop ends the subscription and reports an overflow failure, so waitForClose returns EventOverflowError
+     * Both drop policies keep the subscription running, log a Warn record and count the drop in diagnostics().counters.eventsDropped and eventsDroppedByEvent.
+     * The policy stop ends the subscription and reports an overflow failure, so waitForClose returns EventOverflowError.
+     *
+     * With a partition, dropOldest discards from the longest backlog instead of the oldest event overall.
+     * The backlog of the arriving event's key counts the arriving event. When another key has a longer backlog, that key
+     * loses its oldest waiting event, and ties go to the key whose oldest waiting event is oldest.
+     * Otherwise the arriving event's own key loses its oldest waiting event, or the arriving event itself when that key
+     * has none waiting. This repeats until the arriving event fits.
+     * So an event of another key is discarded only when that key's backlog is longer than the arriving key's, a longer or
+     * equal backlog never takes room from a shorter one, and a busy key's backlog shrinks itself first.
+     * Events whose partition function failed form one backlog of their own.
+     * Under maxPendingBytes the choice still follows the number of waiting events, not their sizes.
+     * Events held by partitionReady count as waiting, so a bot that holds many starting keys needs a larger
+     * maxPendingMessages than the default 256
      */
     readonly overflow?: "stop" | "dropOldest" | "dropNewest"
 }

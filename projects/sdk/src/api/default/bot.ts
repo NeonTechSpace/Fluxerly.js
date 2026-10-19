@@ -158,6 +158,10 @@ export interface BotEventOptions<K extends EventName, M extends MessageCore = Me
     readonly handler: BotEventHandler<K, M>
     /** Receive this handler's failures instead of the client-level onError */
     readonly onError?: (report: FailureReport) => unknown
+    /** Hold the events of a partition key until its own setup is done, as the client.on option partitionReady does.
+     * Valid only together with partition, otherwise runBot throws ConfigurationError before any client exists
+     */
+    readonly partitionReady?: (key: string, signal: AbortSignal) => unknown
 }
 
 /** One optional handler per event, as a function or an object with a handler and delivery settings.

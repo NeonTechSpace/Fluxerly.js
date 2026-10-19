@@ -236,7 +236,7 @@ await runBot({
 })
 ```
 
-With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop the oldest waiting messages instead
+With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop waiting messages instead. With a `partition`, the drops come from the longest backlog, as the [events guide](/docs/{{version}}/events-and-collectors/) describes
 
 ## Use the Effect entry point
 

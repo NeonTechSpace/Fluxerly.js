@@ -110,7 +110,7 @@ Enable two-factor authentication on the account that owns the bot's application,
 
 ## The gateway is connected but commands stopped
 
-Look for `events.dropped` records and `diagnostics().counters.eventsDropped`, which mean handlers are slower than incoming events. A handler or middleware failure, including a synchronous throw, releases its handler slot and partition key without stopping the subscription. A full queue drops the oldest waiting event instead of stopping
+Look for `events.dropped` records and `diagnostics().counters.eventsDropped`, which mean handlers are slower than incoming events. A handler or middleware failure, including a synchronous throw, releases its handler slot and partition key without stopping the subscription. A full queue drops the oldest waiting event instead of stopping, or for a partitioned handler the oldest event of the longest backlog. `diagnostics().counters.eventsDroppedByEvent` shows which events were dropped
 
 <details>
 <summary>Subscriptions that stop on overflow</summary>

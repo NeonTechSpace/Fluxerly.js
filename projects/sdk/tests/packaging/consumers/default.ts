@@ -717,6 +717,14 @@ export function registerReply(client: Client) {
     )
 }
 
+/** Typechecked partition readiness hook that waits for a per-server setup without holding a handler slot */
+export function registerAfterSetup(client: Client, setups: Map<string, Promise<void>>) {
+    return client.on("messageCreate", (message) => void message.content, {
+        partition: "guild",
+        partitionReady: (key, signal) => (signal.aborted ? undefined : setups.get(key)),
+    })
+}
+
 /** Typechecked typing calls and ephemeral gateway delivery through the packed default package. */
 export async function typingOperations(client: Client, channelId: string) {
     const notice = await client.messages.typing(channelId, { timeoutMs: 5_000 })

@@ -12,6 +12,7 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Logger from "effect/Logger"
 import * as References from "effect/References"
+import type { EventName } from "#sdk/events"
 import type { ClientCounters, ErrorInfo, LogCategory, LogLevel, LogRecord, LogSink, LogThreshold } from "#sdk/logging"
 import { ConfigurationError, FluxerlyError } from "#sdk/errors"
 import { record } from "./decode/primitives.js"
@@ -89,7 +90,7 @@ type Counters = {
         ? number
         : { -readonly [R in keyof ClientCounters[K]]: number }
 }
-export type CounterName = Exclude<keyof ClientCounters, "eventsDropped">
+export type CounterName = Exclude<keyof ClientCounters, "eventsDropped" | "eventsDroppedByEvent">
 export type DropReason = keyof ClientCounters["eventsDropped"]
 
 /** Guarded text for any value, used for thrown non-Error values and dedupe keys */
@@ -354,6 +355,7 @@ export class ClientLogger {
         hookFailures: 0,
         reportsDropped: 0,
         eventsDropped: { overflow: 0, malformed: 0, collector: 0, closed: 0 },
+        eventsDroppedByEvent: {},
         cacheChangesDropped: 0,
         protocolFailures: 0,
         unknownDispatches: 0,
@@ -449,27 +451,36 @@ export class ClientLogger {
         }
     }
 
-    countDrop(reason: DropReason, amount = 1) {
+    countDrop(reason: DropReason, amount = 1, event?: EventName) {
         this.#counters.eventsDropped[reason] += amount
+        if (event !== undefined)
+            this.#counters.eventsDroppedByEvent[event] = (this.#counters.eventsDroppedByEvent[event] ?? 0) + amount
         try {
-            metrics.dropped(reason, amount, this.context)
+            metrics.dropped(reason, amount, event, this.context)
         } catch (error) {
             this.#sinkFailure(error)
         }
     }
 
     counters(): ClientCounters {
-        return Object.freeze({ ...this.#counters, eventsDropped: Object.freeze({ ...this.#counters.eventsDropped }) })
+        return Object.freeze({
+            ...this.#counters,
+            eventsDropped: Object.freeze({ ...this.#counters.eventsDropped }),
+            eventsDroppedByEvent: Object.freeze({ ...this.#counters.eventsDroppedByEvent }),
+        })
     }
 
     /** Record an intentionally discarded item: Count it, then log at Debug for expected drops or Warn for anomalies */
     drop(
-        counter: CounterName | { readonly event: DropReason; readonly amount?: number } | undefined,
+        counter:
+            | CounterName
+            | { readonly event: DropReason; readonly amount?: number; readonly eventName?: EventName | undefined }
+            | undefined,
         input: LogInput & { readonly level: "debug" | "warn" | "error" },
         context?: Context.Context<never>,
     ) {
         if (typeof counter === "string") this.count(counter)
-        else if (counter) this.countDrop(counter.event, counter.amount)
+        else if (counter) this.countDrop(counter.event, counter.amount, counter.eventName)
         this.log(input, context)
     }
 

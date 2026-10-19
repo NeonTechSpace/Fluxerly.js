@@ -91,6 +91,45 @@ export interface EventHandlerOptions<T = unknown> extends HandlerOptions<T> {
      * queued or later reports
      */
     readonly onError?: (report: FailureReport) => unknown
+    /**
+     * Hold the events of a partition key until that key is ready, without using a handler slot.
+     * Valid only together with partition, otherwise registration throws ConfigurationError.
+     * Before the first waiting event of a key starts, the SDK calls this hook with the key.
+     * The key's events stay in the queue until the hook settles, while events of other keys keep starting.
+     * A held event does not use one of the concurrency slots, but it counts toward maxPendingMessages and maxPendingBytes, so a
+     * bot that waits for many keys at once needs a larger maxPendingMessages than the default 256.
+     * Held events also count as waiting work for a draining shutdown, so a hook that never settles makes the drain wait
+     * until its limit.
+     * A hook that returns a value other than a promise or thenable marks the key ready at once, with no extra turn.
+     * A returned promise holds the key until it resolves.
+     * The SDK remembers that a key is ready only while it has waiting or running events.
+     * After the key went idle, its next event calls the hook again, so memory stays bounded by the keys with queued work.
+     * Hooks for different keys run at the same time, and every burst of events after an idle period calls the hook again.
+     * Keep it a cheap, idempotent check that answers at once when the key is already ready, such as returning an already
+     * settled promise.
+     * Events without a key share the key "", and the hook receives "".
+     * With partition "guild", a direct message has no community, so its key is its channel ID. A hook should treat keys it
+     * does not know as ready.
+     * A hook that throws, rejects or fails reports every waiting event of that key as a failure of that event's handler,
+     * as a throwing partition function does, and those handlers do not run.
+     * The key is then forgotten, so a later event calls the hook again.
+     * The hook receives a signal that aborts when the subscription stops, which includes unsubscribing, client shutdown and a
+     * draining shutdown that reaches its drain limit.
+     * An Err result returned or resolved by the hook counts as a failure with its error
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * export function afterServerSetup(client: Client, setups: Map<string, Promise<void>>) {
+     *     // A server whose setup is unknown, such as a direct message channel, is ready at once
+     *     return client.on("messageCreate", (message) => void message.content, {
+     *         partition: "guild",
+     *         partitionReady: (key) => setups.get(key),
+     *     })
+     * }
+     * ```
+     */
+    readonly partitionReady?: (key: string, signal: AbortSignal) => unknown
 }
 
 /**

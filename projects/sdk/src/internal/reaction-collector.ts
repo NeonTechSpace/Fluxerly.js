@@ -19,6 +19,7 @@ import {
     type ReactionCollectorResult,
 } from "#sdk/collectors"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
+import type { EventName } from "#sdk/events"
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch, ReactionEmojiInput } from "#sdk/reactions"
 import type { ClientOwner } from "./client.js"
@@ -286,12 +287,12 @@ export class ReactionCollector {
         }
     }
 
-    #offer(message: MessageReaction | MessageReactionBatch, bytes: number) {
+    #offer(message: MessageReaction | MessageReactionBatch, bytes: number, event: EventName) {
         if (!this.#active) return
         if (this.#busy && this.#messages.length === this.#settings!.maxReactions) {
             // The collector is full and finishing its last callback, so later events cannot join the result
             this.#logger?.drop(
-                { event: "collector" },
+                { event: "collector", eventName: event },
                 {
                     level: "debug",
                     category: "collectors",

@@ -38,7 +38,7 @@ import {
     type SocketFactory,
 } from "../transport/index.js"
 import { commandPacer, commandSender, gatewayCommands, type IdentifyFields, type SubmitFailure } from "./commands.js"
-import { routeDispatch, type DispatchContext, type DispatchSinks } from "./dispatch-table.js"
+import { dispatchEvent, routeDispatch, type DispatchContext, type DispatchSinks } from "./dispatch-table.js"
 import {
     decodeFrame,
     maxGatewayMessageBytes,
@@ -329,7 +329,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                             )
                         observer.logger.count("protocolFailures")
                         observer.logger.drop(
-                            { event: "malformed" },
+                            { event: "malformed", eventName: dispatchEvent(type) },
                             {
                                 level: "warn",
                                 category: "gateway",

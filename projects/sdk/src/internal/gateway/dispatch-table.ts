@@ -63,6 +63,8 @@ export interface DispatchSinks {
 
 /** One dispatch type's handling */
 interface DispatchEntry<V> {
+    /** The one public event this type delivers, when a dispatch of it can only ever be that event */
+    readonly event?: EventName
     /** Cache intake that validates the raw body itself and runs before this entry's decoder */
     readonly rawCache?: (body: unknown, sinks: DispatchSinks, type: string) => void
     /** Validate and convert the body. A result of undefined marks it malformed, and ignored marks a valid body that is not delivered */
@@ -174,6 +176,7 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         project: ({ body }, sinks) => sinks.counts?.receiveChannelMemberCounts(body),
     }),
     USER_UPDATE: entry({
+        event: "userUpdate",
         decode: (body) => decodeUser(body),
         project: (user, sinks) => sinks.emit("userUpdate", user),
     }),
@@ -197,6 +200,7 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         (["GUILD_UPDATE", "GUILD_DELETE"] as const).map((type) => [
             type,
             entry({
+                event: guildLifecycleEvents[type],
                 rawCache: guildCache,
                 decode: (body) => decodeGuildLifecycleEvent(type, body),
                 project: (update, sinks) => sinks.emit(guildLifecycleEvents[type], update),
@@ -204,86 +208,106 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         ]),
     ),
     GUILD_HEALTH_UPDATE: entry({
+        event: "guildHealthUpdate",
         decode: decodeGuildHealthUpdate,
         project: (health, sinks) => sinks.emit("guildHealthUpdate", health),
     }),
     VOICE_STATE_UPDATE: entry({
+        event: "voiceStateUpdate",
         // Private calls use the same dispatch name with an explicit null guild ID
         decode: (body) => (record(body) && body.guild_id === null ? ignored : decodeVoiceState(body)),
         project: (voiceState, sinks) => sinks.emit("voiceStateUpdate", voiceState),
     }),
     // Private calls and entrance sounds are notices only and never write a cache
     CALL_CREATE: entry({
+        event: "callCreate",
         decode: decodeCallCreate,
         project: (call, sinks) => sinks.emit("callCreate", call),
     }),
     CALL_UPDATE: entry({
+        event: "callUpdate",
         decode: decodeCallUpdate,
         project: (call, sinks) => sinks.emit("callUpdate", call),
     }),
     CALL_DELETE: entry({
+        event: "callDelete",
         decode: decodeCallDelete,
         project: (call, sinks) => sinks.emit("callDelete", call),
     }),
     ENTRANCE_SOUND_PLAY: entry({
+        event: "entranceSoundPlay",
         decode: decodeEntranceSoundPlay,
         project: (sound, sinks) => sinks.emit("entranceSoundPlay", sound),
     }),
     PRESENCE_UPDATE: entry({
+        event: "presenceUpdate",
         decode: (body) => decodePresenceUpdate(body),
         project: (presence, sinks) => sinks.emit("presenceUpdate", presence),
     }),
     PRESENCE_UPDATE_BULK: entry({
+        event: "presenceUpdateBulk",
         decode: (body) => decodePresenceUpdateBulk(body),
         project: (presences, sinks) => sinks.emit("presenceUpdateBulk", presences),
     }),
     GUILD_EMOJIS_UPDATE: entry({
+        event: "guildEmojisUpdate",
         rawCache: guildCache,
         decode: (body) => decodeExpressionUpdate("emojis", body),
         project: (update, sinks) => sinks.emit("guildEmojisUpdate", update),
     }),
     GUILD_STICKERS_UPDATE: entry({
+        event: "guildStickersUpdate",
         rawCache: guildCache,
         decode: (body) => decodeExpressionUpdate("stickers", body),
         project: (update, sinks) => sinks.emit("guildStickersUpdate", update),
     }),
     CHANNEL_RECIPIENT_ADD: entry({
+        event: "directMessageRecipientAdd",
         decode: decodeRecipientChange,
         project: (change, sinks) => sinks.emit("directMessageRecipientAdd", change),
     }),
     CHANNEL_RECIPIENT_REMOVE: entry({
+        event: "directMessageRecipientRemove",
         decode: decodeRecipientChange,
         project: (change, sinks) => sinks.emit("directMessageRecipientRemove", change),
     }),
     WEBHOOKS_UPDATE: entry({
+        event: "webhooksUpdate",
         decode: decodeWebhooksUpdate,
         project: (update, sinks) => sinks.emit("webhooksUpdate", update),
     }),
     INVITE_CREATE: entry({
+        event: "inviteCreate",
         decode: (body, context) => decodeInviteMetadata(body, context.inviteBase),
         project: (invite, sinks) => sinks.emit("inviteCreate", invite),
     }),
     INVITE_DELETE: entry({
+        event: "inviteDelete",
         decode: (body) => decodeInviteDelete(body),
         project: (invite, sinks) => sinks.emit("inviteDelete", invite),
     }),
     THREAD_CREATE: entry({
+        event: "threadCreate",
         decode: decodeThreadCreate,
         project: (thread, sinks) => sinks.emit("threadCreate", thread),
     }),
     THREAD_UPDATE: entry({
+        event: "threadUpdate",
         decode: (body) => decodeThread(body),
         project: (thread, sinks) => sinks.emit("threadUpdate", thread),
     }),
     THREAD_DELETE: entry({
+        event: "threadDelete",
         decode: decodeThreadDeletion,
         project: (deletion, sinks) => sinks.emit("threadDelete", deletion),
     }),
     THREAD_LIST_SYNC: entry({
+        event: "threadListSync",
         decode: decodeThreadListSync,
         project: (sync, sinks) => sinks.emit("threadListSync", sync),
     }),
     THREAD_MEMBERS_UPDATE: entry({
+        event: "threadMembersUpdate",
         decode: decodeThreadMembersUpdate,
         project: (update, sinks) => sinks.emit("threadMembersUpdate", update),
     }),
@@ -294,20 +318,24 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         project: () => undefined,
     }),
     GUILD_AUDIT_LOG_ENTRY_CREATE: entry({
+        event: "guildAuditLogEntryCreate",
         decode: decodeAuditLogEntryCreate,
         project: (audit, sinks) => sinks.emit("guildAuditLogEntryCreate", audit),
     }),
     MESSAGE_CREATE: entry({
+        event: "messageCreate",
         decode: (body, context) => context.messageDecoder(body),
         cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (message, sinks) => sinks.emit("messageCreate", message),
     }),
     MESSAGE_UPDATE: entry({
+        event: "messageUpdate",
         decode: (body, context) => context.messageDecoder(body),
         cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (message, sinks) => sinks.emit("messageUpdate", message),
     }),
     TYPING_START: entry({
+        event: "typingStart",
         decode: decodeTypingStart,
         cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (typing, sinks) => sinks.emit("typingStart", typing),
@@ -316,6 +344,7 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         (Object.keys(guildEvents) as (keyof typeof guildEvents)[]).map((type) => [
             type,
             entry({
+                event: guildEvents[type],
                 decode: (body) => decodeGuildEvent(type, body),
                 project: (update, sinks) => sinks.emit(guildEvents[type], update as never),
             }),
@@ -340,14 +369,17 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         ]),
     ),
     CHANNEL_PINS_UPDATE: entry({
+        event: "channelPinsUpdate",
         decode: (body) => decodePinsUpdate(body),
         project: (update, sinks) => sinks.emit("channelPinsUpdate", update),
     }),
     MESSAGE_DELETE: entry({
+        event: "messageDelete",
         decode: (body) => decodeDeletion(body),
         project: (deletion, sinks) => sinks.emit("messageDelete", deletion),
     }),
     MESSAGE_DELETE_BULK: entry({
+        event: "messageDeleteBulk",
         decode: (body) => decodeBulkDeletion(body),
         project: (deletion, sinks) => sinks.emit("messageDeleteBulk", deletion),
     }),
@@ -355,6 +387,7 @@ const entries: Record<string, DispatchEntry<unknown>> = {
         (Object.keys(reactionEvents) as (keyof typeof reactionEvents)[]).map((type) => [
             type,
             entry({
+                event: reactionEvents[type],
                 decode: (body) => decodeReaction(type, body),
                 // Only the addition or removal of one user's reaction carries the member
                 ...(memberDecoratedDispatches.has(type)
@@ -368,6 +401,15 @@ const entries: Record<string, DispatchEntry<unknown>> = {
 
 /** Dispatch types the SDK knows. READY and RESUMED are session control, handled before this table */
 const dispatchTable: Readonly<Record<string, DispatchEntry<unknown>>> = Object.freeze(entries)
+
+/**
+ * The one public event a dispatch type delivers, used to attribute a rejected dispatch whose body is never decoded.
+ * Types that deliver several events or none have no answer, such as CHANNEL_CREATE, which is a guild channel or a
+ * private conversation, and GUILD_CREATE, which also carries a voice snapshot
+ */
+export function dispatchEvent(type: string): EventName | undefined {
+    return Object.hasOwn(dispatchTable, type) ? dispatchTable[type]!.event : undefined
+}
 
 /** Result of routing one dispatch through the table */
 export type DispatchResult =
