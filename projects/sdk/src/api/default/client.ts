@@ -713,9 +713,8 @@ export function createClient<const F extends MessageFields | undefined = undefin
                                 ),
                             )
                         return owner.events
-                            .on(
-                                event,
-                                (message, context) =>
+                            .on(event, {
+                                handler: (message, context) =>
                                     Effect.withFiber((fiber) => {
                                         // Operations the handler starts hold their rejection records for its outcome
                                         const rejections = fiberRejectionScope(fiber.context)
@@ -732,11 +731,10 @@ export function createClient<const F extends MessageFields | undefined = undefin
                                         })
                                     }),
                                 options,
-                                reporter ? promiseHook(reporter) : undefined,
+                                onError: reporter ? promiseHook(reporter) : undefined,
                                 scope,
-                                undefined,
-                                partitionReady ? defaultPartitionReady(partitionReady) : undefined,
-                            )
+                                partitionReady: partitionReady ? defaultPartitionReady(partitionReady) : undefined,
+                            })
                             .pipe(Effect.map(subscription))
                     }),
                     "on",

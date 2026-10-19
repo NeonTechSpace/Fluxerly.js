@@ -19,9 +19,8 @@ async function harness(options: Record<string, unknown>, partitionReady: Partiti
     }
     const held = new Set<string>()
     const source = await Effect.runPromise(
-        bus.on(
-            "typingStart",
-            (event) =>
+        bus.on("typingStart", {
+            handler: (event) =>
                 Effect.sync(() => void handled.push(event.userId)).pipe(
                     Effect.andThen(
                         Effect.suspend(() =>
@@ -29,12 +28,11 @@ async function harness(options: Record<string, unknown>, partitionReady: Partiti
                         ),
                     ),
                 ),
-            { partition: "channel", ...options },
-            (report) => Effect.sync(() => void reports.push(report)),
+            options: { partition: "channel", ...options },
+            onError: (report) => Effect.sync(() => void reports.push(report)),
             scope,
-            undefined,
             partitionReady,
-        ),
+        }),
     )
     return {
         bus,

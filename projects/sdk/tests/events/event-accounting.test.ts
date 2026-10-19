@@ -43,18 +43,16 @@ test("executing handler accounting releases after interruption and failure", asy
         const reported = Deferred.makeUnsafe<void>()
         try {
             await Effect.runPromise(
-                bus.on(
-                    "messageDelete",
-                    () =>
+                bus.on("messageDelete", {
+                    handler: () =>
                         Effect.gen(function* () {
                             yield* Deferred.succeed(entered, undefined)
                             yield* Deferred.await(release)
                             if (fail) return yield* Effect.fail("fixture")
                         }),
-                    undefined,
-                    () => Deferred.succeed(reported, undefined),
+                    onError: () => Deferred.succeed(reported, undefined),
                     scope,
-                ),
+                }),
             )
             bus.offer("messageDelete", { id: "10", channelId: "20" }, 1)
             await Effect.runPromise(Deferred.await(entered))

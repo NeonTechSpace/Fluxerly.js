@@ -1217,15 +1217,22 @@ export class EventBus<M extends MessageCore = Message> {
         )
     }
 
+    /**
+     * Register a handler for one event in the given scope, with its delivery options, an optional failure hook, an
+     * optional command name for reports and observations, and an optional partitionReady hook
+     */
     on<K extends EventName, E, R, E2, R2>(
         event: K,
-        handler: (message: EventMap<M>[K], context: EventContext) => Effect.Effect<unknown, E, R>,
-        options: HandlerOptions<EventMap<M>[K]> | undefined,
-        onError: ((report: InternalReport) => Effect.Effect<unknown, E2, R2>) | undefined,
-        scope: Scope.Scope,
-        command?: string,
-        partitionReady?: PartitionReady<E2, R2>,
+        subscription: {
+            readonly handler: (message: EventMap<M>[K], context: EventContext) => Effect.Effect<unknown, E, R>
+            readonly options?: HandlerOptions<EventMap<M>[K]> | undefined
+            readonly onError?: ((report: InternalReport) => Effect.Effect<unknown, E2, R2>) | undefined
+            readonly scope: Scope.Scope
+            readonly command?: string | undefined
+            readonly partitionReady?: PartitionReady<E2, R2> | undefined
+        },
     ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError, R | R2> {
+        const { handler, options, onError, scope, command, partitionReady } = subscription
         const bus = this
         return Effect.uninterruptible(
             Effect.gen(function* () {
