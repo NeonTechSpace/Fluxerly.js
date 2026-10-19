@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from "@playwright/test"
 import { existsSync, readFileSync } from "node:fs"
 import AxeBuilder from "@axe-core/playwright"
+import { expectedGuideExamples } from "../guide-examples.ts"
 
 const guidesDirectory = new URL("../../content/guides/", import.meta.url)
 const { previewVersion } = JSON.parse(readFileSync(new URL("../../content/versions.json", import.meta.url), "utf8")) as { previewVersion: string | null }
@@ -16,7 +17,7 @@ const authoredGuides = guideInventory.pages.flatMap((slug) => {
         slug,
         title,
         navTitle: frontmatter(source, "navTitle"),
-        examples: slug === "quick-start" ? 4 : source.split(/\r?\n/).filter((line) => /^```\S+$/.test(line)).length,
+        examples: expectedGuideExamples(slug, source),
     }]
 })
 
