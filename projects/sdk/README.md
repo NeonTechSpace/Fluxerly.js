@@ -113,7 +113,7 @@ For direct control over connection and shutdown, use `createClient`. Both are av
 The Effect API also provides the one-object `runBot` configuration. Its handlers return Effects instead of Promises and Results. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
 Before running the Effect example, add Effect 4 to the bot project's dependencies with `npm install effect@4`, `pnpm add effect@4` or `bun add effect@4`.
-The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. The lowest version in that range is the one the SDK is tested against, and later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
+The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. The SDK is tested against the lowest version in that range and a newer Effect 4 development version, and later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
 
 Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project to inspect the installed version.
 Recheck the SDK manifest when upgrading the SDK

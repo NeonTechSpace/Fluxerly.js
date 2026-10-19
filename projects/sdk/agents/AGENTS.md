@@ -148,7 +148,7 @@ Check the result requested by the user. Report anything that could not be tested
 ## Only for native Effect applications
 
 Use an Effect version within the `peerDependencies.effect` range in the installed SDK's `package.json`.
-The lowest version in that range is the one the SDK is tested against. Later Effect 4 releases are accepted, but Effect 3 and Effect 4 prereleases are not
+The SDK is tested against the lowest version in that range and a newer Effect 4 development version. Later Effect 4 releases are accepted, but Effect 3 and Effect 4 prereleases are not
 
 Effect operations describe work but do not start it until executed.
 Compose them with `yield*` inside `Effect.gen`, keep the scope open while its resources are needed, and execute the program from the application's entry point.

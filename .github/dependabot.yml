@@ -17,7 +17,7 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
-    # Effect is an exact public peer and changes only by decision. TypeScript and
+    # The Effect peer minimum and development pin change only by decision. TypeScript and
     # @types/node majors are separate decisions (web TypeScript 6, Node 24 floor)
     ignore:
       - dependency-name: effect
