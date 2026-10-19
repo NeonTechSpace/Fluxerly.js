@@ -1,18 +1,18 @@
 import { readFileSync } from "node:fs"
 import { afterAll, beforeAll, expect, test } from "vitest"
-import type { CacheKind, EventName } from "../../src/index.js"
-import { eventDispatchTypes } from "../../src/internal/gateway/event-dispatches.js"
-import { createTestClient, type TestClient } from "../../src/testing.js"
+import { compare, leaves, openReplay, probesFor, withValue, type Replay } from "../support/gateway-replay.js"
 
 // Gateway events have no machine-readable schema, so the decoder tests elsewhere use hand-written payloads, and a
 // field the SDK drops goes unnoticed. This check feeds payloads captured from the hosted service (scrubbed of every
 // identifier, name, text, address, hash and time by tests/live/gateway-capture.js, and refreshed as the live check
 // guide describes) through the real client, and reports every payload field the client never reads.
 //
-// A field counts as read when giving it another valid value changes what the client delivers or caches. Each field is
+// A field counts as read when giving it another valid value changes a delivered event. A change only in the contents
+// of a cache does not count, because the application cannot see the field in the event that carried it. Each field is
 // replaced in turn by values of its own kind, the captures are replayed through the in-memory client, and the
-// delivered events and the contents of every enabled cache are compared with an unchanged replay. That holds however
-// a decoder reaches the field, including copies and spreads that would hide an access from a recorder. A field the
+// delivered events are compared with an unchanged replay, while the caches only show whether a replacement was
+// accepted. That holds however a decoder reaches the field, including copies and spreads that would hide an access
+// from a recorder. A field the
 // client validates but never exposes is reported too, because the application cannot see it either. A replacement the
 // client rejects says nothing about exposure, so only accepted replacements count. A rejection shows as data that the
 // unchanged replay delivered and the replacement does not. A field that rejects every replacement cannot be judged,
@@ -59,122 +59,21 @@ const unprobedOnPurpose: Readonly<Record<string, string>> = {
     "* member.user.id": "The client accepts only the acting user's own ID there, which no replacement can match",
 }
 
-type Pointer = readonly (string | number)[]
-interface Leaf {
-    readonly pointer: Pointer
-    readonly path: string
-}
-
-/** Every scalar and empty container in a payload, with its location and its path using [] for array elements */
-function leaves(value: unknown, pointer: Pointer = [], path = ""): Leaf[] {
-    if (Array.isArray(value) && value.length > 0)
-        return value.flatMap((item, index) => leaves(item, [...pointer, index], `${path}[]`))
-    if (value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0)
-        return Object.entries(value).flatMap(([key, item]) =>
-            leaves(item, [...pointer, key], path ? `${path}.${key}` : key),
-        )
-    return [{ pointer, path }]
-}
-
-function withValue(payload: unknown, pointer: Pointer, replacement: unknown): unknown {
-    const copy = structuredClone(payload) as Record<string | number, unknown>
-    let cursor = copy
-    for (const step of pointer.slice(0, -1)) cursor = cursor[step] as Record<string | number, unknown>
-    cursor[pointer[pointer.length - 1]!] = replacement
-    return copy
-}
-
-const snowflake = /^[0-9]{16,20}$/
-const clock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
-
-/** Other values of the same kind as a captured one. A null stands for any nullable kind, so it tries each */
-function probesFor(original: unknown): unknown[] {
-    if (typeof original === "string") {
-        if (snowflake.test(original)) return ["1000000000000000099"]
-        if (clock.test(original)) return ["2030-01-01T00:00:00.000Z"]
-        if (/^https?:\/\//.test(original)) return ["https://example.invalid/probe"]
-        if (/^[0-9]+$/.test(original)) return [original === "1" ? "2" : "1"]
-        if (/^(a_)?[0-9a-f]{8,}$/.test(original)) return ["0123456789abcdef0123456789abcdef"]
-        return ["probe-value"]
-    }
-    if (typeof original === "number") return [original + 1, original === 0 ? 2 : 0]
-    if (typeof original === "boolean") return [!original]
-    if (original === null)
-        return [
-            "probe-value",
-            "1000000000000000099",
-            "2030-01-01T00:00:00.000Z",
-            "0123456789abcdef0123456789abcdef",
-            1,
-            true,
-        ]
-    if (Array.isArray(original)) return [["1000000000000000099"], ["probe-value"], [{ probe: "value" }]]
-    return [{ probe: "value" }]
-}
-
-const cacheKinds: readonly CacheKind[] = [
-    "messages",
-    "guilds",
-    "members",
-    "roles",
-    "channels",
-    "users",
-    "directMessages",
-    "emojis",
-    "stickers",
-]
-
-let harness: TestClient
-let delivered: unknown[] = []
+let replay: Replay
 
 beforeAll(async () => {
-    harness = createTestClient({
-        cache: Object.fromEntries(cacheKinds.map((kind) => [kind, true])),
-    })
-    for (const name of Object.keys(eventDispatchTypes))
-        harness.client.on(name as EventName, (value: unknown) => void delivered.push({ name, value }))
-    await harness.ready()
+    replay = await openReplay()
 })
-afterAll(() => harness.shutdown())
-
-/** Every object path in a value, with [] for array elements */
-function shape(value: unknown, path = "", into = new Set<string>()) {
-    if (Array.isArray(value)) for (const item of value) shape(item, `${path}[]`, into)
-    else if (value !== null && typeof value === "object")
-        for (const [key, item] of Object.entries(value)) {
-            into.add(`${path}.${key}`)
-            shape(item, `${path}.${key}`, into)
-        }
-    return into
-}
+afterAll(() => replay.shutdown())
 
 /** What the client delivered and cached after replaying the first `count` captures, with `replaced` standing in for the last */
-async function outcome(captures: readonly Capture[], count: number, replaced?: unknown) {
-    harness.client.cache.clear()
-    delivered = []
-    for (const [index, capture] of captures.slice(0, count).entries())
-        harness.emit(capture.event, index === count - 1 && replaced !== undefined ? replaced : capture.payload)
-    await harness.idle()
-    const value = {
-        delivered,
-        cached: cacheKinds.map((kind) => harness.client.cache.entries(kind, { limit: 1000 })),
-    }
-    return {
-        deliveries: delivered.length,
-        shape: shape(
-            JSON.parse(JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? `${item}n` : item))),
-        ),
-        text: JSON.stringify(value, (_key, item: unknown) => (typeof item === "bigint" ? `${item}n` : item)),
-    }
-}
-type Outcome = Awaited<ReturnType<typeof outcome>>
-
-/** Whether a replacement was accepted, and whether it changed anything the unchanged replay delivered or cached */
-function compare(baseline: Outcome, replaced: Outcome) {
-    if (replaced.deliveries !== baseline.deliveries || [...baseline.shape].some((path) => !replaced.shape.has(path)))
-        return "rejected"
-    return replaced.text === baseline.text ? "unchanged" : "changed"
-}
+const outcome = (captures: readonly Capture[], count: number, replaced?: unknown) =>
+    replay.outcome(
+        captures.slice(0, count).map((capture, index) => ({
+            event: capture.event,
+            payload: index === count - 1 && replaced !== undefined ? replaced : capture.payload,
+        })),
+    )
 
 type Verdict = "read" | "unread" | "unprobed"
 
@@ -201,7 +100,7 @@ async function classify(captures: readonly Capture[]) {
                 )
                 if (result === "rejected") continue
                 accepted++
-                if (result === "changed") {
+                if (result === "event") {
                     changed = true
                     break
                 }

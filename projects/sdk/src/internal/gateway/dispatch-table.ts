@@ -402,6 +402,9 @@ const entries: Record<string, DispatchEntry<unknown>> = {
 /** Dispatch types the SDK knows. READY and RESUMED are session control, handled before this table */
 const dispatchTable: Readonly<Record<string, DispatchEntry<unknown>>> = Object.freeze(entries)
 
+/** Every dispatch type the table handles, for the checks that compare it with Fluxer's gateway documentation */
+export const handledDispatchTypes: readonly string[] = Object.freeze(Object.keys(dispatchTable).sort())
+
 /**
  * The one public event a dispatch type delivers, used to attribute a rejected dispatch whose body is never decoded.
  * Types that deliver several events or none have no answer, such as CHANNEL_CREATE, which is a guild channel or a

@@ -1,0 +1,298 @@
+{
+    "AUTH_SESSION_CHANGE": {
+        "category": "unhandled user-account event",
+        "reason": "Authentication session rotation after a password change of the signed-in user"
+    },
+    "CALL_CREATE voice_states[].e2ee_capable": {
+        "category": "known gap not yet exposed",
+        "reason": "CallVoiceState has no end-to-end encryption capability"
+    },
+    "CALL_CREATE voice_states[].guild_id": {
+        "category": "always empty, null or false here",
+        "reason": "Documented null in a call, and the call decoder accepts only null or absent"
+    },
+    "CALL_CREATE voice_states[].member": {
+        "category": "always empty, null or false here",
+        "reason": "Documented null in a call, and the call decoder always sets the member to null"
+    },
+    "CALL_CREATE voice_states[].p2p": {
+        "category": "known gap not yet exposed",
+        "reason": "CallVoiceState has no peer-to-peer flag"
+    },
+    "CALL_CREATE voice_states[].version": {
+        "category": "known gap not yet exposed",
+        "reason": "CallVoiceState has no per-participant state version"
+    },
+    "CALL_UPDATE voice_states[].e2ee_capable": {
+        "category": "known gap not yet exposed",
+        "reason": "CallVoiceState has no end-to-end encryption capability"
+    },
+    "CALL_UPDATE voice_states[].guild_id": {
+        "category": "always empty, null or false here",
+        "reason": "Documented null in a call, and the call decoder accepts only null or absent"
+    },
+    "CALL_UPDATE voice_states[].member": {
+        "category": "always empty, null or false here",
+        "reason": "Documented null in a call, and the call decoder always sets the member to null"
+    },
+    "CALL_UPDATE voice_states[].p2p": {
+        "category": "known gap not yet exposed",
+        "reason": "CallVoiceState has no peer-to-peer flag"
+    },
+    "CALL_UPDATE voice_states[].version": {
+        "category": "known gap not yet exposed",
+        "reason": "CallVoiceState has no per-participant state version"
+    },
+    "CHANNEL_MEMBER_COUNTS_UPDATE": {
+        "category": "answers a request, checked through the request",
+        "reason": "Delivered to the owner of a pending channel member count request, not to event handlers"
+    },
+    "CHANNEL_PINS_ACK": {
+        "category": "unhandled user-account event",
+        "reason": "Pin acknowledgement of the signed-in user's account"
+    },
+    "CHANNEL_UPDATE_BULK guild_id": {
+        "category": "paired with another field",
+        "reason": "Every listed channel must belong to this guild, so a replacement alone is rejected"
+    },
+    "FAVORITE_MEME_CREATE": {
+        "category": "unhandled user-account event",
+        "reason": "Saved memes of the signed-in user's account"
+    },
+    "FAVORITE_MEME_DELETE": {
+        "category": "unhandled user-account event",
+        "reason": "Saved memes of the signed-in user's account"
+    },
+    "FAVORITE_MEME_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Saved memes of the signed-in user's account"
+    },
+    "FORUM_UNREADS": {
+        "category": "unhandled user-session event",
+        "reason": "Answers the forum unread request, which the SDK never sends"
+    },
+    "GUILD_COUNTS_UPDATE": {
+        "category": "answers a request, checked through the request",
+        "reason": "Delivered to the owner of a pending guild count request, not to event handlers"
+    },
+    "GUILD_CREATE channels": {
+        "category": "cache-only",
+        "reason": "The guildCreate event carries the guild snapshot, and the channels are held by the channel cache"
+    },
+    "GUILD_CREATE emojis": {
+        "category": "cache-only",
+        "reason": "The guildCreate event carries the guild snapshot, and the emojis are held by the emoji cache"
+    },
+    "GUILD_CREATE id": {
+        "category": "paired with another field",
+        "reason": "Must equal properties.id and the guild ID of the voice states, so a replacement alone is rejected"
+    },
+    "GUILD_CREATE joined_at": {
+        "category": "known gap not yet exposed",
+        "reason": "GuildCreate does not carry when the account joined"
+    },
+    "GUILD_CREATE member_count": {
+        "category": "known gap not yet exposed",
+        "reason": "GuildCreate does not carry the member count"
+    },
+    "GUILD_CREATE members": {
+        "category": "cache-only",
+        "reason": "The guildCreate event carries the guild snapshot, and the members are held by the member cache"
+    },
+    "GUILD_CREATE online_count": {
+        "category": "known gap not yet exposed",
+        "reason": "GuildCreate does not carry the online member count"
+    },
+    "GUILD_CREATE presences": {
+        "category": "always empty, null or false here",
+        "reason": "Documented always empty, and presences arrive as PRESENCE_UPDATE and PRESENCE_UPDATE_BULK"
+    },
+    "GUILD_CREATE roles": {
+        "category": "cache-only",
+        "reason": "The guildCreate event carries the guild snapshot, and the roles are held by the role cache"
+    },
+    "GUILD_CREATE stickers": {
+        "category": "cache-only",
+        "reason": "The guildCreate event carries the guild snapshot, and the stickers are held by the sticker cache"
+    },
+    "GUILD_CREATE threads": {
+        "category": "cache-only",
+        "reason": "The guildCreate event carries the guild snapshot, and the threads are held by the channel cache"
+    },
+    "GUILD_CREATE unavailable_hidden": {
+        "category": "always empty, null or false here",
+        "reason": "Only accepted GUILD_CREATE bodies have unavailable false or absent, and the document ties this field to unavailable true"
+    },
+    "GUILD_CREATE voice_states[].e2ee_capable": {
+        "category": "known gap not yet exposed",
+        "reason": "VoiceState has no end-to-end encryption capability"
+    },
+    "GUILD_CREATE voice_states[].guild_id": {
+        "category": "paired with another field",
+        "reason": "The snapshot decoder requires it to equal the guild ID, so a replacement alone is rejected"
+    },
+    "GUILD_CREATE voice_states[].p2p": {
+        "category": "known gap not yet exposed",
+        "reason": "VoiceState has no peer-to-peer flag"
+    },
+    "GUILD_CREATE voice_states[].version": {
+        "category": "known gap not yet exposed",
+        "reason": "VoiceState has no per-participant state version"
+    },
+    "GUILD_DELETE guild_id": {
+        "category": "paired with another field",
+        "reason": "Documented to repeat id, and a mismatch is rejected"
+    },
+    "GUILD_HEALTH_UPDATE": {
+        "category": "handled but not documented",
+        "reason": "The SDK decodes it, but the pinned gateway documents do not list it"
+    },
+    "GUILD_MEMBERS_CHUNK": {
+        "category": "answers a request, checked through the request",
+        "reason": "Delivered to the owner of a pending member request, not to event handlers"
+    },
+    "GUILD_MEMBER_LIST_UPDATE": {
+        "category": "unhandled user-session event",
+        "reason": "Member list subscription of a Lazy Request, which the SDK never sends"
+    },
+    "GUILD_SYNC": {
+        "category": "unhandled user-session event",
+        "reason": "Answers a Lazy Request sync, which the SDK never sends"
+    },
+    "GUILD_UPDATE guild_id": {
+        "category": "paired with another field",
+        "reason": "Documented to repeat the guild's own id, and a mismatch is rejected"
+    },
+    "MESSAGE_ACK": {
+        "category": "unhandled user-account event",
+        "reason": "Read state of the signed-in user's account"
+    },
+    "MESSAGE_CREATE channel_type": {
+        "category": "known gap not yet exposed",
+        "reason": "Message does not expose the kind of channel it was sent in"
+    },
+    "MESSAGE_CREATE mention_here": {
+        "category": "known gap not yet exposed",
+        "reason": "Message exposes no here-mention flag"
+    },
+    "MESSAGE_CREATE nicks": {
+        "category": "known gap not yet exposed",
+        "reason": "Message does not expose group direct message nicknames"
+    },
+    "MESSAGE_DELETE member": {
+        "category": "known gap not yet exposed",
+        "reason": "MessageDeletion does not carry the author's member"
+    },
+    "MESSAGE_REACTION_ADD_MANY reactions[].member": {
+        "category": "known gap not yet exposed",
+        "reason": "Each merged reaction addition carries no member"
+    },
+    "PASSIVE_UPDATES": {
+        "category": "unhandled user-session event",
+        "reason": "Sent only to passive user sessions, and a bot session is never passive"
+    },
+    "PRESENCE_UPDATE_BULK presences[].guild_id": {
+        "category": "paired with another field",
+        "reason": "Each entry must name the batch's guild, so a replacement alone is rejected"
+    },
+    "RATE_LIMITED": {
+        "category": "answers a request, checked through the request",
+        "reason": "Delivered to the owner of a pending member request, not to event handlers"
+    },
+    "READY": {
+        "category": "session control outside the dispatch table",
+        "reason": "Handled by the session handshake before dispatches reach the table"
+    },
+    "RECENT_MENTION_DELETE": {
+        "category": "unhandled user-account event",
+        "reason": "Recent mention feed of the signed-in user's account"
+    },
+    "RELATIONSHIP_ADD": {
+        "category": "unhandled user-account event",
+        "reason": "Friend and block relationships of the signed-in user's account"
+    },
+    "RELATIONSHIP_REMOVE": {
+        "category": "unhandled user-account event",
+        "reason": "Friend and block relationships of the signed-in user's account"
+    },
+    "RELATIONSHIP_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Friend and block relationships of the signed-in user's account"
+    },
+    "RESUMED": {
+        "category": "session control outside the dispatch table",
+        "reason": "Handled by the session handshake before dispatches reach the table"
+    },
+    "SAVED_MESSAGE_CREATE": {
+        "category": "unhandled user-account event",
+        "reason": "Saved messages of the signed-in user's account"
+    },
+    "SAVED_MESSAGE_DELETE": {
+        "category": "unhandled user-account event",
+        "reason": "Saved messages of the signed-in user's account"
+    },
+    "SESSIONS_REPLACE": {
+        "category": "unhandled user-account event",
+        "reason": "Live session list of the signed-in user's account"
+    },
+    "THREAD_MEMBERS_UPDATE added_members[].presence": {
+        "category": "intentionally dropped",
+        "reason": "A comment in thread-events.ts states the presence added to each member is not projected"
+    },
+    "THREAD_MEMBER_LIST_UPDATE": {
+        "category": "unhandled user-session event",
+        "reason": "Thread member list subscription of a Lazy Request, which the SDK never sends"
+    },
+    "THREAD_MEMBER_UPDATE mute_config": {
+        "category": "known gap not yet exposed",
+        "reason": "The update only evicts the cached thread, and ThreadMember has no mute state"
+    },
+    "THREAD_MEMBER_UPDATE muted": {
+        "category": "known gap not yet exposed",
+        "reason": "The update only evicts the cached thread, and ThreadMember has no mute state"
+    },
+    "USER_CONNECTIONS_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "External connections of the signed-in user's account"
+    },
+    "USER_GUILD_SETTINGS_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Notification settings of the signed-in user's account"
+    },
+    "USER_NOTE_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Private notes of the signed-in user's account"
+    },
+    "USER_PINNED_DMS_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Pinned private channels of the signed-in user's account"
+    },
+    "USER_SETTINGS_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Account-wide settings of the signed-in user's account"
+    },
+    "VOICE_SERVER_UPDATE": {
+        "category": "unhandled voice event",
+        "reason": "Voice connection grant, and the SDK opens no voice connections"
+    },
+    "VOICE_SIGNAL": {
+        "category": "unhandled voice event",
+        "reason": "Peer-to-peer voice signalling, and the SDK opens no voice connections"
+    },
+    "VOICE_STATE_UPDATE e2ee_capable": {
+        "category": "known gap not yet exposed",
+        "reason": "VoiceState has no end-to-end encryption capability"
+    },
+    "VOICE_STATE_UPDATE p2p": {
+        "category": "known gap not yet exposed",
+        "reason": "VoiceState has no peer-to-peer flag"
+    },
+    "VOICE_STATE_UPDATE version": {
+        "category": "known gap not yet exposed",
+        "reason": "VoiceState has no per-participant state version"
+    },
+    "WEBAUTHN_CREDENTIALS_UPDATE": {
+        "category": "unhandled user-account event",
+        "reason": "Passkeys of the signed-in user's account"
+    }
+}

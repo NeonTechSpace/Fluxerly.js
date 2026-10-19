@@ -425,7 +425,7 @@ async function readBuckets(manifest, source, commit) {
  * @param {Source} source
  * @param {string} commit
  */
-const readGatewayDocs = (manifest, source, commit) =>
+export const readGatewayDocs = (manifest, source, commit) =>
     readDirectory(manifest, source, commit, {
         directory: manifest.gatewayDocs.path,
         label: "gateway documentation",

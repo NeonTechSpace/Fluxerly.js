@@ -1,0 +1,55 @@
+{
+    "CALL_UPDATE": { "like": "CALL_CREATE", "without": ["recipients", "created_at"] },
+    "CHANNEL_CREATE": { "fields": [{ "name": "guild_id", "optional": true, "shape": { "kind": "snowflake" } }] },
+    "CHANNEL_DELETE": { "fields": [] },
+    "CHANNEL_UPDATE": { "fields": [] },
+    "GUILD_AUDIT_LOG_ENTRY_CREATE": {
+        "fields": [{ "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } }]
+    },
+    "GUILD_CREATE": { "object": "guild-ready-object" },
+    "GUILD_MEMBER_ADD": { "fields": [{ "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } }] },
+    "GUILD_MEMBER_UPDATE": { "fields": [{ "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } }] },
+    "GUILD_UPDATE": { "fields": [{ "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } }] },
+    "INVITE_CREATE": { "fields": [] },
+    "MESSAGE_UPDATE": {
+        "fields": [
+            { "name": "guild_id", "optional": true, "shape": { "kind": "snowflake" } },
+            {
+                "name": "member",
+                "optional": true,
+                "shape": {
+                    "kind": "rest",
+                    "name": "guild member",
+                    "link": "/http-api/guild-members/#guild-member-object"
+                }
+            }
+        ]
+    },
+    "PRESENCE_UPDATE": { "object": "presence-object" },
+    "THREAD_MEMBER_UPDATE": {
+        "fields": [
+            { "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } },
+            { "name": "muted", "optional": false, "shape": { "kind": "boolean" } },
+            { "name": "mute_config", "optional": false, "shape": { "kind": "object", "nullable": true } }
+        ]
+    },
+    "THREAD_MEMBERS_UPDATE": {
+        "within": {
+            "added_members": [
+                {
+                    "name": "member",
+                    "optional": false,
+                    "shape": {
+                        "kind": "rest",
+                        "name": "guild member",
+                        "link": "/http-api/guild-members/#guild-member-object"
+                    }
+                },
+                { "name": "presence", "optional": false, "shape": { "kind": "object", "nullable": true } }
+            ]
+        }
+    },
+    "THREAD_UPDATE": { "fields": [] },
+    "USER_UPDATE": { "fields": [] },
+    "VOICE_STATE_UPDATE": { "object": "voice-state-object" }
+}
