@@ -26,7 +26,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         id: setup
         with:
           working-directory: projects
@@ -48,7 +48,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         id: setup
         with:
           working-directory: projects
@@ -76,7 +76,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         id: setup
         with:
           working-directory: projects
@@ -150,7 +150,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         id: setup
         with:
           working-directory: projects
@@ -190,7 +190,7 @@ jobs:
       - name: Retain failing browser evidence
         id: browser_evidence
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-failure
           path: projects/web/test-results
@@ -224,7 +224,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         id: setup
         with:
           working-directory: projects
@@ -309,7 +309,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         id: setup
         with:
           working-directory: projects
