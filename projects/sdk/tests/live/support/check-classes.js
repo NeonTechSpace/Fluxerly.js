@@ -34,6 +34,8 @@ export const checkClasses = Object.freeze({
     "discovery.js": { "": sdkWork("read-only"), "--mutate": manual("shared-state") },
     // Emoji and sticker updates are checked by owned IDs. Source-guild reads change only under shared-state checks
     "expressions.js": { "": sdkWork("test-owned") },
+    // Records only its own temporary channel's dispatches. `--write` also replaces the committed fixture file
+    "gateway-capture.js": { "": sdkWork("test-owned"), "--write": sdkWork("test-owned") },
     "guild-events.js": { "": sdkWork("read-only"), "--voice": sdkWork("read-only") },
     "guild-feature-toggles.js": { "": sdkWork("shared-state") },
     "guild-lifecycle.js": {

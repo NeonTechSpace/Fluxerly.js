@@ -123,6 +123,7 @@ When a check fails only when run together with others, declare it `shared-state`
 | `test:live:discovery`                                                     | Directory search, categories, eligibility/status and read recovery through both APIs                           | Read-only, never submits an application                                                                                                                                                                  | SDK work       |
 | `test:live:member-search`                                                 | Indexed member search and permissions                                                                          | Resource reads and search requests, which can trigger provider lazy indexing. No member moderation or role/channel edits                                                                                 | SDK work       |
 | `test:live:message-members`                                               | A message dispatch refills the author's removed cached member without a member request                         | Journaled temporary channel and bot message, with verified removal. Drops only the bot's cached member. Holds the exclusive lock, since other checks' bot reactions or typing could refill it            | SDK work       |
+| `test:live:gateway-capture`                                               | Captures the temporary channel's gateway dispatches and checks their scrubbing, without replacing the fixture  | One journaled temporary channel with bot messages, one reaction, one typing notice and a topic edit, with verified channel removal                                                                       | SDK work       |
 | `test:live:members`                                                       | Authorized target-member nickname set, independent readback and restoration through both APIs                  | Temporary nickname change for one currently authorized non-owner member                                                                                                                                  | Per run        |
 | `test:live:guild-lifecycle`                                               | Bot membership pages and bounded traversal through both APIs                                                   | Read-only. Leaving requires the separate direct command                                                                                                                                                  | SDK work       |
 | `test:live:discovery:mutate:default`, `test:live:discovery:mutate:effect` | Manual directory application lifecycle and lost-response reconciliation                                        | Real review-queue submission or immediate public listing, then test-owned withdrawal                                                                                                                     | Per run        |
@@ -159,11 +160,30 @@ Run each command with `default` and then `effect` unless stated otherwise
 | `node tests/live/recovery-window.js default --session-restart` | SessionStore shutdown followed by a new client that must receive RESUMED rather than READY within the retention window. Uses only its own sockets and in-memory store, with verified sandbox identity and no server mutations                              | SDK work       |
 | `node tests/live/sdk.js default --quality`                     | Local validation rejection and user/private-channel cache reads for an authorized member and group. No messages or remote state changes                                                                                                                    | Per run        |
 | `node tests/live/users.js default --latest-only`               | Latest-private-message batch failure/recovery with marker-owned test DMs. No profile, presence or group changes                                                                                                                                            | Per run        |
+| `node tests/live/gateway-capture.js --write`                   | Replaces the [gateway capture fixture](/projects/sdk/tests/contract/fixtures/gateway-captures.json) with a fresh scrubbed capture. Runs once, without a mode. Same outside effects as `test:live:gateway-capture`                                          | SDK work       |
 | `node tests/live/own-history.js default --guild`               | Irreversible deletion of every message the designated bot authored in the sandbox server                                                                                                                                                                   | Per run        |
 | `node tests/live/guild-lifecycle.js default --leave`           | The bot leaves the server, with membership-list verification. Add `--lose-response` to discard the successful response and verify reconciliation without replay                                                                                            | Person present |
 | `node tests/live/voice-controls.js default --flags-only`       | Mute/deafen checks without moving or disconnecting the participant. Use `--no-move` instead to include disconnect and rejoin without creating a channel                                                                                                    | Person present |
 
 ## Check requirements
+
+### Gateway captures
+
+The [gateway capture test](/projects/sdk/tests/contract/gateway-captures.test.ts) replays scrubbed dispatches recorded from the hosted service and fails on a payload field the SDK neither exposes nor caches, unless its explicit ignore list names the field with a reason.
+Fields for which every replacement is rejected, such as empty lists and an ID that must match the actor, cannot be judged and sit in a separate reasoned list, so an unread field there goes unreported.
+Refresh the fixture after Fluxer changes a payload, or to cover another dispatch.
+Build the SDK, run `node tests/live/gateway-capture.js --write` from `projects/sdk/`, review the fixture diff and run `pnpm exec vitest run tests/contract/gateway-captures.test.ts --maxWorkers=1`.
+A new unread field needs either an SDK change or a reasoned ignore entry.
+Add a dispatch by extending `triggerAndCollect` in the harness
+
+The harness writes its journal on every run, with or without `--write`, and writes the fixture only with it.
+It keeps only the bot's own dispatches in its temporary channel, and drops other members' messages, reactions and typing.
+Its [scrubber](/projects/sdk/tests/live/support/gateway-scrub.js) replaces every string with a stable placeholder, passes numbers only under reviewed protocol field names, and refuses unreviewed field names and large numbers outside time fields.
+It refuses to continue when the result still holds the token, the server, bot or channel IDs, or an account or server name.
+It also refuses a captured string that survives: Strings of 8 or more characters anywhere inside other text, strings of 4 to 7 characters as a whole value only, and strings under 4 characters not at all.
+Digit-only strings under 8 digits are not checked either.
+A capture with a new field name stops until the name is reviewed and added to the scrubber.
+Raw payloads are never printed or stored
 
 ### Presence and interactive typing
 

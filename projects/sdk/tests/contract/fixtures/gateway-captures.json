@@ -1,0 +1,385 @@
+{
+    "captures": [
+        {
+            "label": "channel-create",
+            "event": "CHANNEL_CREATE",
+            "payload": {
+                "content_warning_level": 0,
+                "content_warning_text": null,
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000002",
+                "last_message_id": null,
+                "last_pin_timestamp": null,
+                "name": "name-1",
+                "nsfw": false,
+                "nsfw_override": null,
+                "parent_id": null,
+                "permission_overwrites": [],
+                "position": 5,
+                "rate_limit_per_user": 0,
+                "topic": null,
+                "type": 0
+            }
+        },
+        {
+            "label": "message-create",
+            "event": "MESSAGE_CREATE",
+            "payload": {
+                "attachments": [],
+                "author": {
+                    "avatar": null,
+                    "avatar_color": null,
+                    "bot": true,
+                    "discriminator": "0001",
+                    "flags": 16,
+                    "global_name": null,
+                    "id": "1000000000000000003",
+                    "username": "username-1"
+                },
+                "channel_id": "1000000000000000002",
+                "channel_type": 0,
+                "content": "content-1",
+                "edited_timestamp": null,
+                "embeds": [],
+                "flags": 0,
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000004",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"]
+                },
+                "mention_everyone": false,
+                "mention_roles": [],
+                "mentions": [],
+                "pinned": false,
+                "stickers": [],
+                "timestamp": "2026-01-01T00:00:02.000Z",
+                "tts": false,
+                "type": 0
+            }
+        },
+        {
+            "label": "message-create-reply-embed",
+            "event": "MESSAGE_CREATE",
+            "payload": {
+                "attachments": [],
+                "author": {
+                    "avatar": null,
+                    "avatar_color": null,
+                    "bot": true,
+                    "discriminator": "0001",
+                    "flags": 16,
+                    "global_name": null,
+                    "id": "1000000000000000003",
+                    "username": "username-1"
+                },
+                "channel_id": "1000000000000000002",
+                "channel_type": 0,
+                "content": "content-2",
+                "edited_timestamp": null,
+                "embeds": [
+                    {
+                        "author": {
+                            "name": "name-2"
+                        },
+                        "color": 5814783,
+                        "description": "description-1",
+                        "fields": [
+                            {
+                                "inline": true,
+                                "name": "name-3",
+                                "value": "value-1"
+                            }
+                        ],
+                        "footer": {
+                            "text": "text-1"
+                        },
+                        "timestamp": "2026-01-01T00:00:03.000Z",
+                        "title": "title-1",
+                        "type": "rich",
+                        "url": "https://example.invalid/url/1"
+                    }
+                ],
+                "flags": 0,
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000006",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"]
+                },
+                "mention_everyone": false,
+                "mention_roles": [],
+                "mentions": [
+                    {
+                        "avatar": null,
+                        "avatar_color": null,
+                        "bot": true,
+                        "discriminator": "0001",
+                        "flags": 16,
+                        "global_name": null,
+                        "id": "1000000000000000003",
+                        "username": "username-1"
+                    }
+                ],
+                "message_reference": {
+                    "channel_id": "1000000000000000002",
+                    "guild_id": "1000000000000000001",
+                    "message_id": "1000000000000000004",
+                    "type": 0
+                },
+                "pinned": false,
+                "referenced_message": {
+                    "attachments": [],
+                    "author": {
+                        "avatar": null,
+                        "avatar_color": null,
+                        "bot": true,
+                        "discriminator": "0001",
+                        "flags": 16,
+                        "global_name": null,
+                        "id": "1000000000000000003",
+                        "username": "username-1"
+                    },
+                    "channel_id": "1000000000000000002",
+                    "content": "content-1",
+                    "edited_timestamp": null,
+                    "embeds": [],
+                    "flags": 0,
+                    "id": "1000000000000000004",
+                    "mention_everyone": false,
+                    "mention_roles": [],
+                    "mentions": [],
+                    "pinned": false,
+                    "stickers": [],
+                    "timestamp": "2026-01-01T00:00:02.000Z",
+                    "tts": false,
+                    "type": 0
+                },
+                "stickers": [],
+                "timestamp": "2026-01-01T00:00:04.000Z",
+                "tts": false,
+                "type": 19
+            }
+        },
+        {
+            "label": "message-update",
+            "event": "MESSAGE_UPDATE",
+            "payload": {
+                "attachments": [],
+                "author": {
+                    "avatar": null,
+                    "avatar_color": null,
+                    "bot": true,
+                    "discriminator": "0001",
+                    "flags": 16,
+                    "global_name": null,
+                    "id": "1000000000000000003",
+                    "username": "username-1"
+                },
+                "channel_id": "1000000000000000002",
+                "content": "content-3",
+                "edited_timestamp": "2026-01-01T00:00:05.000Z",
+                "embeds": [],
+                "flags": 0,
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000004",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"]
+                },
+                "mention_everyone": false,
+                "mention_roles": [],
+                "mentions": [],
+                "pinned": false,
+                "stickers": [],
+                "timestamp": "2026-01-01T00:00:02.000Z",
+                "tts": false,
+                "type": 0
+            }
+        },
+        {
+            "label": "reaction-add",
+            "event": "MESSAGE_REACTION_ADD",
+            "payload": {
+                "channel_id": "1000000000000000002",
+                "emoji": {
+                    "name": "name-4"
+                },
+                "guild_id": "1000000000000000001",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"],
+                    "user": {
+                        "avatar": null,
+                        "avatar_color": null,
+                        "bot": true,
+                        "discriminator": "0001",
+                        "flags": 16,
+                        "global_name": null,
+                        "id": "1000000000000000003",
+                        "username": "username-1"
+                    }
+                },
+                "message_id": "1000000000000000004",
+                "user_id": "1000000000000000003"
+            }
+        },
+        {
+            "label": "reaction-remove",
+            "event": "MESSAGE_REACTION_REMOVE",
+            "payload": {
+                "channel_id": "1000000000000000002",
+                "emoji": {
+                    "name": "name-4"
+                },
+                "guild_id": "1000000000000000001",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"],
+                    "user": {
+                        "avatar": null,
+                        "avatar_color": null,
+                        "bot": true,
+                        "discriminator": "0001",
+                        "flags": 16,
+                        "global_name": null,
+                        "id": "1000000000000000003",
+                        "username": "username-1"
+                    }
+                },
+                "message_id": "1000000000000000004",
+                "user_id": "1000000000000000003"
+            }
+        },
+        {
+            "label": "typing-start",
+            "event": "TYPING_START",
+            "payload": {
+                "channel_id": "1000000000000000002",
+                "guild_id": "1000000000000000001",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"],
+                    "user": {
+                        "avatar": null,
+                        "avatar_color": null,
+                        "bot": true,
+                        "discriminator": "0001",
+                        "flags": 16,
+                        "global_name": null,
+                        "id": "1000000000000000003",
+                        "username": "username-1"
+                    }
+                },
+                "timestamp": 1767225601,
+                "user_id": "1000000000000000003"
+            }
+        },
+        {
+            "label": "channel-update",
+            "event": "CHANNEL_UPDATE",
+            "payload": {
+                "content_warning_level": 0,
+                "content_warning_text": null,
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000002",
+                "last_message_id": "1000000000000000006",
+                "last_pin_timestamp": null,
+                "name": "name-1",
+                "nsfw": false,
+                "nsfw_override": null,
+                "parent_id": null,
+                "permission_overwrites": [],
+                "position": 5,
+                "rate_limit_per_user": 0,
+                "topic": "topic-1",
+                "type": 0
+            }
+        },
+        {
+            "label": "message-delete",
+            "event": "MESSAGE_DELETE",
+            "payload": {
+                "author_id": "1000000000000000003",
+                "channel_id": "1000000000000000002",
+                "content": "content-2",
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000006",
+                "member": {
+                    "accent_color": null,
+                    "avatar": null,
+                    "banner": null,
+                    "communication_disabled_until": null,
+                    "deaf": false,
+                    "joined_at": "2026-01-01T00:00:01.000Z",
+                    "mute": false,
+                    "nick": null,
+                    "roles": ["1000000000000000005"]
+                }
+            }
+        },
+        {
+            "label": "channel-delete",
+            "event": "CHANNEL_DELETE",
+            "payload": {
+                "content_warning_level": 0,
+                "content_warning_text": null,
+                "guild_id": "1000000000000000001",
+                "id": "1000000000000000002",
+                "last_message_id": "1000000000000000006",
+                "last_pin_timestamp": null,
+                "name": "name-1",
+                "nsfw": false,
+                "nsfw_override": null,
+                "parent_id": null,
+                "permission_overwrites": [],
+                "position": 5,
+                "rate_limit_per_user": 0,
+                "topic": "topic-1",
+                "type": 0
+            }
+        }
+    ]
+}
