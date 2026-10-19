@@ -35,8 +35,8 @@ The `YYYYMMDD` part is the UTC date of the Release prepare run's preparation ste
 The date comes first so builds sort by day, and the run number then keeps them from ever repeating.
 Overlapping nightly runs get different versions, because each run number is different.
 Nightly versions published before this format use `CORE-nightly.N`. They stay valid and sort below every dated nightly of the same core, and every nightly sorts below the RC of its core.
-A nightly run is superseded when the newest earlier or the newest later nightly on its line, published after its preparation, has the same content. Its Release publish run succeeds without publishing, prints the superseding version and skips the registry install, announcement and docs preview jobs. This covers overlapping runs on one commit, such as the daily schedule and a manual dispatch.
-When the newest later nightly has different content, the run fails with the newer version error. A candidate whose own version is already on npm is confirmed instead.
+A nightly run is superseded when the newest nightly on its line, published after its preparation, has the same content. When a higher nightly on its line already exists, any nightly published after its preparation with the same content supersedes it, and the newest matching one is reported. The run's Release publish step succeeds without publishing, prints the superseding version and skips the registry install, announcement and docs preview jobs. This covers overlapping runs on one commit, such as the daily schedule and a manual dispatch. The fingerprint reads share a one-minute budget that is checked between reads, and each read can take longer.
+When no such nightly matches and a later one exists, the run fails with the newer version error. When only earlier ones exist, the run publishes. A candidate whose own version is already on npm is confirmed instead.
 When a pending major or minor note is removed, the next nightly's version can drop below the newest nightly. It then publishes under a staging tag such as `nightly-1000-1`, while the `nightly` tag and `/docs/nightly/` keep the higher build until a later nightly passes it. The [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags) can point `nightly` at the newer build
 
 ## When a step fails
@@ -137,7 +137,7 @@ Nightly builds are exempt from these rules.
 A nightly needs no RC, is never blocked by a pending RC and has no content to match.
 A nightly version carries the UTC date of its preparation step and the run number, and it must sort above every published nightly of its core in either form.
 Release version PR and RC or Stable preparation read every published version with the selected source's release tooling, so once a dated nightly is published, the source must include dated nightly support.
-If a higher nightly on the same line publishes first, the lower run is superseded and succeeds without publishing when the newest such nightly has the same content. Otherwise the lower run fails with the newer version error.
+If a higher nightly on the same line publishes first, the lower run is superseded and succeeds without publishing when any nightly of its line published after its preparation has the same content. Otherwise the lower run fails with the newer version error.
 A nightly publishes under the `nightly` tag without moving `latest` or `rc`
 
 ### Release baselines

@@ -306,29 +306,59 @@ export function stagingTag(candidate) {
 }
 
 /**
+ * Nightlies on the candidate's line that were published after its preparation, newest first. These are the versions
+ * above the reviewed baseline on either side of the candidate, without the candidate's own version
+ */
+function nightliesPublishedSincePreparation(candidate, npmVersions) {
+    const line = parseVersion(candidate.version).line
+    const reviewed = candidate.baseline?.version ?? null
+    return npmVersions
+        .filter((value) => {
+            const item = parseVersion(value)
+            return (
+                item.line === line &&
+                item.channel === "nightly" &&
+                value !== candidate.version &&
+                (reviewed === null || compareVersions(value, reviewed) > 0)
+            )
+        })
+        .sort(compareVersions)
+        .reverse()
+}
+
+/**
  * Checks at publication that the candidate's baseline is still the newest earlier version on its channel and line. A
- * nightly prepared while an earlier nightly was still publishing may find that nightly as its baseline now, because
- * nightly content is never reviewed against its baseline. When its content matches that nightly, or the newest
- * nightly of its line published after it, it reports the nightly that superseded it, so nothing is published
+ * nightly prepared while another nightly was still publishing may find newer nightlies on its line now, because
+ * nightly content is never reviewed against its baseline. It reports the nightly that superseded it, so nothing is
+ * published, when the newest nightly published after its preparation has the same content. When a higher nightly of
+ * its line exists the candidate cannot publish anyway, so any nightly published after its preparation with the same
+ * content supersedes it. Without a higher nightly, an older match must not skip the publish, because a revert can
+ * return to older content that the newest nightly replaced. Fingerprints are read newest first, only for those
+ * nightlies and within one shared deadline. Otherwise a higher nightly with other content keeps the newer version
+ * error, while an earlier one with other content lets the candidate publish
  * @param {{ version: string, channel: string, contentFingerprint: string, baseline?: { version: string } | null }} candidate
  * @param {string[]} npmVersions
  * @param {(version: string) => Promise<string>} fingerprintOf Content fingerprint of a published version
+ * @param {{ now?: () => number, timeout?: number }} [options] Clock and total time for all fingerprint reads
  * @returns {Promise<{ superseded: string } | undefined>}
  */
-export async function assertPublishBaseline(candidate, npmVersions, fingerprintOf) {
+export async function assertPublishBaseline(
+    candidate,
+    npmVersions,
+    fingerprintOf,
+    { now = () => performance.now(), timeout = 60_000 } = {},
+) {
     if (candidate.channel === "nightly") {
-        const line = parseVersion(candidate.version).line
-        const higher = npmVersions
-            .filter(
-                (value) =>
-                    parseVersion(value).line === line &&
-                    parseVersion(value).channel === "nightly" &&
-                    compareVersions(value, candidate.version) > 0,
-            )
-            .sort(compareVersions)
-            .at(-1)
-        // Content that differs keeps the newer version error that the baseline selection raises
-        if (higher && (await fingerprintOf(higher)) === candidate.contentFingerprint) return { superseded: higher }
+        const window = nightliesPublishedSincePreparation(candidate, npmVersions)
+        const blocked = window.some((value) => compareVersions(value, candidate.version) > 0)
+        const started = now()
+        for (const value of blocked ? window : window.slice(0, 1)) {
+            if (now() - started >= timeout)
+                throw new Error(
+                    `Nightly fingerprint reads on line ${parseVersion(candidate.version).line}${candidate.baseline ? ` above ${candidate.baseline.version}` : ""} exceeded ${timeout / 1000} seconds, rerun Release publish with the same candidate, or prepare a new nightly`,
+                )
+            if ((await fingerprintOf(value)) === candidate.contentFingerprint) return { superseded: value }
+        }
     }
     const version = selectBaseline({ npmVersions, version: candidate.version, channel: candidate.channel })
     const reviewed = candidate.baseline?.version ?? null
@@ -338,7 +368,6 @@ export async function assertPublishBaseline(candidate, npmVersions, fingerprintO
         throw new Error(
             "Published baseline changed since review, prepare a new candidate without changing an existing version",
         )
-    if ((await fingerprintOf(version)) === candidate.contentFingerprint) return { superseded: version }
     return undefined
 }
 

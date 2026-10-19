@@ -448,6 +448,7 @@ test("Publication accepts a nightly baseline that advanced since preparation, bu
     await assert.rejects(check(nightly("1000.1.0-nightly.56"), ["1000.1.0-nightly.55"]), /baseline changed/)
     await assert.rejects(check(nightly("1000.1.0-nightly.55"), []), /baseline changed/)
     // A newer nightly on the line with other content already won, and one with the same content supersedes this run
+    fingerprints["1000.1.0-nightly.56"] = "older"
     fingerprints["1000.1.0-nightly.58"] = "other"
     await assert.rejects(
         check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58"]),
@@ -457,9 +458,13 @@ test("Publication accepts a nightly baseline that advanced since preparation, bu
     assert.deepEqual(await check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58"]), {
         superseded: "1000.1.0-nightly.58",
     })
-    // Only the newest nightly of the line counts, and other lines and channels never supersede
+    // A matching nightly that is not the newest still supersedes, and the newest matching one is reported
     fingerprints["1000.1.0-nightly.59"] = "other"
-    await assert.rejects(check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58", "1000.1.0-nightly.59"]), /newer version/)
+    assert.deepEqual(
+        await check(nightly("1000.1.0-nightly.55"), [...published, "1000.1.0-nightly.58", "1000.1.0-nightly.59"]),
+        { superseded: "1000.1.0-nightly.58" },
+    )
+    // Other lines and channels never supersede
     fingerprints["1000.2.0-nightly.1"] = "new"
     assert.equal(await check(nightly("1000.1.0-nightly.56"), [...published, "1000.2.0-nightly.1"]), undefined)
     // Reviewed channels keep the exact baseline they were reviewed against
@@ -469,4 +474,78 @@ test("Publication accepts a nightly baseline that advanced since preparation, bu
     // A newer RC with identical content is still an error
     fingerprints["1000.1.0-rc.3"] = "new"
     await assert.rejects(check(rc, ["1000.1.0-rc.0", "1000.1.0-rc.3"]), /newer version/)
+})
+
+test("A nightly is superseded by any nightly of its line published after its preparation", async () => {
+    const day = "1000.1.0-nightly.20261019"
+    const candidate = (version, baseline = null) => ({
+        version,
+        channel: "nightly",
+        contentFingerprint: "same",
+        baseline: baseline && { version: baseline },
+    })
+    const reads = []
+    const check = (target, npmVersions, fingerprints) =>
+        assertPublishBaseline(target, npmVersions, async (version) => {
+            reads.push(version)
+            return fingerprints[version]
+        })
+    const published = [`${day}.1`, `${day}.4`, `${day}.5`]
+    const other = Object.fromEntries(published.map((version) => [version, "other"]))
+    // X and Y were prepared from one commit. Y published, then Z from newer content published. X still finds Y's content
+    const x = candidate(`${day}.3`, `${day}.1`)
+    assert.deepEqual(await check(x, published, { ...other, [`${day}.4`]: "same" }), { superseded: `${day}.4` })
+    // Several nightlies in the window with none matching keep the earlier results for both sides
+    await assert.rejects(check(x, published, other), /newer version is already published/)
+    const lower = candidate(`${day}.9`, `${day}.1`)
+    assert.equal(await check(lower, published, other), undefined)
+    // The newest matching nightly is reported when several match, and reads stop there
+    reads.length = 0
+    assert.deepEqual(await check(x, published, { ...other, [`${day}.4`]: "same", [`${day}.5`]: "same" }), {
+        superseded: `${day}.5`,
+    })
+    assert.deepEqual(reads, [`${day}.5`])
+    // Without a higher nightly only the newest one published after preparation is read, and never the candidate's own
+    reads.length = 0
+    await check(lower, [...published, lower.version], { ...other, [lower.version]: "same" })
+    assert.deepEqual(reads, [`${day}.5`])
+    // Other lines and channels are ignored
+    assert.equal(
+        await check(lower, [...published, "1000.2.0-nightly.20261019.2", "1000.1.0-rc.1"], {
+            ...other,
+            "1000.2.0-nightly.20261019.2": "same",
+            "1000.1.0-rc.1": "same",
+        }),
+        undefined,
+    )
+    // Without a reviewed baseline every nightly of the line counts as published after preparation
+    const unreviewed = { ...other, [`${day}.1`]: "same" }
+    assert.equal(await check(candidate(`${day}.9`), published, unreviewed), undefined)
+    assert.deepEqual(await check(candidate(`${day}.3`), published, unreviewed), { superseded: `${day}.1` })
+    // A candidate that reverts a change below it still publishes when only lower nightlies match: .2 holds the old
+    // content, .4 the change, and this candidate (.5) the reverted content, so the nightly tag must move back to it
+    const revert = candidate(`${day}.5`, `${day}.1`)
+    const lowerOnly = [`${day}.1`, `${day}.2`, `${day}.4`]
+    assert.equal(await check(revert, lowerOnly, { [`${day}.2`]: "same", [`${day}.4`]: "other" }), undefined)
+    // Once a higher nightly exists the candidate cannot publish, so any matching lower nightly supersedes it
+    assert.deepEqual(
+        await check(revert, [...lowerOnly, `${day}.6`], {
+            [`${day}.2`]: "same",
+            [`${day}.4`]: "other",
+            [`${day}.6`]: "other",
+        }),
+        { superseded: `${day}.2` },
+    )
+    // A long line cannot stall publication, the fingerprint reads share one deadline
+    let clock = 0
+    const slow = { now: () => clock, timeout: 1000 }
+    await assert.rejects(
+        assertPublishBaseline(x, [...published, `${day}.6`, `${day}.7`], async () => ((clock += 600), "other"), slow),
+        /fingerprint reads.*1000\.1.*nightly\.20261019\.1/s,
+    )
+    // Release candidates keep comparing only their exact reviewed baseline
+    const rc = { version: "1000.1.0-rc.3", channel: "rc", contentFingerprint: "same", baseline: { version: "1000.1.0-rc.0" } }
+    reads.length = 0
+    await assert.rejects(check(rc, ["1000.1.0-rc.0", "1000.1.0-rc.1"], { "1000.1.0-rc.1": "same" }), /baseline changed/)
+    assert.deepEqual(reads, [])
 })

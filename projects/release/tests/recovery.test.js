@@ -164,6 +164,19 @@ test("A nightly superseded by identical published content uploads and polls noth
     assert.deepEqual(state.tags, {})
 })
 
+test("A baseline check that fails, such as on a fingerprint read deadline, uploads and supersedes nothing", async () => {
+    const state = setup()
+    state.assertBaseline = async () => {
+        state.baselineChecks++
+        throw new Error("Nightly fingerprint reads exceeded their deadline")
+    }
+    state.wait = async () => assert.fail("A failed baseline check must not poll")
+    await assert.rejects(publishCandidate(state.candidate, state), /fingerprint reads exceeded/)
+    assert.equal(state.baselineChecks, 1)
+    assert.equal(state.calls, 0)
+    assert.deepEqual(state.tags, {})
+})
+
 // A rerun can read the candidate as missing, then find it published next to an earlier matching nightly
 function publishedMeanwhile(state, tags) {
     state.assertBaseline = async () => {
