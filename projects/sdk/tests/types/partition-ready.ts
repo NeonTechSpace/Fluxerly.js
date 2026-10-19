@@ -25,6 +25,33 @@ export function botRequiresHookServices() {
     return required
 }
 
+export function botRequiresCommandHookServices() {
+    const bot = runBot({
+        token: "fixture-token",
+        commands: {
+            prefix: "!",
+            partition: "guild",
+            partitionReady: (key) => Setups.use((setups) => setups.ready(key)),
+            commands: { ping: { execute: () => Effect.void } },
+        },
+    })
+    const required: Assert<Equal<Requirements<typeof bot>, Setups>> = true
+    return required
+}
+
+export function testBotRequiresCommandHookServices() {
+    const bot = createTestBot({
+        commands: {
+            prefix: "!",
+            partition: "guild",
+            partitionReady: (key) => Setups.use((setups) => setups.ready(key)),
+            commands: { ping: { execute: () => Effect.void } },
+        },
+    })
+    const required: Assert<Equal<Exclude<Requirements<typeof bot>, import("effect").Scope.Scope>, Setups>> = true
+    return required
+}
+
 export function testBotRequiresHookServices() {
     const bot = createTestBot({
         events: {

@@ -530,13 +530,17 @@ export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Me
     ): NativePrefixCommandRouter<R, M>
     /**
      * Return an Effect that registers this router as one bounded `messageCreate` subscription in the caller's scope.
-     * Provide registered callback services `R` and any error-callback services `R2` when running this Effect
+     * Provide registered callback services `R` and any error-callback or `partitionReady` services `R2` when running this Effect
      *
      * Produces a Subscription after registration, not after connecting the client or completing future command work.
      * Callback failures and defects use subscription `onError` reporting with the command name and full Cause, rather than failing an already completed attachment Effect.
      * A failed onUnmatched callback or custom parser is reported the same way without a command name.
      * The router owns one bounded queue for its `onError` hook, which receives reports one at a time in order, as for client.on.
      * Omitted or undefined settings default to eight concurrent commands and overflow dropOldest, so a burst never stops the router.
+     * With `partition`, the option `partitionReady` holds a key's messages until the Effect it returns completes, as for client.on.
+     * The held messages wait in the queue without using a concurrent command slot, and a hook that fails or dies reports each waiting message to the router's `onError`, without a command name, and runs no command for it.
+     * A throwing `partition` function and an overflow that stops the router are reported to `onError` the same way, in the order the reports arrived. Without an `onError` they go to the client-level `onError` or the log.
+     * The option without `partition` is misuse and dies with ConfigurationError.
      * Rejected and unmatched commands are counted and logged at Debug in the commands category.
      * The observe option receives one handler observation per router invocation, including event and command middleware.
      * A matched command supplies its canonical command name, even when a guard denies it or middleware stops it.
@@ -753,7 +757,9 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
             if (onError !== undefined && typeof onError !== "function")
                 return yield* Effect.die(new ConfigurationError("onError", 'The option "onError" must be a function'))
             // The router's own hook gets one bounded queue in the registration context, so a failed command only
-            // enqueues its report and the hook never holds a command slot. client.on never sees onError
+            // enqueues its report and the hook never holds a command slot. client.on never sees onError: The subscription
+            // delivers its own reports (partitionReady failures, a throwing partition function, overflow) to this same
+            // queue, so every report arrives in order, once
             const hooks =
                 services && onError !== undefined
                     ? services.failures.subscriptionQueue(
@@ -792,7 +798,8 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
             const subscription = yield* client.on(
                 "messageCreate",
                 (message) => router.dispatch(client, message, services?.logging, report) as Effect.Effect<void, E, R>,
-                routerSubscriptionOptions(options) as EventHandlerOptions<never, never>,
+                // Reports of the subscription itself, such as a failing partitionReady hook, join the router's queue
+                routerSubscriptionOptions(options, hooks) as EventHandlerOptions<never, never>,
             )
             subscriptionId = subscription.id
             return subscription
@@ -1272,6 +1279,7 @@ export function nativeBotRouter<M extends MessageCore>(
         onError: _onError,
         concurrency: _concurrency,
         partition: _partition,
+        partitionReady: _partitionReady,
         overflow: _overflow,
         maxPendingMessages: _maxPendingMessages,
         maxPendingBytes: _maxPendingBytes,

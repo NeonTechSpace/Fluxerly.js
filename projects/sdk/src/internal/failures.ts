@@ -456,6 +456,21 @@ export function standaloneHookQueue(
     return new HookQueue(logger, hook, () => context, subscriptionHookCapacity, "subscriptionClosed", tracker)
 }
 
+const sharedQueues = new WeakMap<object, HookQueue>()
+
+/** Let the subscription made from this options object deliver its own reports, such as a failing partitionReady hook,
+ * to an existing queue, instead of building one from an onError option. The command router uses this so that its
+ * command failures and its subscription's reports share one queue, one order and one log record each
+ */
+export function shareReportQueue(options: object, queue: HookQueue): void {
+    sharedQueues.set(options, queue)
+}
+
+/** The queue that shareReportQueue attached to these subscription options, if any */
+export function sharedReportQueue(options: unknown): HookQueue | undefined {
+    return typeof options === "object" && options !== null ? sharedQueues.get(options) : undefined
+}
+
 /** Adapt a default-API hook to the queue's Effect form, passing the report without its Effect Cause */
 export function promiseHook(
     hook: (report: FailureReport) => unknown,

@@ -534,6 +534,7 @@ export function createTestBot<
     OptionsError = never,
     OptionsServices = never,
     SetupServices = never,
+    ReadyServices = never,
 >(
     options: Omit<TestClientOptions<OptionsError, OptionsServices, F>, "token"> & {
         /** Event handlers, as in runBot */
@@ -541,7 +542,7 @@ export function createTestBot<
         /** Skip bot-authored messageCreate and messageUpdate events in the handlers, as in runBot. Defaults to true */
         readonly ignoreBots?: boolean
         /** Prefix commands, as in runBot */
-        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices>
+        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices>
         /** Startup work that ready runs before connecting, as in runBot */
         readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, SetupServices>
         /** Token passed to the client, never sent anywhere. Omit it or pass undefined to use the fixture token */
@@ -560,7 +561,12 @@ export function createTestBot<
     ApplicationError,
     | Scope.Scope
     | Exclude<
-          BotEventServices<Events> | NativeBatchRequirements<C> | RouterServices | OptionsServices | SetupServices,
+          | BotEventServices<Events>
+          | NativeBatchRequirements<C>
+          | RouterServices
+          | OptionsServices
+          | SetupServices
+          | ReadyServices,
           Scope.Scope
       >
 > {

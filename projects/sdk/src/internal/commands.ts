@@ -35,6 +35,7 @@ import { nowMs } from "./clock.js"
 import type { ClientLogger } from "./logging.js"
 import { closestMatch, unsupportedKeyHint } from "./suggest.js"
 import { identifyCommand } from "./events.js"
+import { shareReportQueue, type HookQueue } from "./failures.js"
 
 const commandName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 const maxDurationMs = 2_147_483_647
@@ -679,16 +680,20 @@ const unmatchedText: Record<PrefixCommandUnmatched["_tag"], string> = {
 const routerDefaults = Object.freeze({ concurrency: 8, overflow: "dropOldest" as const })
 
 /** Subscription options for an attached router: Its defaults, then each defined caller setting. An explicit undefined
- * keeps the default. The onError option is removed because the router reports command failures through its own hook queue.
+ * keeps the default. The caller's onError option is removed because the router reports command failures through its own
+ * hook queue. When it has one, the subscription delivers its own reports, such as a failing partitionReady hook, a
+ * throwing partition function and overflow, to that same queue, so every report of the router arrives in one order.
  * A non-object value passes through unchanged so client.on rejects it with its usual ConfigurationError
  */
-export function routerSubscriptionOptions(options: unknown): unknown {
+export function routerSubscriptionOptions(options: unknown, queue?: HookQueue): unknown {
     if (options === undefined) return routerDefaults
     if (typeof options !== "object" || options === null || Array.isArray(options)) return options
     const selected: Record<string, unknown> = { ...routerDefaults }
     for (const [key, value] of Object.entries(options))
         if (key !== "onError" && value !== undefined) selected[key] = value
-    return Object.freeze(selected)
+    const frozen = Object.freeze(selected)
+    if (queue !== undefined) shareReportQueue(frozen, queue)
+    return frozen
 }
 
 /** Validate a guard verdict: `true` allows, `false` denies without a reason and `{ deny }` denies with one */
@@ -1023,6 +1028,7 @@ const routerOptionKeys = ["prefix", "parse", "ignoreBots", "caseSensitive", "men
 export const botCommandDeliveryKeys = [
     "concurrency",
     "partition",
+    "partitionReady",
     "overflow",
     "maxPendingMessages",
     "maxPendingBytes",

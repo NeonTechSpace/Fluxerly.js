@@ -444,6 +444,10 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      * Invalid options throw ConfigurationError, and a throwing onError getter throws SdkDefect for `commands` with code `application.defect`.
      * On a closing or closed client, attach returns an already-closed Subscription whose waitForClose succeeds, and writes a Warn log record with code events.registeredAfterShutdown.
      * Subscription options control scheduling, overflow and `onError` reports for callback failures.
+     * With `partition`, the option `partitionReady` holds a key's messages until that key's own setup is done, as for client.on.
+     * The held messages wait in the queue without using a concurrent command slot, and a hook that throws, rejects or returns an Err result reports each waiting message to the router's `onError`, without a command name, and runs no command for it.
+     * A throwing `partition` function and an overflow that stops the router are reported to `onError` the same way, in the order the reports arrived. Without an `onError` they go to the client-level `onError` or the log.
+     * The option without `partition` throws ConfigurationError.
      * Omitted or undefined settings default to eight concurrent commands and overflow dropOldest, so a burst never stops the router.
      * A failed command is reported with its command name, original error and message IDs to `onError`, or logged at Error without one.
      * A failed onUnmatched callback, prefix resolver or custom parser is reported the same way without a command name.
@@ -639,7 +643,8 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         if (onError !== undefined && typeof onError !== "function")
             throw new ConfigurationError("onError", 'The option "onError" must be a function')
         // The router's own hook gets one bounded queue, so a failed command only enqueues its report and the hook
-        // never holds a command slot. client.on never sees onError, so no second queue can reorder the reports
+        // never holds a command slot. client.on never sees onError: The subscription delivers its own reports (partitionReady
+        // failures, a throwing partition function, overflow) to this same queue, so every report arrives in order, once
         const hooks =
             services && onError !== undefined
                 ? services.failures.subscriptionQueue(
@@ -677,7 +682,8 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         const registered = client.on(
             "messageCreate",
             (message, signal) => this.dispatch(client, message, signal, services, services && report(services)),
-            routerSubscriptionOptions(options) as EventHandlerOptions,
+            // Reports of the subscription itself, such as a failing partitionReady hook, join the router's queue
+            routerSubscriptionOptions(options, hooks) as EventHandlerOptions,
         )
         subscriptionId = registered.id
         return registered
@@ -1040,6 +1046,7 @@ export function botRouter<M extends MessageCore>(
         onError: _onError,
         concurrency: _concurrency,
         partition: _partition,
+        partitionReady: _partitionReady,
         overflow: _overflow,
         maxPendingMessages: _maxPendingMessages,
         maxPendingBytes: _maxPendingBytes,

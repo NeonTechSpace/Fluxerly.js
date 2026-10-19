@@ -181,7 +181,7 @@ export type BotEvents<M extends MessageCore = Message> = {
  * Prefix commands for runBot: The router options of commands.create, the commands themselves, an optional failure hook
  * and the delivery settings of the router's attach.
  * The router is attached before the gateway starts and closed when the bot stops.
- * The delivery settings concurrency, partition, overflow, maxPendingMessages and maxPendingBytes are passed to attach
+ * The delivery settings concurrency, partition, partitionReady, overflow, maxPendingMessages and maxPendingBytes are passed to attach
  * unchanged and checked before any client exists. Omitted settings keep the attach defaults: Eight commands at a time
  * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With overflow "stop", a full
  * queue stops the bot with CriticalWorkerStoppedError.
@@ -205,8 +205,22 @@ export interface BotCommandsOptions<
      */
     readonly commands:
         DefaultPrefixCommandBatch<M, S> | ((router: DefaultPrefixCommandRouter<M>) => DefaultPrefixCommandRouter<M>)
-    /** Receive command failures instead of the client-level onError, as the router attach option does */
+    /** Receive command failures, and the reports of the router's own subscription, instead of the client-level onError,
+     * as the router attach option does. Those are a failing partitionReady hook, a throwing partition function and an
+     * overflow that stops the router (overflow "stop"). With overflow dropOldest, a full queue only writes a Warn record
+     * and produces no report
+     */
     readonly onError?: (report: FailureReport) => unknown
+    /** Hold the commands of a partition key until its own setup is done, as the client.on option partitionReady does for
+     * event handlers. Valid only together with partition, otherwise runBot throws ConfigurationError before any client exists.
+     * Before the first waiting message of a key starts, the SDK calls the hook with the key and a signal that aborts when
+     * the router's subscription stops. The key's messages stay in the queue without using one of the concurrent command
+     * slots until the returned promise settles, while other keys keep running, and the held messages count toward
+     * maxPendingMessages and maxPendingBytes. A hook that throws, rejects or returns an Err result reports every waiting
+     * message of that key to the onError option of the commands, like a throwing partition function does, without a
+     * command name, and those messages run no command
+     */
+    readonly partitionReady?: (key: string, signal: AbortSignal) => unknown
 }
 
 /**

@@ -217,7 +217,7 @@ A skipped answer still counts as a rejection and is logged at Debug. An `onRejec
 
 ## Control how commands run
 
-By default `runBot` runs up to eight commands at a time, and when more messages wait than the queue holds, it drops the oldest waiting message with a Warn record. The `commands` option also accepts the delivery settings of an event handler, `concurrency`, `partition`, `overflow`, `maxPendingMessages` and `maxPendingBytes`, and passes them to the router unchanged. Invalid values throw `ConfigurationError` when `runBot` is called. This bot runs the commands of each channel one at a time in the order they arrived, and stops instead of dropping commands when 64 messages are waiting
+By default `runBot` runs up to eight commands at a time, and when more messages wait than the queue holds, it drops the oldest waiting message with a Warn record. The `commands` option also accepts the delivery settings of an event handler, `concurrency`, `partition`, `partitionReady`, `overflow`, `maxPendingMessages` and `maxPendingBytes`, and passes them to the router unchanged. Invalid values throw `ConfigurationError` when `runBot` is called. This bot runs the commands of each channel one at a time in the order they arrived, and stops instead of dropping commands when 64 messages are waiting
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -238,9 +238,30 @@ await runBot({
 
 With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop waiting messages instead. With a `partition`, the drops come from the longest backlog, as the [events guide](/docs/{{version}}/events-and-collectors/) describes
 
+A partition can need its own setup before its commands run. With `partitionReady`, the SDK calls the hook with the key before the first waiting message of that key starts, and the key's messages wait in the queue, using no command slot, until the returned promise settles. Other keys keep running meanwhile. The hook needs `partition` and otherwise `runBot` throws `ConfigurationError`. A hook that throws, rejects or returns an `Err` result reports each waiting message of that key to the `onError` of the commands, like a throwing `partition` function and an overflow that stops the router, and those messages run no command. The [events guide](/docs/{{version}}/events-and-collectors/#wait-for-a-communitys-setup) covers the timing rules, which are the same for commands
+
+```ts
+import { runBot } from "@neontechspace/fluxerly"
+
+export function pingAfterSetup(setups: Map<string, Promise<void>>) {
+    return runBot({
+        token: process.env.FLUXER_BOT_TOKEN,
+        commands: {
+            prefix: "!",
+            partition: "guild",
+            // A direct message has no community and is keyed by its channel, so an unknown key counts as ready
+            partitionReady: (key) => setups.get(key),
+            commands: {
+                ping: { execute: ({ reply }) => reply("Pong!") },
+            },
+        },
+    })
+}
+```
+
 ## Use the Effect entry point
 
-The [Effect](/docs/{{version}}/glossary/#effect) API accepts the same options. Each reply stops when the command handler is interrupted and keeps `SendError` in the Effect error channel. Services required by any command remain requirements of the returned program
+The [Effect](/docs/{{version}}/glossary/#effect) API accepts the same options, with `partitionReady` returning an Effect whose required services become requirements of the program. Each reply stops when the command handler is interrupted and keeps `SendError` in the Effect error channel. Services required by any command remain requirements of the returned program
 
 ```ts
 import { Effect } from "effect"
@@ -260,7 +281,7 @@ export const program = runBot({
 
 ## Attach commands to an existing client
 
-To add commands to a client the application already manages, create a router, register commands and attach it to the client. Creation and registration throw `ConfigurationError` for invalid definitions. Close the returned subscription to detach the router, or wait for its cleanup with `waitForClose()`
+To add commands to a client the application already manages, create a router, register commands and attach it to the client. Creation and registration throw `ConfigurationError` for invalid definitions. Close the returned subscription to detach the router, or wait for its cleanup with `waitForClose()`. The second argument of `attach` takes the same delivery settings as `runBot`, including `partitionReady`
 
 ```ts
 import { commands, type Client } from "@neontechspace/fluxerly"

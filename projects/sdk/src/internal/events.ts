@@ -1230,9 +1230,11 @@ export class EventBus<M extends MessageCore = Message> {
             readonly scope: Scope.Scope
             readonly command?: string | undefined
             readonly partitionReady?: PartitionReady<E2, R2> | undefined
+            /** An existing queue that delivers this subscription's reports instead of one built from onError */
+            readonly reports?: HookQueue | undefined
         },
     ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError, R | R2> {
-        const { handler, options, onError, scope, command, partitionReady } = subscription
+        const { handler, options, onError, scope, command, partitionReady, reports } = subscription
         const bus = this
         return Effect.uninterruptible(
             Effect.gen(function* () {
@@ -1251,13 +1253,16 @@ export class EventBus<M extends MessageCore = Message> {
                 // A registration after shutdown began gets an already-closed subscription with no worker or hook queue
                 if (!source.active) return source
                 // The subscription's own hook gets a bounded queue with one worker in the registration context, so
-                // reporting only enqueues: Hooks run one at a time in order and never hold a handler slot or shutdown
+                // reporting only enqueues: Hooks run one at a time in order and never hold a handler slot or shutdown.
+                // A caller that already owns such a queue, the command router, passes it as reports, so the
+                // subscription's reports and the caller's own enter that one queue in arrival order
                 let hooks: HookQueue | undefined
                 const context =
                     onError !== undefined || partitionReady !== undefined
                         ? ((yield* Effect.context<R2>()) as Context.Context<never>)
                         : undefined
-                if (onError !== undefined) {
+                if (reports !== undefined) hooks = reports
+                else if (onError !== undefined) {
                     const hook = onError as (report: InternalReport) => Effect.Effect<unknown, unknown>
                     const failures = bus.failures?.()
                     hooks = failures

@@ -22,6 +22,7 @@ import { shutdownDrainMs } from "#sdk/internal/client/drain"
 import { scheduleTiming } from "#sdk/internal/scheduled-tasks"
 import { suspendInput } from "#sdk/internal/defects"
 import { nativeMiddleware, waitForEvent } from "#sdk/internal/events"
+import { sharedReportQueue } from "#sdk/internal/failures"
 import { EventOverflowError, type EventWaitFailure } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageFields, SelectedMessage } from "#sdk/messages"
 import type { EventBufferOptions, EventContext, EventWaitOptions, EventMap, EventName } from "#sdk/events"
@@ -717,6 +718,7 @@ export function openClient<E = never, R = never, const F extends MessageFields |
                                 onError: options?.onError,
                                 scope: callerScope,
                                 partitionReady: options?.partitionReady,
+                                reports: sharedReportQueue(options),
                             })
                             .pipe(Effect.orDie)
                         return nativeSubscription(source)

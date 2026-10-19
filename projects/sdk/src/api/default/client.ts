@@ -7,7 +7,7 @@ import { ok, ResultAsync } from "neverthrow"
 import { causeReasons, defectReason, suspendInput } from "#sdk/internal/defects"
 import { shutdownDrainMs } from "#sdk/internal/client/drain"
 import { scheduleTiming } from "#sdk/internal/scheduled-tasks"
-import { promiseHook, throwIfErr } from "#sdk/internal/failures"
+import { promiseHook, sharedReportQueue, throwIfErr } from "#sdk/internal/failures"
 import { fiberRejectionScope, inRejectionScope } from "#sdk/internal/rejection-scope"
 import { registerClientOwner } from "#sdk/internal/client-registry"
 import type {
@@ -734,6 +734,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                                 onError: reporter ? promiseHook(reporter) : undefined,
                                 scope,
                                 partitionReady: partitionReady ? defaultPartitionReady(partitionReady) : undefined,
+                                reports: sharedReportQueue(options),
                             })
                             .pipe(Effect.map(subscription))
                     }),

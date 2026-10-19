@@ -117,7 +117,7 @@ export type BotCommandEntries<S> = Readonly<
  * Prefix commands for the native runBot: The router options of commands.create, the commands themselves, an optional
  * failure hook and the delivery settings of the router's attach. Router-level callbacks, such as onUnmatched and middleware, run without extra services, while each
  * command's services are added to the bot's requirements. The router is attached before the gateway starts and closed when the bot stops.
- * The delivery settings concurrency, partition, overflow, maxPendingMessages and maxPendingBytes are passed to attach
+ * The delivery settings concurrency, partition, partitionReady, overflow, maxPendingMessages and maxPendingBytes are passed to attach
  * unchanged and checked before any client exists. Omitted settings keep the attach defaults: Eight commands at a time
  * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With overflow "stop", a full
  * queue fails the bot with CriticalWorkerStoppedError.
@@ -132,6 +132,7 @@ export interface BotCommandsOptions<
     S extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>,
     C extends BotCommandEntries<S> = BotCommandEntries<S>,
     RouterServices = never,
+    ReadyServices = never,
 >
     extends NativePrefixCommandsOptions<unknown, never, M>, HandlerOptions<M> {
     /**
@@ -144,8 +145,23 @@ export interface BotCommandsOptions<
     readonly commands:
         | (C & NativePrefixCommandBatch<M, S>)
         | ((router: NativePrefixCommandRouter<never, M>) => NativePrefixCommandRouter<RouterServices, M>)
-    /** Receive command failures instead of the client-level onError, as the router attach option does */
+    /** Receive command failures, and the reports of the router's own subscription, instead of the client-level onError,
+     * as the router attach option does. Those are a failing partitionReady hook, a throwing partition function and an
+     * overflow that stops the router (overflow "stop"). With overflow dropOldest, a full queue only writes a Warn record
+     * and produces no report
+     */
     readonly onError?: (report: FailureReport) => Effect.Effect<unknown, unknown, never>
+    /** Hold the commands of a partition key until its own setup is done, as the client.on option partitionReady does for
+     * event handlers. Valid only together with partition, otherwise runBot dies with ConfigurationError before any client exists.
+     * Before the first waiting message of a key starts, the SDK calls the hook with the key and runs its Effect with the
+     * services available when runBot runs. The key's messages stay in the queue without using one of the concurrent
+     * command slots until the Effect completes, while other keys keep running, and the held messages count toward
+     * maxPendingMessages and maxPendingBytes. A hook that fails or dies reports every waiting message of that key to the
+     * onError option of the commands, like a throwing partition function does, without a command name, and those
+     * messages run no command.
+     * The services the hook requires are added to the bot's requirements
+     */
+    readonly partitionReady?: (key: string) => Effect.Effect<unknown, unknown, ReadyServices>
 }
 
 /**
@@ -469,17 +485,23 @@ export function runBot<
     OptionsError = never,
     OptionsServices = never,
     SetupServices = never,
+    ReadyServices = never,
 >(
     options: Omit<BotOptions<unknown, unknown, OptionsError, OptionsServices, F>, "events" | "commands" | "setup"> & {
         readonly events?: Events & Record<Exclude<keyof Events, EventName>, never>
-        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices>
+        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices>
         readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, SetupServices>
     },
 ): Effect.Effect<
     void,
     ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,
     Exclude<
-        BotEventServices<Events> | NativeBatchRequirements<C> | RouterServices | OptionsServices | SetupServices,
+        | BotEventServices<Events>
+        | NativeBatchRequirements<C>
+        | RouterServices
+        | OptionsServices
+        | SetupServices
+        | ReadyServices,
         Scope.Scope
     >
 > {
@@ -552,7 +574,12 @@ export function runBot<
         void,
         ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,
         Exclude<
-            BotEventServices<Events> | NativeBatchRequirements<C> | RouterServices | OptionsServices | SetupServices,
+            | BotEventServices<Events>
+            | NativeBatchRequirements<C>
+            | RouterServices
+            | OptionsServices
+            | SetupServices
+            | ReadyServices,
             Scope.Scope
         >
     >
