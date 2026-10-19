@@ -46,6 +46,9 @@ export const checkClasses = Object.freeze({
     "member-chunks.js": { "": sdkWork("read-only") },
     // Compares guild-wide role lists and searches the first visible channel, which may be another check's temporary one
     "member-search.js": { "": sdkWork("shared-state") },
+    // Removes the bot's cached member and expects only its own message to refill it, which other checks' bot reactions
+    // and typing would also do
+    "message-members.js": { "": sdkWork("shared-state") },
     "members.js": { "": manual("shared-state") },
     "messages.js": {
         "": sdkWork("test-owned"),

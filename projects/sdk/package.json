@@ -134,6 +134,7 @@
         "test:live:vanity": "pnpm run build && node tests/live/vanity-url.js default && node tests/live/vanity-url.js effect",
         "test:live:discovery": "pnpm run build && node tests/live/discovery.js default && node tests/live/discovery.js effect",
         "test:live:member-search": "pnpm run build && node tests/live/member-search.js default && node tests/live/member-search.js effect",
+        "test:live:message-members": "pnpm run build && node tests/live/message-members.js default && node tests/live/message-members.js effect",
         "test:live:members": "pnpm run build && node tests/live/members.js default && node tests/live/members.js effect",
         "test:live:guild-lifecycle": "pnpm run build && node tests/live/guild-lifecycle.js default && node tests/live/guild-lifecycle.js effect",
         "test:live:discovery:mutate:default": "pnpm run build && node tests/live/discovery.js default --mutate",
