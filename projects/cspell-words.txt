@@ -37,6 +37,7 @@ preuploaded
 preuploads
 replyable
 rrggbb
+sarif
 slowmode
 tempban
 toggleable

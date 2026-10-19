@@ -210,6 +210,15 @@ Dependabot proposes weekly GitHub Actions and npm updates for the workspace, con
 It ignores `effect`, whose development pin and public peer minimum are updated separately by decision, and major `typescript` and `@types/node` updates.
 The SDK runtime dependencies `neverthrow` and `ws` are grouped into their own pull request, so their update can carry a Changeset
 
+The repository's Actions settings allow only selected actions, each pinned to a full commit SHA (`allowed_actions: selected` and `sha_pinning_required: true`).
+A Dependabot GitHub Actions pull request therefore fails Check with a startup failure until its new SHAs are on the allowlist:
+
+1. Collect the new SHAs, including those of actions used inside an updated composite action, such as the `github/codeql-action/upload-sarif` step in `zizmor-action`. Those do not appear in the pull request diff
+2. Verify that each new SHA is the commit of its release tag, for example with `gh api repos/OWNER/REPO/git/ref/tags/TAG`, where `OWNER/REPO` is the repository part of the action path, such as `github/codeql-action` for `github/codeql-action/upload-sarif`. For an annotated tag, dereference the returned tag object to its commit
+3. Add the new entries to the allowlist under Settings, Actions, General, or through the API. Each entry is the full action path from the `uses:` line, `OWNER/REPO[/PATH]@SHA`, such as `github/codeql-action/upload-sarif@SHA`. The API replaces the whole setting, so save the output of `gh api repos/NeonTechSpace/Fluxerly.js/actions/permissions/selected-actions`, edit `patterns_allowed` to keep the existing entries and add the new ones, and send the complete payload with `github_owned_allowed` and `verified_allowed` as they currently are. Use `gh api -X PUT` on the same path with `--input payload.json`, so booleans and arrays keep their JSON types. Read the setting again to verify it
+4. Ask Dependabot to rebase the pull request, then merge it once Check passes
+5. Remove the old SHAs the same way once no workflow on main uses them
+
 Prettier is an SDK development dependency, with its version recorded in the manifest and lockfile.
 Its [configuration](/projects/sdk/.prettierrc.json) selects a 120-column target, 4-space indentation, LF endings and no optional semicolons.
 Other formatting options use Prettier's stable defaults, without plugins or experimental formatting

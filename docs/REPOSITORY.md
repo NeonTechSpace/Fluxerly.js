@@ -168,4 +168,5 @@ Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference 
 Each workflow job installs Node and pnpm with the pinned upstream `pnpm/setup` action from [projects/](/projects/), which reads `projects/.node-version`.
 Jobs that check the SDK's Node floor pass the `engines.node` minimum from the SDK manifest as `runtime` instead, and a [workflow test](/projects/release/tests/workflows.test.js) keeps those copies equal to the manifest.
 The action installs the locked dependencies unless a job that runs only dependency-free release tooling disables it.
-There is no separate `setup-node` step
+There is no separate `setup-node` step.
+Action references use full commit SHAs, and a new SHA must be on the repository's Actions allowlist before a workflow can run, as described in [technology choices](/docs/TECHNOLOGY.md#shared-development-tooling)
