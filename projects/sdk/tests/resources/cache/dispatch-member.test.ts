@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope } from "effect"
 import { expect, onTestFinished, test } from "vitest"
-import type { EventName, GuildMember, Message, MessageFields } from "../../../src/index.js"
+import type { EventName, GuildMember, Message, MessageDeletion, MessageFields } from "../../../src/index.js"
 import { createTestClient as createDefaultTestClient } from "../../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../../src/effect-testing.js"
 import { describeBothApis, type Mode } from "../../support/both-apis.js"
@@ -545,7 +545,7 @@ describeBothApis("member on message, reaction and typing events", (mode) => {
         expect(driver.events.typingStart).toHaveLength(2)
     })
 
-    test("a REST message never carries a member, and a deletion's member is neither delivered nor stored", async () => {
+    test("a REST message never carries a member, and a deletion's member is delivered without account fields but never stored", async () => {
         const driver = await open(mode, { members: true })
         await driver.ready()
         const { fixtures } = driver.test
@@ -565,9 +565,123 @@ describeBothApis("member on message, reaction and typing events", (mode) => {
             member: strippedMember(driver),
         })
         expect(driver.events.messageDelete).toHaveLength(1)
-        expect("member" in (driver.events.messageDelete[0] as object)).toBe(false)
+        const [deleted] = driver.events.messageDelete as MessageDeletion[]
+        expect(deleted!.member).toMatchObject({
+            guildId,
+            userId: fixtures.ids.user,
+            roleIds: ["501", "502"],
+            nickname: "Speaker",
+            joinedAt: "2026-02-03T04:05:06.000Z",
+            communicationDisabledUntil: "2099-01-01T00:00:00.000Z",
+        })
+        expect("username" in deleted!.member!).toBe(false)
+        expect("isBot" in deleted!.member!).toBe(false)
+        expect(Object.isFrozen(deleted!.member) && Object.isFrozen(deleted!.member!.roleIds)).toBe(true)
+        expect(driver.member(guildId, fixtures.ids.user)).toBeUndefined()
+        // Not even a cached member is refreshed by it
+        await driver.emit("MESSAGE_CREATE", fixtures.message({ member: strippedMember(driver, { roles: ["503"] }) }))
+        await driver.emit("MESSAGE_DELETE", {
+            id: message.id,
+            channel_id: message.channel_id,
+            guild_id: guildId,
+            author_id: fixtures.ids.user,
+            member: strippedMember(driver, { roles: ["504"] }),
+        })
+        expect(driver.member(guildId, fixtures.ids.user)?.roleIds).toEqual(["503"])
+    })
+
+    test("a deletion without an author, a community or a decodable member is delivered without a member and without a warning", async () => {
+        const driver = await open(mode, { members: true })
+        await driver.ready()
+        const { fixtures } = driver.test
+        const guildId = fixtures.ids.guild
+        const base = { id: "900", channel_id: fixtures.ids.channel, guild_id: guildId }
+        const author = { author_id: fixtures.ids.user }
+        const member = strippedMember(driver)
+        await driver.emit("MESSAGE_DELETE", { ...base, ...author })
+        await driver.emit("MESSAGE_DELETE", { ...base, member })
+        await driver.emit("MESSAGE_DELETE", { id: "900", channel_id: fixtures.ids.channel, ...author, member })
+        await driver.emit("MESSAGE_DELETE", { ...base, ...author, member: strippedMember(driver, { roles: "none" }) })
+        await driver.emit("MESSAGE_DELETE", { ...base, ...author, member: "30" })
+        await driver.emit("MESSAGE_DELETE", { ...base, ...author, member: null })
+        const deletions = driver.events.messageDelete as MessageDeletion[]
+        expect(deletions).toHaveLength(6)
+        for (const deletion of deletions) expect("member" in deletion).toBe(false)
+        expect(deletions[3]).toMatchObject({ id: "900", authorId: fixtures.ids.user })
+        expect(driver.test.logs().filter((record) => record.code === "gateway.memberSkipped")).toHaveLength(0)
         expect(driver.member(guildId, fixtures.ids.user)).toBeUndefined()
     })
+
+    test("a created message carries the here mention, channel type and group nicknames, and the message cache keeps none of them", async () => {
+        const driver = await open(mode, { messages: true })
+        await driver.ready()
+        const { fixtures } = driver.test
+        const nicks = { [fixtures.ids.user]: "Speaker", [fixtures.ids.bot]: "Helper" }
+        const created = fixtures.message({ mention_here: true, channel_type: 3, nicks })
+        await driver.emit("MESSAGE_CREATE", created)
+        const [message] = driver.events.messageCreate as Message[]
+        expect(message).toMatchObject({ mentionedHere: true, channelType: 3, nicknames: nicks })
+        expect(Object.isFrozen(message!.nicknames)).toBe(true)
+
+        // The cached copy is the message without them, so a later update cannot mix create-only and updated fields
+        const cached = driver.message(created.id, created.channel_id)!
+        expect(cached.content).toBe(created.content)
+        for (const field of ["mentionedHere", "channelType", "nicknames"]) expect(field in cached).toBe(false)
+        await driver.emit("MESSAGE_UPDATE", { ...created, content: "edited" })
+        const [update] = driver.events.messageUpdate as Message[]
+        for (const field of ["mentionedHere", "channelType", "nicknames"]) expect(field in update!).toBe(false)
+        const edited = driver.message(created.id, created.channel_id)!
+        expect(edited.content).toBe("edited")
+        for (const field of ["mentionedHere", "channelType", "nicknames"]) expect(field in edited).toBe(false)
+        // A REST read of the same message does not carry them either
+        driver.test.rest.respond(`GET /channels/${created.channel_id}/messages/${created.id}`, { body: created })
+        const fetched = await driver.fetchMessage(created.id, created.channel_id)
+        for (const field of ["mentionedHere", "channelType", "nicknames"]) expect(field in fetched).toBe(false)
+    })
+
+    test("the fields of a created message are absent when Fluxer sent none, keep unknown channel types and follow the selection", async () => {
+        const plain = await open(mode, undefined)
+        await plain.ready()
+        const { fixtures } = plain.test
+        await plain.emit("MESSAGE_CREATE", fixtures.message())
+        await plain.emit("MESSAGE_CREATE", fixtures.message({ channel_type: 4242, nicks: {}, mention_here: false }))
+        const [bare, unknown] = plain.events.messageCreate as Message[]
+        for (const field of ["mentionedHere", "channelType", "nicknames"]) expect(field in bare!).toBe(false)
+        expect(unknown).toMatchObject({ mentionedHere: false, channelType: 4242, nicknames: {} })
+
+        const selected = await open(mode, undefined, ["channelType"])
+        await selected.ready()
+        await selected.emit(
+            "MESSAGE_CREATE",
+            fixtures.message({ mention_here: true, channel_type: 1, nicks: { [fixtures.ids.user]: "Speaker" } }),
+        )
+        const [message] = selected.events.messageCreate as Message[]
+        expect(message).toMatchObject({ channelType: 1 })
+        expect("mentionedHere" in message!).toBe(false)
+        expect("nicknames" in message!).toBe(false)
+    })
+
+    test.each([
+        ["a non-boolean here mention", { mention_here: "yes" }],
+        ["a non-integer channel type", { channel_type: "text" }],
+        ["nicknames that are not an object", { nicks: ["Speaker"] }],
+        ["a nickname that is not text", { nicks: { "30": 5 } }],
+        ["a nickname keyed by something other than a user ID", { nicks: { speaker: "Speaker" } }],
+    ])(
+        "a created message with %s is rejected whole, and an update ignores the same fields",
+        async (_name, overrides) => {
+            const driver = await open(mode, { messages: true })
+            await driver.ready()
+            const { fixtures } = driver.test
+            await driver.emit("MESSAGE_CREATE", fixtures.message(overrides as never))
+            expect(driver.events.messageCreate).toHaveLength(0)
+            const update = fixtures.message(overrides as never)
+            await driver.emit("MESSAGE_UPDATE", update)
+            expect(driver.events.messageUpdate).toHaveLength(1)
+            expect("channelType" in (driver.events.messageUpdate[0] as object)).toBe(false)
+            expect(driver.message(update.id, update.channel_id)).toBeDefined()
+        },
+    )
 })
 
 test("a voice state's member is never stored in the member cache", async () => {

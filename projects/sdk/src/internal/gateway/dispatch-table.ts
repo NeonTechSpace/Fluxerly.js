@@ -6,7 +6,7 @@
  */
 import type { EventMap, EventName } from "#sdk/events"
 import type { MessageCore } from "#sdk/messages"
-import type { MessageDecoder } from "../message-fields.js"
+import type { GatewayMessageDecoder } from "../message-fields.js"
 import { decodeDeletion, decodeBulkDeletion } from "../message.js"
 import { identifier, record } from "../decode/primitives.js"
 import { decodeUser, decodeDirectMessage } from "../users.js"
@@ -43,7 +43,7 @@ const ignored: unique symbol = Symbol("ignored dispatch")
 
 /** Values a dispatch decoder depends on besides the body */
 export interface DispatchContext {
-    readonly messageDecoder: MessageDecoder<MessageCore>
+    readonly messageDecoder: GatewayMessageDecoder<MessageCore>
     /** Invite URL base from instance discovery */
     readonly inviteBase: string
 }
@@ -324,13 +324,13 @@ const entries: Record<string, DispatchEntry<unknown>> = {
     }),
     MESSAGE_CREATE: entry({
         event: "messageCreate",
-        decode: (body, context) => context.messageDecoder(body),
+        decode: (body, context) => context.messageDecoder(body, "MESSAGE_CREATE"),
         cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (message, sinks) => sinks.emit("messageCreate", message),
     }),
     MESSAGE_UPDATE: entry({
         event: "messageUpdate",
-        decode: (body, context) => context.messageDecoder(body),
+        decode: (body, context) => context.messageDecoder(body, "MESSAGE_UPDATE"),
         cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (message, sinks) => sinks.emit("messageUpdate", message),
     }),

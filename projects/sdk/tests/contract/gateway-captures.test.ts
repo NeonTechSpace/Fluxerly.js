@@ -33,9 +33,6 @@ const fixture = JSON.parse(readFileSync(new URL("./fixtures/gateway-captures.jso
 // here. An entry is removed when the client starts reading its fields or the captures stop carrying them.
 // Entries marked "Dropped" are payload data an application might want, not decisions to leave it out
 const ignoredOnPurpose: Readonly<Record<string, string>> = {
-    "MESSAGE_CREATE channel_type":
-        "Dropped: The kind of channel the message was sent in, which Message does not expose",
-    "MESSAGE_DELETE member": "Dropped: The author's member in a deletion, which MessageDeletion does not carry",
     "* member.user.avatar": "GuildMember projects the account's username and bot flag only",
     "* member.user.avatar_color": "GuildMember projects the account's username and bot flag only",
     "* member.user.discriminator": "GuildMember projects the account's username and bot flag only",

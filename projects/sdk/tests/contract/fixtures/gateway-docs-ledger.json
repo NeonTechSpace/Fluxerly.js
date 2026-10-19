@@ -3,10 +3,6 @@
         "category": "unhandled user-account event",
         "reason": "Authentication session rotation after a password change of the signed-in user"
     },
-    "CALL_CREATE voice_states[].e2ee_capable": {
-        "category": "known gap not yet exposed",
-        "reason": "CallVoiceState has no end-to-end encryption capability"
-    },
     "CALL_CREATE voice_states[].guild_id": {
         "category": "always empty, null or false here",
         "reason": "Documented null in a call, and the call decoder accepts only null or absent"
@@ -15,18 +11,6 @@
         "category": "always empty, null or false here",
         "reason": "Documented null in a call, and the call decoder always sets the member to null"
     },
-    "CALL_CREATE voice_states[].p2p": {
-        "category": "known gap not yet exposed",
-        "reason": "CallVoiceState has no peer-to-peer flag"
-    },
-    "CALL_CREATE voice_states[].version": {
-        "category": "known gap not yet exposed",
-        "reason": "CallVoiceState has no per-participant state version"
-    },
-    "CALL_UPDATE voice_states[].e2ee_capable": {
-        "category": "known gap not yet exposed",
-        "reason": "CallVoiceState has no end-to-end encryption capability"
-    },
     "CALL_UPDATE voice_states[].guild_id": {
         "category": "always empty, null or false here",
         "reason": "Documented null in a call, and the call decoder accepts only null or absent"
@@ -34,14 +18,6 @@
     "CALL_UPDATE voice_states[].member": {
         "category": "always empty, null or false here",
         "reason": "Documented null in a call, and the call decoder always sets the member to null"
-    },
-    "CALL_UPDATE voice_states[].p2p": {
-        "category": "known gap not yet exposed",
-        "reason": "CallVoiceState has no peer-to-peer flag"
-    },
-    "CALL_UPDATE voice_states[].version": {
-        "category": "known gap not yet exposed",
-        "reason": "CallVoiceState has no per-participant state version"
     },
     "CHANNEL_MEMBER_COUNTS_UPDATE": {
         "category": "answers a request, checked through the request",
@@ -87,21 +63,9 @@
         "category": "paired with another field",
         "reason": "Must equal properties.id and the guild ID of the voice states, so a replacement alone is rejected"
     },
-    "GUILD_CREATE joined_at": {
-        "category": "known gap not yet exposed",
-        "reason": "GuildCreate does not carry when the account joined"
-    },
-    "GUILD_CREATE member_count": {
-        "category": "known gap not yet exposed",
-        "reason": "GuildCreate does not carry the member count"
-    },
     "GUILD_CREATE members": {
         "category": "cache-only",
         "reason": "The guildCreate event carries the guild snapshot, and the members are held by the member cache"
-    },
-    "GUILD_CREATE online_count": {
-        "category": "known gap not yet exposed",
-        "reason": "GuildCreate does not carry the online member count"
     },
     "GUILD_CREATE presences": {
         "category": "always empty, null or false here",
@@ -123,21 +87,9 @@
         "category": "always empty, null or false here",
         "reason": "Only accepted GUILD_CREATE bodies have unavailable false or absent, and the document ties this field to unavailable true"
     },
-    "GUILD_CREATE voice_states[].e2ee_capable": {
-        "category": "known gap not yet exposed",
-        "reason": "VoiceState has no end-to-end encryption capability"
-    },
     "GUILD_CREATE voice_states[].guild_id": {
         "category": "paired with another field",
         "reason": "The snapshot decoder requires it to equal the guild ID, so a replacement alone is rejected"
-    },
-    "GUILD_CREATE voice_states[].p2p": {
-        "category": "known gap not yet exposed",
-        "reason": "VoiceState has no peer-to-peer flag"
-    },
-    "GUILD_CREATE voice_states[].version": {
-        "category": "known gap not yet exposed",
-        "reason": "VoiceState has no per-participant state version"
     },
     "GUILD_DELETE guild_id": {
         "category": "paired with another field",
@@ -167,25 +119,9 @@
         "category": "unhandled user-account event",
         "reason": "Read state of the signed-in user's account"
     },
-    "MESSAGE_CREATE channel_type": {
-        "category": "known gap not yet exposed",
-        "reason": "Message does not expose the kind of channel it was sent in"
-    },
-    "MESSAGE_CREATE mention_here": {
-        "category": "known gap not yet exposed",
-        "reason": "Message exposes no here-mention flag"
-    },
-    "MESSAGE_CREATE nicks": {
-        "category": "known gap not yet exposed",
-        "reason": "Message does not expose group direct message nicknames"
-    },
-    "MESSAGE_DELETE member": {
-        "category": "known gap not yet exposed",
-        "reason": "MessageDeletion does not carry the author's member"
-    },
     "MESSAGE_REACTION_ADD_MANY reactions[].member": {
-        "category": "known gap not yet exposed",
-        "reason": "Each merged reaction addition carries no member"
+        "category": "always empty, null or false here",
+        "reason": "Guild-channel additions are never batched, so a batch never carries a member"
     },
     "PASSIVE_UPDATES": {
         "category": "unhandled user-session event",
@@ -244,12 +180,12 @@
         "reason": "Thread member list subscription of a Lazy Request, which the SDK never sends"
     },
     "THREAD_MEMBER_UPDATE mute_config": {
-        "category": "known gap not yet exposed",
-        "reason": "The update only evicts the cached thread, and ThreadMember has no mute state"
+        "category": "always empty, null or false here",
+        "reason": "Bot accounts cannot change thread mute settings, so the bot's own thread member is never muted"
     },
     "THREAD_MEMBER_UPDATE muted": {
-        "category": "known gap not yet exposed",
-        "reason": "The update only evicts the cached thread, and ThreadMember has no mute state"
+        "category": "always empty, null or false here",
+        "reason": "Bot accounts cannot change thread mute settings, so the bot's own thread member is never muted"
     },
     "USER_CONNECTIONS_UPDATE": {
         "category": "unhandled user-account event",
@@ -278,18 +214,6 @@
     "VOICE_SIGNAL": {
         "category": "unhandled voice event",
         "reason": "Peer-to-peer voice signalling, and the SDK opens no voice connections"
-    },
-    "VOICE_STATE_UPDATE e2ee_capable": {
-        "category": "known gap not yet exposed",
-        "reason": "VoiceState has no end-to-end encryption capability"
-    },
-    "VOICE_STATE_UPDATE p2p": {
-        "category": "known gap not yet exposed",
-        "reason": "VoiceState has no peer-to-peer flag"
-    },
-    "VOICE_STATE_UPDATE version": {
-        "category": "known gap not yet exposed",
-        "reason": "VoiceState has no per-participant state version"
     },
     "WEBAUTHN_CREDENTIALS_UPDATE": {
         "category": "unhandled user-account event",

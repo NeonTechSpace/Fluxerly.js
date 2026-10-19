@@ -462,11 +462,15 @@ const keptWith: Readonly<Record<string, { readonly keeps: readonly string[]; rea
         why: "It hides an unavailable guild, so it needs unavailable",
     },
     "MESSAGE_CREATE member": { keeps: ["guild_id"], why: "The member is present in a guild channel" },
+    "MESSAGE_DELETE member": {
+        keeps: ["guild_id", "author_id"],
+        why: "The member is the author's in a guild channel, and its user is removed, so both IDs identify it",
+    },
     "MESSAGE_UPDATE member": { keeps: ["guild_id"], why: "The member is present in a guild channel" },
     "MESSAGE_REACTION_ADD member": { keeps: ["guild_id"], why: "The member is present in a guild channel" },
     "MESSAGE_REACTION_ADD_MANY reactions[].member": {
         keeps: ["guild_id"],
-        why: "The member is present in a guild channel",
+        why: "The probe body names a guild, as a member would need one, although a batch never carries a member",
     },
     "MESSAGE_REACTION_REMOVE member": { keeps: ["guild_id"], why: "The member is present in a guild channel" },
     "TYPING_START member": { keeps: ["guild_id"], why: "The member is present in a guild channel" },

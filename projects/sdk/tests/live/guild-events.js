@@ -88,10 +88,25 @@ const projectVoiceState = (guildId, state) => ({
     isSuppressed: state.suppress,
     isSelfVideoOn: state.self_video === true,
     isSelfStreaming: state.self_stream === true,
+    isE2eeCapable: state.e2ee_capable === true,
+    isPeerToPeer: state.p2p === true,
+    ...(state.version === undefined ? {} : { version: state.version }),
     viewerStreamKeys: state.viewer_stream_keys ?? [],
     // Left out of this comparison, which checks only the member's account ID separately
     member: undefined,
 })
+
+// The counts and join time reach the event exactly as the raw GUILD_CREATE sent them. The bot is a member, so Fluxer
+// sends a join time
+function verifyGuildCreateDetails(created) {
+    const raw = rawGuildCreate.value
+    assert.ok(raw !== undefined, "The raw sandbox GUILD_CREATE was not captured")
+    assert.ok(Number.isSafeInteger(raw.member_count) && Number.isSafeInteger(raw.online_count))
+    assert.equal(typeof raw.joined_at, "string")
+    assert.equal(created.memberCount, raw.member_count)
+    assert.equal(created.onlineCount, raw.online_count)
+    assert.equal(created.joinedAt, raw.joined_at)
+}
 
 async function waitForVoiceSnapshot(client, guildId, snapshot) {
     const deadline = performance.now() + 15_000
@@ -206,6 +221,7 @@ try {
             await waitForGuildCreate(client, guildId, created, unavailable)
             assert.equal(created.value.name, guild.name)
             assert.equal(created.value.ownerId, guild.owner_id)
+            verifyGuildCreateDetails(created.value)
             report(stage, { passed: true, isNewJoin: created.value.isNewJoin, members: guildCreateMembers(bot.id) })
             await verifyStartupCaches(guildId, {
                 botId: bot.id,
@@ -267,6 +283,7 @@ try {
                     yield* Effect.promise(() => waitForGuildCreate(client, guildId, created, unavailable))
                     assert.equal(created.value.name, guild.name)
                     assert.equal(created.value.ownerId, guild.owner_id)
+                    verifyGuildCreateDetails(created.value)
                     report(stage, {
                         passed: true,
                         isNewJoin: created.value.isNewJoin,

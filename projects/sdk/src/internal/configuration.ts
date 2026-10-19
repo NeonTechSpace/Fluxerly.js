@@ -13,6 +13,7 @@ import {
     createGatewayMessageDecoder,
     createMessageDecoder,
     snapshotMessageFields,
+    type GatewayMessageDecoder,
     type MessageDecoder,
 } from "./message-fields.js"
 import { record } from "./decode/primitives.js"
@@ -170,7 +171,7 @@ function resourceConfiguration(value: unknown): ResourceSettings | Configuration
 export interface Configuration<M extends MessageCore = Message> {
     readonly decodeMessage: MessageDecoder<M>
     /** Decodes gateway message dispatches, which alone can carry the author's member */
-    readonly decodeGatewayMessage: MessageDecoder<M>
+    readonly decodeGatewayMessage: GatewayMessageDecoder<M>
     readonly uploadMaxBytes: number
     readonly logging: ClientLogger
     readonly token: Redacted.Redacted<string>

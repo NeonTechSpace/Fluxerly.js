@@ -3,7 +3,7 @@ import type { Embed, EmbedInput } from "./embeds.js"
 import type { EmbedBuilder } from "./builders.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 import type { GuildThreadChannel } from "./channels.js"
-import type { GuildMember } from "./guilds.js"
+import type { DeletedMessageMember, GuildMember } from "./guilds.js"
 
 /** Identify a message by its channel ID and message ID.
  * Pass this plain object to message operations without fetching the message first.
@@ -99,6 +99,29 @@ export interface Message extends MessageReference {
     readonly guildId?: string
     /** Whether Fluxer reports an @everyone or @here mention. Absence means unknown */
     readonly mentionedEveryone?: boolean
+    /**
+     * Whether Fluxer reported a here mention on a messageCreate event. Fluxer sends the flag only as true, so absence
+     * means it reported none rather than false.
+     * Gateway messageCreate events only: REST reads and messageUpdate events never carry it. It is delivered on the
+     * event only and is not kept in the message cache, whose copy of the message omits it
+     */
+    readonly mentionedHere?: boolean
+    /**
+     * Fluxer's numeric type of the channel the message was sent in, such as ChannelType.Text. A direct message reports 1
+     * and a group direct message 3, which ChannelType does not name. Values added by Fluxer in the future are retained,
+     * so do not assume a closed set. Absent when Fluxer supplied none, and reading it performs no request.
+     * Gateway messageCreate events only: REST reads and messageUpdate events never carry it. It is delivered on the
+     * event only and is not kept in the message cache, whose copy of the message omits it
+     */
+    readonly channelType?: number
+    /**
+     * The nicknames of a group direct message, keyed by decimal user ID, as Fluxer attached them to a messageCreate event.
+     * It is frozen, and an ID without an entry has no nickname there. Fluxer omits it for every other channel and when the
+     * group has no nicknames, so absence does not mean the channel is not a group direct message.
+     * Gateway messageCreate events only: REST reads and messageUpdate events never carry it. It is delivered on the
+     * event only and is not kept in the message cache, whose copy of the message omits it
+     */
+    readonly nicknames?: Readonly<Record<string, string>>
     /** Message text without trimming, possibly empty for a message containing only media */
     readonly content: string
     /** Received embeds in display order, or an empty array when none were supplied */
@@ -165,7 +188,8 @@ export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author
 
 /** Name of a Message property accepted by the client's messageFields option.
  * Selecting a MessageCore property, which is always kept, does not change the result.
- * The member field appears only on messageCreate and messageUpdate events, as Message.member describes
+ * The member field appears only on messageCreate and messageUpdate events, as Message.member describes. The
+ * mentionedHere, channelType and nicknames fields appear only on messageCreate events, as their own comments describe
  *
  * @category Messages
  */
@@ -235,7 +259,10 @@ export interface MessageUser {
  *
  * @category Messages
  */
-export type ReferencedMessage = Omit<Message, "referencedMessage" | "member">
+export type ReferencedMessage = Omit<
+    Message,
+    "referencedMessage" | "member" | "mentionedHere" | "channelType" | "nicknames"
+>
 
 /** Channel identity supplied in message or forward-snapshot mention data.
  * It contains only an ID, name and type, not cached channel settings or a decision that the bot may access it
@@ -359,6 +386,16 @@ export interface MessageDeletion extends MessageReference {
     readonly content?: string | null
     /** Deleted message's author ID, only when supplied by Fluxer */
     readonly authorId?: string
+    /**
+     * The author's community membership as Fluxer attached it to the deletion, read from the community's current state at
+     * dispatch time. It is a frozen DeletedMessageMember, which has no username or bot flag because Fluxer removes the
+     * member's user.
+     * Omitted when Fluxer sent none, such as for a message without an author or whose author is no longer a member, and
+     * when the member Fluxer sent does not decode or the deletion names no community or author. A member that does not
+     * decode never costs the event itself. It is delivered on the event only and the member cache does not store it, so a
+     * deletion never changes a cached member
+     */
+    readonly member?: DeletedMessageMember
 }
 
 /** Message IDs deleted together in one channel.

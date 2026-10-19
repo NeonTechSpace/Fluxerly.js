@@ -631,6 +631,19 @@ test("voice decoders read the video, stream, watched-stream and member fields as
     })
 })
 
+test("voice decoders read the encryption, peer-to-peer and version fields, and an omitted flag reads as false", () => {
+    expect(decodeVoiceState(voiceStateWire({ e2ee_capable: false, p2p: true, version: 0 }))).toMatchObject({
+        isE2eeCapable: false,
+        isPeerToPeer: true,
+        version: 0,
+    })
+    const bare = decodeVoiceState(voiceStateWire({ e2ee_capable: undefined, p2p: undefined, version: undefined }))!
+    expect(bare).toMatchObject({ isE2eeCapable: false, isPeerToPeer: false })
+    expect("version" in bare).toBe(false)
+    const snapshot = decodeVoiceStateSnapshot(guildSnapshotWire([voiceStateWire({ p2p: true, version: 9 })]))!
+    expect(snapshot.voiceStates[0]).toMatchObject({ isE2eeCapable: true, isPeerToPeer: true, version: 9 })
+})
+
 test.each([
     ["omitted", undefined],
     ["null", null],
@@ -645,6 +658,11 @@ test.each([
 test.each([
     ["a non-boolean video flag", { self_video: "yes" }],
     ["a non-boolean stream flag", { self_stream: 1 }],
+    ["a non-boolean encryption flag", { e2ee_capable: "yes" }],
+    ["a null peer-to-peer flag", { p2p: null }],
+    ["a fractional version", { version: 1.5 }],
+    ["a negative version", { version: -1 }],
+    ["a text version", { version: "3" }],
     ["watched streams that are not a list", { viewer_stream_keys: "40:41:remote-connection" }],
     ["a watched stream key that is not text", { viewer_stream_keys: ["40:41:remote-connection", 7] }],
     ["a member without its roles and join time", { member: { user: { id: "30", username: "voice-member" } } }],
@@ -683,6 +701,9 @@ test("default voice subscriptions expose the initial visible snapshot and subseq
         isSuppressed: false,
         isSelfVideoOn: true,
         isSelfStreaming: true,
+        isE2eeCapable: true,
+        isPeerToPeer: false,
+        version: 3,
         viewerStreamKeys: ["40:41:remote-connection"],
         member: voiceMember,
     }
@@ -755,6 +776,9 @@ test("native voice streams deliver the video, stream and member fields", async (
                 expect(snapshot?.voiceStates[0]).toMatchObject({
                     isSelfVideoOn: true,
                     isSelfStreaming: true,
+                    isE2eeCapable: true,
+                    isPeerToPeer: false,
+                    version: 3,
                     viewerStreamKeys: ["40:41:remote-connection"],
                     member: voiceMember,
                 })

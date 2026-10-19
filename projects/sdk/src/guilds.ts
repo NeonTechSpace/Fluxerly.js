@@ -486,6 +486,17 @@ export interface GuildMember extends MemberReference {
 }
 
 /**
+ * The author's community membership as Fluxer attached it to a message deletion, with the account fields left out.
+ * Fluxer removes the member's user from it, so it has no username or bot flag, and the SDK takes the community from
+ * the deletion's guildId and the account from its authorId.
+ * It is a frozen observation read from the community's state when Fluxer dispatched the deletion. It is neither a
+ * complete GuildMember nor written to the member cache, so it never refreshes or replaces a cached member
+ *
+ * @category Guilds and members
+ */
+export interface DeletedMessageMember extends Omit<GuildMember, "username" | "isBot"> {}
+
+/**
  * Known Fluxer community-profile bit flags. Other nonnegative 32-bit bits can be observed for forward compatibility
  *
  * @category Guilds and members

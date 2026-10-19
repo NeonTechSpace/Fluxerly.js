@@ -7,7 +7,7 @@
  */
 import type { GuildChannel } from "#sdk/channels"
 import type { EventMap, EventName } from "#sdk/events"
-import type { MessageCore } from "#sdk/messages"
+import type { Message, MessageCore } from "#sdk/messages"
 import type { User } from "#sdk/users"
 import type { MessageCache } from "../cache.js"
 import type { ChannelCache } from "../channel-cache.js"
@@ -78,19 +78,32 @@ export function applyEvent<M extends MessageCore, K extends EventName>(
     if (event === "guildChannelDelete" || event === "threadDelete" || event === "threadMembersUpdate")
         applyThreadEffects(caches, event, message)
     // The cache keeps no member snapshot: It would go stale unseen, and REST copies of the message never carry it.
-    // The member cache holds the current one
+    // The member cache holds the current one. The fields only MESSAGE_CREATE carries stay out too, so a cached message
+    // never mixes them with the update that follows
     if (isMessageEvent<typeof event, M>(event, message)) cache?.observe(withoutMember(message))
     else if ("ids" in message) {
         for (const id of message.ids) cache?.delete({ id, channelId: message.channelId })
     } else if (event === "messageDelete" && "id" in message && "channelId" in message) cache?.delete(message)
 }
 
-/** The message the handlers received, or a frozen copy without its member, never mutating the delivered object */
+/**
+ * The message the handlers received, or a frozen copy without the fields only a gateway event carries, never mutating the
+ * delivered object. Those are the member, which would go stale unseen, and the fields of a created message, which a later
+ * update does not repeat
+ */
 function withoutMember<M extends MessageCore>(message: M): M {
-    if (!("member" in message)) return message
-    const { member: _member, ...rest } = message
+    if (!gatewayOnlyFields.some((field) => field in message)) return message
+    const {
+        member: _member,
+        mentionedHere: _here,
+        channelType: _type,
+        nicknames: _nicks,
+        ...rest
+    } = message as M & Partial<Pick<Message, "member" | "mentionedHere" | "channelType" | "nicknames">>
     return Object.freeze(rest) as unknown as M
 }
+
+const gatewayOnlyFields = ["member", "mentionedHere", "channelType", "nicknames"] as const
 
 /** Apply a channel deletion's or thread event's effects on cached messages and on the bot's cached thread memberships */
 function applyThreadEffects<M extends MessageCore>(

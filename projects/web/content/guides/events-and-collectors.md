@@ -25,6 +25,8 @@ export function observeGuildJoins(client: Client, rememberGuild: (id: string) =>
 
 The `client.on` method returns a subscription. Call its `close()` method when the handler is no longer needed
 
+The event also carries `memberCount`, `onlineCount` and `joinedAt`, as Fluxer reported them when it delivered the event. They are a snapshot that neither `guildUpdate` nor the guild cache refreshes, so call `guilds.fetchCounts` for current totals. Here `onlineCount` is the guild-wide figure every recipient receives, while `guilds.fetchCounts` counts only the online members the bot can see, so the two can differ
+
 <details>
 <summary>How reliable is isNewJoin?</summary>
 

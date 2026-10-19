@@ -261,6 +261,8 @@ Use `auditLogs.fetchPage` or the bounded `auditLogs.iterate` scan with `ViewAudi
 
 Fluxerly supports observing voice states in communities and moving, disconnecting, community muting and community deafening members who are already in a voice channel. These controls remain subject to Fluxer's permissions
 
+A voice state, whether from `voiceStateUpdate`, a `voiceStateSnapshot` or a private call, also reports `isE2eeCapable` for end-to-end encrypted voice, `isPeerToPeer` for a connection that does not pass through LiveKit, and `version`, Fluxer's counter for that participant's state. An omitted flag reads as `false`
+
 Bots cannot join voice channels or send and receive audio or video yet. That feature waits for Fluxer's voice update and an SDK implementation after it. A `Connect` or `Speak` permission describes what Fluxer allows, not an SDK feature, and the bot's gateway `connect()` receives events rather than opening a voice connection. See [member voice controls](/docs/{{version}}/api/interfaces/js-ts.Members/#move) for the current operations
 
 ## Wire it up

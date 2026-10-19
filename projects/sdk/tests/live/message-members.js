@@ -130,6 +130,10 @@ async function verifyMessageRefreshesMember(ops, channelId) {
     )
     const message = created.find((item) => item.id === sent.data.id)
     assert.equal(message.member?.userId, botId, "The message event carried no member")
+    // Fluxer adds the channel type to every created message, and this message mentions nobody in a text channel
+    assert.equal(message.channelType, 0, "The message event carried no text channel type")
+    assert.equal(message.mentionedHere, undefined)
+    assert.equal(message.nicknames, undefined)
     // Cache intake precedes delivery and the change report follows in a later microtask, so it may already be there
     await waitFor(
         () =>

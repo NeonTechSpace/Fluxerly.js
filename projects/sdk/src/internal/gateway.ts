@@ -19,4 +19,4 @@ export { AttemptFailure, classifyClose, runGatewaySession, type Session } from "
  * @public
  */
 export const runGateway = (options: Omit<GatewaySessionOptions<Message>, "messageDecoder">) =>
-    runGatewaySession({ ...options, messageDecoder: (value) => decodeGatewayMessage(value, undefined) })
+    runGatewaySession({ ...options, messageDecoder: (value, type) => decodeGatewayMessage(value, undefined, type) })

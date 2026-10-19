@@ -23,13 +23,13 @@ import type {
     MessageField,
     ReferencedMessage,
 } from "#sdk/messages"
-import type { MessageObservation } from "./message-fields.js"
+import type { GatewayMessageDispatch, MessageObservation } from "./message-fields.js"
 import { MessageError } from "#sdk/message-errors"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
 import { decodeThread } from "./channel-decode.js"
-import { decodeDispatchMember } from "./guilds.js"
+import { decodeDeletionMember, decodeDispatchMember } from "./guilds.js"
 import { count, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 
@@ -90,16 +90,51 @@ export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>
 
 /**
  * Decode a MESSAGE_CREATE or MESSAGE_UPDATE body, which unlike a REST message can carry the author's member.
- * The member is a decoration, so one that does not decode is left out and never costs the message
+ * The member is a decoration, so one that does not decode is left out and never costs the message.
+ * MESSAGE_CREATE alone adds mention_here, channel_type and nicks, which Fluxer's documents exclude from MESSAGE_UPDATE.
+ * Like the REST fields they are validated whatever the selection, and a malformed value rejects the message
  */
 export function decodeGatewayMessage(
     value: unknown,
     fields: ReadonlySet<MessageField> | undefined,
+    type: GatewayMessageDispatch,
 ): MessageObservation | undefined {
     const decoded = decodeMessage(value, fields)
-    if (decoded === undefined || (fields !== undefined && !fields.has("member"))) return decoded
-    const member = decodeDispatchMember("MESSAGE_CREATE", value)
-    return member === undefined ? decoded : Object.freeze({ ...decoded, member })
+    if (decoded === undefined) return decoded
+    const created = type === "MESSAGE_CREATE" ? decodeCreatedFields(value, fields) : {}
+    if (created === undefined) return undefined
+    const member = fields !== undefined && !fields.has("member") ? undefined : decodeDispatchMember(type, value)
+    return Object.freeze({ ...decoded, ...created, ...(member === undefined ? {} : { member }) })
+}
+
+/** The fields only a created message carries, left out when absent or not selected */
+function decodeCreatedFields(
+    value: unknown,
+    fields: ReadonlySet<MessageField> | undefined,
+): Pick<Message, "mentionedHere" | "channelType" | "nicknames"> | undefined {
+    if (!record(value)) return undefined
+    if (
+        (value.mention_here !== undefined && typeof value.mention_here !== "boolean") ||
+        (value.channel_type !== undefined && !int32(value.channel_type))
+    )
+        return undefined
+    let nicknames: Record<string, string> | undefined
+    if (value.nicks !== undefined) {
+        if (!record(value.nicks)) return undefined
+        nicknames = {}
+        for (const [id, nick] of Object.entries(value.nicks)) {
+            if (!identifier(id) || typeof nick !== "string") return undefined
+            nicknames[id] = nick
+        }
+    }
+    const selected = (field: MessageField) => fields === undefined || fields.has(field)
+    return {
+        ...(!selected("mentionedHere") || value.mention_here === undefined
+            ? {}
+            : { mentionedHere: value.mention_here }),
+        ...(!selected("channelType") || value.channel_type === undefined ? {} : { channelType: value.channel_type }),
+        ...(!selected("nicknames") || nicknames === undefined ? {} : { nicknames: Object.freeze(nicknames) }),
+    }
 }
 
 function decodeMessageValue(
@@ -484,12 +519,14 @@ export function decodeDeletion(value: unknown): MessageDeletion | undefined {
     if (value.guild_id !== undefined && !identifier(value.guild_id)) return undefined
     if ("content" in value && value.content !== null && typeof value.content !== "string") return undefined
     if ("author_id" in value && !identifier(value.author_id)) return undefined
+    const member = decodeDeletionMember(value)
     return Object.freeze({
         id: value.id,
         channelId: value.channel_id,
         ...(value.guild_id === undefined ? {} : { guildId: value.guild_id as string }),
         ...(value.content === null || typeof value.content === "string" ? { content: value.content } : {}),
         ...(identifier(value.author_id) ? { authorId: value.author_id } : {}),
+        ...(member === undefined ? {} : { member }),
     })
 }
 

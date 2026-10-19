@@ -28,6 +28,7 @@ import {
     type ClientOptions as NativeClientOptions,
 } from "../../../src/effect.js"
 import { InputValidationFailure } from "../../../src/input-validation.js"
+import { decodeGuildLifecycleEvent } from "../../../src/internal/guilds.js"
 import { memberTimeout } from "../../../src/internal/moderation.js"
 import { Opcode as GatewayOpcode } from "../../../src/internal/protocol/gateway.js"
 import { modes, type Mode } from "../../support/both-apis.js"
@@ -818,6 +819,56 @@ test.each(modes)("%s projects guild creation availability without polluting guil
     expect(seen!.cached).not.toHaveProperty("isNewJoin")
     expect(calls).toHaveLength(0)
     expect(Object.isFrozen(seen!.value)).toBe(true)
+})
+
+test.each(modes)(
+    "%s guildCreate carries the delivery-time counts and join time, which the guild cache never stores",
+    async (mode) => {
+        const dispatch = await gateway()
+        const { calls } = cacheRest()
+        const api = await setup(mode, resourceCache)
+        const seen: { value: EventMap["guildCreate"]; cached: unknown }[] = []
+        await api.on("guildCreate", (value) => {
+            const cached = api.defaultApi
+                ? api.defaultApi.guilds.get(value.id)
+                : Effect.runSync(api.native!.guilds.get(value.id))
+            seen.push({ value, cached })
+        })
+        await api.connect()
+        dispatch("GUILD_CREATE", {
+            ...guildCreate(),
+            online_count: 0,
+            member_count: 12,
+            joined_at: "2026-09-08T12:00:00Z",
+        })
+        await vi.waitFor(() => expect(seen).toHaveLength(1))
+        expect(seen[0]!.value).toMatchObject({ memberCount: 12, onlineCount: 0, joinedAt: "2026-09-08T12:00:00Z" })
+        // The cache holds the guild alone, so a later GUILD_UPDATE cannot leave a stale count beside fresh configuration
+        for (const field of ["memberCount", "onlineCount", "joinedAt", "isNewJoin"])
+            expect(field in (seen[0]!.cached as object)).toBe(false)
+        dispatch("GUILD_UPDATE", { ...guild, guild_id: "20", name: "renamed" })
+        await vi.waitFor(() =>
+            expect(
+                api.defaultApi ? api.defaultApi.guilds.get("20") : Effect.runSync(api.native!.guilds.get("20")),
+            ).toMatchObject({ name: "renamed" }),
+        )
+        // A null join time is kept, and a body without the fields still arrives with them absent
+        dispatch("GUILD_CREATE", { ...guildCreate("21"), online_count: 3, joined_at: null })
+        dispatch("GUILD_CREATE", { ...guildCreate("22"), member_count: undefined, joined_at: undefined })
+        await vi.waitFor(() => expect(seen).toHaveLength(3))
+        expect(seen[1]!.value).toMatchObject({ memberCount: 1, onlineCount: 3, joinedAt: null })
+        for (const field of ["memberCount", "onlineCount", "joinedAt"]) expect(field in seen[2]!.value).toBe(false)
+        expect(calls).toHaveLength(0)
+    },
+)
+
+test.each([
+    ["a fractional member count", { member_count: 1.5 }],
+    ["a negative online count", { online_count: -1 }],
+    ["a text member count", { member_count: "12" }],
+    ["a join time that is not a timestamp", { joined_at: "yesterday" }],
+])("a GUILD_CREATE with %s is rejected whole", (_name, overrides) => {
+    expect(decodeGuildLifecycleEvent("GUILD_CREATE", { ...guildCreate(), ...overrides })).toBeUndefined()
 })
 
 test.each(modes)("%s connects from READY across paired cache and hydration states", async (mode) => {

@@ -860,8 +860,10 @@ field|shared|CallUpdate.voiceStates|readonly CallVoiceState[]|optional=false|nul
 field|shared|CallVoiceState.channelId|null | string|optional=false|nullable=true
 field|shared|CallVoiceState.connectionId|string|optional=false|nullable=false
 field|shared|CallVoiceState.isDeafened|boolean|optional=false|nullable=false
+field|shared|CallVoiceState.isE2eeCapable|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isMobile|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isMuted|boolean|optional=false|nullable=false
+field|shared|CallVoiceState.isPeerToPeer|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSelfDeafened|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSelfMuted|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSelfStreaming|boolean|optional=false|nullable=false
@@ -869,6 +871,7 @@ field|shared|CallVoiceState.isSelfVideoOn|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.isSuppressed|boolean|optional=false|nullable=false
 field|shared|CallVoiceState.sessionId|string | undefined|optional=true|nullable=false
 field|shared|CallVoiceState.userId|string|optional=false|nullable=false
+field|shared|CallVoiceState.version|number | undefined|optional=true|nullable=false
 field|shared|CallVoiceState.viewerStreamKeys|readonly string[]|optional=false|nullable=false
 field|native|CanManageOptions.actorUserId|string | undefined|optional=true|nullable=false
 field|native|CanManageOptions.timeoutMs|number | undefined|optional=true|nullable=false
@@ -1253,6 +1256,19 @@ field|default|DefaultWebhookMessageOperationOptions.timeoutMs|number | undefined
 field|default|DefaultWebhookOperationOptions.auditReason|string | undefined|optional=true|nullable=false
 field|default|DefaultWebhookOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|default|DefaultWebhookOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|DeletedMessageMember.accentColor|null | number | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.avatar|null | string | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.banner|null | string | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.communicationDisabledUntil|null | string | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.guildId|string|optional=false|nullable=false
+field|shared|DeletedMessageMember.isDeafened|boolean | undefined|optional=true|nullable=false
+field|shared|DeletedMessageMember.isMuted|boolean | undefined|optional=true|nullable=false
+field|shared|DeletedMessageMember.joinedAt|string|optional=false|nullable=false
+field|shared|DeletedMessageMember.mentionFlags|MemberMentionPreference | null | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.nickname|null | string | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.profileFlags|null | number | undefined|optional=true|nullable=true
+field|shared|DeletedMessageMember.roleIds|readonly string[]|optional=false|nullable=false
+field|shared|DeletedMessageMember.userId|string|optional=false|nullable=false
 field|shared|DirectMessageChannel.icon|null | string|optional=false|nullable=true
 field|shared|DirectMessageChannel.id|string|optional=false|nullable=false
 field|shared|DirectMessageChannel.lastMessageId|null | string|optional=false|nullable=true
@@ -1805,10 +1821,13 @@ field|shared|GuildCreate.features|readonly string[]|optional=false|nullable=fals
 field|shared|GuildCreate.icon|null | string | undefined|optional=true|nullable=true
 field|shared|GuildCreate.id|string|optional=false|nullable=false
 field|shared|GuildCreate.isNewJoin|boolean|optional=false|nullable=false
+field|shared|GuildCreate.joinedAt|null | string | undefined|optional=true|nullable=true
+field|shared|GuildCreate.memberCount|number | undefined|optional=true|nullable=false
 field|shared|GuildCreate.messageHistoryCutoff|null | string | undefined|optional=true|nullable=true
 field|shared|GuildCreate.mfaLevel|GuildMfaLevel | undefined|optional=true|nullable=false
 field|shared|GuildCreate.name|string|optional=false|nullable=false
 field|shared|GuildCreate.nsfw|boolean | undefined|optional=true|nullable=false
+field|shared|GuildCreate.onlineCount|number | undefined|optional=true|nullable=false
 field|shared|GuildCreate.ownerId|string|optional=false|nullable=false
 field|shared|GuildCreate.splash|null | string | undefined|optional=true|nullable=true
 field|shared|GuildCreate.splashCardAlignment|GuildSplashCardAlignment | undefined|optional=true|nullable=false
@@ -2318,6 +2337,7 @@ field|shared|MemberSearchQuery.userCreatedAtBeforeSeconds|number | undefined|opt
 field|shared|Message.attachments|readonly Attachment[]|optional=false|nullable=false
 field|shared|Message.author|MessageUser|optional=false|nullable=false
 field|shared|Message.channelId|string|optional=false|nullable=false
+field|shared|Message.channelType|number | undefined|optional=true|nullable=false
 field|shared|Message.content|string|optional=false|nullable=false
 field|shared|Message.createdAt|string | undefined|optional=true|nullable=false
 field|shared|Message.editedAt|null | string | undefined|optional=true|nullable=true
@@ -2329,9 +2349,11 @@ field|shared|Message.member|GuildMember | undefined|optional=true|nullable=false
 field|shared|Message.mentionChannels|null | readonly MessageChannelMention[] | undefined|optional=true|nullable=true
 field|shared|Message.mentionRoleIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|Message.mentionedEveryone|boolean | undefined|optional=true|nullable=false
+field|shared|Message.mentionedHere|boolean | undefined|optional=true|nullable=false
 field|shared|Message.mentions|readonly MessageUser[] | undefined|optional=true|nullable=false
 field|shared|Message.messageReference|MessageContextReference | null | undefined|optional=true|nullable=true
 field|shared|Message.messageSnapshots|null | readonly MessageSnapshot[] | undefined|optional=true|nullable=true
+field|shared|Message.nicknames|Readonly<Record<string, string>> | undefined|optional=true|nullable=false
 field|shared|Message.nonce|null | string | undefined|optional=true|nullable=true
 field|shared|Message.nsfwEmojiIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|Message.pinned|boolean | undefined|optional=true|nullable=false
@@ -2406,6 +2428,7 @@ field|shared|MessageDeletion.channelId|string|optional=false|nullable=false
 field|shared|MessageDeletion.content|null | string | undefined|optional=true|nullable=true
 field|shared|MessageDeletion.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageDeletion.id|string|optional=false|nullable=false
+field|shared|MessageDeletion.member|DeletedMessageMember | undefined|optional=true|nullable=false
 field|shared|MessageError._tag|"MessageError"|optional=false|nullable=false
 field|shared|MessageError.apiError|ApiErrorDetail | null|optional=false|nullable=true
 field|shared|MessageError.code|string|optional=false|nullable=false
@@ -3103,8 +3126,10 @@ field|shared|VoiceState.channelId|null | string|optional=false|nullable=true
 field|shared|VoiceState.connectionId|string|optional=false|nullable=false
 field|shared|VoiceState.guildId|string|optional=false|nullable=false
 field|shared|VoiceState.isDeafened|boolean|optional=false|nullable=false
+field|shared|VoiceState.isE2eeCapable|boolean|optional=false|nullable=false
 field|shared|VoiceState.isMobile|boolean|optional=false|nullable=false
 field|shared|VoiceState.isMuted|boolean|optional=false|nullable=false
+field|shared|VoiceState.isPeerToPeer|boolean|optional=false|nullable=false
 field|shared|VoiceState.isSelfDeafened|boolean|optional=false|nullable=false
 field|shared|VoiceState.isSelfMuted|boolean|optional=false|nullable=false
 field|shared|VoiceState.isSelfStreaming|boolean|optional=false|nullable=false
@@ -3113,6 +3138,7 @@ field|shared|VoiceState.isSuppressed|boolean|optional=false|nullable=false
 field|shared|VoiceState.member|GuildMember | undefined|optional=true|nullable=false
 field|shared|VoiceState.sessionId|string | undefined|optional=true|nullable=false
 field|shared|VoiceState.userId|string|optional=false|nullable=false
+field|shared|VoiceState.version|number | undefined|optional=true|nullable=false
 field|shared|VoiceState.viewerStreamKeys|readonly string[]|optional=false|nullable=false
 field|shared|VoiceStateSnapshot.guildId|string|optional=false|nullable=false
 field|shared|VoiceStateSnapshot.voiceStates|readonly VoiceState[]|optional=false|nullable=false

@@ -247,11 +247,30 @@ export function watchGuildJoins(client: Client) {
             const observation: GuildCreate = event
             const guild: import("@neontechspace/fluxerly/effect").Guild = observation
             const joined: boolean = observation.isNewJoin
-            void joined
+            const members: number | undefined = observation.memberCount
+            const online: number | undefined = observation.onlineCount
+            const since: string | null | undefined = observation.joinedAt
+            void [joined, members, online, since]
             // @ts-expect-error Event metadata is readonly
             observation.isNewJoin = false
             // @ts-expect-error Plain Guild snapshots do not contain event metadata
             void guild.isNewJoin
+            // @ts-expect-error Plain Guild snapshots do not contain delivery-time counts
+            void guild.memberCount
+        }),
+    )
+}
+
+/** Packed Effect declarations expose the fields only a created message carries */
+export function watchCreatedMessages(client: Client) {
+    return client.on("messageCreate", (message) =>
+        Effect.sync(() => {
+            const kind: number | undefined = message.channelType
+            const here: boolean | undefined = message.mentionedHere
+            const nicknames: Readonly<Record<string, string>> | undefined = message.nicknames
+            void [kind, here, nicknames]
+            // @ts-expect-error Nicknames are readonly
+            if (message.nicknames) message.nicknames["30"] = "Nick"
         }),
     )
 }
@@ -870,8 +889,12 @@ export function watchMessageChanges(client: Client) {
                 const deletion: MessageDeletion = message
                 const content: string | null | undefined = deletion.content
                 const guildId: string | undefined = deletion.guildId
+                const memberRoles: readonly string[] | undefined = deletion.member?.roleIds
                 void content
                 void guildId
+                void memberRoles
+                // @ts-expect-error A deleted message's member has no account fields
+                void deletion.member?.username
                 // @ts-expect-error Event guild context is readonly
                 deletion.guildId = "99"
                 // @ts-expect-error Missing authors are not fabricated
@@ -947,9 +970,12 @@ export function voiceOperations(client: Client, target: VoiceConnectionReference
                 const channel: string | null = current.channelId
                 const video: boolean = current.isSelfVideoOn
                 const sharing: boolean = current.isSelfStreaming
+                const encrypted: boolean = current.isE2eeCapable
+                const direct: boolean = current.isPeerToPeer
+                const revision: number | undefined = current.version
                 const watching: readonly string[] = current.viewerStreamKeys
                 const memberId: string | undefined = current.member?.userId
-                void [channel, video, sharing, watching, memberId]
+                void [channel, video, sharing, encrypted, direct, revision, watching, memberId]
             }),
         )
         // @ts-expect-error Server deafen state is boolean

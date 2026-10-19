@@ -400,6 +400,15 @@ export interface WireMessage {
      * fixtures.member() without its user and guild_id to emit a decorated event. REST reads never carry it
      */
     readonly member?: Omit<WireMember, "guild_id" | "user">
+    /**
+     * Fluxer's numeric type of the channel, which only MESSAGE_CREATE carries. The default message has none, so pass 0 for
+     * a community text channel, 1 for a direct message or 3 for a group direct message to emit a created message in full
+     */
+    readonly channel_type?: number
+    /** Group direct message nicknames keyed by user ID, which only MESSAGE_CREATE carries and Fluxer omits when empty */
+    readonly nicks?: Readonly<Record<string, string>>
+    /** Whether the message mentions here, which only MESSAGE_CREATE carries and Fluxer sends only as true */
+    readonly mention_here?: boolean
 }
 
 /**

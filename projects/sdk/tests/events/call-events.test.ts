@@ -74,6 +74,9 @@ const voiceState = (userId: string) => ({
     isSuppressed: false,
     isSelfVideoOn: false,
     isSelfStreaming: false,
+    isE2eeCapable: true,
+    isPeerToPeer: false,
+    version: 3,
     viewerStreamKeys: [],
 })
 
@@ -147,6 +150,29 @@ test("a call participant keeps video, stream and watched-stream data but never a
         isSelfStreaming: true,
         viewerStreamKeys: ["dm:20:connection-31"],
     })
+})
+
+test("a call participant reads the encryption, peer-to-peer and version fields, and an omitted flag reads as false", () => {
+    const states = [
+        voiceStateWire("30", { e2ee_capable: false, p2p: true, version: 0 }),
+        voiceStateWire("31", { e2ee_capable: undefined, p2p: undefined, version: undefined }),
+    ]
+    for (const decode of [decodeCallUpdate, decodeCallCreate]) {
+        const [peer, plain] = decode(callWire({ voice_states: states }))!.voiceStates
+        expect(peer).toMatchObject({ isE2eeCapable: false, isPeerToPeer: true, version: 0 })
+        expect(plain).toMatchObject({ isE2eeCapable: false, isPeerToPeer: false })
+        expect("version" in plain!).toBe(false)
+    }
+})
+
+test.each([
+    ["a non-boolean encryption flag", { e2ee_capable: "yes" }],
+    ["a null peer-to-peer flag", { p2p: null }],
+    ["a fractional version", { version: 1.5 }],
+    ["a negative version", { version: -1 }],
+    ["a text version", { version: "3" }],
+])("a call voice state with %s is rejected whole", (_name, extra) => {
+    expect(decodeCallUpdate(callWire({ voice_states: [voiceStateWire("30", extra)] }))).toBeUndefined()
 })
 
 test.each([

@@ -5,6 +5,7 @@
  * Multi-step resource workflows are not transactions, and uncertain writes are never replayed as reads. Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import type {
+    DeletedMessageMember,
     Guild,
     GuildDeletion,
     GuildContentWarningLevel,
@@ -27,7 +28,7 @@ import type {
 import { GuildVerificationLevels } from "#sdk/guilds"
 import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
+import { count as nonNegativeInt32, identifier, int32, nonNegativeInteger, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
@@ -120,13 +121,38 @@ export function decodeGuildEvent(event: keyof typeof guildEvents, value: unknown
     return decodeMember(value, value.guild_id)
 }
 
+/**
+ * The counts and join time of a GUILD_CREATE, or undefined when one is malformed. Fluxer documents them on every create,
+ * but a body without them was accepted before they were read, so each is optional and checked only when present
+ */
+function guildCreateDetails(
+    value: Record<string, unknown>,
+): Pick<GuildCreate, "memberCount" | "onlineCount" | "joinedAt"> | undefined {
+    if (
+        (value.member_count !== undefined && !nonNegativeInt32(value.member_count)) ||
+        (value.online_count !== undefined && !nonNegativeInt32(value.online_count)) ||
+        (value.joined_at !== undefined && value.joined_at !== null && !timestamp(value.joined_at))
+    )
+        return undefined
+    return {
+        ...(value.member_count === undefined ? {} : { memberCount: value.member_count }),
+        ...(value.online_count === undefined ? {} : { onlineCount: value.online_count }),
+        ...(value.joined_at === undefined ? {} : { joinedAt: value.joined_at }),
+    }
+}
+
 /** Decodes the documented complete snapshot/update forms without retaining gateway collections */
 export function decodeGuildLifecycleEvent(event: keyof typeof guildLifecycleEvents, value: unknown) {
     if (event === "GUILD_CREATE") {
         if (!record(value) || (Object.hasOwn(value, "unavailable") && value.unavailable !== false)) return undefined
         const guild = decodeGuildSnapshot(value)
-        return guild
-            ? Object.freeze({ ...guild, isNewJoin: !Object.hasOwn(value, "unavailable") } satisfies GuildCreate)
+        const details = guild && guildCreateDetails(value)
+        return guild && details
+            ? Object.freeze({
+                  ...guild,
+                  isNewJoin: !Object.hasOwn(value, "unavailable"),
+                  ...details,
+              } satisfies GuildCreate)
             : undefined
     }
     if (event === "GUILD_DELETE") {
@@ -184,6 +210,9 @@ export function decodeVoiceState(value: unknown, expectedGuildId?: string): Voic
         typeof value.suppress !== "boolean" ||
         (value.self_video !== undefined && typeof value.self_video !== "boolean") ||
         (value.self_stream !== undefined && typeof value.self_stream !== "boolean") ||
+        (value.e2ee_capable !== undefined && typeof value.e2ee_capable !== "boolean") ||
+        (value.p2p !== undefined && typeof value.p2p !== "boolean") ||
+        (value.version !== undefined && !nonNegativeInteger(value.version)) ||
         (value.viewer_stream_keys !== undefined &&
             value.viewer_stream_keys !== null &&
             (!Array.isArray(value.viewer_stream_keys) ||
@@ -208,6 +237,9 @@ export function decodeVoiceState(value: unknown, expectedGuildId?: string): Voic
         isSuppressed: value.suppress,
         isSelfVideoOn: value.self_video === true,
         isSelfStreaming: value.self_stream === true,
+        isE2eeCapable: value.e2ee_capable === true,
+        isPeerToPeer: value.p2p === true,
+        ...(value.version === undefined ? {} : { version: value.version }),
         viewerStreamKeys: Object.freeze(
             Array.isArray(value.viewer_stream_keys) ? ([...value.viewer_stream_keys] as string[]) : [],
         ),
@@ -421,6 +453,21 @@ export function decodeDispatchMember(
     }
     const member = decodeMember(source, target.guildId)
     return member?.userId === target.userId ? member : undefined
+}
+
+/**
+ * The author's member of a MESSAGE_DELETE dispatch, or undefined when it sent none, names no community or author, or sent
+ * a member that does not decode. Fluxer removes the member's user, so the author_id supplies the account and a stand-in
+ * name lets the shared member rules validate the rest, after which the account fields are dropped again. Like the member
+ * of a message, reaction or typing dispatch it is a decoration that must never cost the event
+ */
+export function decodeDeletionMember(value: unknown): DeletedMessageMember | undefined {
+    if (!record(value) || !record(value.member) || !identifier(value.guild_id) || !identifier(value.author_id))
+        return undefined
+    const member = decodeMember({ ...value.member, user: { id: value.author_id, username: "" } }, value.guild_id)
+    if (!member) return undefined
+    const { username: _username, isBot: _isBot, ...rest } = member
+    return Object.freeze(rest)
 }
 
 export function guildFetch(guildId: string): GuildValidationResult<Guild> {

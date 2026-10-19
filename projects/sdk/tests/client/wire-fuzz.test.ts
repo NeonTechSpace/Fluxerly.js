@@ -387,6 +387,7 @@ const recordedEvents: readonly EventName[] = [
     "messageCreate",
     "messageUpdate",
     "messageReactionAdd",
+    "messageDelete",
     "typingStart",
     "guildCreate",
     "voiceStateSnapshot",
@@ -632,6 +633,7 @@ function wire(f: Fixtures) {
         self_stream: true,
         viewer_stream_keys: [`${guild}:${channel}:remote-connection`],
         e2ee_capable: true,
+        p2p: false,
         version: 3,
         member: memberRead,
     }
@@ -736,7 +738,18 @@ const privateChannel = (body: unknown) =>
     isRecord(body) && (body.guild_id === undefined || body.guild_id === null) && body.type === 999 ? 0 : 1
 
 const gatewayTargets: readonly GatewayTarget[] = [
-    { type: "MESSAGE_CREATE", bases: (w) => [w.message, w.decorated, w.forward, w.direct] },
+    {
+        type: "MESSAGE_CREATE",
+        bases: (w) => [
+            w.message,
+            w.decorated,
+            w.forward,
+            w.direct,
+            // A created message also carries the channel type, and a group message its nicknames
+            { ...w.direct, channel_type: 3, nicks: { [w.ids.user]: "Nick" }, mention_here: true },
+            { ...w.decorated, channel_type: 0 },
+        ],
+    },
     { type: "MESSAGE_UPDATE", bases: (w) => [w.message, w.decorated] },
     {
         type: "MESSAGE_REACTION_ADD",
@@ -749,6 +762,20 @@ const gatewayTargets: readonly GatewayTarget[] = [
                 emoji,
                 member: w.memberRead,
             })),
+    },
+    {
+        type: "MESSAGE_DELETE",
+        bases: (w) => [
+            { id: w.message.id, channel_id: w.ids.channel },
+            {
+                id: w.message.id,
+                channel_id: w.ids.channel,
+                guild_id: w.ids.guild,
+                content: "deleted",
+                author_id: w.ids.user,
+                member: w.decorated.member,
+            },
+        ],
     },
     {
         type: "TYPING_START",

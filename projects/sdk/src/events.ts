@@ -159,6 +159,21 @@ export interface GuildCreate extends Guild {
      * A retained join dispatch may replay during Resume, so this is not an exactly-once notification
      */
     readonly isNewJoin: boolean
+    /** Members of the community when Fluxer delivered this event, or absent when the event carried none. Fluxer documents
+     * it on every create. This is a snapshot that GUILD_UPDATE does not refresh and the guild cache does not store, so it
+     * can be outdated immediately. Request current totals with guilds.fetchCounts, which returns a GuildCount
+     */
+    readonly memberCount?: number
+    /** Online members of the community when Fluxer delivered this event, or absent when the event carried none. Fluxer
+     * counts members with a live gateway session whose status is not offline or invisible, and every recipient receives
+     * the same guild-wide figure. It has the snapshot limits of memberCount. GuildCount.onlineCount differs, because it
+     * counts only the online members visible to the requesting account
+     */
+    readonly onlineCount?: number
+    /** ISO 8601 time the bot joined the community, null when Fluxer reports none, or absent when the event carried no
+     * value. It is delivered with this event only and is not part of Guild or the guild cache
+     */
+    readonly joinedAt?: string | null
 }
 
 /** Payload types for community availability, configuration and visibility events.
@@ -325,6 +340,19 @@ export interface VoiceState {
      * Fluxer sets it to false while the participant lacks the Stream permission. An omitted flag reads as false
      */
     readonly isSelfStreaming: boolean
+    /** Whether the participant's client supports end-to-end encrypted voice. An omitted flag reads as false */
+    readonly isE2eeCapable: boolean
+    /**
+     * Whether this connection exchanges media peer-to-peer and not through LiveKit. A channel or call is peer-to-peer
+     * when every voice state in it has this flag. Fluxer sets it to false on all of them when it converts the channel or
+     * call to LiveKit, which cannot be undone until the channel or call has emptied. An omitted flag reads as false
+     */
+    readonly isPeerToPeer: boolean
+    /**
+     * Fluxer's monotonic version of this participant's voice state, omitted when Fluxer sends none.
+     * It versions one participant's state only, so values of different participants are not comparable
+     */
+    readonly version?: number
     /**
      * Keys of the screen shares this connection is watching, empty when it watches none or Fluxer omits them.
      * A key reads `{guildId}:{channelId}:{connectionId}` for a community voice channel and `dm:{channelId}:{connectionId}`

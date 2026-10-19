@@ -25,6 +25,9 @@ const fields: Record<MessageField, true> = {
     type: true,
     flags: true,
     mentionedEveryone: true,
+    mentionedHere: true,
+    channelType: true,
+    nicknames: true,
     embeds: true,
     attachments: true,
     stickers: true,
@@ -71,9 +74,19 @@ export function createMessageDecoder<F extends MessageFields | undefined = undef
     return ((value: unknown) => decodeMessage(value, fields)) as MessageDecoder<SelectedMessage<F>>
 }
 
-/** The same selection for gateway dispatches, which alone can carry the author's member */
+/** The gateway dispatch types that carry a message, which differ in the fields they add */
+export type GatewayMessageDispatch = "MESSAGE_CREATE" | "MESSAGE_UPDATE"
+
+/** One validated client selection for gateway dispatches, given the type of the dispatch being decoded */
+export type GatewayMessageDecoder<M extends MessageCore> = (
+    value: unknown,
+    type: GatewayMessageDispatch,
+) => M | undefined
+
+/** The same selection for gateway dispatches, which alone can carry the author's member and the fields of a created message */
 export function createGatewayMessageDecoder<F extends MessageFields | undefined = undefined>(
     fields: ReadonlySet<MessageField> | undefined,
-): MessageDecoder<SelectedMessage<F>> {
-    return ((value: unknown) => decodeGatewayMessage(value, fields)) as MessageDecoder<SelectedMessage<F>>
+): GatewayMessageDecoder<SelectedMessage<F>> {
+    return ((value: unknown, type: GatewayMessageDispatch) =>
+        decodeGatewayMessage(value, fields, type)) as GatewayMessageDecoder<SelectedMessage<F>>
 }

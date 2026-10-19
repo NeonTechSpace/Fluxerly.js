@@ -25,7 +25,7 @@ import { nowMs } from "../clock.js"
 import { failingFieldPath } from "../decode/trace.js"
 import { TransportError } from "../effect-failures.js"
 import type { ClientLogger } from "../logging.js"
-import type { MessageDecoder } from "../message-fields.js"
+import type { GatewayMessageDecoder } from "../message-fields.js"
 import type { CountGatewayOwner } from "../counts.js"
 import type { MemberChunkOwner } from "../member-chunks.js"
 import type { PresenceGatewayOwner } from "../presence.js"
@@ -107,7 +107,7 @@ export interface GatewayObserver {
 
 /** Everything one gateway attempt needs. Callbacks run synchronously on the socket's event turn */
 export interface GatewaySessionOptions<M extends MessageCore> {
-    readonly messageDecoder: MessageDecoder<M>
+    readonly messageDecoder: GatewayMessageDecoder<M>
     /** Complete gateway URL, including the protocol version and encoding query */
     readonly url: string
     readonly token: Redacted.Redacted<string>

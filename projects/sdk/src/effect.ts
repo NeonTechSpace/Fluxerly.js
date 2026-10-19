@@ -499,6 +499,7 @@ export type {
     RoleCreate,
     RoleEdit,
     GuildMember,
+    DeletedMessageMember,
     MemberReference,
     VoiceConnectionReference,
     VoiceMuteInput,
