@@ -358,6 +358,71 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
     })
 }
 
+/** Dispatch types that Fluxer decorates with the acting member, read from the guild's state at dispatch time */
+export const memberDecoratedDispatches: ReadonlySet<string> = new Set([
+    "MESSAGE_CREATE",
+    "MESSAGE_UPDATE",
+    "MESSAGE_REACTION_ADD",
+    "MESSAGE_REACTION_REMOVE",
+    "TYPING_START",
+])
+
+/**
+ * The community and account that a message, reaction or typing dispatch's member describes, or undefined when the dispatch
+ * attaches no member, has no usable guild ID, or comes from a webhook, whose author is never a member
+ */
+export function dispatchMemberTarget(
+    type: string,
+    body: unknown,
+): { readonly guildId: string; readonly userId: string } | undefined {
+    if (!record(body) || body.member === undefined || body.member === null || !identifier(body.guild_id))
+        return undefined
+    if (type === "MESSAGE_CREATE" || type === "MESSAGE_UPDATE") {
+        const author = body.author
+        if (!record(author) || !identifier(author.id) || (body.webhook_id !== undefined && body.webhook_id !== null))
+            return undefined
+        return { guildId: body.guild_id, userId: author.id }
+    }
+    return identifier(body.user_id) ? { guildId: body.guild_id, userId: body.user_id } : undefined
+}
+
+/**
+ * The member that Fluxer attached to a message, reaction or typing dispatch, or undefined when it sent none or sent one that
+ * does not decode. A message carries its member without a user, so the author completes it. A reaction or typing member
+ * carries its user, which must be the acting user and have a username. When Fluxer sends it with the ID only, the name
+ * resolver may supply the name from a member already held, and otherwise the member is left out rather than invented.
+ * Unlike a voice state, which is rejected whole, a malformed member only leaves the decoration out, because it must never
+ * cost the event itself
+ */
+export function decodeDispatchMember(
+    type: string,
+    body: unknown,
+    known?: (guildId: string, userId: string) => GuildMember | undefined,
+): GuildMember | undefined {
+    const target = dispatchMemberTarget(type, body)
+    if (!target || !record(body) || !record(body.member)) return undefined
+    if (type === "MESSAGE_CREATE" || type === "MESSAGE_UPDATE") {
+        const author = body.author as Record<string, unknown>
+        return decodeMember(
+            { ...body.member, user: { id: author.id, username: author.username, bot: author.bot } },
+            target.guildId,
+        )
+    }
+    let source: Record<string, unknown> = body.member
+    const user = source.user
+    // Only an absent name may come from a held member. A name or bot flag that is present and invalid is malformed
+    if (record(user) && user.id === target.userId && user.username === undefined) {
+        const held = known?.(target.guildId, target.userId)
+        if (held)
+            source = {
+                ...source,
+                user: { ...user, username: held.username, bot: user.bot === undefined ? held.isBot : user.bot },
+            }
+    }
+    const member = decodeMember(source, target.guildId)
+    return member?.userId === target.userId ? member : undefined
+}
+
 export function guildFetch(guildId: string): GuildValidationResult<Guild> {
     if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     return {

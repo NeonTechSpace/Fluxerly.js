@@ -3,6 +3,7 @@ import type { Embed, EmbedInput } from "./embeds.js"
 import type { EmbedBuilder } from "./builders.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
 import type { GuildThreadChannel } from "./channels.js"
+import type { GuildMember } from "./guilds.js"
 
 /** Identify a message by its channel ID and message ID.
  * Pass this plain object to message operations without fetching the message first.
@@ -136,6 +137,17 @@ export interface Message extends MessageReference {
      * while the thread exists, on a message with MessageFlags.HasThread. Reading this field performs no request
      */
     readonly thread?: GuildThreadChannel
+    /**
+     * The author's community membership as Fluxer attached it to a messageCreate or messageUpdate event, read from the
+     * community's current state at dispatch time. It is a frozen observation completed with the author's username and bot
+     * flag, with the community taken from guildId.
+     * Gateway events only: REST reads never carry it. It is also omitted for direct messages, webhook messages and authors
+     * who left the community, and when the member Fluxer sent does not decode, which never costs the event itself.
+     * It is delivered on the event only and is not kept in the message cache, whose copy of the message omits it, so a
+     * later cache read never shows a stale member. The members cache holds the current one: With it enabled, the SDK
+     * stores this member there whether or not messageFields selects it
+     */
+    readonly member?: GuildMember
     /** Partial account identity supplied as the author, without profile lookup or account methods.
      * Webhook and deleted-user authors remain partial MessageUser values and must not be treated as complete User objects
      */
@@ -152,7 +164,8 @@ export interface Message extends MessageReference {
 export type MessageCore = Pick<Message, "id" | "channelId" | "content" | "author" | "type" | "guildId">
 
 /** Name of a Message property accepted by the client's messageFields option.
- * Selecting a MessageCore property, which is always kept, does not change the result
+ * Selecting a MessageCore property, which is always kept, does not change the result.
+ * The member field appears only on messageCreate and messageUpdate events, as Message.member describes
  *
  * @category Messages
  */
@@ -218,11 +231,11 @@ export interface MessageUser {
 }
 
 /** One resolved reply supplied inline with a message.
- * This is a frozen Message snapshot without another resolved reply, keeping nesting finite and avoiding hidden fetches
+ * This is a frozen Message snapshot without another resolved reply or member, keeping nesting finite and avoiding hidden fetches
  *
  * @category Messages
  */
-export type ReferencedMessage = Omit<Message, "referencedMessage">
+export type ReferencedMessage = Omit<Message, "referencedMessage" | "member">
 
 /** Channel identity supplied in message or forward-snapshot mention data.
  * It contains only an ID, name and type, not cached channel settings or a decision that the bot may access it

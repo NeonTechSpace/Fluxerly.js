@@ -9,7 +9,12 @@ import * as Schedule from "effect/Schedule"
 import { ConfigurationError } from "#sdk/errors"
 import type { MessageCacheSettings, ResourceCacheSettings } from "#sdk/cache"
 import type { Message, MessageCore, MessageFields, SelectedMessage } from "#sdk/messages"
-import { createMessageDecoder, snapshotMessageFields, type MessageDecoder } from "./message-fields.js"
+import {
+    createGatewayMessageDecoder,
+    createMessageDecoder,
+    snapshotMessageFields,
+    type MessageDecoder,
+} from "./message-fields.js"
 import { record } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 import { loggingConfiguration, type ClientLogger } from "./logging.js"
@@ -164,6 +169,8 @@ function resourceConfiguration(value: unknown): ResourceSettings | Configuration
 
 export interface Configuration<M extends MessageCore = Message> {
     readonly decodeMessage: MessageDecoder<M>
+    /** Decodes gateway message dispatches, which alone can carry the author's member */
+    readonly decodeGatewayMessage: MessageDecoder<M>
     readonly uploadMaxBytes: number
     readonly logging: ClientLogger
     readonly token: Redacted.Redacted<string>
@@ -448,6 +455,7 @@ export function validateConfiguration<F extends MessageFields | undefined = unde
         if (transport instanceof ConfigurationError) return Effect.fail(transport)
         return Effect.succeed({
             decodeMessage: createMessageDecoder<F>(selectedFields),
+            decodeGatewayMessage: createGatewayMessageDecoder<F>(selectedFields),
             uploadMaxBytes,
             logging,
             cache,

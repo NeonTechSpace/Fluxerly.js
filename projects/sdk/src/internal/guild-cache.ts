@@ -17,7 +17,14 @@ import type { GuildEmoji, GuildSticker } from "#sdk/expressions"
 import type { User } from "#sdk/users"
 import type { EventMap, EventName } from "#sdk/events"
 import type { ResourceCacheSettings } from "#sdk/cache"
-import { decodeGuild, decodeGuildSnapshot, decodeMember, decodeRoles } from "./guilds.js"
+import {
+    decodeDispatchMember,
+    decodeGuild,
+    decodeGuildSnapshot,
+    decodeMember,
+    decodeRoles,
+    dispatchMemberTarget,
+} from "./guilds.js"
 import { expressionItems } from "./expressions.js"
 import { ExpiryQueue, ExpiryTimer } from "./expiry-queue.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
@@ -388,6 +395,49 @@ export class GuildCache {
             this.#evict({ kind: "roles", guildId })
             this.#evict({ kind: "members", guildId })
         }
+        this.#schedule()
+    }
+
+    /**
+     * Store the member that Fluxer attached to a message, reaction or typing dispatch, exactly as a member add or update
+     * does. Fluxer reads it from the guild's current state when it dispatches, which is why these dispatches may refresh the
+     * cache while a voice state's member, which can lag behind role edits, never does. It is read from the raw body so
+     * that the client's message field selection cannot hide it. A member that does not decode is left out of the event, and
+     * evicts the account's cached member because the dispatch could have changed it, which this returns true for. A
+     * reaction or typing member that Fluxer sends with the user's ID only is completed from the member already held
+     */
+    decoratedEvent(event: string, value: unknown): boolean {
+        if (this.#closed || !this.settings.members) return false
+        const target = dispatchMemberTarget(event, value)
+        if (!target) return false
+        const member = decodeDispatchMember(
+            event,
+            value,
+            (guildId, userId) => this.#peek({ kind: "members", guildId, id: userId })?.value as GuildMember | undefined,
+        )
+        if (member) this.#observe("members", member)
+        else this.#evict({ kind: "members", guildId: target.guildId, id: target.userId })
+        this.#schedule()
+        return member === undefined
+    }
+
+    /**
+     * Drop what a rejected message, reaction or typing dispatch could have changed in the member cache. Its member is
+     * current state that was never read, so the cached copy of the acting account may now be stale. Without a usable
+     * account ID the community's members go, and without a usable community ID every member does. A dispatch without a
+     * member, and a webhook's message, could not have changed any
+     */
+    evictRejectedMember(event: string, value: unknown) {
+        if (this.#closed || !this.settings.members) return
+        if (!record(value) || value.member === undefined || value.member === null) return
+        const message = event === "MESSAGE_CREATE" || event === "MESSAGE_UPDATE"
+        // Only a webhook ID that decodes proves the author is no member, so a malformed one still evicts
+        if (message && identifier(value.webhook_id)) return
+        const author = record(value.author) && identifier(value.author.id) ? value.author.id : value.author_id
+        const actor = message ? author : value.user_id
+        if (!identifier(value.guild_id)) this.clearKind("members")
+        else if (identifier(actor)) this.#evict({ kind: "members", guildId: value.guild_id, id: actor })
+        else this.#evict({ kind: "members", guildId: value.guild_id })
         this.#schedule()
     }
 

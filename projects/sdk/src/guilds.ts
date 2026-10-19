@@ -450,7 +450,8 @@ export interface VoiceDeafenInput {
 }
 
 /** A user's membership in one community, including assigned roles, community-profile settings and available moderation state.
- * This frozen snapshot comes from REST or member-add/update events. It does not update in place or calculate
+ * This frozen snapshot comes from REST, member-add/update events, or the member Fluxer attaches to message, reaction, typing
+ * and voice-state events. It does not update in place or calculate
  * permissions. Account identity and community-specific customization are distinct
  *
  * @category Guilds and members

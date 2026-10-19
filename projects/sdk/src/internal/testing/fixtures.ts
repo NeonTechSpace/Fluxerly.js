@@ -394,6 +394,12 @@ export interface WireMessage {
     readonly attachments: readonly unknown[]
     /** Stickers */
     readonly stickers: readonly unknown[]
+    /**
+     * The author's community membership as MESSAGE_CREATE and MESSAGE_UPDATE carry it, without a user and guild ID because
+     * the author and guild_id of the message supply them. The default message has none, so pass the result of
+     * fixtures.member() without its user and guild_id to emit a decorated event. REST reads never carry it
+     */
+    readonly member?: Omit<WireMember, "guild_id" | "user">
 }
 
 /**

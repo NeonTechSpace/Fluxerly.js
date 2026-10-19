@@ -341,7 +341,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     fields: { phase, mode },
                 })
                 return yield* runGatewaySession({
-                    messageDecoder: configuration.decodeMessage,
+                    messageDecoder: configuration.decodeGatewayMessage,
                     url,
                     token: configuration.token,
                     session: shard.session,

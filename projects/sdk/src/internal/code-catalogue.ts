@@ -471,6 +471,12 @@ export const logCodes = {
             "A thread in a community snapshot failed validation, so the channel cache does not hold it. The failing entry is in fields.field",
         action: "Report it if Fluxer's payloads changed, and include the field",
     },
+    "gateway.memberSkipped": {
+        levels: ["warn"],
+        meaning:
+            "The member attached to a message, reaction or typing dispatch failed validation, so the event arrives without it and the member cache dropped its entry for the account. Logged only while the member cache is enabled",
+        action: "Report it if Fluxer's payloads changed, and include the dispatch type",
+    },
     "gateway.unknownDispatch": {
         levels: ["debug"],
         meaning: "A dispatch type that this SDK version does not handle was ignored",

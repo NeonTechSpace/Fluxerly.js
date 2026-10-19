@@ -387,6 +387,7 @@ const recordedEvents: readonly EventName[] = [
     "messageCreate",
     "messageUpdate",
     "messageReactionAdd",
+    "typingStart",
     "guildCreate",
     "voiceStateSnapshot",
     "guildChannelCreate",
@@ -577,6 +578,9 @@ function wire(f: Fixtures) {
         communication_disabled_until: "2099-01-01T00:00:00.000Z",
     })
     const { guild_id: _memberGuild, ...memberRead } = member
+    // Fluxer attaches the author's member to a guild message without its user
+    const { user: _memberUser, ...decoratedMember } = memberRead
+    const decorated = { ...message, member: decoratedMember }
     const { guild_id: _botGuild, ...botMember } = f.member({ user: f.botUser() })
     const everyone = f.role({ id: guild, name: "@everyone", position: 0, permissions: "104324673" })
     const role = f.role({
@@ -696,6 +700,7 @@ function wire(f: Fixtures) {
         ids: { guild, channel, user, bot, roleId },
         mentioned,
         message,
+        decorated,
         forward,
         direct,
         member,
@@ -731,8 +736,8 @@ const privateChannel = (body: unknown) =>
     isRecord(body) && (body.guild_id === undefined || body.guild_id === null) && body.type === 999 ? 0 : 1
 
 const gatewayTargets: readonly GatewayTarget[] = [
-    { type: "MESSAGE_CREATE", bases: (w) => [w.message, w.forward, w.direct] },
-    { type: "MESSAGE_UPDATE", bases: (w) => [w.message] },
+    { type: "MESSAGE_CREATE", bases: (w) => [w.message, w.decorated, w.forward, w.direct] },
+    { type: "MESSAGE_UPDATE", bases: (w) => [w.message, w.decorated] },
     {
         type: "MESSAGE_REACTION_ADD",
         bases: (w) =>
@@ -742,7 +747,21 @@ const gatewayTargets: readonly GatewayTarget[] = [
                 message_id: w.message.id,
                 guild_id: w.ids.guild,
                 emoji,
+                member: w.memberRead,
             })),
+    },
+    {
+        type: "TYPING_START",
+        bases: (w) => [
+            { channel_id: w.ids.channel, user_id: w.ids.user, guild_id: w.ids.guild, timestamp: 1_800_000_000 },
+            {
+                channel_id: w.ids.channel,
+                user_id: w.ids.user,
+                guild_id: w.ids.guild,
+                timestamp: 1_800_000_000,
+                member: w.memberRead,
+            },
+        ],
     },
     {
         type: "GUILD_CREATE",

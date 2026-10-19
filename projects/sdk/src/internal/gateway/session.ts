@@ -146,7 +146,7 @@ export interface GatewaySessionOptions<M extends MessageCore> {
               readonly detach: () => void
           }
         | undefined
-    /** Guild and channel cache intake for guild lifecycle and expression dispatches, when a resource cache is enabled */
+    /** Guild, channel and member cache intake for guild lifecycle, expression and member-decorated dispatches, when a guild, channel or message cache is enabled */
     readonly onGuild?: ((event: string, value: unknown) => void) | undefined
     readonly presence?: PresenceGatewayOwner | undefined
     readonly counts?: CountGatewayOwner | undefined

@@ -44,6 +44,8 @@ Fluxer also delivers notices, such as a member joining or a pinned message, as m
 
 </details>
 
+A `messageCreate` or `messageUpdate` event for a community message can carry `message.member`, the author's community membership as Fluxer held it when it sent the event, with roles, nickname and join time. It is absent on messages from REST reads, direct messages, webhooks and authors who left the community, and the message cache does not keep it, so read it in the handler. With `cache.members` enabled, `members.get` then answers for that author without a request. The same member arrives as `reaction.member` on `messageReactionAdd` and `messageReactionRemove` events and as `typing.member` on `typingStart` events. A member that Fluxer sends in a form the SDK cannot read is left off, and the event still arrives
+
 Received messages can carry `message.messageReference`, which points at a replied-to or forwarded message, or at the source of an announcement copy or follow notice. Its `channelId` is always present, but `id` is optional. Check `id`, then build a `MessageReference` from both fields for a fetch or reply. A follow notice identifies only the source channel. See [announcement channels](/docs/{{version}}/announcement-channels/) for publishing messages and handling their copies
 
 Sends and edits accept only `MessageFlags.SuppressEmbeds` and `MessageFlags.SuppressNotifications`. The SDK rejects any other flag before sending the request. Fluxer sets `Crossposted`, `IsCrosspost` and `SourceMessageDeleted` itself

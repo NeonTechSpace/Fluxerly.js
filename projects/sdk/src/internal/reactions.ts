@@ -8,6 +8,7 @@ import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-valida
 import { format } from "#sdk/helpers"
 import { identifier, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
+import { decodeDispatchMember } from "./guilds.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
     const input = query === undefined ? {} : query
@@ -170,5 +171,11 @@ export function decodeReaction(event: keyof typeof reactionEvents, value: unknow
     if (!decoded) return undefined
     if (event === "MESSAGE_REACTION_REMOVE_EMOJI") return Object.freeze({ ...target, emoji: decoded })
     if (!identifier(value.user_id)) return undefined
-    return Object.freeze({ ...target, emoji: decoded, userId: value.user_id })
+    const member = decodeDispatchMember(event, value)
+    return Object.freeze({
+        ...target,
+        emoji: decoded,
+        userId: value.user_id,
+        ...(member === undefined ? {} : { member }),
+    })
 }

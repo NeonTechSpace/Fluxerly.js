@@ -4,7 +4,7 @@
  * Implements [SDK contracts: Public API model](/docs/SDK-CONTRACTS.md#public-api-model)
  */
 import { ConfigurationError } from "#sdk/errors"
-import { decodeMessage } from "./message.js"
+import { decodeGatewayMessage, decodeMessage } from "./message.js"
 import type { MessageCore, MessageField, MessageFields, SelectedMessage } from "#sdk/messages"
 
 /** Internal observation when the caller's runtime selection is not known statically */
@@ -38,6 +38,7 @@ const fields: Record<MessageField, true> = {
     messageSnapshots: true,
     referencedMessage: true,
     thread: true,
+    member: true,
 }
 
 /** Snapshot public field names once, without retaining the caller's array or constructing message data */
@@ -68,4 +69,11 @@ export function createMessageDecoder<F extends MessageFields | undefined = undef
 ): MessageDecoder<SelectedMessage<F>> {
     // Configuration validates and copies F before binding this projection
     return ((value: unknown) => decodeMessage(value, fields)) as MessageDecoder<SelectedMessage<F>>
+}
+
+/** The same selection for gateway dispatches, which alone can carry the author's member */
+export function createGatewayMessageDecoder<F extends MessageFields | undefined = undefined>(
+    fields: ReadonlySet<MessageField> | undefined,
+): MessageDecoder<SelectedMessage<F>> {
+    return ((value: unknown) => decodeGatewayMessage(value, fields)) as MessageDecoder<SelectedMessage<F>>
 }

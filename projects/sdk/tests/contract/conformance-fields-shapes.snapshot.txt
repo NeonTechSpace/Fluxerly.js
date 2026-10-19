@@ -2322,6 +2322,7 @@ field|shared|Message.embeds|readonly Embed[]|optional=false|nullable=false
 field|shared|Message.flags|number | undefined|optional=true|nullable=false
 field|shared|Message.guildId|string | undefined|optional=true|nullable=false
 field|shared|Message.id|string|optional=false|nullable=false
+field|shared|Message.member|GuildMember | undefined|optional=true|nullable=false
 field|shared|Message.mentionChannels|null | readonly MessageChannelMention[] | undefined|optional=true|nullable=true
 field|shared|Message.mentionRoleIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|Message.mentionedEveryone|boolean | undefined|optional=true|nullable=false
@@ -2462,6 +2463,7 @@ field|shared|MessageReaction.channelId|string|optional=false|nullable=false
 field|shared|MessageReaction.emoji|ReactionEmoji|optional=false|nullable=false
 field|shared|MessageReaction.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageReaction.id|string|optional=false|nullable=false
+field|shared|MessageReaction.member|GuildMember | undefined|optional=true|nullable=false
 field|shared|MessageReaction.userId|string|optional=false|nullable=false
 field|shared|MessageReactionBatch.channelId|string|optional=false|nullable=false
 field|shared|MessageReactionBatch.guildId|string | undefined|optional=true|nullable=false
@@ -3015,6 +3017,7 @@ field|native|TimeoutOptions.timeoutReason|null | string | undefined|optional=tru
 field|shared|TimeoutStateOptions.now|Date | undefined|optional=true|nullable=false
 field|shared|TypingStart.channelId|string|optional=false|nullable=false
 field|shared|TypingStart.guildId|string | undefined|optional=true|nullable=false
+field|shared|TypingStart.member|GuildMember | undefined|optional=true|nullable=false
 field|shared|TypingStart.timestamp|number|optional=false|nullable=false
 field|shared|TypingStart.userId|string|optional=false|nullable=false
 field|shared|UnknownWebhook.avatar|null | string|optional=false|nullable=true

@@ -29,6 +29,7 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
 import { decodeThread } from "./channel-decode.js"
+import { decodeDispatchMember } from "./guilds.js"
 import { count, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 
@@ -85,6 +86,20 @@ export function decodeMessage(
 export function decodeMessage(value: unknown, fields?: ReadonlySet<MessageField>): MessageObservation | undefined {
     const decoded = decodeMessageValue(value, fields, true, true)
     return decoded === true ? undefined : decoded
+}
+
+/**
+ * Decode a MESSAGE_CREATE or MESSAGE_UPDATE body, which unlike a REST message can carry the author's member.
+ * The member is a decoration, so one that does not decode is left out and never costs the message
+ */
+export function decodeGatewayMessage(
+    value: unknown,
+    fields: ReadonlySet<MessageField> | undefined,
+): MessageObservation | undefined {
+    const decoded = decodeMessage(value, fields)
+    if (decoded === undefined || (fields !== undefined && !fields.has("member"))) return decoded
+    const member = decodeDispatchMember("MESSAGE_CREATE", value)
+    return member === undefined ? decoded : Object.freeze({ ...decoded, member })
 }
 
 function decodeMessageValue(

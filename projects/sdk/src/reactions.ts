@@ -1,5 +1,6 @@
 import type { MessageReference } from "./messages.js"
 import type { GuildEmoji } from "./expressions.js"
+import type { GuildMember } from "./guilds.js"
 
 /** Choose one page of users who reacted with a particular emoji.
  * Pass to messages.fetchReactionUsers. Use iterateReactionUsers to traverse bounded multiple pages.
@@ -76,7 +77,8 @@ export interface ReactionEmoji {
 /** Message address carried by a reaction event, with optional community context.
  * The `id` field is the message ID.
  * Gateway reconnection can miss events. An event does not show current counts or everyone who reacted.
- * Additional provider data, such as member details and session identifiers, is not retained
+ * Additional provider data, such as session identifiers, is not retained. The acting member of an addition or removal
+ * is available only as MessageReaction.member
  *
  * @category Messages
  */
@@ -95,6 +97,15 @@ export interface MessageReaction extends ReactionTarget {
     readonly userId: string
     /** Emoji whose reaction changed */
     readonly emoji: ReactionEmoji
+    /**
+     * Community membership of the user whose reaction changed, as Fluxer attached it to the event from the community's
+     * current state at dispatch time. It is a frozen observation, omitted in direct messages, for users who left the
+     * community, and when the member Fluxer sent does not decode or comes without the user's name, which never costs the
+     * event itself.
+     * With the members cache enabled, the SDK also stores this member there, completing a nameless one from the member
+     * already cached for the user, and dropping the cached member when the one sent does not decode
+     */
+    readonly member?: GuildMember
 }
 
 /** Notice that every reaction using one emoji was cleared from a message.

@@ -446,7 +446,8 @@ export interface Members {
     /**
      * Look up a community member by decimal guildId and userId in the enabled cache, without a request.
      * Enable cache.members to retain members, and cache.roles for local role-name lookup.
-     * Explicit fetches or later gateway events can fill those caches.
+     * Explicit fetches or later gateway events can fill those caches, including the author or actor member that Fluxer attaches
+     * to message, reaction and typing events, so a member who just spoke can be present without a request.
      * The cache misses, stale-snapshot warnings, misuse and recency rules of guilds.get apply.
      * The example makes no requests when rendering observed role names.
      * A missing member gives undefined, and missing role names fall back to IDs.

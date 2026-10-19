@@ -948,6 +948,9 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         await ops.add(message, input)
         const added = await wait("messageReactionAdd", (value) => value.userId === botId && value.emoji.id === emoji.id)
         assert.equal(added.emoji.name, emoji.name)
+        // Fluxer attaches the reacting member with its user, so a missing name would omit it
+        assert.equal(added.member?.userId, botId)
+        assert.ok(typeof added.member.username === "string" && Array.isArray(added.member.roleIds))
         assert.deepEqual(await reactors(customPath), [botId])
         const collected = await selected.wait()
         assert.equal(collected.reason, "limit")
@@ -1042,7 +1045,11 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         report(stage, true)
         stage = "own_reaction_remove"
         await ops.remove(message, "👍")
-        assert.equal((await wait("messageReactionRemove", (value) => value.emoji.name === "👍")).userId, botId)
+        const removed = await wait("messageReactionRemove", (value) => value.emoji.name === "👍")
+        assert.equal(removed.userId, botId)
+        // A removal carries the member whose reaction changed, named like an addition's
+        assert.equal(removed.member?.userId, botId)
+        assert.equal(typeof removed.member.username, "string")
         assert.deepEqual(await reactors(encodeURIComponent("👍")), [])
         assert.deepEqual(await reactors(customPath), [botId])
         report(stage, true)
@@ -2690,6 +2697,12 @@ function observeMessageChanges(channelId) {
             )
             assert.equal(updated.author.id, botId)
             assert.ok(Object.isFrozen(updated.author))
+            // Fluxer attaches the author's community member, without its user, and the SDK completes it from the author
+            assert.equal(updated.member?.userId, botId)
+            assert.equal(updated.member.guildId, updated.guildId)
+            assert.equal(updated.member.username, updated.author.username)
+            assert.ok(Array.isArray(updated.member.roleIds) && Object.isFrozen(updated.member))
+            report("gateway_update_member", true)
             assert.equal(
                 (await api("GET", `/channels/${channelId}/messages/${updated.id}`)).data?.content,
                 updated.content,
@@ -2697,6 +2710,7 @@ function observeMessageChanges(channelId) {
             if (get) {
                 const cached = await waitForCache(get, updated, (current) => current?.content === updated.content)
                 assert.equal(cached.author.id, botId)
+                assert.equal(cached.member, undefined)
                 report("cache_gateway_update", true)
             }
             report(stage, true)

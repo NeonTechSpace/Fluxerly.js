@@ -180,6 +180,16 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         /** Cache individual memberships from explicit reads, REST pages, member add or update events and the members a guild create
          * event lists, which are the bot's own and those in voice channels. The guild create events sent while a session starts
          * list member accounts by ID only, so only the bot's own member, completed from READY's account, is stored from them.
+         * The member that Fluxer attaches to message create and update, reaction add and remove, and typing events refreshes
+         * it too, because Fluxer reads that member from the community's current state when it dispatches the event. It is stored
+         * whatever messageFields selects. A reaction or typing member that arrives without the user's name is completed from
+         * the member already cached before it is stored. When the member of such an event does not decode, or the whole event
+         * is rejected as malformed, the account's cached member is removed because the cached copy may now be stale. When a
+         * rejected event does not identify the account, the community's cached members are removed, and when it does not
+         * identify the community either, every cached member is. A member that fails to decode logs gateway.memberSkipped.
+         * A voice state's member is never stored, because it can lag behind role edits.
+         * The cache only receives these when Fluxer sends the events, so enabling it requests no extra dispatches
+         * and a bot that receives no such events fills it from reads alone.
          * Member removal clears that membership.
          * Successful or uncertain role assignment clears the target
          */

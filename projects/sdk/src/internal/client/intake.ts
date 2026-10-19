@@ -14,6 +14,7 @@ import type { ChannelCache } from "../channel-cache.js"
 import { identifier, record } from "../decode/primitives.js"
 import { isMessageEvent } from "../events.js"
 import type { GuildCache } from "../guild-cache.js"
+import { memberDecoratedDispatches } from "../guilds.js"
 import type { ClientLogger } from "../logging.js"
 import { threadParentTypes } from "../thread-events.js"
 import type { UserCache } from "../user-cache.js"
@@ -76,10 +77,19 @@ export function applyEvent<M extends MessageCore, K extends EventName>(
     if (event === "directMessageDelete" && "id" in message) cache?.deleteChannel(message.id)
     if (event === "guildChannelDelete" || event === "threadDelete" || event === "threadMembersUpdate")
         applyThreadEffects(caches, event, message)
-    if (isMessageEvent<typeof event, M>(event, message)) cache?.observe(message)
+    // The cache keeps no member snapshot: It would go stale unseen, and REST copies of the message never carry it.
+    // The member cache holds the current one
+    if (isMessageEvent<typeof event, M>(event, message)) cache?.observe(withoutMember(message))
     else if ("ids" in message) {
         for (const id of message.ids) cache?.delete({ id, channelId: message.channelId })
     } else if (event === "messageDelete" && "id" in message && "channelId" in message) cache?.delete(message)
+}
+
+/** The message the handlers received, or a frozen copy without its member, never mutating the delivered object */
+function withoutMember<M extends MessageCore>(message: M): M {
+    if (!("member" in message)) return message
+    const { member: _member, ...rest } = message
+    return Object.freeze(rest) as unknown as M
 }
 
 /** Apply a channel deletion's or thread event's effects on cached messages and on the bot's cached thread memberships */
@@ -109,13 +119,30 @@ function applyThreadEffects<M extends MessageCore>(
     }
 }
 
-/** Raw guild lifecycle, expression and own thread membership intake, or undefined when no cache can use it */
+/**
+ * Raw guild lifecycle, expression, own thread membership and attached member intake, or undefined when no cache can use it.
+ * The members that message, reaction and typing dispatches carry reach only the member cache
+ */
 export function guildIntake<M extends MessageCore>(
     caches: ClientCaches<M>,
 ): ((event: string, value: unknown) => void) | undefined {
     const { cache, resources, channelCache, logging } = caches
     if (!resources && !channelCache && !cache) return undefined
     return (event, value) => {
+        if (memberDecoratedDispatches.has(event)) {
+            // Only the member cache reads the decoration, whatever message fields the subscribers selected
+            if (resources?.decoratedEvent(event, value)) {
+                const guildId = record(value) && identifier(value.guild_id) ? value.guild_id : undefined
+                logging.log({
+                    level: "warn",
+                    category: "gateway",
+                    code: "gateway.memberSkipped",
+                    message: `Skipped the member of a ${event} dispatch${guildId === undefined ? "" : ` in community ${guildId}`} because its data did not match the expected shape. The member cache dropped its entry for the account, and handlers still receive the event without the member`,
+                    fields: { dispatch: event, ...(guildId === undefined ? {} : { guildId }) },
+                })
+            }
+            return
+        }
         if (event === "THREAD_MEMBER_UPDATE") {
             // The dispatch table validated the body first. A cached thread carries the bot's membership, now stale
             if (record(value) && identifier(value.id) && identifier(value.guild_id))
@@ -141,6 +168,7 @@ export function guildIntake<M extends MessageCore>(
 export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M>, type: string, body: unknown) {
     const { cache, resources, channelCache, userCache } = caches
     const value = record(body) ? body : undefined
+    if (memberDecoratedDispatches.has(type)) resources?.evictRejectedMember(type, value)
     if (type.startsWith("MESSAGE_")) {
         // Reactions never change cached message snapshots
         if (type.startsWith("MESSAGE_REACTION")) return

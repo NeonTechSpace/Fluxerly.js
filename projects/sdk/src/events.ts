@@ -58,7 +58,8 @@ export interface GuildAuditLogEntryCreate extends AuditLogEntry {
 }
 
 /** Notice that an account began typing, not a lasting indication that it is still typing.
- * The SDK does not cache this notice or fetch the user or channel
+ * The SDK does not cache this notice or fetch the user or channel. With the members cache enabled, the member that Fluxer
+ * attached is stored there
  *
  * @category Events and collectors
  */
@@ -71,6 +72,13 @@ export interface TypingStart {
     readonly timestamp: number
     /** Owning community ID, when supplied. Absence alone does not prove that the channel is private */
     readonly guildId?: string
+    /**
+     * Community membership of the account that began typing, as Fluxer attached it from the community's current state at
+     * dispatch time. It is a frozen observation, omitted in direct messages, for accounts that left the community, and
+     * when the member Fluxer sent does not decode or comes without the account's name, which never costs the event itself.
+     * The members cache, when enabled, handles it as MessageReaction.member describes
+     */
+    readonly member?: GuildMember
 }
 
 /** Custom emoji collection supplied in one community update, frozen in received order.
@@ -326,7 +334,9 @@ export interface VoiceState {
     /**
      * The participant's community member data as Fluxer attached it to this voice state, omitted when Fluxer sends none.
      * Fluxer refreshes it when the voice state changes, so it can lag behind later nickname or role edits.
-     * It is a frozen observation and neither reads nor writes any member cache
+     * It is a frozen observation and neither reads nor writes any member cache, unlike the member on message, reaction and
+     * typing events, which Fluxer reads from current state at dispatch. A member that does not decode rejects the whole
+     * voice state, while those events only omit their member
      */
     readonly member?: GuildMember
 }
@@ -710,15 +720,19 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Does not identify the message. The timestamp may stay unchanged after unpin
      */
     readonly channelPinsUpdate: ChannelPinsUpdate
-    /** A short-lived typing notice, subject to Fluxer's delivery filtering. It is not an account presence snapshot or cache entry */
+    /** A short-lived typing notice, subject to Fluxer's delivery filtering. It is not an account presence snapshot or cache entry.
+     * Carries the typing member when Fluxer attached one, and the enabled member cache stores it
+     */
     readonly typingStart: TypingStart
     /** Newly created message using this client's selected fields, with frozen nested metadata rather than downloaded file contents.
-     * Updates the enabled message-cache observation
+     * Updates the enabled message-cache observation. Also stores the author's member, when Fluxer attached one, in the enabled
+     * member cache, whichever message fields the client selects
      */
     readonly messageCreate: M
     /** Message data supplied for an update, not previous-and-current values or a patch to merge.
      * Optional metadata may be absent. A non-text change can deliver the same selected values again.
-     * Replaces the enabled message-cache observation rather than merging absent metadata from an older snapshot
+     * Replaces the enabled message-cache observation rather than merging absent metadata from an older snapshot.
+     * Also stores the author's member, when Fluxer attached one, in the enabled member cache
      */
     readonly messageUpdate: M
     /** One deleted message's channel and message IDs, plus supplied community ID, text and author ID when available.
@@ -730,11 +744,15 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Evicts the listed enabled message-cache entries
      */
     readonly messageDeleteBulk: MessageBulkDeletion
-    /** One user's reaction addition, not synthesized from reaction batches or successful addReaction requests */
+    /** One user's reaction addition, not synthesized from reaction batches or successful addReaction requests.
+     * The enabled member cache stores the member Fluxer attached
+     */
     readonly messageReactionAdd: MessageReaction
     /** Reaction additions grouped by Fluxer. Listen to this and messageReactionAdd to observe both addition forms */
     readonly messageReactionAddMany: MessageReactionBatch
-    /** One user's reaction was removed, possibly by a moderator rather than that user */
+    /** One user's reaction was removed, possibly by a moderator rather than that user.
+     * The enabled member cache stores the member Fluxer attached
+     */
     readonly messageReactionRemove: MessageReaction
     /** All reactions on the target message were cleared, without a list of affected users */
     readonly messageReactionRemoveAll: ReactionTarget

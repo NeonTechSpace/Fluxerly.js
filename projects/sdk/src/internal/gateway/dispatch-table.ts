@@ -15,9 +15,11 @@ import { decodePinsUpdate } from "../pins.js"
 import {
     decodeGuildEvent,
     decodeGuildLifecycleEvent,
+    decodeDispatchMember,
     decodeVoiceState,
     decodeVoiceStateSnapshot,
     guildEvents,
+    memberDecoratedDispatches,
     guildLifecycleEvents,
 } from "../guilds.js"
 import { decodeChannelEvent, channelEvents, decodeThread } from "../channel-decode.js"
@@ -50,7 +52,7 @@ export interface DispatchContext {
 export interface DispatchSinks {
     /** Deliver a decoded event to the client's intake, which updates caches before subscribers see it */
     readonly emit: <K extends EventName>(event: K, value: EventMap<MessageCore>[K]) => void
-    /** Guild and channel cache intake over the raw body. Present only when a resource cache is enabled */
+    /** Guild, channel and member cache intake over the raw body. Present when the guild, channel or message cache is enabled */
     readonly guildCache?: ((type: string, body: unknown) => void) | undefined
     readonly presence?: Pick<PresenceGatewayOwner, "guildCreate"> | undefined
     readonly counts?: Pick<CountGatewayOwner, "receiveGuildCounts" | "receiveChannelMemberCounts"> | undefined
@@ -95,11 +97,13 @@ function decodeTypingStart(value: unknown): EventMap["typingStart"] | undefined 
         (value.guild_id !== undefined && value.guild_id !== null && !identifier(value.guild_id))
     )
         return undefined
+    const member = decodeDispatchMember("TYPING_START", value)
     return Object.freeze({
         channelId: value.channel_id,
         userId: value.user_id,
         timestamp: value.timestamp,
         ...(typeof value.guild_id === "string" ? { guildId: value.guild_id } : {}),
+        ...(member === undefined ? {} : { member }),
     })
 }
 
@@ -295,14 +299,17 @@ const entries: Record<string, DispatchEntry<unknown>> = {
     }),
     MESSAGE_CREATE: entry({
         decode: (body, context) => context.messageDecoder(body),
+        cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (message, sinks) => sinks.emit("messageCreate", message),
     }),
     MESSAGE_UPDATE: entry({
         decode: (body, context) => context.messageDecoder(body),
+        cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (message, sinks) => sinks.emit("messageUpdate", message),
     }),
     TYPING_START: entry({
         decode: decodeTypingStart,
+        cache: (_value, body, sinks, type) => guildCache(body, sinks, type),
         project: (typing, sinks) => sinks.emit("typingStart", typing),
     }),
     ...Object.fromEntries(
@@ -349,6 +356,10 @@ const entries: Record<string, DispatchEntry<unknown>> = {
             type,
             entry({
                 decode: (body) => decodeReaction(type, body),
+                // Only the addition or removal of one user's reaction carries the member
+                ...(memberDecoratedDispatches.has(type)
+                    ? { cache: (_value: unknown, body: unknown, sinks: DispatchSinks) => guildCache(body, sinks, type) }
+                    : {}),
                 project: (reaction, sinks) => sinks.emit(reactionEvents[type], reaction as never),
             }),
         ]),

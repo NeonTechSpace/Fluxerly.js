@@ -7,7 +7,7 @@
  * [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
 import type { Message } from "#sdk/messages"
-import { decodeMessage } from "./message.js"
+import { decodeGatewayMessage } from "./message.js"
 import { runGatewaySession, type GatewaySessionOptions } from "./gateway/session.js"
 
 export { AttemptFailure, classifyClose, runGatewaySession, type Session } from "./gateway/session.js"
@@ -19,4 +19,4 @@ export { AttemptFailure, classifyClose, runGatewaySession, type Session } from "
  * @public
  */
 export const runGateway = (options: Omit<GatewaySessionOptions<Message>, "messageDecoder">) =>
-    runGatewaySession({ ...options, messageDecoder: decodeMessage })
+    runGatewaySession({ ...options, messageDecoder: (value) => decodeGatewayMessage(value, undefined) })
