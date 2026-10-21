@@ -474,7 +474,7 @@ export interface NativePrefixCommandRouter<R = never, M extends MessageCore = Me
      * An empty usage suppresses inferred syntax, and an absent schema adds no argument syntax.
      * A selection that is empty, or whose group or ancestor include rejects, produces `[]`. No prefix resolver, guard, cooldown or handler is evaluated
      *
-     * The explicit UTF-16 page limit preserves surrogate pairs, but may split visible character clusters or Markdown.
+     * The explicit UTF-16 page limit is respected and pages end between visible characters, so surrogate pairs, flags and base characters with combining marks are not split, but a page can be shorter than the limit and Markdown may still be split. Only a single character longer than the limit is cut, between code points.
      * Page-edge whitespace is trimmed and empty pages are removed, so joining pages does not reconstruct the exact original text.
      * The application chooses which pages to send and how to handle mentions
      *

@@ -4,6 +4,12 @@ import * as native from "../../src/effect.js"
 
 afterEach(() => vi.unstubAllGlobals())
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+/** Whether an index of the text falls between two visible characters */
+const isGraphemeBoundary = (content: string, index: number): boolean =>
+    index >= content.length || graphemes.segment(content).containing(index)!.index === index
+
 /** Return the HelperError a plain helper throws for invalid input. Returning normally fails the test */
 function thrown(run: () => unknown): unknown {
     try {
@@ -170,6 +176,35 @@ test("splits losslessly at line, word and surrogate-safe hard boundaries", () =>
     expect(thrown(() => defaultApi.text.split(1 as never, { maxLength: 2 }))).toMatchObject({ reason: "text" })
 })
 
+test("splits between visible characters and still joins back to the input", () => {
+    const split = (content: string, maxLength: number) => defaultApi.text.split(content, { maxLength })
+    // A flag, a skin tone, a joined emoji and a combining mark are never separated
+    expect(split("aaaaaaaaa🇩🇪", 11)).toEqual(["aaaaaaaaa", "🇩🇪"])
+    expect(split("ab👍🏽c", 5)).toEqual(["ab", "👍🏽c"])
+    expect(split("ab👨‍👩‍👧‍👦c", 11)).toEqual(["ab", "👨‍👩‍👧‍👦", "c"])
+    expect(split("abcde\u0301f", 5)).toEqual(["abcd", "e\u0301f"])
+    // A carriage return and the line feed after it are one character, and a space before a combining mark is not a boundary
+    expect(split("ab\r\ncd", 3)).toEqual(["ab", "\r\n", "cd"])
+    expect(split("one\r\ntwo", 4)).toEqual(["one", "\r\n", "two"])
+    expect(split("one \u0301two three", 5)).toEqual(["one \u0301", "two ", "three"])
+    // A first character longer than the limit is cut between code points, which still advances
+    const long = "e" + "\u0301".repeat(7)
+    expect(split(long, 3)).toEqual([long.slice(0, 3), long.slice(3, 6), long.slice(6)])
+    expect(split("ab" + long + "cd", 4)).toEqual(["ab", long.slice(0, 4), long.slice(4), "cd"])
+    for (const content of [
+        "aaaaaaaaa🇩🇪 \u0301x\r\n",
+        "A🦊e\u0301\r\n👨‍👩‍👧‍👦 `code` @everyone\t",
+        "one \u0301two\r\nthree 👍🏽 four " + long,
+    ])
+        for (let maxLength = 2; maxLength < 16; maxLength++) {
+            const parts = split(content, maxLength)
+            expect(parts.join("")).toBe(content)
+            expect(parts.every((piece) => piece.length > 0 && piece.length <= maxLength && piece.isWellFormed())).toBe(
+                true,
+            )
+        }
+})
+
 test("truncates to the limit with a suffix, keeping surrogate pairs whole", () => {
     vi.stubGlobal("fetch", () => {
         throw Error("Pure helpers must not fetch")
@@ -213,8 +248,54 @@ test("truncates to the limit with a suffix, keeping surrogate pairs whole", () =
         expect(result.endsWith(suffix)).toBe(true)
         const kept = result.slice(0, result.length - suffix.length)
         expect(content.startsWith(kept)).toBe(true)
-        // Only a pair that straddles the cut may shorten the kept text, and then by one unit
-        expect(maxLength - suffix.length - kept.length).toBeLessThanOrEqual(1)
+        // The kept text ends between visible characters
+        expect(isGraphemeBoundary(content, kept.length)).toBe(true)
+    }
+})
+
+test("truncate cuts between visible characters", () => {
+    const truncate = (content: string, maxLength: number, suffix = "") =>
+        defaultApi.text.truncate(content, { maxLength, suffix })
+    // A flag is two regional indicators, four units, and is dropped whole
+    expect(truncate("aaaaaaaaa🇩🇪", 11)).toBe("aaaaaaaaa")
+    expect(truncate("aaaaaaaaa🇩🇪", 13)).toBe("aaaaaaaaa🇩🇪")
+    expect(truncate("aaaa🇩🇪b", 7, "…")).toBe("aaaa…")
+    // A skin tone, a joined emoji and a combining mark stay with their base
+    expect(truncate("ab👍🏽c", 5)).toBe("ab")
+    expect(truncate("ab👍🏽c", 6)).toBe("ab👍🏽")
+    expect(truncate("ab👨‍👩‍👧‍👦c", 10)).toBe("ab")
+    expect(truncate("ab👨‍👩‍👧‍👦c", 13)).toBe("ab👨‍👩‍👧‍👦")
+    expect(truncate("abe\u0301c", 3)).toBe("ab")
+    expect(truncate("abe\u0301c", 4)).toBe("abe\u0301")
+    // A carriage return and the line feed after it are one character
+    expect(truncate("ab\r\ncd", 3)).toBe("ab")
+    expect(truncate("ab\r\ncd", 4)).toBe("ab\r\n")
+    // A first character that does not fit in the room is never cut, so the suffix alone is returned
+    const long = "e" + "\u0301".repeat(50)
+    expect(truncate(long + "x", 10)).toBe("")
+    expect(truncate(long + "x", 10, "…")).toBe("…")
+    expect(truncate("😀".repeat(3) + "\u0301".repeat(50), 4)).toBe("😀😀")
+    expect(truncate("\u{1F1E9}" + "\u0301".repeat(50), 2)).toBe("")
+    expect(truncate("🇩🇪x", 4, "…")).toBe("…")
+    expect(truncate("🇩🇪x", 4, "")).toBe("🇩🇪")
+    expect(truncate("🇩🇪x", 3, "")).toBe("")
+    // With no room for text, the suffix alone is returned
+    expect(truncate("🇩🇪🇩🇪", 1, "…")).toBe("…")
+})
+
+test("split cuts a single huge character without scanning it again for every piece", () => {
+    const prototype = Object.getPrototypeOf(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(""))
+    const containing = vi.spyOn(prototype, "containing")
+    try {
+        const content = "e" + "\u0301".repeat(10_000)
+        const pieces = defaultApi.text.split(content, { maxLength: 10 })
+        expect(pieces).toHaveLength(1_001)
+        expect(pieces.join("")).toBe(content)
+        expect(pieces.every((piece) => piece.length <= 10)).toBe(true)
+        // One lookup for the character, not one per piece
+        expect(containing.mock.calls.length).toBeLessThan(10)
+    } finally {
+        containing.mockRestore()
     }
 })
 

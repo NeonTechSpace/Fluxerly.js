@@ -398,7 +398,7 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      * No schema means no inferred argument syntax, and an explicit empty usage suppresses it.
      * A selection that is empty, or whose group or ancestor include rejects, returns `[]`. Nothing is sent, and no prefix resolver, guard, cooldown or handler runs
      *
-     * Pages respect the UTF-16 length limit and do not split a character represented by two code units, but may split visible character clusters or Markdown.
+     * Pages respect the UTF-16 length limit and end between visible characters, so a character represented by two code units, a flag or a base character with combining marks is not split, but a page can be shorter than the limit and Markdown may still be split. Only a single character longer than the limit is cut, between code points.
      * Page-edge whitespace is trimmed and empty pages are removed, so joining pages is not a lossless reconstruction.
      * The caller selects pages to send and handles mentions
      *

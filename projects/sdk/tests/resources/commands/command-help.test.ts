@@ -130,6 +130,15 @@ test("default help filters frozen metadata once without running command callback
     expect(cooldownCalls).toBe(0)
 })
 
+test("default help pages end between visible characters", () => {
+    const router = commands
+        .create({ prefix: "!" })
+        .register({ name: "flag", description: "🇩🇪🇩🇪", execute: () => undefined })
+
+    // A flag is four units, so a six unit page ends before the second flag rather than inside it
+    expect(router.help({ prefix: "!", maxLength: 6 })).toEqual(["!flag", "🇩🇪", "🇩🇪"])
+})
+
 test("default help returns bounded Unicode pages with trimmed edges and supports empty selection reuse", () => {
     let router = commands.create({ prefix: "!" })
     router = router.register({ name: "unicode", description: "😀é😀", execute: () => undefined })
