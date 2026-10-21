@@ -19,10 +19,13 @@ Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly
 
 Every step can be rerun with the same inputs. Publication reads npm before uploading and never uploads a version twice
 
+Keep `.github/workflows/` unchanged on `main` from preparation until Release publish has announced the GitHub release.
+GitHub refuses to create a release whose source commit has workflow files that differ from `main` unless the token has the Workflows permission, and the release App does not have it
+
 ## Nightly builds
 
 Nightly builds need no manual step.
-Every day, [Release prepare](/.github/workflows/release-prepare.yml) builds `main` as the next nightly version and starts [Release publish](/.github/workflows/release-publish.yml) itself, without a checksum review.
+Every day at 01:00 UTC, [Release prepare](/.github/workflows/release-prepare.yml) builds `main` as the next nightly version and starts [Release publish](/.github/workflows/release-publish.yml) itself, without a checksum review.
 Publication then runs the same checks as any release and announces a GitHub prerelease that carries the docs snapshot
 
 A day whose SDK content matches the previous nightly publishes nothing.
@@ -55,7 +58,7 @@ When a pending major or minor note is removed, the next nightly's version can dr
 | `Candidate does not match the externally reviewed checksum` | The checksum input differs from the candidate | Copy the checksum from the preparation summary |
 | `Preparation workflow commit is not reachable from main` | Release prepare ran from a branch | Run Release prepare from `main` |
 | `Preparation is not a successful manual or scheduled run of this repository's release-prepare workflow` | The run ID is wrong, or the run failed or was still running after 5 minutes | Use the ID of a successful Release prepare run |
-| `GitHub rejected the OPERATION with HTTP 4xx` | GitHub refused the request, so nothing changed | Fix the cause, such as App permissions or tag rules, then rerun Release publish |
+| `GitHub rejected the OPERATION with HTTP 4xx` | GitHub refused the request, so nothing changed. A 403 on release creation can also mean workflow files changed on `main` after preparation | Fix the cause, such as App permissions or tag rules, then rerun Release publish. For workflow changes, revert them on `main`, rerun Release publish, then push them again |
 | `GitHub release creation is unconfirmed`, `asset deletion is unconfirmed` or `asset contents are unconfirmed` | A network or server failure left the outcome uncertain | Rerun Release publish. Reconciliation reads back after uncertain writes and replaces incomplete expected assets |
 | `Publish pending changes as a release candidate before stable` | Stable was selected from an RC source that has new changes | Run Release version PR with `channel: rc`, publish that RC, then select Stable |
 | `VERSION is a new major version or epoch` | A big release was selected for Stable without a published RC | Run Release version PR with `channel: rc`, publish that RC, then select Stable. See [release stages](/docs/RELEASING.md#release-stages) |
