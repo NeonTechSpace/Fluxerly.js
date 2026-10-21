@@ -332,6 +332,31 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         ])
     })
 
+    test.each([
+        ["channels.setPermissionOverwrite", "PUT", "stop denying"],
+        ["channels.removePermissionOverwrite", "DELETE", "every permission that the overwrite denies"],
+    ] as const)("a refused %s logs the overwrite rule in its hint", async (operation, method, rule) => {
+        stubFetchWithHostedDiscovery(async () => Response.json({ code: "MISSING_PERMISSIONS" }, { status: 403 }))
+        const logs = captureLogs()
+        const client = await setup(mode, { logging: logs.logging })
+        await expectErr(
+            operation === "channels.setPermissionOverwrite"
+                ? client.channels.setPermissionOverwrite("20", { id: "50", type: "role", allow: 1n, deny: 0n })
+                : client.channels.removePermissionOverwrite("20", "50"),
+        )
+        expect(logs.withCode("rest.rejected")).toEqual([
+            expect.objectContaining({
+                level: "warn",
+                status: 403,
+                route: "/channels/:id/permissions/:id",
+                fields: expect.objectContaining({ method, hint: expect.stringContaining("Manage roles") }),
+            }),
+        ])
+        const hint = logs.withCode("rest.rejected")[0]!.fields?.hint
+        expect(hint).toContain(rule)
+        expect(hint).toContain("permissionBits.refusedGrants")
+    })
+
     test("webhook and OAuth clients log a rejected credential once through their logging option", async () => {
         let body: unknown = {}
         stubFetchWithHostedDiscovery(async () => Response.json(body, { status: 401 }))

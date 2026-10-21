@@ -390,7 +390,7 @@ export function runAttempt<A, M extends MessageCore>(
                             rejection.apiError,
                             status,
                             request.webhookId === undefined ? "bot" : "webhook",
-                            routeAction(template),
+                            routeAction(template, request.method),
                         ),
                     },
                 }

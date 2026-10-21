@@ -704,17 +704,25 @@ const credentialHints: Readonly<Record<Exclude<RequestCredential, "bot">, string
  * @internal What a rejected REST route does, so a logged missing-permission hint names what that route needs.
  * Operation errors name the permissions of their operation instead
  */
-export type RequestAction = "message" | "moderation" | "other"
+export type RequestAction = "message" | "moderation" | "setOverwrite" | "removeOverwrite" | "other"
 
 /** Missing-permission fixes for actions whose needs are known */
 const missingPermissionHints: Readonly<Record<Exclude<RequestAction, "other">, string>> = {
     message: `Grant the bot's role ${label("ViewChannel")} and ${label("SendMessages")} in this channel, plus ${label("EmbedLinks")} or ${label("AttachFiles")} when the message has them, in the community settings or the channel's permission overrides`,
     moderation:
         "Grant the bot's role the permission this operation needs in the community settings, and move the bot's highest role above the highest role of the member it acts on",
+    // Refused overwrite writes share the text of their operations, so one place owns what these routes need
+    setOverwrite: requiredPermissionsHint(permissionRequirement("channels.setPermissionOverwrite")!),
+    removeOverwrite: requiredPermissionsHint(permissionRequirement("channels.removePermissionOverwrite")!),
 }
 
-/** @internal The action of a REST route template, such as /channels/:id/messages or /guilds/:id/bans/:id */
-export function routeAction(template: string): RequestAction {
+/** @internal The action of a REST route template and HTTP method, such as GET /channels/:id/messages or DELETE /guilds/:id/bans/:id */
+export function routeAction(template: string, method: string): RequestAction {
+    if (template === "/channels/:id/permissions/:id") {
+        if (method === "PUT") return "setOverwrite"
+        if (method === "DELETE") return "removeOverwrite"
+        return "other"
+    }
     if (/\/(members|bans|roles)(\/|$)/.test(template)) return "moderation"
     if (/\/messages(\/|$)/.test(template)) return "message"
     return "other"
