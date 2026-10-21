@@ -233,6 +233,7 @@ export interface TestClient<M extends MessageCore = Message> {
     /**
      * Close one shard's connection from the gateway side with a close code when run. The SDK then recovers as it would
      * against Fluxer, resuming with RESUMED for a resumable code, or ends the connection lifetime for a fatal one.
+     * With endSession set, the client identifies a new session instead of resuming.
      * Dies with ConfigurationError when that shard is not connected
      */
     disconnect(options?: TestDisconnectOptions): Effect.Effect<void>

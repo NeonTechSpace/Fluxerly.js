@@ -103,6 +103,7 @@ export type { GuildIterationQuery } from "./pagination.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
 export type {
+    ChannelPermissions,
     DefaultPermissionFetchOptions,
     PermissionFetchOptions,
     PermissionInput,

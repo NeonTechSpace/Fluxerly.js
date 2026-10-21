@@ -1,7 +1,12 @@
-import type { DefaultPermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
+import type {
+    ChannelPermissions,
+    DefaultPermissionFetchOptions,
+    PermissionInput,
+    PermissionTarget,
+} from "#sdk/permissions"
 import type { ResultAsync } from "neverthrow"
 import type { ChannelOperationFailure } from "#sdk/channels"
-import type { GuildOperationFailure } from "#sdk/guilds"
+import type { DefaultGuildOperationOptions, GuildOperationFailure, MemberReference } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
 
 /**
@@ -33,6 +38,7 @@ export interface PermissionHelpers {
     calculate(input: PermissionInput): bigint
     /**
      * Fetch guild, member, role and optional channel data, then calculate their permission flags.
+     * Use fetchChannels for every channel of a community.
      * No gateway connection is needed, and by default every observation is read fresh without consulting a cache.
      * Set `preferCache` to take each observation from an enabled cache when it is there and fetch only what is missing.
      * A cached channel without its overwrite list is fetched, and so are all roles when any needed role is not cached.
@@ -58,4 +64,48 @@ export interface PermissionHelpers {
         target: PermissionTarget,
         options?: DefaultPermissionFetchOptions,
     ): ResultAsync<bigint, GuildOperationFailure | ChannelOperationFailure | CancelledError | ConfigurationError>
+    /**
+     * Fetch one member's permission flags in every channel of a community, such as to see what the bot can do in each
+     * channel. Pass the bot's own ID as `userId`, which `client.users.getSelf()` returns once the bot has connected.
+     * It reads the guild, the member, the role list and the channel list once each, always fresh, then calculates each
+     * channel locally the same way as calculate and fetch, so the community owner and an Administrator get every flag.
+     * That is four reads for the whole community, where fetch with a `channelId` takes up to four per channel.
+     * Returns a frozen array of frozen `{ channel, permissions }` entries, in the order Fluxer lists the channels.
+     * Fluxer lists only the channels the bot can view, so a channel that only the member can view is missing.
+     * Threads and forum posts are not listed, so call fetch with a thread's ID for one.
+     * The reads happen at different moments, so the result does not guarantee that a later action will succeed. It
+     * ignores timeouts and role hierarchy, and a channel's bits do not prove that the member can view it.
+     * The reads can fill enabled caches, but the result itself is not cached. Unlike fetch, it has no `preferCache`,
+     * because no cache holds a complete channel list.
+     * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the whole call, including read
+     * retries and awaited cancellation cleanup.
+     * An invalid target or deadline fails with permissions.fetchChannels reason input.
+     * Errors from the reads keep their GuildOperationError or ChannelOperationError.
+     * A listed channel that Fluxer sends without its permission overwrites fails with permissions.fetchChannels reason
+     * response, outcome unknown, details.read and details.channelId, as in fetch.
+     * Client closure fails with ClientClosedError. Its outcome is notDispatched when the client closes before a read is
+     * sent, rejected while a read waits out a 429 before its retry, and unknown with details.read while a read is in flight
+     *
+     * @example
+     * ```ts
+     * import { permissionBits, type Client } from "@neontechspace/fluxerly"
+     *
+     * export async function sendableChannels(client: Client, guildId: string) {
+     *     const botId = client.users.getSelf()?.id
+     *     if (botId === undefined) return []
+     *     const result = await client.permissions.fetchChannels({ guildId, userId: botId })
+     *     if (result.isErr()) throw result.error
+     *     return result.value
+     *         .filter(({ permissions }) => permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]))
+     *         .map(({ channel }) => channel.id)
+     * }
+     * ```
+     */
+    fetchChannels(
+        target: MemberReference,
+        options?: DefaultGuildOperationOptions,
+    ): ResultAsync<
+        readonly ChannelPermissions[],
+        GuildOperationFailure | ChannelOperationFailure | CancelledError | ConfigurationError
+    >
 }

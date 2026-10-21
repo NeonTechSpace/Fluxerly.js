@@ -47,9 +47,20 @@ export interface TestDisconnectOptions {
     readonly shardId?: number
     /**
      * WebSocket or gateway close code the client receives, default 4000 (unknown error), after which the SDK reconnects
-     * and resumes. A fatal code such as 4004 ends the client's connection lifetime instead
+     * and resumes. Every recoverable code resumes the same session, including 4007 (invalid sequence), so the shard's
+     * sessionEpoch stays the same. Use endSession to start a new session. A fatal code such as 4004 ends the client's
+     * connection lifetime instead
      */
     readonly code?: number
+    /**
+     * Whether the test gateway forgets the shard's session before it closes the connection, default false.
+     * The client's Resume then gets Invalid Session, as when Fluxer no longer holds the session, so the client identifies a
+     * new session. The shard's sessionEpoch increases, the next event's context shows the higher value, and the SDK runs
+     * the same cache release and new-session handling as after a real session loss.
+     * A value that is not a boolean throws ConfigurationError. A fatal code still ends the client's connection
+     * lifetime, so combine this option with a recoverable code
+     */
+    readonly endSession?: boolean
 }
 
 /**

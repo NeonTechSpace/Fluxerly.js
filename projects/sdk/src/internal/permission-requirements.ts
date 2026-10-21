@@ -1,7 +1,9 @@
 /**
  * Permissions that Fluxer checks for SDK operations, behind details.requiredPermissions and the missing-permission hint.
  * Invariant: Every entry comes from Fluxer's own permission check in fluxerapp/fluxer. Entries that name no other commit
- * come from a95172bf88da26dd877255ceee139bf84e6799fa, and the forum tag and threads.* entries come from the commit
+ * come from a95172bf88da26dd877255ceee139bf84e6799fa, except the five entries that change channel permission overwrites
+ * (channels.create, edit, reorder, setPermissionOverwrite and removePermissionOverwrite), whose references come from
+ * 597116a0b4bf3a212789bdebe7f284babc33b445. The forum tag and threads.* entries come from the commit
  * 4749eb7f866ceba0c9622014a9824900d5be8172 that their comments name. Source references are relative to
  * fluxer_api/src/api.
  * An operation whose rejection the source does not tie to one set of permissions has no entry and keeps the generic hint.
@@ -37,7 +39,12 @@ const requires = (scope: PermissionScope, permissions: readonly PermissionName[]
 
 const memberHierarchy =
     "Fluxer also requires the bot's highest role to be above the member's highest role, and never allows acting on the community owner"
-const ownPermissions = "the bot can allow, or stop denying, only permissions it has"
+// Fluxer's grant rule, utils/PermissionUtils.ts:55-64 at 597116a: A change grants the bits it newly allows and the bits
+// it stops denying, and Fluxer refuses it with MISSING_PERMISSIONS when the bot lacks any of them in the channel it
+// checks. The community owner and Administrator have every bit, because the gateway returns all of them without
+// applying channel overwrites (fluxer_gateway/src/guild/guild_permissions.erl:79-80, 85-88 and 169-170 at 597116a)
+const ownPermissions = "it can allow, or stop denying, only permissions it has in the channel"
+const refusedGrantsHint = "The permissionBits.refusedGrants helper shows which bits Fluxer would refuse"
 
 /** A permission label followed by the different title that a channel's permission screen shows for it, if any */
 const withChannelTitle = (name: PermissionName): string => {
@@ -51,33 +58,44 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "channels.fetch": requires("channel", ["ViewChannel"]),
     // webhook/ChannelFollowService.ts:181
     "channels.fetchFollowerStats": requires("channel", ["ViewChannel"]),
-    // guild/services/GuildChannelService.ts:92, guild/services/channel/ChannelOperationsService.ts:83-97
+    // guild/services/GuildChannelService.ts:92, guild/services/channel/ChannelOperationsService.ts:83-98 at 597116a, where
+    // Manage Roles is checked community-wide and only the allow bits of each new overwrite are compared with the bot's
+    // permissions in the parent category, or community-wide without one. Denies are not checked, and a channel created
+    // without overwrites copies its category's without a check
     "channels.create": requires(
         "guild",
         ["ManageChannels"],
-        `Setting permission overwrites also needs ${withChannelTitle("ManageRoles")}, and the bot can allow only permissions it has`,
+        `Setting permission overwrites also needs ${withChannelTitle("ManageRoles")}. Unless the bot has Administrator, it can allow only permissions it has in the parent category, or in the community when there is no parent. ${refusedGrantsHint}`,
     ),
-    // channel/services/channel_data/ChannelOperationsService.ts:164, 189, 219-258
+    // channel/services/channel_data/ChannelOperationsService.ts:164, 189, 217-261 at 597116a, where every target of the old
+    // or new overwrite list is compared and the community owner skips the comparison
     "channels.edit": requires(
         "channel",
         ["ViewChannel", "ManageChannels"],
-        `Changing permission overwrites also needs ${withChannelTitle("ManageRoles")}, and ${ownPermissions}. Changing a voice region also needs ${label("UpdateRtcRegion")}`,
+        `Changing permission overwrites also needs ${withChannelTitle("ManageRoles")}. Unless the bot has Administrator, ${ownPermissions}. ${refusedGrantsHint}. Changing a voice region also needs ${label("UpdateRtcRegion")}`,
     ),
     // channel/services/channel_data/ChannelOperationsService.ts:418
     "channels.delete": requires("channel", ["ViewChannel", "ManageChannels"]),
-    // guild/services/GuildChannelService.ts:115, guild/services/channel/ChannelOperationsService.ts:396-405
+    // guild/services/GuildChannelService.ts:115, guild/services/channel/ChannelOperationsService.ts:371-406 at 597116a,
+    // where only a move into another category syncs, Manage Roles is checked in the moved channel and every target of the
+    // channel's or the category's overwrites is compared with the bot's permissions in that channel. The move happens
+    // before the sync
     "channels.reorder": requires(
         "guild",
         ["ManageChannels"],
-        `Moving a channel with syncPermissionsOnMove also needs ${withChannelTitle("ManageRoles")}, and ${ownPermissions}`,
+        `Moving a channel into another category with syncPermissionsOnMove also needs ${withChannelTitle("ManageRoles")} in the moved channel. Unless the bot has Administrator, the category's overwrites can allow, or stop denying, only permissions the bot has in that channel. ${refusedGrantsHint}. Fluxer moves the channel first, so a refusal leaves it moved without the category's overwrites`,
     ),
-    // channel/services/channel_data/ChannelOperationsService.ts:647-676
-    "channels.setPermissionOverwrite": requires("channel", ["ManageRoles"], `Also, ${ownPermissions}`),
-    // channel/services/channel_data/ChannelOperationsService.ts:719-738
+    // channel/services/channel_data/ChannelOperationsService.ts:647-676 at 597116a
+    "channels.setPermissionOverwrite": requires(
+        "channel",
+        ["ManageRoles"],
+        `Also, unless the bot has Administrator, ${ownPermissions}. ${refusedGrantsHint}`,
+    ),
+    // channel/services/channel_data/ChannelOperationsService.ts:719-738 at 597116a
     "channels.removePermissionOverwrite": requires(
         "channel",
         ["ManageRoles"],
-        "Also, the bot can remove an overwrite only when it has every permission that overwrite denies",
+        `Also, unless the bot has Administrator, it can remove an overwrite only when it has every permission that the overwrite denies in the channel. ${refusedGrantsHint}`,
     ),
     // webhook/ChannelFollowService.ts:77-100, webhook/WebhookService.ts:614-634
     "channels.follow": requires(

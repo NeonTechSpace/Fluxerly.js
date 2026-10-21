@@ -1,4 +1,4 @@
-// Guild and channel permission calculation against independent raw reads, and indexed member search with filters,
+// Guild, channel and all-channel permission calculation against independent raw reads, and indexed member search with filters,
 // iteration, an injected transport failure and cancellation. The search POST can trigger provider lazy indexing.
 // Creates no journal and no remote resources, and makes no member, role or channel edits
 import assert from "node:assert/strict"
@@ -277,6 +277,28 @@ try {
                 fullDenyPrecedenceNotProven: true,
             })
         }
+    }
+
+    stage = "all_channel_permissions_and_independent_calculation"
+    const [rawChannels, channelPermissions] = await Promise.all([
+        api("GET", `/guilds/${guildId}/channels`),
+        value(client.permissions.fetchChannels({ guildId, userId: botId })),
+    ])
+    if (!Array.isArray(rawChannels) || rawChannels.some((raw) => !Array.isArray(raw?.permission_overwrites))) {
+        skip(stage, "listed_channel_omits_explicit_overwrite_snapshot")
+    } else {
+        // The list keeps Fluxer's order, and each entry equals the independent calculation for its raw channel
+        assert.ok(channelPermissions.length === rawChannels.length)
+        assert.ok(Object.isFrozen(channelPermissions) && channelPermissions.every(Object.isFrozen))
+        channelPermissions.forEach((entry, index) => {
+            const raw = rawChannels[index]
+            assert.ok(entry.channel.id === raw.id && entry.channel.guildId === guildId)
+            assert.ok(entry.permissions === rawPermissionCalculation(rawGuild, rawMember, rawRoles, raw))
+        })
+        report(stage, {
+            layer: "channel_scoped_raw_permission_bitfields_for_every_listed_channel",
+            channelCount: channelPermissions.length,
+        })
     }
 
     // Fluxer may lazily build its member index for this authorized read-only POST. Reports intentionally omit request

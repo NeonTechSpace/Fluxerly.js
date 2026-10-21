@@ -76,11 +76,28 @@ function describeOne(error: unknown, indent: string, stack: boolean): string {
 
 const retryableReasons = new Set(["busy", "network", "timeout", "rateLimit"])
 
-/** Whether repeating the same call is safe and may succeed. True for rate limits, full local capacity, and network
- * failures and timeouts of reads or of writes that were not sent. False for rejections, invalid input, writes with an
- * unknown outcome, cancellation and closed clients
- */
-function isRetryable(error: unknown): boolean {
+/** The Effect Cause a value is, or undefined for any other value, including a proxy that rejects inspection */
+function causeOf(value: unknown): Cause.Cause<unknown> | undefined {
+    try {
+        return Cause.isCause(value) ? (value as Cause.Cause<unknown>) : undefined
+    } catch {
+        // allow-silent: a proxy that rejects inspection is read as a plain value
+        return undefined
+    }
+}
+
+/** The value as an SDK error, or undefined for any other value, including a proxy that rejects prototype inspection */
+function sdkErrorOf(value: unknown): FluxerlyError | undefined {
+    try {
+        return value instanceof FluxerlyError ? value : undefined
+    } catch {
+        // allow-silent: a proxy that rejects prototype inspection is read as an application value
+        return undefined
+    }
+}
+
+/** Whether one failure value is an SDK error whose call is safe to repeat */
+function isRetryableError(error: unknown): boolean {
     if (!(error instanceof FluxerlyError)) return false
     switch (error._tag) {
         case "RateLimitError":
@@ -89,13 +106,52 @@ function isRetryable(error: unknown): boolean {
         case "ConnectionError":
             return (error as unknown as { reason: string }).reason === "network"
         case "ShardConnectionError":
-            return isRetryable(error.cause)
+            return isRetryableError(error.cause)
     }
     const fields = error as unknown as { reason?: unknown; outcome?: unknown }
     if (typeof fields.reason !== "string" || !retryableReasons.has(fields.reason)) return false
     const outcome = fields.outcome
     // A read cannot have changed remote state, so an unknown outcome only matters for writes
     return outcome !== "unknown" || fields.reason === "rateLimit" || error.details.read === true
+}
+
+/** Whether repeating the same call is safe and may succeed. True for rate limits, full local capacity, and network
+ * failures and timeouts of reads or of writes that were not sent. False for rejections, invalid input, writes with an
+ * unknown outcome, cancellation and closed clients. An Effect Cause is retryable when it has a reason and every reason
+ * is a retryable failure, so a defect or an interruption in it makes it false
+ */
+function isRetryable(error: unknown): boolean {
+    const cause = causeOf(error)
+    if (cause === undefined) return isRetryableError(error)
+    const reasons = cause.reasons
+    return reasons.length > 0 && reasons.every((reason) => reason._tag === "Fail" && isRetryableError(reason.error))
+}
+
+/** The server-required wait of one failure value in milliseconds, or undefined when it carries none */
+function ownRetryAfterMs(error: unknown): number | undefined {
+    const sdk = sdkErrorOf(error)
+    if (sdk === undefined) return undefined
+    try {
+        // A shard failure carries the wait of the failure that stopped it
+        if (sdk._tag === "ShardConnectionError") return ownRetryAfterMs(sdk.cause)
+        const wait = (sdk as { readonly retryAfterMs?: unknown }).retryAfterMs
+        return typeof wait === "number" && Number.isFinite(wait) && wait >= 0 ? wait : undefined
+    } catch {
+        // allow-silent: a proxy of an SDK error whose properties reject reads carries no usable wait
+        return undefined
+    }
+}
+
+/** The wait of an error, or the largest wait among the failures of an Effect Cause */
+function retryAfterMs(error: unknown): number | undefined {
+    const cause = causeOf(error)
+    if (cause === undefined) return ownRetryAfterMs(error)
+    let longest: number | undefined
+    for (const reason of cause.reasons) {
+        const wait = reason._tag === "Fail" ? ownRetryAfterMs(reason.error) : undefined
+        if (wait !== undefined && (longest === undefined || wait > longest)) longest = wait
+    }
+    return longest
 }
 
 const outcomeRank = { notDispatched: 0, rejected: 1, unknown: 2 } as const
@@ -109,15 +165,10 @@ function ownOutcome(error: unknown): OperationOutcome | undefined {
 
 /** The outcome of an error, or the least certain outcome across every failure of an Effect Cause */
 function outcome(error: unknown): OperationOutcome | undefined {
-    let cause = false
-    try {
-        cause = Cause.isCause(error)
-    } catch {
-        // allow-silent: a proxy that rejects inspection is read as a plain value below
-    }
-    if (!cause) return ownOutcome(error)
+    const cause = causeOf(error)
+    if (cause === undefined) return ownOutcome(error)
     let result: OperationOutcome | undefined
-    for (const reason of (error as Cause.Cause<unknown>).reasons) {
+    for (const reason of cause.reasons) {
         // A defect or interruption can hide any progress, and a failure without an outcome says nothing about progress
         const own = reason._tag === "Fail" ? ownOutcome(reason.error) : undefined
         if (own === undefined) return undefined
@@ -249,9 +300,23 @@ export interface ErrorTools {
      * or a network failure or timeout of a read or of a write that was not sent.
      * A write whose outcome is unknown is not retryable, because Fluxer may already have applied it.
      * Rejections, invalid input, cancellation and closed clients are never retryable, because a closed client
-     * cannot send again and a new client is needed
+     * cannot send again and a new client is needed.
+     * An Effect Cause, such as that of a failed Exit, is retryable only when it has at least one reason and every reason
+     * is a retryable failure. A defect, an interruption or an empty Cause gives false, because the work may have stopped
+     * part-way.
+     * Concurrent forEach and all can drop the reasons of siblings they interrupt, as described for outcome, so for several
+     * concurrent writes check each item's own result rather than the combined Cause
      */
     readonly isRetryable: (error: unknown) => boolean
+    /** How many milliseconds to wait before repeating the call, as Fluxer or the SDK's own rate limiting requires.
+     * It reads the error's retryAfterMs, which every operation error and RateLimitError carries when the wait is known.
+     * For a ShardConnectionError it is the wait of the failure that stopped the shard.
+     * For an Effect Cause it is the longest wait among its failures, which covers all of them, and defects and
+     * interruptions in the Cause are ignored.
+     * Returns undefined when there is no usable wait, including for a value that is not an SDK error, so the caller can
+     * use its own backoff. It never throws. It does not say whether repeating the call is safe, so check isRetryable too
+     */
+    readonly retryAfterMs: (error: unknown) => number | undefined
     /** Call the handler named by the error's _tag, or the _ fallback, and return its result.
      * Returns undefined when no handler applies
      */
@@ -279,7 +344,7 @@ export interface ErrorTools {
 }
 
 /**
- * Error helpers that classify and match errors through apiCode, isNotFound, isRetryable, outcome and match.
+ * Error helpers that classify and match errors through apiCode, isNotFound, isRetryable, retryAfterMs, outcome and match.
  * To print an error, use describeError
  *
  * @example
@@ -306,4 +371,4 @@ export interface ErrorTools {
  *
  * @category Errors
  */
-export const errors: ErrorTools = Object.freeze({ apiCode, isNotFound, isRetryable, match, outcome })
+export const errors: ErrorTools = Object.freeze({ apiCode, isNotFound, isRetryable, match, outcome, retryAfterMs })

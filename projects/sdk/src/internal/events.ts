@@ -96,13 +96,19 @@ export function recordCommandFailure(
     metrics.handlerFailure(name ?? "messageCreate", context)
 }
 
-/** One admitted event with the shard, its session epoch and the received frame size it arrived with */
-interface Delivery<A> {
+/** Where and when the client received an event, fixed when it accepted the event */
+interface Origin {
+    readonly shardId: number
+    /** The shard's session epoch when the event was accepted, so a later new session does not relabel a queued event */
+    readonly sessionEpoch: number
+    /** The client-wide number of the event, the same for every handler that receives it */
+    readonly receipt: number
+}
+
+/** One admitted event with the shard, its session epoch, receipt and the received frame size it arrived with */
+interface Delivery<A> extends Origin {
     readonly message: A
     readonly bytes: number
-    readonly shardId: number
-    /** The shard's session epoch when the event was admitted, so a later new session does not relabel a queued event */
-    readonly sessionEpoch: number
     /** Partition key of a partitioned handler, computed once when the event is admitted, or the failure computing it */
     readonly key?: string | { readonly failure: unknown }
 }
@@ -229,6 +235,7 @@ function eventContext(delivery: Delivery<unknown>): EventContext {
     return Object.freeze({
         shardId: delivery.shardId,
         sessionEpoch: delivery.sessionEpoch,
+        receipt: delivery.receipt,
         receivedBytes: delivery.bytes,
     })
 }
@@ -489,10 +496,10 @@ export class EventSource<A = Message> {
         }
     }
 
-    #delivery(message: A, bytes: number, shardId: number, sessionEpoch: number): Delivery<A> {
+    #delivery(message: A, bytes: number, origin: Origin): Delivery<A> {
         return this.limits.partition === undefined
-            ? { message, bytes, shardId, sessionEpoch }
-            : { message, bytes, shardId, sessionEpoch, key: this.#keyOf(message) }
+            ? { message, bytes, ...origin }
+            : { message, bytes, ...origin, key: this.#keyOf(message) }
     }
 
     /**
@@ -549,25 +556,25 @@ export class EventSource<A = Message> {
         return victims
     }
 
-    /** Admit one event received by a shard during the given session epoch, in a frame of the given byte length */
-    offer(message: A, bytes: number, shardId = 0, sessionEpoch = 0) {
+    /** Admit one event received in a frame of the given byte length, from the shard, session and receipt of its origin */
+    offer(message: A, bytes: number, origin: Origin) {
         if (!this.#active) return
         const waiter = this.#waiters.values().next().value
         if (waiter) {
             this.#waiters.delete(waiter)
-            waiter(Effect.succeed({ message, bytes, shardId, sessionEpoch }))
+            waiter(Effect.succeed({ message, bytes, ...origin }))
             return
         }
         const full = () =>
             this.#pending.length >= this.limits.maxPendingMessages || bytes > this.limits.maxPendingBytes - this.#bytes
         if (!full()) {
-            this.#push(this.#delivery(message, bytes, shardId, sessionEpoch))
+            this.#push(this.#delivery(message, bytes, origin))
             return
         }
         const limit = this.#pending.length >= this.limits.maxPendingMessages ? "messages" : "bytes"
         const policy = this.limits.overflow
         if (policy === "dropOldest" && bytes <= this.limits.maxPendingBytes) {
-            const arriving = this.#delivery(message, bytes, shardId, sessionEpoch)
+            const arriving = this.#delivery(message, bytes, origin)
             const victims = this.#plan(this.limits.partition === undefined ? undefined : groupOf(arriving), bytes)
             if (victims === undefined) {
                 // Nothing the arrival could displace is worth more than it, so it alone goes
@@ -1016,6 +1023,8 @@ export class EventBus<M extends MessageCore = Message> {
     #closed = false
     /** Whether intake stopped for a draining shutdown: New events and registrations are refused, admitted work continues */
     #sealed = false
+    /** Events accepted so far, across all shards of the client: The last receipt given */
+    #receipts = 0
     /** Events refused after sealing that an open subscription or collector would have received, by name, reported once when the bus stops */
     #refused = new Map<EventName, number>()
     /** Handler invocations started and not yet finished, counted from admission so a drain never misses one about to start */
@@ -1154,10 +1163,14 @@ export class EventBus<M extends MessageCore = Message> {
                 this.#refused.set(event, (this.#refused.get(event) ?? 0) + 1)
             return
         }
+        // One number for the event, so every handler of it sees the same one, and events decoded from one frame follow
+        // one another in dispatch order
+        const receipt = ++this.#receipts
         for (const offer of reactionCollectors ?? [])
             offer(reaction!, bytes, shardId, event === "messageReactionRemove")
         for (const offer of messageCollectors ?? []) offer(message as M, bytes, shardId)
-        for (const source of this.#sources[event]) source.offer(message, bytes, shardId, sessionEpoch)
+        const origin: Origin = { shardId, sessionEpoch, receipt }
+        for (const source of this.#sources[event]) source.offer(message, bytes, origin)
     }
     stop() {
         if (this.#closed) return

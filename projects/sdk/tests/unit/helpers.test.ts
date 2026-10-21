@@ -222,6 +222,109 @@ for (const [mode, api] of apis) {
             })
     })
 
+    test(`${mode}: refusedGrants returns the bits Fluxer's grant rule would refuse for the bot's own bits`, () => {
+        const { Permissions } = api
+        const tts = Permissions.SendTtsMessages
+        const send = Permissions.SendMessages
+        const view = Permissions.ViewChannel
+        const unknown = 1n << 62n
+        const refused = api.permissionBits.refusedGrants
+        // Newly allowing a permission the bot lacks is refused, and holding it is not
+        expect(refused(undefined, { allow: tts, deny: 0n }, view)).toBe(tts)
+        expect(refused(undefined, { allow: tts, deny: 0n }, view | tts)).toBe(0n)
+        // Only the newly allowed bits count, not the ones the overwrite already allowed
+        expect(refused({ allow: tts, deny: 0n }, { allow: tts | send, deny: 0n }, view)).toBe(send)
+        // Ceasing to deny a permission grants it too, whether it is allowed afterwards or inherited
+        expect(refused({ allow: 0n, deny: send }, { allow: 0n, deny: 0n }, view)).toBe(send)
+        expect(refused({ allow: 0n, deny: send }, { allow: send, deny: 0n }, view)).toBe(send)
+        // Denying or ceasing to allow never grants anything
+        expect(refused({ allow: send, deny: 0n }, { allow: 0n, deny: send }, 0n)).toBe(0n)
+        expect(refused(undefined, { allow: 0n, deny: send | tts }, 0n)).toBe(0n)
+        // A removal stops every deny of the removed overwrite, and removing an overwrite that only allows is free
+        expect(refused({ allow: view, deny: send | tts }, undefined, send)).toBe(tts)
+        expect(refused({ allow: view, deny: 0n }, undefined, 0n)).toBe(0n)
+        expect(refused(undefined, undefined, 0n)).toBe(0n)
+        // Bits without a known name count like any other
+        expect(refused(undefined, { allow: unknown, deny: 0n }, view)).toBe(unknown)
+        // A bot with Administrator is never refused
+        expect(refused(undefined, { allow: tts | unknown, deny: 0n }, Permissions.Administrator)).toBe(0n)
+        expect(refused({ allow: 0n, deny: send }, undefined, Permissions.Administrator)).toBe(0n)
+        // The result is a plain bigint and extra fields of an overwrite as read are ignored
+        expect(refused({ id: "5", type: "role", allow: 0n, deny: 0n } as never, { allow: tts, deny: 0n }, 0n)).toBe(tts)
+    })
+
+    test(`${mode}: refusedGrants rejects invalid overwrites and held bits with a HelperError`, () => {
+        const refused = api.permissionBits.refusedGrants as (...values: unknown[]) => unknown
+        const valid = { allow: 1n, deny: 0n }
+        const rejected: unknown[][] = [
+            [valid, valid, -1n],
+            [valid, valid, 1n << 64n],
+            [valid, valid, 1],
+            [valid, valid, undefined],
+            [{ allow: -1n, deny: 0n }, valid, 0n],
+            [valid, { allow: 0n, deny: 1n << 64n }, 0n],
+            [{ allow: 1, deny: 0n }, valid, 0n],
+            [valid, { allow: 0n }, 0n],
+            [null, valid, 0n],
+            [valid, "overwrite", 0n],
+        ]
+        for (const args of rejected)
+            expect(thrown(() => refused(...args))).toMatchObject({
+                _tag: "HelperError",
+                operation: "permissionBits.refusedGrants",
+                reason: "permissionBits",
+            })
+    })
+
+    test(`${mode}: sameOverwrites compares lists as Fluxer does when it syncs a category's children`, () => {
+        const { Permissions } = api
+        const same = api.permissionBits.sameOverwrites
+        const role = { id: "10", type: "role", allow: Permissions.ViewChannel, deny: 0n } as const
+        const member = { id: "20", type: "member", allow: 0n, deny: Permissions.SendMessages } as const
+        expect(same([], [])).toBe(true)
+        expect(same([role, member], [role, member])).toBe(true)
+        // The order does not matter, and other fields of the entries are ignored
+        expect(same([role, member], [member, role])).toBe(true)
+        expect(same([role], [{ ...role, extra: true } as never])).toBe(true)
+        // A different target, type, allow, deny or size is a different list
+        expect(same([role], [])).toBe(false)
+        expect(same([role], [role, member])).toBe(false)
+        expect(same([role], [{ ...role, id: "11" }])).toBe(false)
+        expect(same([role], [{ ...role, type: "member" }])).toBe(false)
+        expect(same([role], [{ ...role, allow: 0n }])).toBe(false)
+        expect(same([role], [{ ...role, deny: Permissions.SendMessages }])).toBe(false)
+        // The inputs are not changed
+        const left = [member, role]
+        same(left, [role, member])
+        expect(left).toEqual([member, role])
+    })
+
+    test(`${mode}: sameOverwrites rejects invalid lists and a list that names a target twice with a HelperError`, () => {
+        const same = api.permissionBits.sameOverwrites as (...values: unknown[]) => unknown
+        const valid = { id: "10", type: "role", allow: 1n, deny: 0n }
+        const rejected: unknown[][] = [
+            // Fluxer rejects the same ID twice on write, so neither list may hold it, even with another type
+            [[valid, valid], [valid]],
+            [[valid], [valid, { ...valid, type: "member" }]],
+            [[valid], undefined],
+            [undefined, [valid]],
+            [[valid], "list"],
+            [[valid], [null]],
+            [[valid], [{ ...valid, id: "01" }]],
+            [[valid], [{ ...valid, id: 10 }]],
+            [[valid], [{ ...valid, type: "user" }]],
+            [[valid], [{ ...valid, allow: -1n }]],
+            [[valid], [{ ...valid, deny: 1n << 64n }]],
+            [[valid], [{ ...valid, allow: 1 }]],
+        ]
+        for (const args of rejected)
+            expect(thrown(() => same(...args))).toMatchObject({
+                _tag: "HelperError",
+                operation: "permissionBits.sameOverwrites",
+                reason: "permissionBits",
+            })
+    })
+
     test(`${mode}: applies display, named permissions, decimal serialization, and hosted guild/direct-message link contracts`, () => {
         expect(api.display.name({ username: "user", displayName: "Display" })).toBe("Display")
         expect(api.display.name({ username: "user", displayName: null }, { nickname: "Guild name" })).toBe("Guild name")

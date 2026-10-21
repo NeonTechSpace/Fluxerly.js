@@ -309,7 +309,12 @@ describe("public runBot", () => {
             await running
             // The context is the client's own, so sessionEpoch names the session that delivered the event
             expect(epoch).toBeGreaterThan(0)
-            expect(context).toEqual({ shardId: 0, sessionEpoch: epoch, receivedBytes: expect.any(Number) })
+            expect(context).toEqual({
+                shardId: 0,
+                sessionEpoch: epoch,
+                receipt: expect.any(Number),
+                receivedBytes: expect.any(Number),
+            })
             expect(Object.isFrozen(context)).toBe(true)
         }
         await run((signal, seen) =>

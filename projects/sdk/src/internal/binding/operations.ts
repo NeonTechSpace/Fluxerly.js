@@ -188,7 +188,7 @@ import {
     memberVoiceFlag,
     memberVoiceMove,
 } from "#sdk/internal/moderation"
-import { calculatePermissions, fetchPermissions } from "#sdk/internal/permissions"
+import { calculatePermissions, fetchChannelPermissions, fetchPermissions } from "#sdk/internal/permissions"
 import { memberTimeoutState } from "#sdk/internal/timeout-state"
 import { fetchCanManage } from "#sdk/internal/role-hierarchy-workflow"
 import {
@@ -761,6 +761,9 @@ function defineOperations<M extends MessageCore>() {
             calculate: pure((_owner: Owner, input: PermissionInput) => calculatePermissions(input)),
             fetch: op(1, (owner: Owner, target: PermissionTarget, options?: PermissionFetchOptions) =>
                 fetchPermissions(owner, target, options),
+            ),
+            fetchChannels: op(1, (owner: Owner, target: MemberReference, options?: GuildOperationOptions) =>
+                fetchChannelPermissions(owner, target, options),
             ),
         },
         roles: {

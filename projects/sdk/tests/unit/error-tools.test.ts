@@ -118,6 +118,93 @@ test("isRetryable separates safe repeats from rejections, input and uncertain wr
     expect(errors.isRetryable(new Error("application"))).toBe(false)
 })
 
+test("isRetryable of an Effect Cause needs a reason and only retryable failures", () => {
+    const retryable = new GuildOperationError({ operation: "roles.edit", reason: "network", outcome: "notDispatched" })
+    const uncertain = new GuildOperationError({ operation: "roles.edit", reason: "network", outcome: "unknown" })
+    const fail = (error: unknown) => Cause.makeFailReason(error)
+    expect(errors.isRetryable(Cause.fail(retryable))).toBe(true)
+    expect(errors.isRetryable(Cause.fromReasons([fail(retryable), fail(new RateLimitError("http", 500))]))).toBe(true)
+    // One failure that is not safe to repeat, a defect, an interruption or no reason at all makes the Cause false
+    expect(errors.isRetryable(Cause.fromReasons([fail(retryable), fail(uncertain)]))).toBe(false)
+    expect(errors.isRetryable(Cause.fromReasons([fail(retryable), Cause.makeDieReason(new Error("cleanup"))]))).toBe(
+        false,
+    )
+    expect(errors.isRetryable(Cause.fromReasons([fail(retryable), Cause.makeInterruptReason()]))).toBe(false)
+    expect(errors.isRetryable(Cause.fail(new Error("application")))).toBe(false)
+    expect(errors.isRetryable(Cause.die(new Error("defect")))).toBe(false)
+    expect(errors.isRetryable(Cause.interrupt())).toBe(false)
+    expect(errors.isRetryable(Cause.fromReasons([]))).toBe(false)
+    expect(native.errors.isRetryable).toBe(errors.isRetryable)
+})
+
+test("retryAfterMs reads the wait of an SDK error and the largest wait among the failures of a Cause", () => {
+    const waiting = (retryAfterMs: number | null) =>
+        new GuildOperationError({ operation: "roles.edit", reason: "rateLimit", outcome: "rejected", retryAfterMs })
+    expect(errors.retryAfterMs(waiting(1_500))).toBe(1_500)
+    expect(errors.retryAfterMs(waiting(0))).toBe(0)
+    expect(errors.retryAfterMs(new RateLimitError("gateway", 2_000))).toBe(2_000)
+    expect(errors.retryAfterMs(new MessageError({ reason: "rateLimit", outcome: "rejected", retryAfterMs: 700 }))).toBe(
+        700,
+    )
+    // A shard failure carries the wait of the failure that stopped it
+    expect(errors.retryAfterMs(new ShardConnectionError(1, new RateLimitError("gateway", 3_000)))).toBe(3_000)
+    // No usable wait, other errors and other values give undefined
+    for (const value of [
+        waiting(null),
+        new ShardConnectionError(1, new AuthenticationError()),
+        new GuildOperationError({ operation: "roles.edit", reason: "network", outcome: "unknown" }),
+        new RateLimitError("http", null),
+        new Error("application"),
+        // A look-alike is not an SDK error
+        Object.assign(new Error("look-alike"), { retryAfterMs: 5 }),
+        { retryAfterMs: 5 },
+        "text",
+        undefined,
+        null,
+    ])
+        expect(errors.retryAfterMs(value)).toBeUndefined()
+    const fail = (error: unknown) => Cause.makeFailReason(error)
+    expect(errors.retryAfterMs(Cause.fail(waiting(900)))).toBe(900)
+    expect(
+        errors.retryAfterMs(
+            Cause.fromReasons([
+                fail(waiting(900)),
+                fail(new Error("application")),
+                fail(new RateLimitError("http", 4_000)),
+                fail(waiting(null)),
+                Cause.makeDieReason(waiting(9_000)),
+            ]),
+        ),
+    ).toBe(4_000)
+    expect(errors.retryAfterMs(Cause.fromReasons([Cause.makeInterruptReason()]))).toBeUndefined()
+    expect(errors.retryAfterMs(Cause.die(new Error("defect")))).toBeUndefined()
+    expect(errors.retryAfterMs(Cause.fromReasons([]))).toBeUndefined()
+    expect(native.errors.retryAfterMs).toBe(errors.retryAfterMs)
+})
+
+test("retryAfterMs never throws for values that reject inspection", () => {
+    const hostile = new Proxy(
+        {},
+        {
+            getPrototypeOf() {
+                throw new Error("trap")
+            },
+            get() {
+                throw new Error("trap")
+            },
+        },
+    )
+    expect(errors.retryAfterMs(hostile)).toBeUndefined()
+    // A proxy of an SDK error passes the instance check, so its throwing property reads must be guarded as well
+    const throwingReads = new Proxy(new RateLimitError("gateway", 2_000), {
+        get() {
+            throw new Error("trap")
+        },
+    })
+    expect(errors.retryAfterMs(throwingReads)).toBeUndefined()
+    expect(errors.retryAfterMs(Cause.fail(throwingReads))).toBeUndefined()
+})
+
 test("match calls the handler for the error tag or the fallback", () => {
     const pick = (value: ConfigurationError | AuthenticationError) => value
     const failure = pick(new ConfigurationError("token", "Token must be a string"))

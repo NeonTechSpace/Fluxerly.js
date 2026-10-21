@@ -6,13 +6,13 @@
 import * as Effect from "effect/Effect"
 import { isThreadChannel } from "#sdk/channels"
 import type { ChannelOperationFailure, GuildChannel, PermissionOverwrite } from "#sdk/channels"
-import type { GuildOperationFailure, GuildOperationOptions, GuildRole } from "#sdk/guilds"
+import type { GuildOperationFailure, GuildOperationOptions, GuildRole, MemberReference } from "#sdk/guilds"
 import { ClientClosedError } from "#sdk/errors"
 import { GuildOperationError, Permissions } from "#sdk/guilds"
 import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { composedStepFacts } from "#sdk/api-errors"
-import type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
-import { channelFetch } from "./channels.js"
+import type { ChannelPermissions, PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
+import { channelFetch, channelList } from "./channels.js"
 import type { ClientOwner } from "./client.js"
 import { guildFetch, memberFetch, roleList } from "./guilds.js"
 import { identifier, record } from "./decode/primitives.js"
@@ -25,11 +25,13 @@ const administrator = 1n << 3n
 const unsigned64 = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= allPermissions
 
-const inputFailure = (operation: "permissions.calculate" | "permissions.fetch", failure: InputValidationFailure) =>
+type PermissionOperation = "permissions.calculate" | "permissions.fetch" | "permissions.fetchChannels"
+
+const inputFailure = (operation: PermissionOperation, failure: InputValidationFailure) =>
     new GuildOperationError({ operation, reason: "input", outcome: "notDispatched", inputValidation: failure.detail })
 
-const timeoutFailure = () =>
-    new GuildOperationError({ operation: "permissions.fetch", reason: "timeout", outcome: "notDispatched" })
+const timeoutFailure = (operation: PermissionOperation) =>
+    new GuildOperationError({ operation, reason: "timeout", outcome: "notDispatched" })
 
 interface ValidatedInput {
     readonly guild: PermissionGuild
@@ -284,14 +286,12 @@ export function calculatePermissions(input: PermissionInput): Effect.Effect<bigi
     })
 }
 
-function validateTarget(value: unknown): ValidatedTarget | InputValidationFailure {
+function validateTarget(
+    value: unknown,
+    keys: readonly string[] = ["guildId", "userId", "channelId"],
+): ValidatedTarget | InputValidationFailure {
     if (!record(value)) return inputValidationFailure("target", "type", "Permission target must be an object")
-    const unsupported = unsupportedKeyFailure(
-        value,
-        ["guildId", "userId", "channelId"],
-        "target",
-        "the permission target",
-    )
+    const unsupported = unsupportedKeyFailure(value, keys, "target", "the permission target")
     if (unsupported) return unsupported
     const guildId = value.guildId
     if (!identifier(guildId))
@@ -305,15 +305,13 @@ function validateTarget(value: unknown): ValidatedTarget | InputValidationFailur
     return { guildId, userId, channelId }
 }
 
-function validateOptions(value: unknown): PermissionFetchOptions | InputValidationFailure {
+function validateOptions(
+    value: unknown,
+    keys: readonly string[] = ["timeoutMs", "signal", "preferCache"],
+): PermissionFetchOptions | InputValidationFailure {
     if (value === undefined) return {}
     if (!record(value)) return inputValidationFailure("options", "type", "Permission fetch options must be an object")
-    const unsupported = unsupportedKeyFailure(
-        value,
-        ["timeoutMs", "signal", "preferCache"],
-        "options",
-        "the permission fetch options",
-    )
+    const unsupported = unsupportedKeyFailure(value, keys, "options", "the permission fetch options")
     if (unsupported) return unsupported
     const signal = value.signal
     if (
@@ -349,9 +347,12 @@ function remainingOptions(deadline: number, now: () => number): GuildOperationOp
     return remaining > 0 ? { timeoutMs: remaining } : undefined
 }
 
-function remoteCalculationFailure(error: GuildOperationError): GuildOperationError {
+function remoteCalculationFailure(
+    error: GuildOperationError,
+    operation: "permissions.fetch" | "permissions.fetchChannels",
+): GuildOperationError {
     return new GuildOperationError({
-        operation: "permissions.fetch",
+        operation,
         reason: error.reason === "input" ? "response" : error.reason,
         outcome: error.outcome,
         status: error.status,
@@ -381,11 +382,14 @@ const unconfirmedFailures = new WeakSet<object>()
 export const isUnconfirmedPermissions = (error: unknown): boolean =>
     typeof error === "object" && error !== null && unconfirmedFailures.has(error)
 
-function unconfirmedFailure(channelId: string): GuildOperationError {
+function unconfirmedFailure(
+    channelId: string,
+    operation: "permissions.fetch" | "permissions.fetchChannels",
+): GuildOperationError {
     // The channel read was sent and answered, so the failure follows other unusable responses of a read: Unknown outcome,
     // marked as a read, so it cannot have changed anything
     const failure = new GuildOperationError({
-        operation: "permissions.fetch",
+        operation,
         reason: "response",
         outcome: "unknown",
         status: 200,
@@ -437,7 +441,7 @@ export function fetchPermissions(
             // Each remote read gets the time left, and none starts once the deadline has passed. Cache reads need no time
             const remote = <A, E>(run: (budget: GuildOperationOptions) => Effect.Effect<A, E>) => {
                 const remaining = remainingOptions(deadline, now)
-                return remaining ? run(remaining) : Effect.fail(timeoutFailure())
+                return remaining ? run(remaining) : Effect.fail(timeoutFailure("permissions.fetch"))
             }
             const readChannel = (id: string) =>
                 Effect.gen(function* () {
@@ -450,7 +454,7 @@ export function fetchPermissions(
                     )
                     // Only a thread takes its permissions from elsewhere, so any other channel needs its overwrite list
                     if (!isThreadChannel(fetched) && fetched.permissionOverwrites === undefined)
-                        return yield* Effect.fail(unconfirmedFailure(id))
+                        return yield* Effect.fail(unconfirmedFailure(id, "permissions.fetch"))
                     return fetched
                 })
 
@@ -484,7 +488,61 @@ export function fetchPermissions(
                 roles,
                 ...(channel === undefined ? {} : { channel }),
                 ...(parentChannel === undefined ? {} : { parentChannel }),
-            }).pipe(Effect.mapError(remoteCalculationFailure))
+            }).pipe(Effect.mapError((error) => remoteCalculationFailure(error, "permissions.fetch")))
+        })
+    })
+}
+
+/**
+ * Fetches the guild, the member, the role list and the community channel list once each under one deadline, then
+ * calculates the member's raw bitfield in every listed channel with the same calculation as permissions.calculate.
+ * The community list never includes threads, and the reads are always remote, because no cache holds a complete list
+ */
+export function fetchChannelPermissions(
+    owner: Pick<ClientOwner, "guild" | "channel" | "logical"> & { readonly defaultTimeoutMs?: number },
+    target: MemberReference,
+    options?: GuildOperationOptions,
+): Effect.Effect<readonly ChannelPermissions[], GuildOperationFailure | ChannelOperationFailure> {
+    const operation = "permissions.fetchChannels"
+    // Reading and validating the caller target and options is marked as application input
+    return suspendInput(() => {
+        const targetSnapshot = validateTarget(target, ["guildId", "userId"])
+        if (targetSnapshot instanceof InputValidationFailure)
+            return Effect.fail(inputFailure(operation, targetSnapshot))
+        const validatedOptions = validateOptions(options, ["timeoutMs", "signal"])
+        if (validatedOptions instanceof InputValidationFailure)
+            return Effect.fail(inputFailure(operation, validatedOptions))
+        const { guildId, userId } = targetSnapshot
+        return Effect.gen(function* () {
+            const now = () => owner.logical.now()
+            const deadline = now() + (validatedOptions.timeoutMs ?? owner.defaultTimeoutMs ?? 30_000)
+            // Each remote read gets the time left, and none starts once the deadline has passed
+            const remote = <A, E>(run: (budget: GuildOperationOptions) => Effect.Effect<A, E>) => {
+                const remaining = remainingOptions(deadline, now)
+                return remaining ? run(remaining) : Effect.fail(timeoutFailure(operation))
+            }
+            const guild = yield* remote((budget) => owner.guild("guilds.fetch", () => guildFetch(guildId), budget))
+            const member = yield* remote((budget) =>
+                owner.guild("members.fetch", () => memberFetch({ guildId, userId }), budget),
+            )
+            const roles = [
+                ...(yield* remote((budget) => owner.guild("roles.fetchAll", () => roleList(guildId), budget))),
+            ]
+            const channels = yield* remote((budget) =>
+                owner.channel("channels.fetchAll", () => channelList(guildId), budget),
+            )
+            const results: ChannelPermissions[] = []
+            for (const channel of channels) {
+                // A thread takes its parent's permissions and Fluxer lists none here, so a stray one is left out
+                if (isThreadChannel(channel)) continue
+                if (channel.permissionOverwrites === undefined)
+                    return yield* Effect.fail(unconfirmedFailure(channel.id, operation))
+                const permissions = yield* calculatePermissions({ guild, member, roles, channel }).pipe(
+                    Effect.mapError((error) => remoteCalculationFailure(error, operation)),
+                )
+                results.push(Object.freeze({ channel, permissions }))
+            }
+            return Object.freeze(results)
         })
     })
 }

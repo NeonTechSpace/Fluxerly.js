@@ -42,7 +42,7 @@ export type BotEventContext<K extends EventName, M extends MessageCore = Message
     /** The client owned by this bot run. Do not retain it after the run stops */
     readonly client: Client<M>
     /** How the client received this event, the EventContext a client.on handler receives. Its sessionEpoch tells which
-     * shard session the event belongs to
+     * shard session the event belongs to, and its receipt orders events by arrival
      */
     readonly context: EventContext
 } & (K extends "messageCreate"

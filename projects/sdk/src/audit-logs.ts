@@ -30,9 +30,15 @@ export const AuditLogActions: Readonly<{
     readonly MemberBanAdd: 22
     /** An account's community ban was lifted */
     readonly MemberBanRemove: 23
-    /** A member's community-specific settings or moderation state changed */
+    /** A member's community-specific settings or moderation state changed, which can include a `roles` change as MemberRoleUpdate describes */
     readonly MemberUpdate: 24
-    /** A member's assigned roles changed */
+    /**
+     * A member's assigned roles changed.
+     * The entry's changes hold one change with key `roles`, whose oldValue and newValue are the member's full role ID
+     * lists before and after, as decimal strings. The added roles are those in newValue that oldValue lacks, and the
+     * removed roles are those in oldValue that newValue lacks.
+     * Fluxer records the same `roles` change on a MemberUpdate entry that changes the roles together with other settings
+     */
     readonly MemberRoleUpdate: 25
     /** A member was moved between voice channels */
     readonly MemberMove: 26

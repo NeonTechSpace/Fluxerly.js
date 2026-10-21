@@ -87,7 +87,7 @@ export type { GuildListQuery, GuildListSummary } from "./guilds.js"
 export type { GuildIterationQuery } from "./pagination.js"
 export { GuildMemberJoinSourceTypes } from "./member-search.js"
 export type { GuildMemberJoinSourceType } from "./member-search.js"
-export type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "./permissions.js"
+export type { ChannelPermissions, PermissionFetchOptions, PermissionInput, PermissionTarget } from "./permissions.js"
 export type { HierarchyHelpers, RoleHierarchyInput, RoleManagementInput } from "./role-hierarchy.js"
 export { BotApplicationOperationError } from "./application.js"
 export type {

@@ -208,6 +208,30 @@ test("retains reviewed validation meanings with plain field paths, bounded to 32
     expect(Object.isFrozen(errors)).toBe(true)
 })
 
+test("describes Fluxer's invalid URL validation code instead of treating it as unreviewed", () => {
+    const detail = apiErrorDetail({
+        code: "INVALID_FORM_BODY",
+        errors: [{ path: "url", code: "INVALID_URL_FORMAT", message: "Invalid URL format." }],
+    })
+    const [url] = detail && "validationErrors" in detail ? detail.validationErrors : []
+    expect(url).toEqual({ providerCode: "INVALID_URL_FORMAT", explanation: expect.stringMatching(/\S/), path: "url" })
+    // A code that the SDK does not describe gets the generic explanation, which this one differs from
+    const unreviewed = apiErrorDetail({
+        code: "INVALID_FORM_BODY",
+        errors: [{ path: "url", code: "UNREVIEWED_NEW_CODE" }],
+    })
+    const [other] = unreviewed && "validationErrors" in unreviewed ? unreviewed.validationErrors : []
+    expect(url!.explanation).not.toBe(other!.explanation)
+    const failure = new MessageOperationError({
+        operation: "edit",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 400,
+        apiError: detail,
+    })
+    expect(failure.message).not.toContain("does not describe")
+})
+
 test("operation errors use reviewed details, status, retry delay, and never raw provider text", () => {
     const detail = apiErrorDetail({
         code: "INVALID_FORM_BODY",

@@ -107,6 +107,21 @@ test.each(modes)("%s fetches filtered pages through the public client without re
     }
 })
 
+// Fluxer 597116a: GuildMemberService records the member snapshots' roles lists, sorted, as one roles change
+test("keeps a member role change as the full role ID lists before and after", () => {
+    const request = validRequest(auditLogPage("20", { userId: "30" }))
+    const entries = [AuditLogActions.MemberRoleUpdate, AuditLogActions.MemberUpdate].map((action_type, index) =>
+        entry({
+            id: String(100 - index),
+            action_type,
+            changes: [{ key: "roles", old_value: ["40", "41"], new_value: ["40", "42"] }],
+        }),
+    )
+    const result = request.decode(page(entries))!
+    for (const item of result.entries)
+        expect(item.changes).toEqual([{ key: "roles", oldValue: ["40", "41"], newValue: ["40", "42"] }])
+})
+
 test("accepts sticker lifecycle actions in user-filtered pages and action filters", () => {
     const actions = [AuditLogActions.StickerCreate, AuditLogActions.StickerUpdate, AuditLogActions.StickerDelete]
     expect(actions).toEqual([90, 91, 92])

@@ -292,7 +292,13 @@ export class TestGateway {
                 "connection",
                 "Disconnect code must be a WebSocket close code from 1000 through 4999",
             )
-        this.#connected(shardId, "disconnect").socket.serverClose(code)
+        const endSession = options?.endSession
+        if (endSession !== undefined && typeof endSession !== "boolean")
+            throw new ConfigurationError("connection", "Disconnect endSession must be a boolean")
+        const { socket } = this.#connected(shardId, "disconnect")
+        // A forgotten session makes the client's Resume get Invalid Session, so it identifies a new session
+        if (endSession === true) this.#shards.delete(shardId)
+        socket.serverClose(code)
     }
 
     /** Close every remaining socket and refuse later connections. Returns how many sockets were still open */

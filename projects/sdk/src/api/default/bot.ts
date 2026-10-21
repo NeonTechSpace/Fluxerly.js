@@ -117,7 +117,7 @@ export type BotEventContext<K extends EventName, M extends MessageCore = Message
     /** Cancels SDK operations passed this signal when the handler is stopped. It cannot stop arbitrary application Promises */
     readonly signal: AbortSignal
     /** How the client received this event, the EventContext a client.on handler receives. Its sessionEpoch tells which
-     * shard session the event belongs to
+     * shard session the event belongs to, and its receipt orders events by arrival
      */
     readonly context: EventContext
 } & (K extends "messageCreate"

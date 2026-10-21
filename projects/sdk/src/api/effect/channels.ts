@@ -135,6 +135,9 @@ export interface Channels {
      * Omitting permissionOverwrites inherits the selected parent category's overwrites.
      * An empty [] creates no explicit overwrites, which does not make a channel private.
      * Explicit overwrites use Fluxer's required feature opt-in for ViewChannelMembers.
+     * Unless the bot has Administrator, each overwrite can allow only permissions the bot has in the parent category, or
+     * in the community when there is no parent, and Fluxer answers missingPermissions otherwise. Denies are not checked.
+     * Use permissionBits.refusedGrants to see beforehand which bits Fluxer would refuse.
      * Each allow and deny mask must be from 0n through 9_223_372_036_854_775_807n, and invalid masks fail before dispatch.
      * The example denies ViewChannel to everyone and grants access to the named bot.
      * The application manages the created channel afterward.
@@ -180,7 +183,11 @@ export interface Channels {
      * Omitted permissionOverwrites keeps the old list, and [] clears it.
      * Each replacement allow and deny mask must be from 0n through 9_223_372_036_854_775_807n.
      * Explicit replacement handles setting and clearing ViewChannelMembers through Fluxer's required feature opt-in.
+     * Unless the bot has Administrator, each changed overwrite can allow, or stop denying, only permissions the bot has in
+     * this channel, and Fluxer answers missingPermissions otherwise.
+     * Use permissionBits.refusedGrants to see beforehand which bits Fluxer would refuse.
      * On a category, a permissionOverwrites change also writes each child whose overwrites matched the category's old ones, in separate writes.
+     * Fluxer offers no way to leave a child out, and permissionBits.sameOverwrites shows which children match.
      * A failure can leave some children with the old overwrites.
      * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * The thread defaults and the forum settings apply to the channel types named on each field. The SDK cannot see the
@@ -205,8 +212,11 @@ export interface Channels {
     /**
      * Submit community-channel moves, succeeding with no value after HTTP 204.
      * Fluxer applies moves sequentially and may normalize positions.
-     * The syncPermissionsOnMove option copies the destination category's overwrites.
+     * The syncPermissionsOnMove option copies the destination category's overwrites, and applies only to a move into another category.
      * Fluxer copies them after each move, so a failed copy leaves that channel moved without them.
+     * Unless the bot has Administrator, the copied overwrites can allow, or stop denying, only permissions the bot has in
+     * the moved channel, and the copy fails with missingPermissions otherwise.
+     * Use permissionBits.refusedGrants to see beforehand which bits Fluxer would refuse.
      * A bulk channel event can arrive before that copy finishes.
      * Failures can leave partial movement because this is not a transaction, and the error does not list the moves that finished.
      * Use fetchAll afterward when final order matters, and after a failure to read the actual order and parents before sending moves again.
@@ -225,7 +235,12 @@ export interface Channels {
      * Each mask must be from 0n through 9_223_372_036_854_775_807n, and larger received masks cannot be written unchanged.
      * HTTP 204 succeeds with no value.
      * Fluxer requires ManageRoles and uses a feature opt-in to set or clear ViewChannelMembers.
+     * Unless the bot has Administrator, the overwrite can allow, or stop denying, only permissions the bot has in this
+     * channel, and Fluxer answers missingPermissions otherwise.
+     * To see beforehand which bits Fluxer would refuse, pass permissionBits.refusedGrants the current overwrite, the new
+     * one and the bot's bits in this channel, from permissions.fetch with a channelId or from permissions.fetchChannels.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
+     * Fluxer offers no way to leave a child out, and permissionBits.sameOverwrites shows which children match.
      * A failure can leave some children with the old overwrites.
      * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * No target fetch or inherited-permission calculation is performed
@@ -239,8 +254,11 @@ export interface Channels {
      * Remove one explicit permission overwrite by decimal role or member target ID.
      * Other overwrites remain unchanged.
      * HTTP 204 succeeds with no value.
-     * Fluxer requires ManageRoles, and a bot without Administrator can remove an overwrite only when it has every permission that overwrite denies.
+     * Fluxer requires ManageRoles. Unless the bot has Administrator, it can remove an overwrite only when it has every
+     * permission that the overwrite denies in this channel, and Fluxer answers missingPermissions otherwise.
+     * To check beforehand, call permissionBits.refusedGrants with the overwrite as current and undefined as next.
      * On a category, Fluxer writes the category first and then each child whose overwrites matched the category's old ones, in separate writes.
+     * Fluxer offers no way to leave a child out, and permissionBits.sameOverwrites shows which children match.
      * A failure can leave some children with the old overwrites.
      * A retry may skip them, because Fluxer selects children by comparing with the category's overwrites at the time of that call, so fetch the children again to check.
      * An unknown outcome needs an explicit follow-up read

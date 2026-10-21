@@ -9,10 +9,12 @@ import {
     GuildOperationError,
     Permissions,
     type ClientOptions,
+    type DefaultGuildOperationOptions,
     type DefaultPermissionFetchOptions,
     type GuildPublicThreadChannel,
     type PermissionInput,
     type PermissionTarget,
+    type MemberReference,
 } from "../../../src/index.js"
 import { fixtures } from "../../../src/testing.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
@@ -97,6 +99,10 @@ async function setup(mode: Mode) {
             defaultApi
                 ? unwrap(await defaultApi.permissions.fetch(value, options))
                 : run(native!.permissions.fetch(value, options)),
+        fetchChannels: async (value: MemberReference, options?: DefaultGuildOperationOptions) =>
+            defaultApi
+                ? unwrap(await defaultApi.permissions.fetchChannels(value, options))
+                : run(native!.permissions.fetchChannels(value, options)),
         shutdown: close,
     }
 }
@@ -787,4 +793,198 @@ const wireChannel = (permissionOverwrites: readonly unknown[] | undefined, guild
     guild_id: guildId,
     type: 0,
     ...(permissionOverwrites === undefined ? {} : { permission_overwrites: permissionOverwrites }),
+})
+
+const listedChannel = (id: string, permissionOverwrites: readonly unknown[] | undefined, type = 0) => ({
+    id,
+    guild_id: "20",
+    type,
+    ...(permissionOverwrites === undefined ? {} : { permission_overwrites: permissionOverwrites }),
+})
+
+/** Serve one community with the given channel list, and record the paths that were read */
+function listRest(
+    channels: () => readonly unknown[],
+    roles = [wireRole("20", 2n), wireRole("40", unknownPermission | 4n)],
+) {
+    const calls: string[] = []
+    rest(async (url) => {
+        const path = new URL(url).pathname
+        calls.push(path)
+        if (path.endsWith("/guilds/20")) return Response.json(wireGuild())
+        const memberId = /\/members\/(\d+)$/.exec(path)?.[1]
+        if (memberId !== undefined) return Response.json(wireMember(memberId))
+        if (path.endsWith("/roles")) return Response.json(roles)
+        if (path.endsWith("/guilds/20/channels")) return Response.json(channels())
+        throw Error(`Unexpected request ${path}`)
+    })
+    return calls
+}
+const channelTarget: MemberReference = { guildId: "20", userId: "30" }
+
+test.each(modes)(
+    "%s fetchChannels reads each list once and calculates every listed channel in Fluxer's order",
+    async (mode) => {
+        const calls = listRest(() => [
+            listedChannel("52", [{ id: "30", type: 1, allow: "16", deny: "4" }]),
+            listedChannel("50", []),
+            listedChannel("51", [{ id: "20", type: 0, allow: "0", deny: "2" }], 4),
+        ])
+        const api = await setup(mode)
+        const result = await api.fetchChannels(channelTarget)
+        expect(calls).toEqual([
+            "/v1/guilds/20",
+            "/v1/guilds/20/members/30",
+            "/v1/guilds/20/roles",
+            "/v1/guilds/20/channels",
+        ])
+        expect(result.map(({ channel }) => channel.id)).toEqual(["52", "50", "51"])
+        expect(result.map(({ permissions }) => permissions)).toEqual([
+            unknownPermission | 2n | 16n,
+            unknownPermission | 2n | 4n,
+            unknownPermission | 4n,
+        ])
+        // Each entry is what calculate gives for that channel, and the result is frozen
+        for (const { channel, permissions } of result) {
+            expect(permissions).toBe(
+                api.calculate({
+                    guild: guild(),
+                    member: member(),
+                    roles: [role("20", 2n), role("40", unknownPermission | 4n)],
+                    channel,
+                }),
+            )
+            expect(Object.isFrozen(channel)).toBe(true)
+            expect(Object.isFrozen(result[0])).toBe(true)
+        }
+        expect(Object.isFrozen(result)).toBe(true)
+        // Nothing is cached for the next call, so it reads the same four resources again
+        await api.fetchChannels(channelTarget)
+        expect(calls).toHaveLength(8)
+    },
+)
+
+test.each(modes)("%s fetchChannels gives an owner or an Administrator every bit in every channel", async (mode) => {
+    listRest(
+        () => [listedChannel("50", [{ id: "20", type: 0, allow: "0", deny: String(allPermissions & ~(1n << 63n)) }])],
+        [wireRole("20", 0n), wireRole("40", Permissions.Administrator)],
+    )
+    const api = await setup(mode)
+    expect((await api.fetchChannels(channelTarget)).map(({ permissions }) => permissions)).toEqual([allPermissions])
+    // The community owner, user 99, has no role and still gets every bit
+    listRest(() => [listedChannel("50", [])], [wireRole("20", 0n), wireRole("40", 0n)])
+    expect((await api.fetchChannels({ guildId: "20", userId: "99" })).map(({ permissions }) => permissions)).toEqual([
+        allPermissions,
+    ])
+})
+
+test.each(modes)("%s fetchChannels returns an empty list for a community without channels", async (mode) => {
+    listRest(() => [])
+    const api = await setup(mode)
+    expect(await api.fetchChannels(channelTarget)).toEqual([])
+})
+
+test.each(modes)("%s fetchChannels leaves out a thread that appears in the list", async (mode) => {
+    listRest(() => [listedChannel("50", []), wireThread()])
+    const api = await setup(mode)
+    expect((await api.fetchChannels(channelTarget)).map(({ channel }) => channel.id)).toEqual(["50"])
+})
+
+test.each(modes)("%s fetchChannels fails when a listed channel lacks its overwrite list", async (mode) => {
+    listRest(() => [listedChannel("50", []), listedChannel("51", undefined)])
+    const api = await setup(mode)
+    const failure = await api.fetchChannels(channelTarget).then(
+        () => undefined,
+        (error: unknown) => error as GuildOperationError,
+    )
+    expect(failure).toMatchObject({
+        _tag: "GuildOperationError",
+        operation: "permissions.fetchChannels",
+        reason: "response",
+        outcome: "unknown",
+        details: { channelId: "51", read: true, responseField: "permissionOverwrites" },
+    })
+    expect(errors.isRetryable(failure)).toBe(false)
+})
+
+test.each(modes)(
+    "%s fetchChannels preserves resource failures and rejects invalid input before any read",
+    async (mode) => {
+        const calls = listRest(() => [])
+        const api = await setup(mode)
+        for (const [value, path] of [
+            [{ guildId: "20" }, "target.userId"],
+            [{ guildId: "x", userId: "30" }, "target.guildId"],
+            // A channel belongs to fetch, and the list covers them all
+            [{ ...channelTarget, channelId: "50" }, "target"],
+            [null, "target"],
+        ] as const)
+            await expect(api.fetchChannels(value as never)).rejects.toMatchObject({
+                _tag: "GuildOperationError",
+                operation: "permissions.fetchChannels",
+                reason: "input",
+                inputValidation: { path: expect.stringContaining(path) },
+            })
+        for (const options of [{ preferCache: true }, { timeoutMs: 0 }, { timeoutMs: 1.5 }, "options"])
+            await expect(api.fetchChannels(channelTarget, options as never)).rejects.toMatchObject({
+                operation: "permissions.fetchChannels",
+                reason: "input",
+            })
+        expect(calls).toEqual([])
+        rest(async (url) => {
+            const path = new URL(url).pathname
+            if (path.endsWith("/guilds/20")) return Response.json(wireGuild())
+            if (path.endsWith("/members/30")) return Response.json(wireMember())
+            if (path.endsWith("/roles")) return Response.json([wireRole("20", 0n), wireRole("40", 0n)])
+            return Response.json({ message: "Missing access", code: 50001 }, { status: 403 })
+        })
+        await expect(api.fetchChannels(channelTarget)).rejects.toMatchObject({
+            _tag: "ChannelOperationError",
+            operation: "channels.fetchAll",
+            reason: "rejected",
+            status: 403,
+        })
+    },
+)
+
+test.each(modes)("%s fetchChannels gives the channel list only the shared deadline remainder", async (mode) => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "performance", "setTimeout", "clearTimeout"] })
+    vi.spyOn(Effect.runSync(Clock.Clock), "monotonicTimeNanosUnsafe").mockImplementation(() =>
+        BigInt(Math.floor(performance.now() * 1_000_000)),
+    )
+    let enteredList!: () => void
+    let listAborted = false
+    const listRead = new Promise<void>((resolve) => {
+        enteredList = resolve
+    })
+    rest(async (url, init) => {
+        const path = new URL(url).pathname
+        if (path.endsWith("/guilds/20")) {
+            await new Promise((resolve) => setTimeout(resolve, 40))
+            return Response.json(wireGuild())
+        }
+        if (path.endsWith("/members/30")) return Response.json(wireMember())
+        if (path.endsWith("/roles")) return Response.json([wireRole("20", 0n), wireRole("40", 0n)])
+        enteredList()
+        return new Promise<Response>((_resolve, reject) => {
+            ;(init.signal as AbortSignal).addEventListener(
+                "abort",
+                () => {
+                    listAborted = true
+                    reject(new DOMException("Timed out", "AbortError"))
+                },
+                { once: true },
+            )
+        })
+    })
+    const api = await setup(mode)
+    const pending = api.fetchChannels(channelTarget, { timeoutMs: 50 }).then(
+        () => undefined,
+        (error) => error,
+    )
+    await vi.advanceTimersByTimeAsync(40)
+    await listRead
+    await vi.advanceTimersByTimeAsync(11)
+    expect(listAborted).toBe(true)
+    expect(await pending).toMatchObject({ operation: "channels.fetchAll", reason: "timeout" })
 })

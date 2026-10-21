@@ -148,6 +148,7 @@ operation|default|OAuthClient.revoke|(input: { readonly token: string; readonly 
 operation|default|OAuthClient.shutdown|() => ResultAsync<void, never>
 operation|default|PermissionHelpers.calculate|(input: PermissionInput) => bigint
 operation|default|PermissionHelpers.fetch|(target: PermissionTarget, options?: DefaultPermissionFetchOptions | undefined) => ResultAsync<bigint, CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
+operation|default|PermissionHelpers.fetchChannels|(target: MemberReference, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly ChannelPermissions[], CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
 operation|default|Presence.set|(input: PresenceInput) => Result<void, PresenceFailure>
 operation|default|Presence.setMembers|(guildId: string, memberIds: readonly string[]) => Result<void, PresenceFailure>
 operation|default|RestRequests.request|<T = unknown>(input: DefaultRestRequest) => ResultAsync<RestResponse<T>, CancelledError | ConfigurationError | RestRequestFailure>
@@ -352,6 +353,7 @@ operation|native|OAuthClient.revoke|(input: { readonly token: string; readonly t
 operation|native|OAuthClient.shutdown|() => Effect<void, never, never>
 operation|native|PermissionHelpers.calculate|(input: PermissionInput) => bigint
 operation|native|PermissionHelpers.fetch|(target: PermissionTarget, options?: PermissionFetchOptions | undefined) => Effect<bigint, ChannelOperationError | ClientClosedError | GuildOperationError, never>
+operation|native|PermissionHelpers.fetchChannels|(target: MemberReference, options?: GuildOperationOptions | undefined) => Effect<readonly ChannelPermissions[], ChannelOperationError | ClientClosedError | GuildOperationError, never>
 operation|native|Presence.set|(input: PresenceInput) => Effect<void, PresenceFailure, never>
 operation|native|Presence.setMembers|(guildId: string, memberIds: readonly string[]) => Effect<void, PresenceFailure, never>
 operation|native|RestRequests.request|<T = unknown>(input: RestRequest) => Effect<RestResponse<T>, RestRequestFailure, never>
@@ -988,6 +990,8 @@ field|native|ChannelPaginateOptions.idleMs|number | undefined|optional=true|null
 field|native|ChannelPaginateOptions.removeClicks|boolean | undefined|optional=true|nullable=false
 field|native|ChannelPaginateOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|native|ChannelPaginateOptions.users|PageTurners|optional=false|nullable=false
+field|shared|ChannelPermissions.channel|GuildChannel|optional=false|nullable=false
+field|shared|ChannelPermissions.permissions|bigint|optional=false|nullable=false
 field|shared|ChannelPinsUpdate.channelId|string|optional=false|nullable=false
 field|shared|ChannelPinsUpdate.guildId|string | undefined|optional=true|nullable=false
 field|shared|ChannelPinsUpdate.lastPinTimestamp|null | string|optional=false|nullable=true
@@ -1444,6 +1448,7 @@ field|shared|EntranceSoundPlay.url|string|optional=false|nullable=false
 field|shared|EntranceSoundPlay.userId|string|optional=false|nullable=false
 field|shared|EventBufferOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
 field|shared|EventBufferOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
+field|shared|EventContext.receipt|number|optional=false|nullable=false
 field|shared|EventContext.receivedBytes|number|optional=false|nullable=false
 field|shared|EventContext.sessionEpoch|number|optional=false|nullable=false
 field|shared|EventContext.shardId|number|optional=false|nullable=false

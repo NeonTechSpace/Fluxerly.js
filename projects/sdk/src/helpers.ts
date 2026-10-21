@@ -163,6 +163,8 @@ export class HelperError extends FluxerlyError {
             | "permissionBits.toDecimal"
             | "permissionBits.label"
             | "permissionBits.patchOverwrite"
+            | "permissionBits.refusedGrants"
+            | "permissionBits.sameOverwrites"
             | "colors.parse"
             | "colors.toHex"
             | "colors.toRgb"
@@ -231,6 +233,10 @@ function helperExplanation(operation: HelperError["operation"], reason: HelperEr
         case "permissionBits":
             if (operation === "permissionBits.patchOverwrite")
                 return "The current overwrite must be undefined or hold allow and deny as bigints from 0 through 18,446,744,073,709,551,615, and the change may hold only allow, deny and inherit lists of Permissions keys, with each permission in at most one list"
+            if (operation === "permissionBits.refusedGrants")
+                return "The current and next overwrites must each be undefined or hold allow and deny as bigints from 0 through 18,446,744,073,709,551,615, and the held permissions must be a bigint in that range"
+            if (operation === "permissionBits.sameOverwrites")
+                return "Each list must be an array of overwrites, each with a decimal ID that appears once in the list, a type of role or member, and allow and deny as bigints from 0 through 18,446,744,073,709,551,615"
             return "Permission bits must be a bigint from 0 through 18,446,744,073,709,551,615, and permission names must be keys of Permissions"
         case "link":
             if (operation === "links.installation")
@@ -343,6 +349,63 @@ function patchedOverwrite(
             deny: (before.deny | deny) & ~(allow | inherit),
         }),
     )
+}
+
+type OverwriteBits = Pick<PermissionOverwrite, "allow" | "deny">
+
+/** The allow and deny bits of an overwrite as read, nothing for undefined, or null when the value is not an overwrite */
+function overwriteBits(value: unknown): OverwriteBits | null {
+    if (value === undefined) return { allow: 0n, deny: 0n }
+    if (typeof value !== "object" || value === null) return null
+    // Read each caller field once, so the validated bits are the ones used
+    const { allow, deny } = value as { readonly allow?: unknown; readonly deny?: unknown }
+    return validPermissionBits(allow) && validPermissionBits(deny) ? { allow, deny } : null
+}
+
+function refusedGrantBits(current: unknown, next: unknown, held: unknown): Result<bigint, HelperError> {
+    const operation = "permissionBits.refusedGrants"
+    const before = overwriteBits(current)
+    const after = overwriteBits(next)
+    if (before === null || after === null || !validPermissionBits(held))
+        return err(helperError(operation, "permissionBits"))
+    if ((held & Permissions.Administrator) === Permissions.Administrator) return ok(0n)
+    // Fluxer's overwriteGrantedBits: Bits the change newly allows, and bits it stops denying
+    const granted = (after.allow & ~before.allow) | (before.deny & ~after.deny)
+    return ok(granted & ~held)
+}
+
+/** The overwrites of a list by target ID, or null when the list is invalid or names a target twice */
+function overwritesById(value: unknown): ReadonlyMap<string, PermissionOverwrite> | null {
+    if (!Array.isArray(value)) return null
+    const byId = new Map<string, PermissionOverwrite>()
+    for (const entry of value as unknown[]) {
+        if (typeof entry !== "object" || entry === null) return null
+        // Read each caller field once, so the validated overwrite is the one compared
+        const { id, type, allow, deny } = entry as Partial<Record<keyof PermissionOverwrite, unknown>>
+        if (
+            !isSnowflake(id) ||
+            (type !== "role" && type !== "member") ||
+            !validPermissionBits(allow) ||
+            !validPermissionBits(deny) ||
+            byId.has(id)
+        )
+            return null
+        byId.set(id, { id, type, allow, deny })
+    }
+    return byId
+}
+
+function sameOverwriteLists(first: unknown, second: unknown): Result<boolean, HelperError> {
+    const a = overwritesById(first)
+    const b = overwritesById(second)
+    if (a === null || b === null) return err(helperError("permissionBits.sameOverwrites", "permissionBits"))
+    if (a.size !== b.size) return ok(false)
+    for (const [id, left] of a) {
+        const right = b.get(id)
+        if (right === undefined || right.type !== left.type || right.allow !== left.allow || right.deny !== left.deny)
+            return ok(false)
+    }
+    return ok(true)
 }
 
 const timestampStyleValues = new Set<string>(Object.values(TimestampStyles))
@@ -825,6 +888,58 @@ export type PermissionBitHelpers = Readonly<{
         current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
         change: OverwritePatch,
     ): Readonly<Pick<PermissionOverwrite, "allow" | "deny">>
+    /**
+     * Return the permission bits that Fluxer would refuse when an overwrite changes from `current` to `next`, so the
+     * change can be checked before the request is sent.
+     * Unless the bot has Administrator, Fluxer lets it allow, or stop denying, only permissions it has in the overwrite's
+     * channel, and answers missingPermissions otherwise. Removing an overwrite stops all of its denies.
+     * Pass the overwrite as read as `current` and the one to write as `next`, with undefined for no overwrite, so a `next`
+     * of undefined is a removal. Pass the bot's permission bits in that channel as `held`, such as the result of
+     * `permissions.fetch` with a `channelId` or an entry of `permissions.fetchChannels`.
+     * Returns 0n when nothing would be refused. That is always the case when `held` includes Administrator, and when the
+     * change only denies bits or stops allowing them.
+     * One call covers one overwrite. For `channels.edit` with a new list, call it for each target ID in either list. For a
+     * category move with syncPermissionsOnMove, call it for each target ID in the channel's or the category's overwrites,
+     * with the channel's bits. For `channels.create`, pass undefined as `current` and the parent category's bits as
+     * `held`, or the community-wide bits when there is no parent, because Fluxer checks only the allow bits there.
+     * Throws HelperError when an overwrite or `held` has the wrong type or bits outside the unsigned 64-bit range
+     *
+     * @example
+     * ```ts
+     * import { permissionBits, type Client, type PermissionOverwrite } from "@neontechspace/fluxerly"
+     * export async function allowTtsExample(
+     *     client: Client,
+     *     guildId: string,
+     *     channelId: string,
+     *     botId: string,
+     *     current: PermissionOverwrite | undefined,
+     * ) {
+     *     const held = await client.permissions.fetch({ guildId, userId: botId, channelId })
+     *     if (held.isErr()) return held
+     *     const next = permissionBits.patchOverwrite(current, { allow: ["SendTtsMessages"] })
+     *     const refused = permissionBits.refusedGrants(current, next, held.value)
+     *     if (refused !== 0n) return permissionBits.inspect(refused).names
+     *     return await client.channels.setPermissionOverwrite(channelId, { id: "20", type: "role", ...next })
+     * }
+     * ```
+     */
+    refusedGrants(
+        current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+        next: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+        held: bigint,
+    ): bigint
+    /**
+     * Return whether two overwrite lists are equal the way Fluxer compares them: The same target IDs, and for each ID the same type, allow and deny.
+     * Order and other fields of the entries are ignored.
+     * A channel whose overwrites equal its category's is synced with it. When `channels.edit`,
+     * `channels.setPermissionOverwrite` or `channels.removePermissionOverwrite` changes the category's overwrites, Fluxer
+     * copies the change to exactly those children, with no opt-out. Compare each child with the category before the
+     * change to learn which channels it will rewrite.
+     * Two empty lists are equal, so a category without overwrites also syncs every child without overwrites.
+     * Throws HelperError for a value that is not an array, an entry with an invalid ID, type or bits, or a list that names
+     * the same ID twice. Fluxer rejects duplicate IDs on write, so a list read from Fluxer never has one
+     */
+    sameOverwrites(first: readonly PermissionOverwrite[], second: readonly PermissionOverwrite[]): boolean
 }>
 
 /** Work with sets of named permissions stored in a bigint bitfield, without writing bitwise expressions by hand.
@@ -875,6 +990,13 @@ export const permissionBits: PermissionBitHelpers = Object.freeze({
         current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
         change: OverwritePatch,
     ): Readonly<Pick<PermissionOverwrite, "allow" | "deny">> => valueOrThrow(patchedOverwrite(current, change)),
+    refusedGrants: (
+        current: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+        next: Pick<PermissionOverwrite, "allow" | "deny"> | undefined,
+        held: bigint,
+    ): bigint => valueOrThrow(refusedGrantBits(current, next, held)),
+    sameOverwrites: (first: readonly PermissionOverwrite[], second: readonly PermissionOverwrite[]): boolean =>
+        valueOrThrow(sameOverwriteLists(first, second)),
 })
 
 /**

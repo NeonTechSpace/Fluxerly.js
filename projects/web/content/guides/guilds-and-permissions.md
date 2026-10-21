@@ -145,6 +145,22 @@ A thread has no permission overwrites of its own, because Fluxer calculates its 
 
 To decide without requests, call `client.permissions.fetch(target, { preferCache: true })`. It takes each part from an enabled cache and fetches only what is missing, which is how `guards.requirePermissions` decides. Cached parts follow the gateway events applied so far and can come from different moments, so keep the default fresh read for the moment right before an action where a stale grant matters
 
+To see what the bot can do in every channel, call [`permissions.fetchChannels`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#fetchchannels) with the bot's own ID. It reads the community once and calculates each channel locally, instead of reading again for every channel
+
+```ts
+import { permissionBits, type Client } from "@neontechspace/fluxerly"
+
+export async function channelsWhereBotCanSend(client: Client, guildId: string) {
+    const botId = client.users.getSelf()?.id
+    if (botId === undefined) return []
+    const result = await client.permissions.fetchChannels({ guildId, userId: botId })
+    if (result.isErr()) throw result.error
+    return result.value
+        .filter(({ permissions }) => permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]))
+        .map(({ channel }) => channel.id)
+}
+```
+
 A timed-out member keeps their permission bits, while Fluxer blocks sending messages, editing and publishing their own messages, reacting, uploading, typing, changing their own nickname, writing in threads and joining voice. The `client.members.timeoutState(member)` method returns `"active"`, `"none"` or `"unknown"`. A member without the `communicationDisabledUntil` field is `"unknown"`, and `members.fetch` always includes it. To show a permission to people, `permissionBits.label("ManageGuild")` gives Fluxer's own name for it, "Manage community". These are community-scope titles, and a channel's permission screen calls `ManageChannels` "Manage channel" and `ManageRoles` "Manage permissions"
 
 <details>
@@ -173,6 +189,50 @@ export async function quietRole(client: Client, channelId: string, roleId: strin
 ```
 
 Pass the overwrite as read from the channel, or `undefined` when there is none. In the change, `allow` also stops denying, `deny` also stops allowing and `inherit` clears both. A permission in more than one list throws `HelperError`. A result with `allow` and `deny` both `0n` has no effect, so remove such an overwrite with `channels.removePermissionOverwrite`
+
+## Check what Fluxer will refuse in an overwrite
+
+Unless the bot has `Administrator`, an overwrite change can allow, or stop denying, only permissions the bot has in the channel. Fluxer refuses anything more with `missingPermissions`. The [`permissionBits.refusedGrants`](/docs/{{version}}/api/modules/js-ts/#permissionbits) helper returns the bits Fluxer would refuse, so the application can check a change before sending it. The [`channels`](/docs/{{version}}/api/interfaces/js-ts.Channels/#setpermissionoverwrite) reference describes how each method applies the rule
+
+```ts
+import { permissionBits, type Client, type PermissionOverwrite } from "@neontechspace/fluxerly"
+
+export async function allowTtsIfPossible(
+    client: Client,
+    guildId: string,
+    channelId: string,
+    roleId: string,
+    current: PermissionOverwrite | undefined,
+) {
+    const botId = client.users.getSelf()?.id
+    if (botId === undefined) return
+    const held = await client.permissions.fetch({ guildId, userId: botId, channelId })
+    if (held.isErr()) return held
+    const { allow, deny } = permissionBits.patchOverwrite(current, { allow: ["SendTtsMessages"] })
+    if (permissionBits.refusedGrants(current, { allow, deny }, held.value) !== 0n) return
+    return await client.channels.setPermissionOverwrite(channelId, { id: roleId, type: "role", allow, deny })
+}
+```
+
+## Find the channels a category change will rewrite
+
+When a category's overwrites change, Fluxer copies the new overwrites to every child whose overwrites equal the category's old ones, with no way to opt out. The `permissionBits.sameOverwrites(first, second)` helper compares two lists as Fluxer does, so the application can find those children before the change
+
+```ts
+import { permissionBits, type GuildChannel } from "@neontechspace/fluxerly"
+
+export function syncedChildren(category: GuildChannel, channels: readonly GuildChannel[]) {
+    const overwrites = category.permissionOverwrites
+    // Unknown until the category is read with its overwrites, such as through channels.fetch
+    if (overwrites === undefined) return undefined
+    return channels.filter(
+        ({ parentId, permissionOverwrites }) =>
+            parentId === category.id &&
+            permissionOverwrites !== undefined &&
+            permissionBits.sameOverwrites(permissionOverwrites, overwrites),
+    )
+}
+```
 
 ## Grant a configured opt-in role
 

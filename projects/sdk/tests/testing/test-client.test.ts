@@ -4,6 +4,7 @@ import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
 import {
     ClientClosedError,
     ConfigurationError,
+    type EventContext,
     type EventMap,
     type EventName,
     type LogRecord,
@@ -37,8 +38,12 @@ interface Driver {
     readonly test: DefaultTestClient | NativeTestClient
     ready(): Promise<void>
     emit(type: string, payload: unknown, options?: { readonly shardId?: number }): Promise<void>
-    disconnect(options?: { readonly shardId?: number; readonly code?: number }): Promise<void>
-    on<K extends EventName>(event: K, handler: (value: EventMap[K]) => void): Promise<void>
+    disconnect(options?: {
+        readonly shardId?: number
+        readonly code?: number
+        readonly endSession?: boolean
+    }): Promise<void>
+    on<K extends EventName>(event: K, handler: (value: EventMap[K], context: EventContext) => void): Promise<void>
     shutdown(): Promise<void>
 }
 
@@ -51,7 +56,8 @@ async function open(mode: Mode, options: TestClientOptions = {}): Promise<Driver
             ready: () => test.ready(),
             emit: async (type, payload, emitOptions) => test.emit(type, payload, emitOptions),
             disconnect: async (disconnectOptions) => test.disconnect(disconnectOptions),
-            on: async (event, handler) => void test.client.on(event, (value) => handler(value as never)),
+            on: async (event, handler) =>
+                void test.client.on(event, (value, _signal, context) => handler(value as never, context)),
             shutdown: () => test.shutdown(),
         }
     }
@@ -65,7 +71,9 @@ async function open(mode: Mode, options: TestClientOptions = {}): Promise<Driver
         disconnect: (disconnectOptions) => Effect.runPromise(test.disconnect(disconnectOptions)),
         on: async (event, handler) => {
             await Effect.runPromise(
-                test.client.on(event, (value) => Effect.sync(() => handler(value as never))).pipe(Scope.provide(scope)),
+                test.client
+                    .on(event, (value, context) => Effect.sync(() => handler(value as never, context)))
+                    .pipe(Scope.provide(scope)),
             )
         },
         shutdown: () => Effect.runPromise(test.shutdown()),
@@ -394,6 +402,82 @@ describe.each(modes)("%s test client", (mode) => {
             ConfigurationError,
         )
     }, 20_000)
+
+    test("a disconnect resumes the same session, even with 4007, while endSession identifies a new one", async () => {
+        const clock = sdkClock()
+        const driver = await open(mode)
+        const contexts: EventContext[] = []
+        await driver.on("typingStart", (_event, context) => void contexts.push(context))
+        await driver.ready()
+        const wire = { channel_id: "20", user_id: "30", timestamp: 1_767_225_600 }
+        const handshakes = (op: number) => driver.test.commands().filter((command) => command.op === op).length
+        // Wake the shard's recovery wait, whose length the shard reports, then wait for the next connection
+        const recover = async (handshake: () => boolean, connected = true) => {
+            const delay = await vi.waitFor(
+                () => {
+                    const retryDelayMs = driver.test.client.shards[0]?.recovery?.retryDelayMs
+                    expect(retryDelayMs).toEqual(expect.any(Number))
+                    return retryDelayMs!
+                },
+                { interval: 5 },
+            )
+            await clock.waiting(delay)
+            await clock.advance(delay)
+            await expect.poll(handshake, { timeout: 10_000 }).toBe(true)
+            if (connected) await expect.poll(() => driver.test.client.state, { timeout: 10_000 }).toBe("Connected")
+        }
+        const received = async (count: number) => {
+            await driver.emit("TYPING_START", wire)
+            await expect.poll(() => contexts.length, { timeout: 10_000 }).toBe(count)
+        }
+
+        await received(1)
+        await driver.disconnect()
+        await recover(() => handshakes(6) === 1)
+        await received(2)
+        // 4007 (invalid sequence) discards a session only when it closes a Resume attempt, so here it resumes as well
+        await driver.disconnect({ code: 4007 })
+        await recover(() => handshakes(6) === 2)
+        await received(3)
+        expect(handshakes(2)).toBe(1)
+        expect(contexts.map((context) => context.sessionEpoch)).toEqual([1, 1, 1])
+        // The gateway forgets the session, so the client's Resume gets Invalid Session and it identifies again
+        await driver.disconnect({ endSession: true })
+        await recover(() => handshakes(6) === 3, false)
+        await recover(() => handshakes(2) === 2)
+        await received(4)
+        expect(handshakes(6)).toBe(3)
+        expect(contexts[3]!.sessionEpoch).toBeGreaterThan(contexts[2]!.sessionEpoch)
+        expect(driver.test.client.shards[0]!.sessionEpoch).toBe(contexts[3]!.sessionEpoch)
+    }, 20_000)
+
+    test("disconnect rejects an endSession that is not a boolean without closing the connection", async () => {
+        const driver = await open(mode)
+        await driver.ready()
+        for (const endSession of ["yes", 1, null])
+            expect(await misuse(() => driver.disconnect({ endSession } as never))).toBeInstanceOf(ConfigurationError)
+        expect(driver.test.client.state).toBe("Connected")
+    })
+
+    test("events decoded from one frame get consecutive receipts in dispatch order", async () => {
+        const driver = await open(mode)
+        const seen: [string, number][] = []
+        await driver.on("guildCreate", (_event, context) => void seen.push(["guildCreate", context.receipt]))
+        await driver.on(
+            "voiceStateSnapshot",
+            (_event, context) => void seen.push(["voiceStateSnapshot", context.receipt]),
+        )
+        await driver.on("typingStart", (_event, context) => void seen.push(["typingStart", context.receipt]))
+        await driver.ready()
+        await driver.emit("GUILD_CREATE", driver.test.fixtures.guildCreate())
+        await driver.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1_767_225_600 })
+        await expect.poll(() => seen.length, { timeout: 10_000 }).toBe(3)
+        expect(seen.toSorted(([, left], [, right]) => left - right)).toEqual([
+            ["guildCreate", 1],
+            ["voiceStateSnapshot", 2],
+            ["typingStart", 3],
+        ])
+    })
 
     test("controls reject emits before ready and after shutdown, and shutdown leaves no gateway sockets open", async () => {
         const driver = await open(mode)

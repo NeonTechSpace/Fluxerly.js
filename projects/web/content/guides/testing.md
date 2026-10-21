@@ -182,7 +182,7 @@ Each `rest.respond` call returns a route whose `requests()` lists only the reque
 
 Each test client has its own `fixtures`, whose builders return snake_case wire payloads for users, the bot user, guilds, `GUILD_CREATE` bodies, channels, roles, members and messages. Their defaults refer to one community, one channel and one author, and `fixtures.ids` holds those IDs. The IDs are deterministic, so the same calls produce the same IDs in every run.
 The shared `fixtures` export and `createFixtures()` build payloads outside a test client.
-Pass `{ shardId }` to `emit` to choose the receiving [shard](/docs/{{version}}/glossary/#shard) in a sharded client. Call `disconnect({ code })` to close a shard's connection from the gateway side and watch the client resume, or fail for a code that ends the session.
+Pass `{ shardId }` to `emit` to choose the receiving [shard](/docs/{{version}}/glossary/#shard) in a sharded client. Call `disconnect({ code })` to close a shard's connection from the gateway side and watch the client resume, or fail for a code that ends the session. Every recoverable code resumes the same session, including 4007, so `sessionEpoch` stays the same. Pass `endSession: true` to make the test gateway forget the session first, so the client identifies a new one and the next event's `context.sessionEpoch` is higher.
 The `createTestClient` function accepts every `createClient` option except `transport` and `instance`, which the test transport owns. The `createTestBot` function accepts the bot's `runBot` options and ignores `signal`, `processSignals` and `reportFailure`
 
 </details>

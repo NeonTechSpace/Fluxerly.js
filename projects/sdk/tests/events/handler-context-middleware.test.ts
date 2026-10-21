@@ -140,10 +140,73 @@ describeBothApis("handler context", (mode) => {
             expect(context).toEqual({
                 shardId,
                 sessionEpoch: sessionEpochs.get(shardId),
+                receipt: expect.any(Number),
                 receivedBytes: Buffer.byteLength(JSON.stringify(frame)),
             })
             expect(Object.isFrozen(context)).toBe(true)
         }
+        // One client-wide count numbers the events of both shards from 1
+        expect([...byChannel.values()].map((context) => context.receipt).toSorted()).toEqual([1, 2])
+    })
+
+    test("numbers events from 1 across shards in receive order, with the same number for every handler of an event", async () => {
+        const client = await setup(mode)
+        const first: [string, EventContext][] = []
+        const second: [string, EventContext][] = []
+        await handle(mode, client, (event, context) => void first.push([event.channelId, context]))
+        await handle(mode, client, (event, context) => void second.push([event.channelId, context]))
+        offer(client, "20", 10, 0)
+        offer(client, "21", 10, 1)
+        offer(client, "22", 10, 0)
+        await vi.waitFor(() => expect(first.length + second.length).toBe(6))
+        const receipts = (seen: [string, EventContext][]) =>
+            Object.fromEntries(seen.map(([channelId, context]) => [channelId, context.receipt]))
+        expect(receipts(first)).toEqual({ "20": 1, "21": 2, "22": 3 })
+        expect(receipts(second)).toEqual(receipts(first))
+        expect(Object.isFrozen(first[0]![1])).toBe(true)
+    })
+
+    test("keeps the number an event was given while it waits behind a slower handler", async () => {
+        const client = await setup(mode)
+        const gate = Promise.withResolvers<void>()
+        const order: [string, number][] = []
+        // Only the first event waits, so the later event finishes first although it arrived second
+        if (mode === "default")
+            (client as Client).on(
+                "typingStart",
+                async (event, _signal, context) => {
+                    if (event.channelId === "20") await gate.promise
+                    order.push([event.channelId, context.receipt])
+                },
+                { concurrency: 2 },
+            )
+        else {
+            const scope = Scope.makeUnsafe()
+            onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+            await Effect.runPromise(
+                (client as NativeClient)
+                    .on(
+                        "typingStart",
+                        (event, context) =>
+                            Effect.gen(function* () {
+                                if (event.channelId === "20") yield* Effect.promise(() => gate.promise)
+                                order.push([event.channelId, context.receipt])
+                            }),
+                        { concurrency: 2 },
+                    )
+                    .pipe(Scope.provide(scope)),
+            )
+        }
+        offer(client, "20")
+        offer(client, "21")
+        await vi.waitFor(() => expect(order).toEqual([["21", 2]]))
+        gate.resolve()
+        await vi.waitFor(() =>
+            expect(order).toEqual([
+                ["21", 2],
+                ["20", 1],
+            ]),
+        )
     })
 })
 
@@ -170,7 +233,7 @@ describeBothApis("event middleware", (mode) => {
             {
                 event: "typingStart",
                 payload: typing("20"),
-                context: { shardId: 3, sessionEpoch: 7, receivedBytes: 64 },
+                context: { shardId: 3, sessionEpoch: 7, receipt: 1, receivedBytes: 64 },
                 subscriptionId: subscription.id,
             },
         ])

@@ -102,3 +102,17 @@ export interface PermissionFetchOptions extends GuildOperationOptions {
  * @category Options
  */
 export interface DefaultPermissionFetchOptions extends PermissionFetchOptions, OperationOptions {}
+
+/**
+ * One entry of the permissions.fetchChannels result: A member's raw permission bits in one community channel.
+ * The bits come from the same calculation as permissions.calculate, with the channel's own overwrites. They do not show
+ * whether the member can view the channel or whether an action will succeed
+ *
+ * @category Roles and permissions
+ */
+export interface ChannelPermissions {
+    /** The listed community channel, a frozen snapshot with its permission overwrites */
+    readonly channel: GuildChannel
+    /** The member's permission bits in this channel, an unsigned 64-bit bigint that preserves unknown flags */
+    readonly permissions: bigint
+}

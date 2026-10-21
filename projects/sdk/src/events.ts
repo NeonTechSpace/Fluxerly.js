@@ -573,6 +573,29 @@ export interface EventContext {
      * ```
      */
     readonly sessionEpoch: number
+    /**
+     * A number that orders events by arrival. The client gives each event the next number when it accepts it, starting
+     * at 1 and counting across all of its shards in the order it received the events. Every handler of the same event
+     * sees the same number, and events decoded from one frame get consecutive numbers in dispatch order.
+     * Handlers of one community can run out of order because of handler concurrency, partitions or partitionReady, so
+     * compare receipts to learn which event came first: The smaller receipt arrived first.
+     * One handler sees gaps between the numbers, because the client also numbers events that its subscription does not
+     * receive, so only the order has meaning.
+     * Under a supervisor each child process numbers its own events, so receipts from different processes cannot be
+     * compared
+     *
+     * @example
+     * ```ts
+     * import type { EventContext } from "@neontechspace/fluxerly"
+     * const newest = new Map<string, number>()
+     * export function isOutOfOrder(channelId: string, context: EventContext) {
+     *     const last = newest.get(channelId) ?? 0
+     *     newest.set(channelId, Math.max(last, context.receipt))
+     *     return context.receipt < last
+     * }
+     * ```
+     */
+    readonly receipt: number
     /** UTF-8 byte length of the whole received gateway frame that carried the event, the same size counted against maxPendingBytes.
      * Events decoded from one frame, such as guildCreate and its voiceStateSnapshot, report the same value
      */
@@ -589,7 +612,7 @@ export interface EventInvocationOf<K extends EventName, M extends MessageCore = 
     readonly event: K
     /** Frozen event payload the handler receives */
     readonly payload: EventMap<M>[K]
-    /** Shard, its session epoch and received size of the frame that carried the event */
+    /** Shard, its session epoch, receipt number and received size of the frame that carried the event */
     readonly context: EventContext
     /** Identifier of the subscription whose handler this invocation runs, such as messageCreate#3 */
     readonly subscriptionId: string

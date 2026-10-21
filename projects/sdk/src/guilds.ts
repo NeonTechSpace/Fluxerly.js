@@ -1043,6 +1043,7 @@ export interface RoleHoistPosition {
 export type GuildOperation =
     | "permissions.calculate"
     | "permissions.fetch"
+    | "permissions.fetchChannels"
     | `hierarchy.${"compare" | "isAbove" | "canManage" | "highestRole" | "canManageRole"}`
     | "members.search"
     | `discovery.${"search" | "fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`

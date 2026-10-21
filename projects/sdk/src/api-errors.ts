@@ -262,6 +262,8 @@ export const validationErrorMappings = {
     INVALID_MESSAGE_DATA: "The submitted message data is invalid",
     INVALID_SNOWFLAKE: "A submitted identifier is invalid",
     INVALID_SNOWFLAKE_FORMAT: "A submitted identifier has an invalid format",
+    INVALID_URL_FORMAT:
+        "A submitted URL is not accepted, such as one that is not http or https, contains a user name or password, or has no top-level domain",
     MESSAGE_IDS_CANNOT_BE_EMPTY: "At least one message identifier is required",
     STRING_LENGTH_INVALID: "A submitted string has an invalid length",
     TOO_MANY_EMBEDS: "Too many embeds were submitted",
@@ -475,6 +477,7 @@ export type ApiValidationCode =
     | "INVALID_MESSAGE_DATA"
     | "INVALID_SNOWFLAKE"
     | "INVALID_SNOWFLAKE_FORMAT"
+    | "INVALID_URL_FORMAT"
     | "MESSAGE_IDS_CANNOT_BE_EMPTY"
     | "STRING_LENGTH_INVALID"
     | "TOO_MANY_EMBEDS"

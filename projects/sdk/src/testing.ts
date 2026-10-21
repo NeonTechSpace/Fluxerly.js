@@ -154,6 +154,7 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
     /**
      * Close one shard's connection from the gateway side with a close code. The SDK then recovers as it would
      * against Fluxer, resuming with RESUMED for a resumable code, or ends the connection lifetime for a fatal one.
+     * With endSession set, the client identifies a new session instead of resuming.
      * Throws ConfigurationError when that shard is not connected
      */
     disconnect(options?: TestDisconnectOptions): void
