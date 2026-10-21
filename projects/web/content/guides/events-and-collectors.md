@@ -46,7 +46,7 @@ Pass the signal to SDK operations inside the handler so they stop with it. To ru
 A handler runs one event at a time by default, and later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead
 
 To handle several events at a time and still keep related events in order, pass a `partition` option. The value `"channel"` keys each event by its channel, `"guild"` by its community, and a function returns a key of its own. Events with different keys run side by side, up to eight at a time unless `concurrency` says otherwise, while events with the same key run one after another in the order they arrived.
-When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. A key's backlog counts the arriving event, and another key loses its oldest waiting event only when its backlog is longer. Otherwise the arriving event's own key loses its oldest one, or the arriving event itself when that key has none waiting. So a busy key's backlog shrinks itself first. Under `maxPendingBytes` the choice still follows the number of waiting events, not their sizes
+When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. The [`overflow`](/docs/{{version}}/api/interfaces/js-ts.HandlerOptions/#overflow) reference lists how the backlog to drop from is chosen
 
 </details>
 

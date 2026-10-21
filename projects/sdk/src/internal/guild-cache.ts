@@ -48,6 +48,8 @@ type Selection = { kind: ResourceKind; guildId: string; id?: string }
 export type ResourceRequest = {
     selection: Selection
     mutation?: boolean
+    /** A write whose response is not a guild snapshot, so it only invalidates */
+    evictOnly?: boolean
     replace?: boolean
     members?: boolean
     batch?: boolean
@@ -279,9 +281,9 @@ export class GuildCache {
             if (guard.mutation) this.missing(guard)
             return
         }
-        // Guild request decoders own the result shape, and void writes never fabricate a snapshot
+        // Guild request decoders own the result shape, and void or eviction-only writes never fabricate a snapshot
         const values: readonly Snapshot[] =
-            result === undefined ? [] : Array.isArray(result) ? result : [result as Snapshot]
+            result === undefined || guard.evictOnly ? [] : Array.isArray(result) ? result : [result as Snapshot]
         if (guard.mutation || (guard.replace && !guard.invalid))
             for (const selection of this.#selections(guard)) this.#evict(selection, guard)
         for (const value of values) {

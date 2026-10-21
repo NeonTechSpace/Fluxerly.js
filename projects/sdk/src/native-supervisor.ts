@@ -4,11 +4,14 @@ import * as Exit from "effect/Exit"
 import * as Stream from "effect/Stream"
 import type * as Scope from "effect/Scope"
 import { ConfigurationError, type ConnectError } from "#sdk/errors"
-import { attachAccountLimits, attachIdentifyGate } from "#sdk/internal/client"
-import { ChildBridge, childFailureReason, createSupervisor, supervisorOptionError } from "#sdk/internal/supervisor"
-import { childClientOptionsError } from "#sdk/internal/configuration"
+import {
+    ChildBridge,
+    childClientOptions,
+    childFailureReason,
+    createSupervisor,
+    readChildOptions,
+} from "#sdk/internal/supervisor"
 import { readInput } from "#sdk/internal/defects"
-import type { SessionStore } from "#sdk/sharding"
 import {
     SupervisorChildError,
     type SupervisorAssignment,
@@ -142,75 +145,6 @@ export interface NativeSupervisorTools {
     }
 }
 
-/** Child options read once before the helper waits for an assignment */
-interface ChildSettings<E, R> {
-    readonly clientOptions: Omit<ClientOptions<E, R>, "token" | "sharding">
-    /** The child's session store, added to the shards the parent assigns */
-    readonly sessions: SessionStore | undefined
-    readonly token: string | undefined
-    readonly configure: NativeSupervisorChildOptions<E, R>["configure"]
-}
-
-/** Read the child options once, so later getter changes cannot alter the client or configure Effect */
-function readChildOptions<E, R>(options: NativeSupervisorChildOptions<E, R>): ChildSettings<E, R> | ConfigurationError {
-    const invalidOptions = supervisorOptionError(
-        options,
-        ["token", "clientOptions", "configure"],
-        "configuration",
-        "Supervisor child options",
-    )
-    if (invalidOptions) return invalidOptions
-    const clientOptions = options.clientOptions
-    const invalid = childClientOptionsError(clientOptions)
-    if (invalid) return invalid
-    const {
-        messageFields,
-        instance,
-        rest,
-        transport,
-        uploads,
-        logging,
-        onError,
-        gateway,
-        cache,
-        connection,
-        observe,
-        sharding,
-    } = clientOptions ?? {}
-    const configure = options.configure
-    return {
-        sessions: sharding?.sessions,
-        clientOptions: {
-            ...(messageFields === undefined ? {} : { messageFields }),
-            ...(instance === undefined ? {} : { instance }),
-            ...(rest === undefined ? {} : { rest }),
-            ...(transport === undefined ? {} : { transport }),
-            ...(uploads === undefined ? {} : { uploads }),
-            ...(logging === undefined ? {} : { logging }),
-            ...(onError === undefined ? {} : { onError }),
-            ...(gateway === undefined ? {} : { gateway }),
-            ...(cache === undefined ? {} : { cache }),
-            ...(connection === undefined ? {} : { connection }),
-            ...(observe === undefined ? {} : { observe }),
-        },
-        token: options.token,
-        // Keep the options object as the receiver, as a method call on it would
-        configure: (context) => Reflect.apply(configure, options, [context]),
-    }
-}
-
-function childClientOptions<E, R>(
-    settings: ChildSettings<E, R>,
-    assignment: SupervisorAssignment,
-    bridge: ChildBridge,
-): ClientOptions<E, R> {
-    const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
-    return attachAccountLimits(
-        attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate),
-        bridge.accountLimits,
-    )
-}
-
 /** Build native supervisor tools around this entry point's scoped client creator */
 export function makeNativeSupervisor(
     createClient: <E, R>(options: ClientOptions<E, R>) => Effect.Effect<Client, ConfigurationError, Scope.Scope | R>,
@@ -220,7 +154,9 @@ export function makeNativeSupervisor(
             options: NativeSupervisorChildOptions<E, R>,
         ): Effect.Effect<void, ConfigurationError | ConnectError | SupervisorChildError | E, Exclude<R, Scope.Scope>> =>
             // Reading the caller options is marked as application input
-            readInput(() => readChildOptions(options)).pipe(
+            readInput(() =>
+                readChildOptions<ClientOptions<E, R>, NativeSupervisorChildOptions<E, R>["configure"]>(options),
+            ).pipe(
                 Effect.flatMap((settings) => {
                     if (settings instanceof ConfigurationError) return Effect.fail(settings)
                     return Effect.scoped(

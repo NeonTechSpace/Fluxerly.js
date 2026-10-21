@@ -21,11 +21,11 @@ export type CommandArgumentSchema = Readonly<Record<string, CommandArgumentDescr
 export interface CommandArgumentMetadata {
     /** Schema property name, which also names its converted value */
     readonly name: string
-    /** Conversion applied to this positional token, such as `integer` or `user` */
+    /** Conversion applied to this positional token, such as `integer` or `member` */
     readonly type: CommandArgumentType
     /** True when the argument can be omitted, producing undefined or its default instead of an error */
     readonly optional: boolean
-    /** True when this final text argument joins all remaining tokens with spaces */
+    /** True when this final text or custom argument takes all remaining tokens, joined with spaces */
     readonly rest: boolean
     /** Additional mention kind accepted by an `id` descriptor, if configured. Generated usage still shows the argument name */
     readonly mention?: CommandArgumentMention

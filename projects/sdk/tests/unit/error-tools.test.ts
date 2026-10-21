@@ -114,6 +114,8 @@ test("isRetryable separates safe repeats from rejections, input and uncertain wr
     expect(errors.isRetryable(new MessageError({ reason: "timeout", outcome: "unknown" }))).toBe(false)
     expect(errors.isRetryable(new RateLimitError("gateway", null))).toBe(true)
     expect(errors.isRetryable(new ShardConnectionError(0, new ConnectionError("gateway", "network")))).toBe(true)
+    expect(errors.isRetryable(new ConnectionError("discovery", "network", 503))).toBe(true)
+    expect(errors.isRetryable(new ConnectionError("discovery", "network", 404))).toBe(false)
     expect(errors.isRetryable(new AuthenticationError())).toBe(false)
     expect(errors.isRetryable(new Error("application"))).toBe(false)
 })

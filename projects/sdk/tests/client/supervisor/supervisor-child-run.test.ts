@@ -2,6 +2,7 @@ import { type Cause, Deferred, Effect, Exit, Stream } from "effect"
 import { err, ok } from "neverthrow"
 import { expect, test, vi } from "vitest"
 import { ConnectionError, ShardConnectionError, type ApplicationError, type SdkDefect } from "../../../src/errors.js"
+import { clientOptionKeys } from "../../../src/internal/configuration.js"
 import { SupervisorChildError, type SupervisorAssignment } from "../../../src/supervisor.js"
 
 /** A child bridge the test drives. Without assigned, the assignment waits until the test stops or disconnects it */
@@ -110,12 +111,18 @@ const forwarded = {
     rest: { maxQueued: 7 },
     transport: { userAgent: "SupervisorChildTest (https://example.invalid, 1)" },
     uploads: { maxBytes: 1_048_576 },
+    logging: { level: "silent" },
     gateway: { ignoredEvents: ["TYPING_START"] },
     cache: { guilds: true },
     connection: { startupTimeoutMs: 5_000 },
     observe: () => undefined,
     onError: () => undefined,
 }
+
+test("the forwarded fixture covers every client option a child accepts", () => {
+    const accepted = clientOptionKeys.filter((key) => key !== "token" && key !== "sharding")
+    expect(Object.keys(forwarded).sort()).toEqual([...accepted].sort())
+})
 
 test("default child.run forwards every client setting except token and sharding to the child client", async () => {
     const created: Record<string, unknown>[] = []

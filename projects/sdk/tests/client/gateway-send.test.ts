@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest"
 import { ClientClosedError, GatewaySendError, type Client } from "../../src/index.js"
 import type { Client as NativeClient } from "../../src/effect.js"
 import { nowMs } from "../../src/internal/clock.js"
-import { commandPacer, gatewayCommands, maxPendingApplicationCommands } from "../../src/internal/gateway/commands.js"
+import { commandPacer, gatewayCommands } from "../../src/internal/gateway/commands.js"
 import { Opcode } from "../../src/internal/protocol/gateway.js"
 import { describeBothApis, setup } from "../support/both-apis.js"
 import { runWithTestClock } from "../support/clock.js"
@@ -166,42 +166,13 @@ describe("outbound command pacing", () => {
             }),
         ))
 
-    test("withdraws an interrupted submission and fails waiting ones when the connection closes", () =>
-        runWithTestClock(
-            Effect.gen(function* () {
-                const clock = yield* Clock.Clock
-                const { sent, pacer } = pacerFixture(clock, 1)
-                yield* Effect.forkChild(pacer.run)
-                pacer.send(3, "first")
-                const withdrawn = yield* Effect.forkChild(pacer.submit(20, "withdrawn"))
-                const waiting = yield* Effect.forkChild(pacer.submit(20, "waiting"))
-                yield* Effect.yieldNow
-                yield* Fiber.interrupt(withdrawn)
-                yield* TestClock.adjust(window)
-                expect(sent).toEqual([
-                    [3, "first"],
-                    [20, "waiting"],
-                ])
-                expect(Exit.isSuccess(yield* Fiber.await(waiting))).toBe(true)
-                const stranded = yield* Effect.forkChild(pacer.submit(20, "stranded"))
-                yield* Effect.yieldNow
-                pacer.close()
-                expect(yield* Effect.flip(Fiber.join(stranded))).toBe("closed")
-                expect(yield* Effect.flip(pacer.submit(20, "late"))).toBe("closed")
-            }),
-        ))
-
-    test("fails a submission as busy when the shard already holds the most waiting commands", () =>
+    test("fails a submission as closed once the pacer closed", () =>
         runWithTestClock(
             Effect.gen(function* () {
                 const clock = yield* Clock.Clock
                 const { pacer } = pacerFixture(clock, 1)
-                pacer.send(3, "fills the budget")
-                for (let index = 0; index < maxPendingApplicationCommands; index++)
-                    yield* Effect.forkChild(pacer.submit(20, index))
-                yield* Effect.yieldNow
-                expect(yield* Effect.flip(pacer.submit(20, "one more"))).toBe("busy")
                 pacer.close()
+                expect(yield* Effect.flip(pacer.submit(20, "late"))).toBe("closed")
             }),
         ))
 

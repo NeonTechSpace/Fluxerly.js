@@ -371,7 +371,7 @@ export const logCodes = {
     "lifecycle.sessionSaveFailed": {
         levels: ["error"],
         meaning:
-            "The session store's save function threw, rejected or timed out during shutdown, so the next start begins a new session",
+            "The session store's save function threw, rejected or timed out. During shutdown the next start then begins a new session, and at startup the shard starts a new session instead of resuming the loaded one",
         action: "Fix the session store's save function",
     },
     "lifecycle.sessionLoadFailed": {
@@ -382,7 +382,7 @@ export const logCodes = {
     "lifecycle.sessionSnapshotIgnored": {
         levels: ["warn"],
         meaning:
-            "A saved session was malformed, older than Fluxer's 60-second resume window, or saved for another gateway or shard count, so the shard starts a new session",
+            "A saved session was malformed, older than Fluxer's 60-second resume window, already resumed by an earlier start, or saved for another gateway or shard count, so the shard starts a new session",
     },
     "lifecycle.identifyPermitFailed": {
         levels: ["error"],

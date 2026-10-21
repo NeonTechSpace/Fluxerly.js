@@ -76,8 +76,9 @@ The `fileSessionStore` function keeps each shard's snapshot in its own file in t
 <details>
 <summary>When a saved session is not used</summary>
 
-Snapshots are saved only during a clean shutdown, after each socket has closed, so a crash leaves no fresh snapshot.
-A snapshot older than 60 seconds, a malformed one or one for another gateway address is ignored and logged at Warn.
+Resumable snapshots are saved only during a clean shutdown, after each socket has closed.
+Before a shard resumes a snapshot, it marks the stored one as used, so a crash leaves no resumable snapshot and the same snapshot is never resumed twice.
+A snapshot older than 60 seconds, a malformed or used one, or one for another gateway address is ignored and logged at Warn.
 A failed `load` or `save`, or one that takes longer than 5 seconds, is logged in full at Error.
 In every case the shard starts a new session, so a store problem never stops the bot.
 If Fluxer no longer holds the session, the resume fails and the shard starts a new session as it would after any lost connection. If only part of the saved session's replay arrived first, the shard clears those cached community observations and their dependent resources before starting the new session. Reads cached during that wait are cleared again at READY. A successful resume retains the replayed observations.
@@ -216,7 +217,7 @@ A child that ran for `healthyResetMs` (default 60 seconds) after finishing `conf
 When a child uses up its attempts, the supervisor fails and stops the other children. With `restart: false`, the first unexpected exit does the same.
 Each child has `startupTimeoutMs` (default 30 seconds) to accept its assignment and finish `configure`, and `shutdownTimeoutMs` (default 5 seconds) to exit after a stop request.
 The parent logs why before it acts: `supervisor.startupTimeout` when a child misses its startup time, `supervisor.terminated` before it force-terminates a child and `supervisor.identifyUnacknowledged` when a child does not confirm a session start, which stops that child. When reading a child's output fails, `supervisor.outputFailed` records the error and that stream is no longer forwarded.
-A replacement is a new process with a new client. A crash leaves no saved session, so the replacement starts new sessions.
+A replacement is a new process with a new client. A crash leaves no resumable session, so the replacement starts new sessions.
 The [`SupervisorOptions`](/docs/{{version}}/api/interfaces/js-ts.SupervisorOptions/) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
 
 </details>

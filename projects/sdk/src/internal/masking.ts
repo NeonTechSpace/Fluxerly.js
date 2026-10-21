@@ -1,13 +1,10 @@
 /**
  * Credential masking and guarded value descriptions shared by logging, failure reports and error text.
  * Invariant: Tokens, authorization values, client secrets, webhook tokens, invite codes and URL user information are masked in
- * messages, fields and error text, and describing any value never throws. Implements [SDK contracts: Logging](/docs/SDK-CONTRACTS.md#logging)
+ * messages, fields and error text, and describing any value never throws.
+ * This module has no SDK imports, so the error classes can use it without an import cycle. Implements [SDK contracts: Logging](/docs/SDK-CONTRACTS.md#logging)
  */
 import { inspect } from "node:util"
-
-/** Credential masking and guarded value descriptions shared by logging, failure reports and SDK error text.
- * This module has no SDK imports, so the error classes can use it without an import cycle
- */
 
 const redacted = "[redacted]"
 

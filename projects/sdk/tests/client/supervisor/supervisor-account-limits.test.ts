@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events"
 import { Effect } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
 
@@ -13,6 +12,7 @@ import { supervisor } from "../../../src/index.js"
 import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import type { SupervisorOptions } from "../../../src/supervisor.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { forkScripted as forkScriptedChildren, type ScriptedChild as Child } from "../../support/scripted-child.js"
 import { hostTurnsUntil } from "../../support/client-clock.js"
 
 afterEach(() => {
@@ -20,61 +20,7 @@ afterEach(() => {
     fork.mockReset()
 })
 
-type Message = { readonly type: string; readonly [key: string]: unknown }
-
-/**
- * A scripted child process: It says hello, finishes configuration when assigned and records every parent message.
- * With holdShutdown it keeps running after a stop request, as a child that drains its work does
- */
-function scriptedChild(pid: number, holdShutdown: boolean) {
-    const received: Message[] = []
-    const child = Object.assign(new EventEmitter(), {
-        pid,
-        connected: true,
-        exitCode: null as number | null,
-        signalCode: null as NodeJS.Signals | null,
-        received,
-        send(message: Message) {
-            received.push(message)
-            if (message.type === "assignment")
-                queueMicrotask(() => child.emit("message", { type: "ready", generation: message.generation }))
-            if (message.type === "shutdown" && !holdShutdown) child.exit(0)
-            return true
-        },
-        kill() {
-            child.exit(0)
-            return true
-        },
-        exit(code: number) {
-            if (!child.connected) return
-            child.connected = false
-            child.exitCode = code
-            queueMicrotask(() => {
-                child.emit("disconnect")
-                child.emit("exit", code, null)
-            })
-        },
-        /** Send a message to the parent. The parent answers synchronously, so the answer is the last one received */
-        tell(message: Message) {
-            child.emit("message", message)
-            return received.at(-1)
-        },
-    })
-    queueMicrotask(() => child.emit("message", { type: "hello" }))
-    return child
-}
-
-type Child = ReturnType<typeof scriptedChild>
-
-function forkScripted(holdShutdown = false) {
-    const children: Child[] = []
-    fork.mockImplementation(() => {
-        const child = scriptedChild(300 + children.length, holdShutdown)
-        children.push(child)
-        return child
-    })
-    return children
-}
+const forkScripted = (holdShutdown?: boolean) => forkScriptedChildren(fork, 300, holdShutdown)
 
 async function managed(mode: Mode, options: SupervisorOptions) {
     if (mode === "default") {

@@ -15,8 +15,8 @@ import {
     notPrivateChannel,
     ownerIds as validOwnerIds,
     permissionNames,
-    unconfirmedPermissions,
 } from "#sdk/internal/command-guards"
+import { isUnconfirmedPermissions } from "#sdk/internal/permissions"
 
 /**
  * Built-in native command guards for the most common access rules. Pass one or a list as a command's `guard`.
@@ -166,7 +166,7 @@ export const guards: NativeGuards = Object.freeze({
                               return missing.length === 0 || { deny: guardDenials.missing(missing) }
                           }),
                           // The unconfirmed channel is an expected denial, any other failure fails the command
-                          Effect.catchIf(unconfirmedPermissions, () =>
+                          Effect.catchIf(isUnconfirmedPermissions, () =>
                               Effect.succeed<PrefixCommandGuardResult>({ deny: guardDenials.unconfirmedChannel }),
                           ),
                       )

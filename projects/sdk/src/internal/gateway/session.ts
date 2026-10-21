@@ -29,7 +29,7 @@ import type { GatewayMessageDecoder } from "../message-fields.js"
 import type { CountGatewayOwner } from "../counts.js"
 import type { MemberChunkOwner } from "../member-chunks.js"
 import type { PresenceGatewayOwner } from "../presence.js"
-import { classifyCloseCode, CloseCode, Opcode, opcodeName, resumePreservingCloseCode } from "../protocol/gateway.js"
+import { closeCodeInfo, CloseCode, Opcode, opcodeName, resumePreservingCloseCode } from "../protocol/gateway.js"
 import {
     defaultSocketFactory,
     SocketState,
@@ -83,16 +83,22 @@ export class AttemptFailure {
     ) {}
 }
 
-/** Classify a gateway close through the reviewed close-code table. Unlisted codes enter recovery */
+/** Classify a gateway close through the reviewed close-code table. Unlisted codes enter recovery.
+ * The resuming flag says whether the closed attempt was still resuming, which is when an identify action discards the session
+ */
 export function classifyClose(code: number, resuming: boolean): AttemptFailure {
-    const outcome = classifyCloseCode(code, resuming)
-    const failure =
-        outcome.failure === "authentication"
-            ? new AuthenticationError()
-            : outcome.failure === "rateLimit"
-              ? new RateLimitError("gateway", null)
-              : new ConnectionError("gateway", outcome.failure, code)
-    return new AttemptFailure(failure, outcome.retry, outcome.resetSession, "closed", code)
+    if (code === CloseCode.authenticationFailed)
+        return new AttemptFailure(new AuthenticationError(), false, false, "closed", code)
+    const { action } = closeCodeInfo(code)
+    if (action === "wait") return new AttemptFailure(new RateLimitError("gateway", null), true, false, "closed", code)
+    const permanent = action === "fatal"
+    return new AttemptFailure(
+        new ConnectionError("gateway", permanent ? "protocol" : "closed", code),
+        !permanent,
+        action === "identify" && resuming,
+        "closed",
+        code,
+    )
 }
 
 /** Logging and malformed-dispatch policy for one shard's gateway session */

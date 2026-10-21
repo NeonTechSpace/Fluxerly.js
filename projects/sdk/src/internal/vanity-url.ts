@@ -71,7 +71,7 @@ export function vanityUrlEdit(
         bucket: "guild:vanity:update",
         method: "PATCH",
         json: JSON.stringify({ code }),
-        cache: { selection: { kind: "guilds", guildId }, mutation: true },
+        cache: { selection: { kind: "guilds", guildId }, mutation: true, evictOnly: true },
         decode: (value, instance) => {
             const result = decode(value, instance?.invite ?? inviteBase)
             return result?.code === code ? result : undefined

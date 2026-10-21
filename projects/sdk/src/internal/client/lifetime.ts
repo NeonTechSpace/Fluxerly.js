@@ -17,11 +17,12 @@ import { nowMs } from "../clock.js"
 import { mapFailureCause, withDeadline } from "../effect-failures.js"
 import type { ClientLogger } from "../logging.js"
 
-/** Short readable duration for log messages */
+/** Short readable duration for log messages. Each range ends where rounding would reach the next unit */
 export function formatDuration(milliseconds: number): string {
-    if (milliseconds < 1_000) return `${Math.max(0, Math.round(milliseconds))} ms`
-    if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(1)} s`
-    return `${Math.floor(milliseconds / 60_000)} min ${Math.round((milliseconds % 60_000) / 1_000)} s`
+    if (milliseconds < 999.5) return `${Math.max(0, Math.round(milliseconds))} ms`
+    if (milliseconds < 59_950) return `${(milliseconds / 1_000).toFixed(1)} s`
+    const seconds = Math.round(milliseconds / 1_000)
+    return `${Math.floor(seconds / 60)} min ${seconds % 60} s`
 }
 
 /** Run every shard loop until one fails permanently, bounded by the group startup deadline until startup completes.

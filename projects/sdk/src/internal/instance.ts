@@ -498,7 +498,6 @@ export class InstanceResolver {
                             Deferred.doneUnsafe(task.result, exit)
                         }),
                     ),
-                    // The deferred above retains the original exit for every waiter and cleanup observer
                     // allow-silent: The deferred above retains the original exit for every waiter
                     Effect.catchCause(() => Effect.void),
                     Effect.asVoid,

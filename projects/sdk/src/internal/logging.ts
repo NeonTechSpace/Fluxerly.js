@@ -20,7 +20,7 @@ import { readCaller, suspendMarked } from "./defects.js"
 import { metrics } from "./metrics.js"
 import { describeValue, errorSummary, maskPayload, maskText } from "./masking.js"
 import { unsupportedKeyHint } from "./suggest.js"
-import type { LogCode } from "./code-catalogue.js"
+import { errorCodes, type LogCode } from "./code-catalogue.js"
 
 const logCategories = [
     "lifecycle",
@@ -93,11 +93,22 @@ type Counters = {
 export type CounterName = Exclude<keyof ClientCounters, "eventsDropped" | "eventsDroppedByEvent">
 export type DropReason = keyof ClientCounters["eventsDropped"]
 
-/** Guarded text for any value, used for thrown non-Error values and dedupe keys */
-const valueText = describeValue
-
 /** ErrorInfo values built from SDK errors, whose stacks only show SDK internals */
 const sdkInfos = new WeakSet<ErrorInfo>()
+
+/** Catalogued SDK error codes as patterns, where a family such as guild.<reason> matches any one reason */
+const sdkCodePatterns = Object.keys(errorCodes).map(
+    (code) => new RegExp(`^${code.replaceAll(".", "\\.").replace(/<[^>]+>/g, "[^.]+")}$`),
+)
+
+/** Treat each error in a parsed record's cause chain with a catalogued SDK code as an SDK error, so its stack stays
+ * hidden as it is in the process that built it. A supervisor parent calls this for the records its children print
+ */
+export function markSdkErrors(info: ErrorInfo | undefined): void {
+    for (let depth = 0; info && depth < 8; info = info.cause, depth++)
+        if (typeof info.code === "string" && sdkCodePatterns.some((pattern) => pattern.test(info!.code!)))
+            sdkInfos.add(info)
+}
 
 /** Convert any thrown or failed value to masked ErrorInfo, following the cause chain a few levels.
  * Never throws: Getters, proxies and null-prototype objects that reject inspection get a guarded description
@@ -142,7 +153,11 @@ export function errorInfo(
         // allow-silent: The typeof operator never throws, but keep the description total
         kind = "unknown"
     }
-    return Object.freeze({ origin, name: `Non-Error value (${kind})`, message: maskText(valueText(value), secrets) })
+    return Object.freeze({
+        origin,
+        name: `Non-Error value (${kind})`,
+        message: maskText(describeValue(value), secrets),
+    })
 }
 
 /** A copy of an error with its masked name, message, stack and cause chain, and only its code as another own property.
@@ -294,7 +309,7 @@ const recordKeys = [
 ] as const
 
 /** One readable line per record, with key facts and an indented error */
-function prettyLine(entry: LogRecord, color: boolean): string {
+export function prettyLine(entry: LogRecord, color: boolean): string {
     const facts: string[] = []
     for (const key of recordKeys) {
         const value = entry[key]
@@ -676,7 +691,7 @@ export class ClientLogger {
     }
 
     /** The built-in console format and color for one output stream, which decides from its own terminal state.
-     * Warn and higher records go to standard error. Supervisors pass the parent's choice to their children
+     * Warn and higher records go to standard error
      */
     consoleFormat(stream: "stdout" | "stderr"): { readonly format: "pretty" | "json"; readonly color: boolean } {
         const terminal = (stream === "stderr" ? process.stderr : process.stdout).isTTY === true
@@ -767,8 +782,8 @@ export class ClientLogger {
             const level = (Object.entries(effectLevels).find(([, value]) => value === options.logLevel)?.[0] ??
                 "info") as LogLevel
             const message = Array.isArray(options.message)
-                ? options.message.map((part) => valueText(part)).join(" ")
-                : valueText(options.message)
+                ? options.message.map((part) => describeValue(part)).join(" ")
+                : describeValue(options.message)
             const failure =
                 Cause.isCause(options.cause) && options.cause.reasons.length ? Cause.squash(options.cause) : undefined
             this.log({

@@ -19,7 +19,6 @@ const rootClients = ["Client", "OAuthClient", "WebhookClient"] as const
 
 export interface PublicObjectField {
     readonly key: string
-    readonly owner: string
     readonly name: string
     readonly type: string
     readonly optional: boolean
@@ -28,7 +27,6 @@ export interface PublicObjectField {
 
 export interface PublicObjectSchema {
     readonly name: string
-    readonly owners: readonly string[]
     readonly fields: readonly PublicObjectField[]
     readonly variants: readonly string[]
 }
@@ -50,7 +48,6 @@ export interface PublicFieldInventories {
 }
 
 export interface PublicFieldInventory {
-    readonly entrypoint: "src/index.ts" | "src/effect.ts"
     readonly members: readonly PublicMemberSchema[]
     readonly operations: Readonly<Record<string, PublicOperationSchema>>
     readonly objects: Readonly<Record<string, PublicObjectSchema>>
@@ -143,15 +140,6 @@ function objectSchema(project: Project, name: string, exported: TypeScriptSymbol
     const declared = project.checker.getDeclaredTypeOfSymbol(resolvedSymbol(project, exported))
     const variants = declaredVariants(project, exported)
     const fields = sdkProperties(project, variants).map(([propertyName, properties]) => {
-        const owners = [
-            ...new Set(
-                properties
-                    .flatMap((property) => property.declarations)
-                    .map((declaration) => String(declaration.path))
-                    .filter(isSdkSourcePath)
-                    .map((path) => path.replace(/^.*\/src\//, "src/")),
-            ),
-        ]
         const displayedTypes = properties.flatMap((property) => {
             const propertyType = project.checker.getTypeOfSymbol(property)
             if (propertyType === undefined) throw new Error(`${name}.${propertyName} has no type`)
@@ -165,13 +153,11 @@ function objectSchema(project: Project, name: string, exported: TypeScriptSymbol
             type: fieldType,
             optional: hasTopLevelUnionMember(fieldType, "undefined"),
             nullable: hasTopLevelUnionMember(fieldType, "null"),
-            owner: owners.join("; "),
         })
     })
     if (fields.length === 0) return undefined
     return Object.freeze({
         name,
-        owners: Object.freeze([...new Set(fields.flatMap((field) => field.owner.split("; ")))].sort()),
         fields: Object.freeze(fields),
         variants: Object.freeze(
             declared.isUnionType()
@@ -401,7 +387,6 @@ function entrypointInventory(project: Project, entrypoint: "src/index.ts" | "src
         if (schema !== undefined) objects[name] = schema
     }
     return Object.freeze({
-        entrypoint,
         members: Object.freeze(clientMembers.members.map(({ key, type }) => Object.freeze({ key, type }))),
         operations: Object.freeze(operations),
         objects: Object.freeze(objects),

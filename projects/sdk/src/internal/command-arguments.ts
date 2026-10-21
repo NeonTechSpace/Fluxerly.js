@@ -343,6 +343,18 @@ function parseDuration(raw: string): number | undefined {
     return Number.isSafeInteger(total) ? total : undefined
 }
 
+/** Write whole milliseconds in the syntax parseDuration accepts, such as 1h30m, for showing a bound to bot users */
+export function durationText(milliseconds: number): string {
+    let rest = milliseconds
+    let text = ""
+    for (const [unit, size] of durationUnits) {
+        if (rest < size) continue
+        text += `${Math.floor(rest / size)}${unit}`
+        rest %= size
+    }
+    return text === "" ? "0s" : text
+}
+
 function withinBounds(
     descriptor: { readonly min?: number; readonly max?: number },
     value: number,

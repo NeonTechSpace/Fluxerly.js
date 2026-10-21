@@ -31,6 +31,7 @@ import {
     AttachmentTransferCleanupError,
     AttachmentTransferSource,
     AttachmentTransferVerificationCleanupError,
+    completeCleanup,
 } from "../transfer-source.js"
 import { classifyResponse, RestFailure, type Outcome, type RateLimitDetails } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
@@ -147,20 +148,6 @@ export type AttemptResult<A> =
           readonly details: RateLimitDetails
       }
 
-/** Run every cleanup action, then rethrow the one failure or an AggregateError of several */
-export async function completeCleanup(actions: readonly (() => void | PromiseLike<void>)[]) {
-    const failures: unknown[] = []
-    for (const action of actions) {
-        try {
-            await action()
-        } catch (error) {
-            failures.push(error)
-        }
-    }
-    if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) throw new AggregateError(failures, "REST cleanup failed")
-}
-
 /** Parse a payload for unsafe debugging, keeping text that is not JSON */
 function parsedPayload(text: string): unknown {
     try {
@@ -261,13 +248,7 @@ export function runAttempt<A, M extends MessageCore>(
         }
         if (error instanceof ResponseJsonCleanupError) {
             state?.cleanupDefects.push(error.cause)
-            const rejected = error.status >= 400
-            if (rejected && !request.preparation) progress.outcome = "rejected"
-            return new RestFailure({
-                reason: rejected ? "rejected" : "response",
-                outcome: progress.outcome,
-                status: error.status,
-            })
+            return new RestFailure({ reason: "response", outcome: progress.outcome, status: error.status })
         }
         return runtime.closed
             ? new ClientClosedError()
@@ -289,13 +270,12 @@ export function runAttempt<A, M extends MessageCore>(
                         if (request.invalidateMessages) runtime.cache?.gap()
                     }
                     if (request.body && !request.put && runtime.logging?.unsafePayloads("rest")) {
-                        const route = template
                         runtime.logging.payload(
                             "rest",
                             "rest.payloadSent",
-                            `${request.method} ${route} request body`,
+                            `${request.method} ${template} request body`,
                             parsedPayload(request.body.json),
-                            { route },
+                            { route: template },
                         )
                     }
                     const work = runtime
@@ -474,15 +454,14 @@ export function runAttempt<A, M extends MessageCore>(
                         })
                     if (runtime.logging?.unsafePayloads("rest")) {
                         // Unsafe debugging reads a copy, so decoding keeps its own bounded stream
-                        const route = template
                         void payloadText(response).then(
                             ({ text, truncated }) =>
                                 runtime.logging?.payload(
                                     "rest",
                                     "rest.payloadReceived",
-                                    `${request.method} ${route} response body${truncated ? `, first ${payloadReadLimit} bytes` : ""}`,
+                                    `${request.method} ${template} response body${truncated ? `, first ${payloadReadLimit} bytes` : ""}`,
                                     truncated ? text : parsedPayload(text),
-                                    { route, status: response.status, fields: { truncated } },
+                                    { route: template, status: response.status, fields: { truncated } },
                                 ),
                             // allow-silent: A failed read of the logging copy leaves decoding to report the body
                             () => undefined,

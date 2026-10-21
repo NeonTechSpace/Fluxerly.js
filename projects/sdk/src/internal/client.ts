@@ -880,13 +880,15 @@ export class ClientOwner<M extends MessageCore = Message> {
             for (const shard of this.#shards.values())
                 if (shard.state === "Connected" || shard.state === "Recovering") this.#gapShard(shard.shardId, false)
         }
-        if (state === "Closing" || state === "Closed") this.cache?.close()
-        if (state === "Closing" || state === "Closed") this.counts.close()
-        if (state === "Closing" || state === "Closed") this.memberChunks.close()
-        if (state === "Closing" || state === "Closed") this.resources?.close()
-        if (state === "Closing" || state === "Closed") this.userCache.close()
-        if (state === "Closing" || state === "Closed") this.presence.close()
-        if (state === "Closing" || state === "Closed") this.channelCache?.close()
+        if (state === "Closing" || state === "Closed") {
+            this.cache?.close()
+            this.counts.close()
+            this.memberChunks.close()
+            this.resources?.close()
+            this.userCache.close()
+            this.presence.close()
+            this.channelCache?.close()
+        }
         this.#state = state
         if (state === "Disconnected" || state === "Closing" || state === "Closed") {
             for (const shard of this.#shards.values()) {
@@ -1084,6 +1086,15 @@ export class ClientOwner<M extends MessageCore = Message> {
         })
     }
 
+    /** Run one REST delegation with the bot token, or fail before sending when the client is closing or closed */
+    #open<A, E, R>(send: (token: Redacted.Redacted<string>) => Effect.Effect<A, E, R>) {
+        return Effect.suspend((): Effect.Effect<A, E | ClientClosedError, R> =>
+            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
+                ? send(this.#configuration.token)
+                : Effect.fail(closedBeforeSend()),
+        )
+    }
+
     user<A>(
         operation: UserOperation,
         build: () => UserRequest<A> | InputValidationFailure,
@@ -1213,11 +1224,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         build: () => BotApplicationRequest<A>,
         options?: BotApplicationOperationOptions,
     ) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.application(this.#configuration.token, operation, build, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.application(token, operation, build, options))
     }
 
     getUserResource<K extends "users" | "directMessages">(kind: K, id: string) {
@@ -1247,11 +1254,7 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     /** Send one caller-described request through this client's REST scheduler */
     request<T>(input: RestRequest | DefaultRestRequest): Effect.Effect<RestResponse<T>, RestRequestFailure> {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.request<T>(this.#configuration.token, input)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.request<T>(token, input))
     }
 
     /**
@@ -1321,19 +1324,11 @@ export class ClientOwner<M extends MessageCore = Message> {
         build: () => WebhookRequest<A> | InputValidationFailure,
         options?: WebhookOperationOptions,
     ) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.webhook(this.#configuration.token, operation, build, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.webhook(token, operation, build, options))
     }
 
     guild<A>(operation: GuildOperation, build: GuildBuild<A>, options?: GuildOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.guild(this.#configuration.token, operation, build, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.guild(token, operation, build, options))
     }
 
     /** Read the bot's own member of a community, keeping its account ID for members.getSelf */
@@ -1367,11 +1362,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         build: () => ChannelRequest<A> | InputValidationFailure,
         options?: ChannelOperationOptions,
     ) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.channel(this.#configuration.token, operation, build, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.channel(token, operation, build, options))
     }
 
     getChannel(id: string) {
@@ -1467,28 +1458,18 @@ export class ClientOwner<M extends MessageCore = Message> {
         return suspendInput(() => {
             const request = replyInput(target, input)
             if (request instanceof MessageError) return Effect.fail(request)
-            return this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.reply(this.#configuration.token, request.target, request.input, options)
-                : Effect.fail(closedBeforeSend())
+            return this.#open((token) => this.rest.reply(token, request.target, request.input, options))
         })
     }
 
     send(channelId: string, input: MessageInput | string, options?: SendOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.send(this.#configuration.token, channelId, input, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.send(token, channelId, input, options))
     }
     refreshAttachmentUrls(
         urls: readonly string[],
         options?: AttachmentRefreshOptions,
     ): Effect.Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure> {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.refreshAttachmentUrls(this.#configuration.token, urls, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.refreshAttachmentUrls(token, urls, options))
     }
     downloadAttachment(
         attachment: Attachment,
@@ -1512,11 +1493,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     forward(channelId: string, input: ForwardMessageInput, options?: SendOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.forward(this.#configuration.token, channelId, input, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.forward(token, channelId, input, options))
     }
 
     sendDirectMessage(userId: string, input: MessageInput | string, options?: SendOptions) {
@@ -1555,11 +1532,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         query?: ReactionUsersQuery,
         options?: MessageOperationOptions,
     ) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetchReactionUsers(this.#configuration.token, target, emoji, query, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.fetchReactionUsers(token, target, emoji, query, options))
     }
 
     reaction(
@@ -1569,43 +1542,23 @@ export class ClientOwner<M extends MessageCore = Message> {
         options?: MessageOperationOptions,
         userId?: string,
     ) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.reaction(this.#configuration.token, operation, target, emoji, options, userId)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.reaction(token, operation, target, emoji, options, userId))
     }
 
     fetch(target: MessageReference, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetch(this.#configuration.token, target, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.fetch(token, target, options))
     }
 
     publish(target: MessageReference, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.publish(this.#configuration.token, target, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.publish(token, target, options))
     }
 
     fetchCrosspostSource(target: MessageReference, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetchCrosspostSource(this.#configuration.token, target, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.fetchCrosspostSource(token, target, options))
     }
 
     typing(channelId: string, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.typing(this.#configuration.token, channelId, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.typing(token, channelId, options))
     }
 
     keepTyping<A, E, R>(
@@ -1675,67 +1628,35 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     pin(operation: "pin" | "unpin", target: MessageReference, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.pin(this.#configuration.token, operation, target, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.pin(token, operation, target, options))
     }
 
     fetchPins(channel: string, query?: MessagePinsQuery, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetchPins(this.#configuration.token, channel, query, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.fetchPins(token, channel, query, options))
     }
 
     fetchHistory(channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.fetchHistory(this.#configuration.token, channelId, query, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.fetchHistory(token, channelId, query, options))
     }
 
     searchMessages(context: MessageSearchContext, query?: MessageSearchQuery, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.search(this.#configuration.token, context, query, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.search(token, context, query, options))
     }
 
     edit(target: MessageReference, input: EditMessageInput | string, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.edit(this.#configuration.token, target, input, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.edit(token, target, input, options))
     }
 
     delete(target: MessageReference, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.delete(this.#configuration.token, target, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.delete(token, target, options))
     }
 
     deleteAttachment(target: MessageReference, attachmentId: string, options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.deleteAttachment(this.#configuration.token, target, attachmentId, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.deleteAttachment(token, target, attachmentId, options))
     }
 
     deleteMany(channelId: string, ids: readonly string[], options?: MessageOperationOptions) {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.deleteMany(this.#configuration.token, channelId, ids, options)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return this.#open((token) => this.rest.deleteMany(token, channelId, ids, options))
     }
 
     deleteOwnMessages(channelId: string, options: unknown) {
@@ -2299,7 +2220,6 @@ export class ClientOwner<M extends MessageCore = Message> {
                                 }
                             }),
                         ),
-                        // Outcomes are retained above, not left as unobserved fiber failures
                         // allow-silent: Outcomes are retained above, not left as unobserved fiber failures
                         Effect.catchCause(() => Effect.void),
                     ),
@@ -2510,7 +2430,7 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
                     logical,
                     identifyGate,
                     limits,
-                    configuration.transport.transport,
+                    configuration.transport,
                 )
             }),
         )

@@ -27,7 +27,7 @@ const applicationCommandBudget = 500
 /** Length of the rolling pacing window in milliseconds, matching Fluxer's per-socket window */
 const commandWindowMs = 60_000
 /** Most gateway.send commands one socket holds while they wait for the pacing budget */
-export const maxPendingApplicationCommands = 500
+const maxPendingApplicationCommands = 500
 
 /** Send one command. Failures are reported through the session, never thrown. Returns whether the socket took the frame */
 export type SendCommand = (op: number, d: unknown) => boolean

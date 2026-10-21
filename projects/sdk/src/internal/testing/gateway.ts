@@ -10,6 +10,7 @@ import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { WebSocketLike, WebSocketOptions } from "#sdk/rest"
 import { CloseCode, Opcode } from "../protocol/gateway.js"
 import { SocketState } from "../transport/index.js"
+import { guildShardId } from "../sharding.js"
 import type { WireUser } from "./fixtures.js"
 import type { TestDisconnectOptions, TestEmitOptions, TestGatewayCommand } from "./types.js"
 
@@ -94,11 +95,6 @@ function mentionedMessage(type: string, payload: unknown, userId: string): boole
                     typeof user === "object" && user !== null && (user as { id?: unknown }).id === userId,
             ))
     )
-}
-
-/** Fluxer's shard for a guild ID under a shard count */
-function guildShard(guildId: string, totalShards: number): number {
-    return Number((BigInt(guildId) >> 22n) % BigInt(totalShards))
 }
 
 /** The scripted gateway shared by one test client's shards */
@@ -254,7 +250,7 @@ export class TestGateway {
         const guildId = (payload as { guild_id?: unknown } | null)?.guild_id
         const shardId =
             requested ??
-            (typeof guildId === "string" && /^[0-9]+$/.test(guildId) ? guildShard(guildId, this.#totalShards) : 0)
+            (typeof guildId === "string" && /^[0-9]+$/.test(guildId) ? guildShardId(guildId, this.#totalShards) : 0)
         let text: string | undefined
         try {
             text = JSON.stringify(payload)

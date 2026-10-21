@@ -4,12 +4,13 @@ import { afterEach, expect, test, vi } from "vitest"
 import { WebSocket } from "ws"
 import { createClient, type PresenceInput } from "../../../src/index.js"
 import { createClient as createEffectClient } from "../../../src/effect.js"
+import { InputValidationFailure } from "../../../src/input-validation.js"
 import {
     decodePresenceUpdate,
     decodePresenceUpdateBulk,
     PresenceOwner,
     presenceUpdate,
-    validatePresenceInput,
+    presenceInput,
     type PresenceTimer,
 } from "../../../src/internal/presence.js"
 import { modes, type Mode } from "../../support/both-apis.js"
@@ -258,22 +259,29 @@ test("presence input is validated, copied and encoded without caller-owned field
             expiresAt: "2030-01-01T00:00:00.000Z",
         },
     }
-    const frozen = validatePresenceInput(input)
+    const frozen = presenceInput(input)
+    if (frozen instanceof InputValidationFailure) throw frozen
     expect(frozen).toEqual(input)
     expect(Object.isFrozen(frozen)).toBe(true)
-    expect(Object.isFrozen(frozen?.customStatus)).toBe(true)
+    expect(Object.isFrozen(frozen.customStatus)).toBe(true)
     input.customStatus.text = "mutated after acceptance"
     input.customStatus.emoji.id = "43"
-    expect(presenceUpdate(frozen!)).toEqual({
+    expect(presenceUpdate(frozen)).toEqual({
         status: "idle",
         afk: false,
         mobile: false,
         custom_status: { text: "reviewing", emoji_id: "42", expires_at: "2030-01-01T00:00:00.000Z" },
     })
-    expect(validatePresenceInput({ status: "offline" })).toBeUndefined()
-    expect(validatePresenceInput({ status: "online", customStatus: { emoji: { id: "not-an-id" } } })).toBeUndefined()
-    expect(validatePresenceInput({ status: "online", customStatus: { emoji: { id: "1", name: "x" } } })).toBeUndefined()
-    expect(validatePresenceInput({ status: "online", customStatus: { expiresAt: "2030-01-01" } })).toBeUndefined()
+    expect(presenceInput({ status: "offline" })).toBeInstanceOf(InputValidationFailure)
+    expect(presenceInput({ status: "online", customStatus: { emoji: { id: "not-an-id" } } })).toBeInstanceOf(
+        InputValidationFailure,
+    )
+    expect(presenceInput({ status: "online", customStatus: { emoji: { id: "1", name: "x" } } })).toBeInstanceOf(
+        InputValidationFailure,
+    )
+    expect(presenceInput({ status: "online", customStatus: { expiresAt: "2030-01-01" } })).toBeInstanceOf(
+        InputValidationFailure,
+    )
 })
 
 test("presence owner coalesces one latest intent, spaces writes and cancels detached work", () => {

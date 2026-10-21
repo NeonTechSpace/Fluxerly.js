@@ -1,5 +1,9 @@
 import { Effect, Redacted } from "effect"
-import { runGateway } from "../../../../dist/internal/gateway.js"
+import { runGatewaySession } from "../../../../dist/internal/gateway/session.js"
+import { decodeGatewayMessage } from "../../../../dist/internal/message.js"
+
+const runGateway = (options) =>
+    runGatewaySession({ ...options, messageDecoder: (value, type) => decodeGatewayMessage(value, undefined, type) })
 
 export async function runFixtureGateway(bridge, assignment) {
     const gatewayUrl = process.env.FLUXERLY_SUPERVISOR_GATEWAY

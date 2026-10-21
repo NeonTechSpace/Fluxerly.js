@@ -67,7 +67,11 @@ async function readNonempty(reader: AttachmentStreamReader, closed: () => boolea
     }
 }
 
-async function completeCleanup(actions: readonly (() => void | PromiseLike<void>)[]) {
+/** Run every cleanup action, then rethrow the one failure or an AggregateError of several */
+export async function completeCleanup(
+    actions: readonly (() => void | PromiseLike<void>)[],
+    message = "REST cleanup failed",
+) {
     const failures: unknown[] = []
     for (const action of actions) {
         try {
@@ -77,7 +81,7 @@ async function completeCleanup(actions: readonly (() => void | PromiseLike<void>
         }
     }
     if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) throw new AggregateError(failures, "Attachment source cleanup failed")
+    if (failures.length > 1) throw new AggregateError(failures, message)
 }
 
 /** One operation-owned exact-length source. Byte inputs are copied before construction, while file and stream sources remain caller-owned outside an acquired reader */
@@ -103,14 +107,16 @@ export class AttachmentTransferSource {
         this.#streamPending = undefined
         this.#streamOffset = 0
         if (!reader) return
-        await completeCleanup([...(cancel ? [() => reader.cancel()] : []), () => reader.releaseLock()])
+        await completeCleanup(
+            [...(cancel ? [() => reader.cancel()] : []), () => reader.releaseLock()],
+            "Attachment source cleanup failed",
+        )
     }
 
     async close() {
         // Copied bytes have no caller-owned reader or mutable source to release. They can
         // recreate an inline multipart body after a confirmed 429, including when the server
         // replied before reading the first body
-        if (!this.replayable) this.#closed = true
         await this.#closeStream(true)
     }
 
@@ -259,7 +265,10 @@ export class AttachmentTransferSource {
             if (!reader) return
             const current = reader
             reader = undefined
-            await completeCleanup([...(cancel ? [() => current.cancel()] : []), () => current.releaseLock()])
+            await completeCleanup(
+                [...(cancel ? [() => current.cancel()] : []), () => current.releaseLock()],
+                "Attachment source cleanup failed",
+            )
         }
         return {
             body,

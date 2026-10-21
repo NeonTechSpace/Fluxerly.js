@@ -170,6 +170,17 @@ export function fromExit<A, E extends OperationFailure>(
     return failure?._tag === "Fail" ? err(failure.error) : err(new CancelledError(operation))
 }
 
+/** Run a client's shutdown effect to completion, throwing SdkDefect for a defect and never returning an Err */
+export function runShutdown<E extends OperationFailure>(effect: Effect.Effect<void, E>): ResultAsync<void, never> {
+    return new ResultAsync<void, never>(
+        Effect.runPromiseExit(effect).then((exit) => {
+            const result = fromExit(exit, "shutdown")
+            if (result.isErr()) throw new SdkDefect("shutdown", Exit.isFailure(exit) ? causeReasons(exit.cause) : [])
+            return ok(undefined)
+        }),
+    )
+}
+
 /**
  * Run a local cache lookup or pure calculation and return its value directly.
  * Input misuse throws the operation's own error, and defects or interruption throw SdkDefect.

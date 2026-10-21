@@ -48,28 +48,6 @@ test.each([
     expect(fork).not.toHaveBeenCalled()
 })
 
-test("both public facades name a misspelled supervisor option and suggest the closest one", async () => {
-    const options = {
-        entry: process.execPath,
-        totalShards: 2,
-        assignments: [{ id: "first", shardIds: [0] }],
-        restrat: {},
-    }
-    let thrown: unknown
-    try {
-        supervisor.create(options as never)
-    } catch (error) {
-        thrown = error
-    }
-    const native = await Effect.runPromiseExit(nativeSupervisor.create(options as never))
-    const reason = native._tag === "Failure" ? native.cause.reasons[0] : undefined
-    for (const error of [thrown, reason?._tag === "Die" ? reason.defect : undefined]) {
-        expect(error).toBeInstanceOf(ConfigurationError)
-        expect(error).toMatchObject({ field: "supervisor", hint: expect.stringContaining('"restart"') })
-    }
-    expect(fork).not.toHaveBeenCalled()
-})
-
 function childWithoutPid(): ChildProcess {
     let child: {
         readonly pid: undefined

@@ -205,12 +205,15 @@ export interface SupervisorOptions {
     readonly execArgv?: readonly string[]
     /** How child standard output and error reach this process
      *
-     * The default, prefix, forwards each child line through this process in the supervisor's console format.
-     * In pretty format each line gets a label: [shard N] for a child owning one shard, otherwise [child id].
+     * The default, prefix, forwards each child line through this process in the format of the stream it goes to.
+     * Default-API children log JSON with no color, unless FLUXERLY_LOG_FORMAT or FLUXERLY_LOG_COLOR is set in the child environment.
+     * An Effect API child sends its records to Effect's logger unless its logging.format option is set, so set that option to json to forward structured records.
+     * In pretty format each SDK record prints as a readable line and each line gets a label: [shard N] for a child owning
+     * one shard, otherwise [child id]. Other text keeps its content behind the label.
      * In json format the output stays valid JSON Lines: A child's SDK record gains a fields.child entry, another JSON
      * object passes through unchanged, and other text becomes a supervisor.childOutput record.
-     * Children receive the supervisor's resolved format and color through FLUXERLY_LOG_FORMAT and FLUXERLY_LOG_COLOR,
-     * unless those variables are already set, so a default-API child prints readable lines when this process writes to a terminal.
+     * Each stream decides on its own, so with a terminal on standard output and standard error redirected to a file,
+     * standard output shows readable lines and the file receives the child's records with their level, code and fields.
      * Lines longer than 262,144 characters are truncated with a marker, and child output pauses while this process's
      * output applies backpressure. Exit handling waits up to one second after a child exits for its output to drain.
      * A failed read of a child stream logs supervisor.outputFailed at Warn and stops forwarding that stream
@@ -259,7 +262,7 @@ export interface SupervisorChildSharding {
     /**
      * Keep this child's resumable sessions across process restarts, as the client option sharding.sessions does.
      * A deploy that stops the supervisor and starts it again within Fluxer's 60-second resume window then resumes each
-     * shard instead of starting a new session. Snapshots are saved only when the child shuts down normally, so a
+     * shard instead of starting a new session. Resumable snapshots are saved only when the child shuts down normally, so a
      * restart after a crash starts new sessions. The child saves while it shuts down, so saves must finish within the
      * supervisor option shutdownTimeoutMs, after which the parent force-terminates the child. See SessionStore
      */

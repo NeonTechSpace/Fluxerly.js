@@ -8,7 +8,9 @@ Before starting, [create a Fluxer bot](/docs/{{version}}/create-a-bot/) and add 
 
 ## Generate the project
 
-Run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in the bot's folder and choose JavaScript, TypeScript or Effect. Adding `--template js`, `--template ts` or `--template effect` skips the question. It writes this bot with a test and an empty `.env` file for the token, installs the SDK and prints the remaining steps, including where to get the token and invite the bot
+{{init}}
+
+Adding `--template js`, `--template ts` or `--template effect` skips the question. It writes this bot with a test and an empty `.env` file for the token, installs the SDK and prints the remaining steps, including where to get the token and invite the bot
 
 The folder may already hold the `.env` and `.gitignore` that [Create a bot](/docs/{{version}}/create-a-bot/) describes. The command keeps the `.env` and its token, adds `node_modules` and `.env` to the `.gitignore` when they are missing and leaves the rest of that file as it is. When any other file that the command writes already exists, such as `package.json` or `bot.js`, it stops without writing anything
 

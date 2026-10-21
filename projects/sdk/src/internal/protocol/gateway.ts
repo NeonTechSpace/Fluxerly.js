@@ -253,47 +253,15 @@ export function closeCodeInfo(code: number): CloseCodeInfo {
     )
 }
 
-/** What one gateway closure means for the attempt that observed it */
-export interface CloseOutcome {
-    /** The failure kind: `authentication` for a rejected credential, `rateLimit` for a server-required wait,
-     * `protocol` for a permanent closure and `closed` for a recoverable one
-     */
-    readonly failure: "authentication" | "rateLimit" | "protocol" | "closed"
-    /** Whether the SDK's recovery loop may start another attempt */
-    readonly retry: boolean
-    /** Whether the retained session can no longer resume, so the next attempt sends Identify */
-    readonly resetSession: boolean
-}
-
-/** Classify a gateway close through the reviewed close-code table.
- * The resuming flag says whether the closed attempt was still resuming, which is when an identify action discards the session
- */
-export function classifyCloseCode(code: number, resuming: boolean): CloseOutcome {
-    if (code === CloseCode.authenticationFailed) return { failure: "authentication", retry: false, resetSession: false }
-    const info = closeCodeInfo(code)
-    if (info.action === "wait") return { failure: "rateLimit", retry: true, resetSession: false }
-    const permanent = info.action === "fatal"
-    return {
-        failure: permanent ? "protocol" : "closed",
-        retry: !permanent,
-        resetSession: info.action === "identify" && resuming,
-    }
-}
-
-/** Readable next step for a close action as one sentence, used in log messages.
- * The resume flag says whether the next attempt will actually send Resume, which requires a retained session and sequence.
+/** Readable next step after a retryable failure as one sentence, used in log messages.
+ * The rateLimited flag says the wait is for a rate limit, and the resume flag says whether the next attempt will
+ * actually send Resume, which requires a retained session and sequence.
  * The delay is already formatted with its unit, and established says whether the shard was connected before, so the
  * next attempt reconnects rather than retries startup
  */
-export function closeActionText(action: CloseAction, resume: boolean, delay: string, established = true): string {
+export function closeActionText(rateLimited: boolean, resume: boolean, delay: string, established = true): string {
     const next = `${established ? "reconnecting" : "retrying"} ${resume ? "and resuming the session" : "with a new session"}`
-    switch (action) {
-        case "fatal":
-            return "The SDK does not retry this failure"
-        case "wait":
-            return `Waiting ${delay} for the rate limit, then ${next}`
-        case "identify":
-        case "resume":
-            return `${next.charAt(0).toUpperCase()}${next.slice(1)} in ${delay}`
-    }
+    return rateLimited
+        ? `Waiting ${delay} for the rate limit, then ${next}`
+        : `${next.charAt(0).toUpperCase()}${next.slice(1)} in ${delay}`
 }

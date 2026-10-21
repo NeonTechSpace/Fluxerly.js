@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import {
     commandArgumentMetadata,
     convertCommandArguments,
+    durationText,
     snapshotCommandArguments,
 } from "../../../src/internal/command-arguments.js"
 import type { CommandArgumentDescriptor } from "../../../src/command-arguments.js"
@@ -146,6 +147,20 @@ test.each([
 ])("duration %s converts to %i milliseconds", (raw, milliseconds) => {
     const schema = snapshotCommandArguments({ wait: { type: "duration" } })
     expect(convertCommandArguments(schema, [raw])).toEqual({ _tag: "Converted", values: { wait: milliseconds } })
+})
+
+test.each([
+    [0, "0s"],
+    [500, "500ms"],
+    [1_000, "1s"],
+    [60_500, "1m500ms"],
+    [3_600_000, "1h"],
+    [5_400_000, "1h30m"],
+    [694_861_001, "1w1d1h1m1s1ms"],
+])("duration bound %i is written as %s, which converts back to it", (milliseconds, text) => {
+    expect(durationText(milliseconds)).toBe(text)
+    const schema = snapshotCommandArguments({ wait: { type: "duration" } })
+    expect(convertCommandArguments(schema, [text])).toEqual({ _tag: "Converted", values: { wait: milliseconds } })
 })
 
 test("durations reject bare numbers, unknown units, unordered parts and values outside their bounds", () => {

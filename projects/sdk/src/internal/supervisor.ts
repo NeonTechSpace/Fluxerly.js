@@ -9,8 +9,8 @@
  * the one member request window, counting a granted request from its grant and again once it reached the socket. An
  * unanswered child uses its own window. Per-route REST buckets stay per process, and session retention belongs to each
  * child's own SessionStore. It terminates only an
- * unresponsive child after the graceful deadline and awaits that child's exit, passes its resolved format to children
- * through FLUXERLY_LOG_FORMAT and FLUXERLY_LOG_COLOR, and keeps forwarded JSON output valid JSON Lines. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
+ * unresponsive child after the graceful deadline and awaits that child's exit, has children log JSON and prints each
+ * child record in the format of the parent's own stream, and keeps forwarded JSON output valid JSON Lines. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
 import { fork, type ChildProcess } from "node:child_process"
 import { isAbsolute } from "node:path"
@@ -22,11 +22,17 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import { ConfigurationError, ConnectionError } from "#sdk/errors"
-import { loggingConfiguration, type ClientLogger } from "#sdk/internal/logging"
+import { loggingConfiguration, markSdkErrors, prettyLine, type ClientLogger } from "#sdk/internal/logging"
 import { maskText } from "#sdk/internal/masking"
-import { makeClient, type AccountLimits, type IdentifyGate } from "#sdk/internal/client"
+import {
+    attachAccountLimits,
+    attachIdentifyGate,
+    makeClient,
+    type AccountLimits,
+    type IdentifyGate,
+} from "#sdk/internal/client"
 import { memberRequestLimit, memberRequestWindowMs, type MemberRequestSlot } from "#sdk/internal/member-chunks"
-import { validateConfiguration } from "#sdk/internal/configuration"
+import { childClientOptionKeys, childClientOptionsError, validateConfiguration } from "#sdk/internal/configuration"
 import {
     admitReshard,
     automaticShardPlan,
@@ -40,12 +46,15 @@ import {
     SupervisorError,
     type SupervisorAssignment,
     type SupervisorChildDiagnostics,
+    type SupervisorChildSharding,
     type SupervisorChildState,
     type SupervisorOptions,
     type SupervisorState,
     type SupervisorStatus,
 } from "#sdk/supervisor"
+import type { LogRecord } from "#sdk/logging"
 import type { ClientDiagnostics, ConnectionState } from "#sdk/client"
+import type { SessionStore } from "#sdk/sharding"
 import { record, safeInteger, snapshotArray } from "#sdk/internal/decode/primitives"
 import { callerFields, readCaller, suspendMarked } from "#sdk/internal/defects"
 import { unsupportedKeyHint } from "#sdk/internal/suggest"
@@ -217,12 +226,8 @@ function splitShards(totalShards: number, split: ProcessSplit): readonly ChildCo
     return Object.freeze(children)
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-    return Object.keys(value).every((key) => keys.includes(key))
-}
-
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-    return hasOnlyKeys(value, keys) && keys.every((key) => key in value)
+    return Object.keys(value).every((key) => keys.includes(key)) && keys.every((key) => key in value)
 }
 
 function positiveTimer(value: unknown): value is number {
@@ -316,18 +321,6 @@ function childEnvironment(value: unknown): readonly (readonly [string, string])[
     return Object.freeze(copied)
 }
 
-/**
- * Validate and snapshot supervisor configuration without creating a child process. Each caller field is read once, and
- * only the reads of the options are marked as application input, so a fault in the surrounding validation or logger
- * creation stays an SDK fault
- */
-function validateSupervisorConfiguration(
-    options: unknown,
-    native = false,
-): Effect.Effect<SupervisorConfiguration, ConfigurationError> {
-    return suspendMarked(() => supervisorSettings(options, native))
-}
-
 const supervisorOptionKeys: readonly string[] = [
     "entry",
     "totalShards",
@@ -369,142 +362,204 @@ export function supervisorOptionError(
           )
 }
 
+/** Child options read once before the helper waits for an assignment. T is the entry point's client options type */
+export interface ChildSettings<T extends object, Configure> {
+    readonly clientOptions: Omit<T, "token" | "sharding">
+    /** The child's session store, added to the shards the parent assigns */
+    readonly sessions: SessionStore | undefined
+    readonly token: string | undefined
+    readonly configure: Configure
+}
+
+/**
+ * Read the child options once, so later getter changes cannot alter the client or configure callback. A throw here comes
+ * from reading the caller options
+ */
+export function readChildOptions<T extends object, Configure extends (context: never) => unknown>(options: {
+    readonly token: string | undefined
+    readonly clientOptions?: Omit<T, "token" | "sharding"> & { readonly sharding?: SupervisorChildSharding }
+    readonly configure: Configure
+}): ChildSettings<T, Configure> | ConfigurationError {
+    const invalidOptions = supervisorOptionError(
+        options,
+        ["token", "clientOptions", "configure"],
+        "configuration",
+        "Supervisor child options",
+    )
+    if (invalidOptions) return invalidOptions
+    const clientOptions: Readonly<Record<string, unknown>> | undefined = options.clientOptions
+    const invalid = childClientOptionsError(clientOptions)
+    if (invalid) return invalid
+    const copied: Record<string, unknown> = {}
+    let sessions: SessionStore | undefined
+    for (const key of childClientOptionKeys) {
+        const value = clientOptions?.[key]
+        if (key === "sharding") sessions = (value as SupervisorChildSharding | undefined)?.sessions
+        else if (value !== undefined) copied[key] = value
+    }
+    const configure = options.configure
+    return {
+        sessions,
+        clientOptions: copied as Omit<T, "token" | "sharding">,
+        token: options.token,
+        // Keep the options object as the receiver, as a method call on it would
+        configure: ((context: never) => Reflect.apply(configure, options, [context])) as Configure,
+    }
+}
+
+/** The client options for one assigned child, with the parent's Identify gate and account limits attached */
+export function childClientOptions<T extends object>(
+    settings: ChildSettings<T, unknown>,
+    assignment: SupervisorAssignment,
+    bridge: ChildBridge,
+): T {
+    const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
+    return attachAccountLimits(
+        attachIdentifyGate(
+            { ...settings.clientOptions, token: settings.token, sharding } as unknown as T,
+            bridge.identifyGate,
+        ),
+        bridge.accountLimits,
+    )
+}
+
+/**
+ * Validate and snapshot supervisor configuration without creating a child process. Each caller field is read once, and
+ * only the reads of the options are marked as application input, so a fault in the surrounding validation or logger
+ * creation stays an SDK fault
+ */
 function supervisorSettings(
     options: unknown,
     native: boolean,
 ): Effect.Effect<SupervisorConfiguration, ConfigurationError> {
-    {
-        if (!record(options))
-            return Effect.fail(new ConfigurationError("supervisor", "Supervisor settings must be an object"))
-        const unsupported = readCaller(() => Object.keys(options)).find((key) => !supervisorOptionKeys.includes(key))
-        if (unsupported !== undefined)
-            return Effect.fail(
-                new ConfigurationError("supervisor", `Unsupported supervisor option ${JSON.stringify(unsupported)}`, {
-                    hint: unsupportedKeyHint(unsupported, supervisorOptionKeys),
-                }),
-            )
-        const field = callerFields(options)
-        const entry = readCaller(() => childEntry(field("entry")))
-        if (!entry)
-            return Effect.fail(
-                new ConfigurationError("entry", 'The supervisor option "entry" must be an absolute path or a file URL'),
-            )
-        const totalShards = field("totalShards")
-        if (totalShards !== "auto" && (!safeInteger(totalShards) || totalShards < 1 || totalShards > maximumShardCount))
-            return Effect.fail(
-                new ConfigurationError(
-                    "totalShards",
-                    'The supervisor option "totalShards" must be an integer from 1 through 16,384, or "auto"',
-                ),
-            )
-        const split = processSplit(field("assignments"), field("processes"), field("shardsPerProcess"), totalShards)
-        if (split instanceof ConfigurationError) return Effect.fail(split)
-        const counting = ["token", "instance", "transport"].map((key) => [key, field(key)] as const)
-        const automatic =
-            totalShards === "auto"
-                ? countingOptions(counting, field("logging"), split as ProcessSplit, native)
-                : undefined
-        if (automatic instanceof ConfigurationError) return Effect.fail(automatic)
-        if (totalShards !== "auto") {
-            const supplied = counting.find(([, value]) => value !== undefined)
-            if (supplied)
-                return Effect.fail(
-                    new ConfigurationError(
-                        supplied[0] as "token" | "instance" | "transport",
-                        `The supervisor option ${JSON.stringify(supplied[0])} is used only to count the bot's communities when totalShards is "auto"`,
-                        { hint: 'Remove it, or set totalShards to "auto" to size the plan at start' },
-                    ),
-                )
-        }
-        const children =
-            totalShards === "auto"
-                ? Object.freeze([])
-                : split === undefined
-                  ? readCaller(() => fixedAssignments(field("assignments"), totalShards))
-                  : splitShards(totalShards, split)
-        if (children instanceof ConfigurationError) return Effect.fail(children)
-        const restart = field("restart")
-        let restartConfiguration: RestartConfiguration | undefined = defaultRestart
-        if (restart === false) restartConfiguration = undefined
-        else if (restart !== undefined) {
-            const configured = readCaller(() => restartSettings(restart))
-            if (configured instanceof ConfigurationError) return Effect.fail(configured)
-            restartConfiguration = configured
-        }
-        const identify = readCaller(() => identifySettings(field("identify")))
-        if (identify instanceof ConfigurationError) return Effect.fail(identify)
-        const diagnosticsInput = field("diagnosticsIntervalMs")
-        const diagnosticsIntervalMs = diagnosticsInput === undefined ? defaultDiagnosticsIntervalMs : diagnosticsInput
-        if (!positiveTimer(diagnosticsIntervalMs) || diagnosticsIntervalMs < 1_000)
-            return Effect.fail(
-                new ConfigurationError(
-                    "diagnosticsIntervalMs",
-                    'The supervisor option "diagnosticsIntervalMs" must be an integer from 1,000 through 2,147,483,647 milliseconds',
-                ),
-            )
-        const startupInput = field("startupTimeoutMs")
-        const startupTimeoutMs = startupInput === undefined ? defaultStartupTimeoutMs : startupInput
-        if (!positiveTimer(startupTimeoutMs))
-            return Effect.fail(
-                new ConfigurationError(
-                    "startupTimeoutMs",
-                    'The supervisor option "startupTimeoutMs" must be an integer from 1 through 2,147,483,647 milliseconds',
-                ),
-            )
-        const shutdownInput = field("shutdownTimeoutMs")
-        const shutdownTimeoutMs = shutdownInput === undefined ? defaultShutdownTimeoutMs : shutdownInput
-        if (!positiveTimer(shutdownTimeoutMs))
-            return Effect.fail(
-                new ConfigurationError(
-                    "shutdownTimeoutMs",
-                    'The supervisor option "shutdownTimeoutMs" must be an integer from 1 through 2,147,483,647 milliseconds',
-                ),
-            )
-        const childEnvironmentOverrides = readCaller(() => childEnvironment(field("childEnvironment")))
-        if (childEnvironmentOverrides instanceof ConfigurationError) return Effect.fail(childEnvironmentOverrides)
-        const environment = new Map<string, string>()
-        for (const [key, value] of Object.entries(process.env)) {
-            if (typeof value === "string") environment.set(key, value)
-        }
-        for (const [key, value] of childEnvironmentOverrides) environment.set(key, value)
-        const argsInput = field("args")
-        const args = argsInput === undefined ? Object.freeze([]) : readCaller(() => stringArray(argsInput, "args"))
-        if (args instanceof ConfigurationError) return Effect.fail(args)
-        const execArgvOption = field("execArgv")
-        const execArgv = readCaller(() =>
-            stringArray(execArgvOption === undefined ? process.execArgv : execArgvOption, "execArgv"),
-        )
-        if (execArgv instanceof ConfigurationError) return Effect.fail(execArgv)
-        const childOutputInput = field("childOutput")
-        const childOutput = childOutputInput === undefined ? "prefix" : childOutputInput
-        if (childOutput !== "prefix" && childOutput !== "inherit" && childOutput !== "ignore")
-            return Effect.fail(
-                new ConfigurationError(
-                    "childOutput",
-                    'The supervisor option "childOutput" must be "prefix", "inherit" or "ignore"',
-                ),
-            )
-        const logger = loggingConfiguration(field("logging"), native)
-        if (logger instanceof ConfigurationError) return Effect.fail(logger)
-        return Effect.succeed(
-            Object.freeze({
-                entry,
-                children,
-                automatic,
-                restart: restartConfiguration,
-                minimumSpacingMs: identify.minimumSpacingMs,
-                coordinator: identify.coordinator,
-                diagnosticsIntervalMs,
-                startupTimeoutMs,
-                shutdownTimeoutMs,
-                environment: Object.freeze([...environment].map((entry) => Object.freeze(entry))),
-                args,
-                execArgv: Object.freeze(filteredExecArguments(execArgv)),
-                childOutput,
-                logger,
+    if (!record(options))
+        return Effect.fail(new ConfigurationError("supervisor", "Supervisor settings must be an object"))
+    const unsupported = readCaller(() => Object.keys(options)).find((key) => !supervisorOptionKeys.includes(key))
+    if (unsupported !== undefined)
+        return Effect.fail(
+            new ConfigurationError("supervisor", `Unsupported supervisor option ${JSON.stringify(unsupported)}`, {
+                hint: unsupportedKeyHint(unsupported, supervisorOptionKeys),
             }),
         )
+    const field = callerFields(options)
+    const entry = readCaller(() => childEntry(field("entry")))
+    if (!entry)
+        return Effect.fail(
+            new ConfigurationError("entry", 'The supervisor option "entry" must be an absolute path or a file URL'),
+        )
+    const totalShards = field("totalShards")
+    if (totalShards !== "auto" && (!safeInteger(totalShards) || totalShards < 1 || totalShards > maximumShardCount))
+        return Effect.fail(
+            new ConfigurationError(
+                "totalShards",
+                'The supervisor option "totalShards" must be an integer from 1 through 16,384, or "auto"',
+            ),
+        )
+    const split = processSplit(field("assignments"), field("processes"), field("shardsPerProcess"), totalShards)
+    if (split instanceof ConfigurationError) return Effect.fail(split)
+    const counting = ["token", "instance", "transport"].map((key) => [key, field(key)] as const)
+    const automatic =
+        totalShards === "auto" ? countingOptions(counting, field("logging"), split as ProcessSplit, native) : undefined
+    if (automatic instanceof ConfigurationError) return Effect.fail(automatic)
+    if (totalShards !== "auto") {
+        const supplied = counting.find(([, value]) => value !== undefined)
+        if (supplied)
+            return Effect.fail(
+                new ConfigurationError(
+                    supplied[0] as "token" | "instance" | "transport",
+                    `The supervisor option ${JSON.stringify(supplied[0])} is used only to count the bot's communities when totalShards is "auto"`,
+                    { hint: 'Remove it, or set totalShards to "auto" to size the plan at start' },
+                ),
+            )
     }
+    const children =
+        totalShards === "auto"
+            ? Object.freeze([])
+            : split === undefined
+              ? readCaller(() => fixedAssignments(field("assignments"), totalShards))
+              : splitShards(totalShards, split)
+    if (children instanceof ConfigurationError) return Effect.fail(children)
+    const restart = field("restart")
+    let restartConfiguration: RestartConfiguration | undefined = defaultRestart
+    if (restart === false) restartConfiguration = undefined
+    else if (restart !== undefined) {
+        const configured = readCaller(() => restartSettings(restart))
+        if (configured instanceof ConfigurationError) return Effect.fail(configured)
+        restartConfiguration = configured
+    }
+    const identify = readCaller(() => identifySettings(field("identify")))
+    if (identify instanceof ConfigurationError) return Effect.fail(identify)
+    const diagnosticsInput = field("diagnosticsIntervalMs")
+    const diagnosticsIntervalMs = diagnosticsInput === undefined ? defaultDiagnosticsIntervalMs : diagnosticsInput
+    if (!positiveTimer(diagnosticsIntervalMs) || diagnosticsIntervalMs < 1_000)
+        return Effect.fail(
+            new ConfigurationError(
+                "diagnosticsIntervalMs",
+                'The supervisor option "diagnosticsIntervalMs" must be an integer from 1,000 through 2,147,483,647 milliseconds',
+            ),
+        )
+    const startupInput = field("startupTimeoutMs")
+    const startupTimeoutMs = startupInput === undefined ? defaultStartupTimeoutMs : startupInput
+    if (!positiveTimer(startupTimeoutMs))
+        return Effect.fail(
+            new ConfigurationError(
+                "startupTimeoutMs",
+                'The supervisor option "startupTimeoutMs" must be an integer from 1 through 2,147,483,647 milliseconds',
+            ),
+        )
+    const shutdownInput = field("shutdownTimeoutMs")
+    const shutdownTimeoutMs = shutdownInput === undefined ? defaultShutdownTimeoutMs : shutdownInput
+    if (!positiveTimer(shutdownTimeoutMs))
+        return Effect.fail(
+            new ConfigurationError(
+                "shutdownTimeoutMs",
+                'The supervisor option "shutdownTimeoutMs" must be an integer from 1 through 2,147,483,647 milliseconds',
+            ),
+        )
+    const childEnvironmentOverrides = readCaller(() => childEnvironment(field("childEnvironment")))
+    if (childEnvironmentOverrides instanceof ConfigurationError) return Effect.fail(childEnvironmentOverrides)
+    const environment = new Map<string, string>()
+    for (const [key, value] of Object.entries(process.env)) {
+        if (typeof value === "string") environment.set(key, value)
+    }
+    for (const [key, value] of childEnvironmentOverrides) environment.set(key, value)
+    const argsInput = field("args")
+    const args = argsInput === undefined ? Object.freeze([]) : readCaller(() => stringArray(argsInput, "args"))
+    if (args instanceof ConfigurationError) return Effect.fail(args)
+    const execArgvOption = field("execArgv")
+    const execArgv = readCaller(() =>
+        stringArray(execArgvOption === undefined ? process.execArgv : execArgvOption, "execArgv"),
+    )
+    if (execArgv instanceof ConfigurationError) return Effect.fail(execArgv)
+    const childOutputInput = field("childOutput")
+    const childOutput = childOutputInput === undefined ? "prefix" : childOutputInput
+    if (childOutput !== "prefix" && childOutput !== "inherit" && childOutput !== "ignore")
+        return Effect.fail(
+            new ConfigurationError(
+                "childOutput",
+                'The supervisor option "childOutput" must be "prefix", "inherit" or "ignore"',
+            ),
+        )
+    const logger = loggingConfiguration(field("logging"), native)
+    if (logger instanceof ConfigurationError) return Effect.fail(logger)
+    return Effect.succeed(
+        Object.freeze({
+            entry,
+            children,
+            automatic,
+            restart: restartConfiguration,
+            minimumSpacingMs: identify.minimumSpacingMs,
+            coordinator: identify.coordinator,
+            diagnosticsIntervalMs,
+            startupTimeoutMs,
+            shutdownTimeoutMs,
+            environment: Object.freeze([...environment].map((entry) => Object.freeze(entry))),
+            args,
+            execArgv: Object.freeze(filteredExecArguments(execArgv)),
+            childOutput,
+            logger,
+        }),
+    )
 }
 
 /**
@@ -722,6 +777,16 @@ function outputLabel(configuration: ChildConfiguration) {
 export const maximumForwardedLineLength = 262_144
 const truncationMarker = " … [line truncated by the supervisor]"
 
+/** Whether a parsed child line is an SDK record, meaning an object with a string level, code and category */
+function sdkRecord(value: unknown): value is Record<string, unknown> {
+    return (
+        record(value) &&
+        typeof value.level === "string" &&
+        typeof value.code === "string" &&
+        typeof value.category === "string"
+    )
+}
+
 /** One child line in the parent's JSON Lines output. An SDK record gains a fields.child entry, another JSON object
  * passes through unchanged, and any other text becomes a supervisor.childOutput record, so the output stays valid
  */
@@ -729,8 +794,7 @@ function jsonOutputLine(line: string, configuration: ChildConfiguration, stream:
     try {
         const value = JSON.parse(line) as unknown
         if (record(value)) {
-            if (typeof value.level !== "string" || typeof value.code !== "string" || typeof value.category !== "string")
-                return line
+            if (!sdkRecord(value)) return line
             const fields = record(value.fields) ? value.fields : {}
             return JSON.stringify({ ...value, fields: { ...fields, child: configuration.id } })
         }
@@ -747,9 +811,29 @@ function jsonOutputLine(line: string, configuration: ChildConfiguration, stream:
     })
 }
 
+/** One child line in the parent's pretty output. An SDK record prints as the parent would print its own record,
+ * and any other text keeps its content. Every printed line carries the label
+ */
+function prettyOutputLine(line: string, label: string, color: boolean): string {
+    try {
+        const value = JSON.parse(line) as unknown
+        if (sdkRecord(value)) {
+            const entry = value as unknown as LogRecord
+            markSdkErrors(entry.error)
+            return prettyLine(entry, color)
+                .split("\n")
+                .map((part) => `${label} ${part}`)
+                .join("\n")
+        }
+    } catch {
+        // allow-silent: A line that is not JSON is forwarded as plain text below
+    }
+    return `${label} ${line}`
+}
+
 /**
- * Forward each line from a child stream in the parent's format for that stream: Labelled text for pretty output,
- * or JSON Lines for json output. Lines longer than maximumForwardedLineLength are truncated with a marker, the child
+ * Forward each line from a child stream in the parent's format for that stream: Labelled readable lines for pretty
+ * output, or JSON Lines for json output. Lines longer than maximumForwardedLineLength are truncated with a marker, the child
  * stream pauses while the parent stream applies backpressure, and a partial final line is forwarded at the end.
  * The done callback runs once the child stream has ended or closed
  */
@@ -763,12 +847,13 @@ function forwardLines(
 ) {
     if (!stream) return done()
     const label = outputLabel(configuration)
-    const json = logger.consoleFormat(name).format === "json"
+    const { format, color } = logger.consoleFormat(name)
     let pending = ""
     let skipping = false
     let finished = false
     const emit = (line: string) => {
-        const text = json ? jsonOutputLine(line, configuration, name) : `${label} ${line}`
+        const text =
+            format === "json" ? jsonOutputLine(line, configuration, name) : prettyOutputLine(line, label, color)
         if (!target.write(`${text}\n`) && !stream.isPaused()) {
             stream.pause()
             target.once("drain", () => stream.resume())
@@ -1086,15 +1171,9 @@ export class SupervisorOwner {
         const generation = slot.generation
         const output = this.#configuration!.childOutput
         const stdio = output === "prefix" ? "pipe" : output
-        // Prefixed children write into pipes, so they receive the parent's console format and color rather than
-        // choosing JSON for a non-terminal output. Explicit environment values still win
-        const inherited =
-            output === "prefix"
-                ? (() => {
-                      const { format, color } = this.#configuration!.logger.consoleFormat("stdout")
-                      return { FLUXERLY_LOG_FORMAT: format, FLUXERLY_LOG_COLOR: color ? "1" : "0" }
-                  })()
-                : {}
+        // Prefixed children write into pipes, so they always log JSON without color. The supervisor reads each record
+        // and prints it in the format of the parent stream it goes to. Explicit environment values still win
+        const inherited = output === "prefix" ? { FLUXERLY_LOG_FORMAT: "json", FLUXERLY_LOG_COLOR: "0" } : {}
         try {
             child = fork(this.#configuration!.entry, [...this.#configuration!.args], {
                 env: { ...inherited, ...Object.fromEntries(this.#configuration!.environment) },
@@ -2241,7 +2320,7 @@ export function createSupervisor(
     options: SupervisorOptions,
     native = false,
 ): Effect.Effect<SupervisorOwner, ConfigurationError> {
-    return validateSupervisorConfiguration(options, native).pipe(
+    return suspendMarked(() => supervisorSettings(options, native)).pipe(
         Effect.tap((configuration) =>
             Effect.withFiber((fiber) => {
                 if (native) configuration.logger.context = fiber.context

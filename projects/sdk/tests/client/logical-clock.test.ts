@@ -12,6 +12,7 @@ import { LogicalScheduler, makeLogicalScheduler } from "../../src/internal/logic
 import { MemberChunkOwner } from "../../src/internal/member-chunks.js"
 import type { ClientOwner } from "../../src/internal/client.js"
 import { fetchPermissions } from "../../src/internal/permissions.js"
+import { runWithTestClock } from "../support/clock.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 
 afterEach(() => {
@@ -19,11 +20,8 @@ afterEach(() => {
     vi.restoreAllMocks()
 })
 
-const withTestClock = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(TestClock.layer({ warningDelay: "10 seconds" }))))
-
 test("logical scheduler wakes for an earlier deadline and skips cleared due callbacks", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const scope = Scope.makeUnsafe()
             const scheduler = yield* makeLogicalScheduler(scope)
@@ -81,7 +79,7 @@ test("logical scheduler wakes for an earlier deadline and skips cleared due call
 })
 
 test("TestClock expires cache TTLs in the background and diagnostics report released accounting", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const scope = Scope.makeUnsafe()
             const logical = yield* makeLogicalScheduler(scope)
@@ -165,7 +163,7 @@ const permissionOwner = (
     }) as unknown as Parameters<typeof fetchPermissions>[0]
 
 test("composed owner workflows decrement one creation-Clock budget", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const clock = yield* Clock.Clock
             const timeouts: number[] = []
@@ -179,7 +177,7 @@ test("composed owner workflows decrement one creation-Clock budget", async () =>
 })
 
 test("cache-first permission reads charge only their remote reads to the deadline", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const clock = yield* Clock.Clock
             const timeouts: number[] = []
@@ -200,7 +198,7 @@ test("cache-first permission reads charge only their remote reads to the deadlin
 })
 
 test("native cooldown claims use the caller Clock", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const store = nativeCommands.memoryCooldowns({ maxEntries: 1 })
             expect(yield* store.claim({ key: "command:user", durationMs: 100 })).toMatchObject({
@@ -222,7 +220,7 @@ test("native cooldown claims use the caller Clock", async () => {
 })
 
 test("TestClock advances event waits and releases their subscription", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const bus = new EventBus()
             const fiber = yield* Effect.forkChild(waitForEvent(bus, "messageCreate", { timeoutMs: 100 }))
@@ -244,7 +242,7 @@ test("TestClock advances event waits and releases their subscription", async () 
 })
 
 test("TestClock advances collector and member-stream deadlines without host waiting", async () => {
-    await withTestClock(
+    await runWithTestClock(
         Effect.gen(function* () {
             const scope = Scope.makeUnsafe()
             const logical = yield* makeLogicalScheduler(scope)
@@ -322,7 +320,7 @@ test("a REST admission timer defect retains bounded failure, closure and later p
         logged.push({ annotations: { ...entry.fiber.getRef(References.CurrentLogAnnotations) }, cause: entry.cause })
     })
 
-    await withTestClock(
+    await runWithTestClock(
         Effect.scoped(
             Effect.gen(function* () {
                 const client = yield* createNative({ token: "fixture-only-not-a-credential" })
@@ -379,7 +377,7 @@ test("REST admission and total deadline remain bound to the client creation Cloc
                   init.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }),
               ),
     )
-    await withTestClock(
+    await runWithTestClock(
         Effect.scoped(
             Effect.gen(function* () {
                 const creationClock = yield* TestClock.testClockWith(Effect.succeed)

@@ -8,7 +8,7 @@ import type { PrefixCommandMetadata } from "#sdk/commands"
 import { ConfigurationError } from "#sdk/errors"
 import { readCaller } from "./defects.js"
 import { splitText } from "#sdk/text"
-import { copyCommandGroupPath, sameCommandPath } from "./commands.js"
+import { commandUsage, copyCommandGroupPath, displayPrefix, sameCommandPath } from "./commands.js"
 import { unsupportedKeyHint } from "./suggest.js"
 
 /** Default page length of a command context's help, which fits one message */
@@ -31,7 +31,7 @@ export function contextHelpOptions(options: CommandContextHelpOptions | undefine
         return options as never
     return {
         get prefix() {
-            return options?.prefix ?? prefix
+            return options?.prefix ?? displayPrefix(prefix)
         },
         get maxLength() {
             return options?.maxLength ?? contextHelpLength
@@ -75,15 +75,7 @@ export function commandHelp(
     for (const command of selected) {
         const path = command.path ?? [command.name]
         const namespace = path.slice(0, -1)
-        const usage =
-            command.usage ??
-            command.arguments
-                ?.map((argument) => {
-                    const name = argument.name + (argument.rest ? "..." : "")
-                    return argument.optional ? `[${name}]` : `<${name}>`
-                })
-                .join(" ") ??
-            ""
+        const usage = commandUsage(command)
         const aliases = command.aliases?.length
             ? ` (Aliases: ${command.aliases.map((alias) => prefix + [...namespace, alias].join(" ")).join(", ")})`
             : ""

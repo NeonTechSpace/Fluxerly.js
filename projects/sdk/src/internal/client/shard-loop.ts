@@ -44,11 +44,12 @@ import type { PresenceOwner } from "../presence.js"
 import { closeActionText, closeCodeInfo, CloseCode } from "../protocol/gateway.js"
 import type { SocketFactory } from "../transport/index.js"
 import type { IdentifyFields, SubmitFailure } from "../gateway/commands.js"
-import { checkSnapshot, type ShardPlan } from "../sharding.js"
+import { checkSnapshot, usedSnapshot, type ShardPlan } from "../sharding.js"
 import { backoffCeiling, retryDelay, stayedHealthy } from "./backoff.js"
 import { applyEvent, guildIntake, invalidateDispatch, type ClientCaches } from "./intake.js"
 import { formatDuration } from "./lifetime.js"
 import { emitObservation } from "../observer.js"
+import { retryableConnection } from "../retryable-connection.js"
 
 /** Observable per-shard state, owned by the client and updated by this loop */
 export interface ShardRuntime {
@@ -127,8 +128,8 @@ export interface ShardLoopOptions<M extends MessageCore> {
     readonly loadSessions?: boolean
 }
 
-/** Time allowed for one session store load */
-const sessionLoadTimeoutMs = 5_000
+/** Time allowed for one session store call at startup */
+const sessionStoreTimeoutMs = 5_000
 
 /** Server protocol anomalies in a row, without a healthy connection between them, after which a shard stops retrying */
 const protocolFailureLimit = 3
@@ -147,15 +148,22 @@ const connectionTexts = {
     },
 } as const
 
+/** The gateway close code that ended an attempt, from the closure or from a gateway connection error */
+function attemptCloseCode(failure: AttemptFailure): number | undefined {
+    const error = failure.failure
+    return (
+        failure.closeCode ??
+        (error instanceof ConnectionError && error.phase === "gateway" ? (error.status ?? undefined) : undefined)
+    )
+}
+
 /** Readable reason for an ended connection attempt as one sentence, including a close code's reviewed meaning */
 function attemptExplanation(failure: AttemptFailure): string {
     const error = failure.failure
     if (failure.end === "heartbeatTimeout") return "The gateway did not acknowledge a heartbeat in time"
     if (failure.end === "reconnectRequested") return "The gateway asked the SDK to reconnect"
     if (failure.end === "invalidSession") return "The gateway invalidated the session"
-    const closeCode =
-        failure.closeCode ??
-        (error instanceof ConnectionError && error.phase === "gateway" ? (error.status ?? undefined) : undefined)
+    const closeCode = attemptCloseCode(failure)
     if (closeCode !== undefined) {
         const info = closeCodeInfo(closeCode)
         return `Close code ${closeCode} (${info.name}): ${info.meaning}`
@@ -180,11 +188,8 @@ function attemptExplanation(failure: AttemptFailure): string {
 }
 
 function closeFields(failure: AttemptFailure): { closeCode?: number } {
-    const error = failure.failure
-    if (failure.closeCode !== undefined) return { closeCode: failure.closeCode }
-    return error instanceof ConnectionError && error.phase === "gateway" && error.status !== null
-        ? { closeCode: error.status }
-        : {}
+    const closeCode = attemptCloseCode(failure)
+    return closeCode === undefined ? {} : { closeCode }
 }
 
 /** The handshake of the next attempt after a retryable failure: Resume with a retained session and sequence, otherwise
@@ -200,17 +205,12 @@ function nextAction(failure: AttemptFailure, session: Session, delayMs: number, 
     // A rate-limit close and a rate-limited discovery request both arrive as RateLimitError, and the delay covers the wait.
     // This path always retries, so only the rate-limit wait changes the wording besides Resume or a new session
     const rateLimited = failure.failure instanceof RateLimitError
-    return closeActionText(rateLimited ? "wait" : "resume", resume, formatDuration(delayMs), established)
+    return closeActionText(rateLimited, resume, formatDuration(delayMs), established)
 }
 
 /** Whether a discovery failure is worth another attempt */
 function retryableDiscovery(error: unknown): boolean {
-    return (
-        error instanceof RateLimitError ||
-        (error instanceof ConnectionError &&
-            error.reason === "network" &&
-            (error.status === null || error.status >= 500))
-    )
+    return error instanceof RateLimitError || (error instanceof ConnectionError && retryableConnection(error))
 }
 
 /** Run one shard until its connection fails permanently. The loop never succeeds */
@@ -251,38 +251,42 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                 )
             })
         // A store failure is logged in full and never fails startup: The shard then starts a new session
+        const storeCall = <A>(
+            operation: "load" | "save",
+            run: () => Promise<A>,
+            code: "lifecycle.sessionLoadFailed" | "lifecycle.sessionSaveFailed",
+            message: string,
+        ) => {
+            const budgetMs = Math.max(1, Math.min(sessionStoreTimeoutMs, deadline - now()))
+            // @effect-diagnostics-next-line unknownInEffectCatch:off
+            return Effect.tryPromise({ try: () => Promise.resolve(run()), catch: (error) => error }).pipe(
+                Effect.timeoutOrElse({
+                    duration: budgetMs,
+                    orElse: () =>
+                        Effect.fail(
+                            // @effect-diagnostics-next-line globalErrorInEffectFailure:off
+                            new Error(
+                                `The session store's ${operation} did not finish within ${formatDuration(budgetMs)}`,
+                            ),
+                        ),
+                }),
+                Effect.map((value) => ({ value })),
+                Effect.catch((error) =>
+                    Effect.sync(() => {
+                        log({ level: "error", code, message, error, origin: "application" })
+                        return undefined
+                    }),
+                ),
+            )
+        }
         const loadSession = (gatewayUrl: string) =>
             Effect.gen(function* () {
                 sessionsLoaded = true
-                const loadBudgetMs = Math.max(1, Math.min(sessionLoadTimeoutMs, deadline - now()))
-                // @effect-diagnostics-next-line unknownInEffectCatch:off
-                const loaded = yield* Effect.tryPromise({
-                    try: () => Promise.resolve(host.sessions!.load(shard.shardId)),
-                    catch: (error) => error,
-                }).pipe(
-                    Effect.timeoutOrElse({
-                        duration: loadBudgetMs,
-                        orElse: () =>
-                            Effect.fail(
-                                // @effect-diagnostics-next-line globalErrorInEffectFailure:off
-                                new Error(
-                                    `The session store's load did not finish within ${formatDuration(loadBudgetMs)}`,
-                                ),
-                            ),
-                    }),
-                    Effect.map((value) => ({ value })),
-                    Effect.catch((error) =>
-                        Effect.sync(() => {
-                            log({
-                                level: "error",
-                                code: "lifecycle.sessionLoadFailed",
-                                message: `Shard ${shard.shardId} could not load its saved session, so it starts a new session`,
-                                error,
-                                origin: "application",
-                            })
-                            return undefined
-                        }),
-                    ),
+                const loaded = yield* storeCall(
+                    "load",
+                    () => host.sessions!.load(shard.shardId),
+                    "lifecycle.sessionLoadFailed",
+                    `Shard ${shard.shardId} could not load its saved session, so it starts a new session`,
                 )
                 if (loaded === undefined || loaded.value === undefined) return
                 const checked = checkSnapshot(loaded.value, gatewayUrl, plan.totalShards, Date.now())
@@ -294,6 +298,15 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     })
                     return
                 }
+                // Fluxer replays every dispatch after the saved sequence, so a second Resume of this snapshot after a crash
+                // would repeat the dispatches this process handles. Only the next shutdown saves a resumable session again
+                const used = yield* storeCall(
+                    "save",
+                    () => host.sessions!.save(shard.shardId, usedSnapshot(checked.snapshot)),
+                    "lifecycle.sessionSaveFailed",
+                    `Shard ${shard.shardId} could not mark its saved session as used, so it starts a new session`,
+                )
+                if (used === undefined) return
                 shard.session = { id: checked.snapshot.sessionId, sequence: checked.snapshot.sequence }
                 restoredSession = true
                 log({

@@ -1,4 +1,4 @@
-import { readCaller, thrownReason } from "#sdk/internal/defects"
+import { readCaller } from "#sdk/internal/defects"
 import type {
     CommandCooldownClaim,
     CommandCooldownPer,
@@ -28,7 +28,7 @@ import type {
 import type { CommandContextHelpOptions, CommandHelpOptions } from "#sdk/command-help"
 import { commandHelp, contextHelpOptions } from "#sdk/internal/command-help"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
-import { ApplicationError, CancelledError, ConfigurationError, SdkDefect } from "#sdk/errors"
+import { CancelledError, ConfigurationError } from "#sdk/errors"
 import {
     configurationEffect,
     cooldownRequest,
@@ -39,12 +39,16 @@ import {
     type LocalMemoryCooldownStore,
     PrefixCommandRegistry,
     rejectionReply,
+    routerAdapterKeys,
     routerSubscriptionOptions,
     sameCommandPath,
     snapshotCommandDefinition,
     snapshotCommandCooldown,
     validateCommandShape,
     checkBotCommandKeys,
+    localSetup,
+    registerCallback,
+    snapshotFunctions,
 } from "#sdk/internal/commands"
 import { convertCommandArguments, parseCommandArgument } from "#sdk/internal/command-arguments"
 import { suggestName } from "#sdk/internal/suggest"
@@ -532,13 +536,10 @@ export interface DefaultCommands {
     memoryCooldowns(options?: MemoryCooldownOptions): MemoryCooldownStore
 }
 
-/** Router option keys this API adds to the shared ones */
-const routerAdapterKeys = ["onUnmatched", "onReject", "use"]
-
 /** Default-API command tools exposed through the public `commands` namespace, with immediate creation and registration */
 export const defaultCommands: DefaultCommands = Object.freeze({
     create: <M extends MessageCore = Message>(options: DefaultPrefixCommandsOptions<M>) =>
-        attempt(() => {
+        localSetup(() => {
             const registry = new PrefixCommandRegistry<StoredDefaultCommand<M>, M>(options, routerAdapterKeys)
             return freezeRouter(
                 new DefaultPrefixCommandRouterOwner(
@@ -548,14 +549,14 @@ export const defaultCommands: DefaultCommands = Object.freeze({
             )
         }),
     parseQuoted: parseQuotedPrefixCommand,
-    suggest: (name: string, candidates: Iterable<string>) => attempt(() => suggestName(name, candidates)),
+    suggest: (name: string, candidates: Iterable<string>) => localSetup(() => suggestName(name, candidates)),
     parseArgument: <const D extends Exclude<CommandArgumentDescriptor, CommandArgumentCustom>>(
         token: string | undefined,
         descriptor: D,
         options?: CommandArgumentParseOptions,
-    ) => attempt(() => parseCommandArgument(descriptor, token, options) as CommandArgumentValue<D> | undefined),
+    ) => localSetup(() => parseCommandArgument(descriptor, token, options) as CommandArgumentValue<D> | undefined),
     memoryCooldowns: (options: MemoryCooldownOptions | undefined) =>
-        attempt(() => defaultMemoryCooldownStore(createMemoryCooldownStore(options))),
+        localSetup(() => defaultMemoryCooldownStore(createMemoryCooldownStore(options))),
 })
 
 interface StoredDefaultCommand<M extends MessageCore> extends PrefixCommandDefinition {
@@ -594,14 +595,14 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
     }
 
     help(options: CommandHelpOptions): readonly string[] {
-        return attempt(() => commandHelp(this.#registry.visibleEntries, options))
+        return localSetup(() => commandHelp(this.#registry.visibleEntries, options))
     }
 
     register<const S extends CommandArgumentSchema = {}>(
         command: DefaultPrefixCommand<S, M>,
         options?: PrefixCommandRegistrationOptions,
     ): DefaultPrefixCommandRouter<M> {
-        return attempt(() =>
+        return localSetup(() =>
             freezeRouter(
                 new DefaultPrefixCommandRouterOwner(
                     this.#registry.register(
@@ -618,7 +619,7 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         commands: DefaultPrefixCommandBatch<M, S>,
         options?: PrefixCommandRegistrationOptions,
     ): DefaultPrefixCommandRouter<M> {
-        return attempt(() => {
+        return localSetup(() => {
             const stored = readCaller(() => snapshotDefaultCommandBatch<M>(commands))
             return freezeRouter(
                 new DefaultPrefixCommandRouterOwner(this.#registry.registerMany(stored, options), this.#settings),
@@ -630,7 +631,7 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         group: PrefixCommandGroupDefinition,
         options?: PrefixCommandRegistrationOptions,
     ): DefaultPrefixCommandRouter<M> {
-        return attempt(() =>
+        return localSetup(() =>
             freezeRouter(
                 new DefaultPrefixCommandRouterOwner(this.#registry.registerGroup(group, options), this.#settings),
             ),
@@ -639,7 +640,7 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
 
     attach(client: Client<M>, options?: EventHandlerOptions): Subscription {
         const services = clientServices(client)
-        const onError: unknown = attempt(() => readCaller(() => options?.onError))
+        const onError: unknown = localSetup(() => readCaller(() => options?.onError))
         if (onError !== undefined && typeof onError !== "function")
             throw new ConfigurationError("onError", 'The option "onError" must be a function')
         // The router's own hook gets one bounded queue, so a failed command only enqueues its report and the hook
@@ -949,18 +950,6 @@ function snapshotRouterSettings<M extends MessageCore>(options: DefaultPrefixCom
     })
 }
 
-function snapshotFunctions<F>(value: unknown, message: string): readonly F[] {
-    if (value === undefined) return Object.freeze([])
-    if (!Array.isArray(value)) throw new ConfigurationError("commands", message)
-    const copied: F[] = []
-    for (let index = 0; index < value.length; index += 1) {
-        if (!Object.hasOwn(value, index) || typeof value[index] !== "function")
-            throw new ConfigurationError("commands", message)
-        copied.push(value[index] as F)
-    }
-    return Object.freeze(copied)
-}
-
 function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends MessageCore>(
     command: DefaultPrefixCommand<S, M>,
     keyedName?: string,
@@ -1135,7 +1124,7 @@ function defaultMemoryCooldownStore(owner: LocalMemoryCooldownStore): MemoryCool
             return owner.size
         },
         claim: (input: CommandCooldownRequest) => {
-            const result = attempt(() => owner.claim(readCaller(() => snapshotClaimInput(input))))
+            const result = localSetup(() => owner.claim(readCaller(() => snapshotClaimInput(input))))
             if (result._tag === "Success") return result.value
             throw result.error
         },
@@ -1168,30 +1157,4 @@ function defaultCallback<A>(callback: () => A | PromiseLike<A>): Effect.Effect<A
             },
         })
     })
-}
-
-/**
- * Run local command setup, keeping ConfigurationError for misuse. A throw from a marked read of caller definitions,
- * options or claims is an application fault, and any other throw, such as from building the registry, is an SDK fault
- */
-function attempt<A>(create: () => A): A {
-    try {
-        return create()
-    } catch (error) {
-        if (error instanceof ConfigurationError) throw error
-        throw new SdkDefect("commands", [thrownReason(error)])
-    }
-}
-
-/**
- * Run a runBot register callback. Misuse and SDK defects from the registrations it makes keep their errors, and any
- * other throw is the application's own failure, carried by ApplicationError naming `runBot commands`
- */
-function registerCallback<A>(register: () => A): A {
-    try {
-        return register()
-    } catch (error) {
-        if (error instanceof ConfigurationError || error instanceof SdkDefect) throw error
-        throw new ApplicationError("runBot commands", error)
-    }
 }

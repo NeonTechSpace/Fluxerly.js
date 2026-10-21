@@ -477,6 +477,25 @@ test.each(modes)("%s rejects throwing, nonboolean, and thenable cleanup filters 
     }
 })
 
+test.each(modes)("%s keeps the thrown cleanup filter value as the preview failure cause", async (mode) => {
+    const thrown = new Error("private filter failure")
+    stubFetchWithHostedDiscovery(async () => Response.json([wire("30")]))
+    const api = await cleanupApi(mode)
+    try {
+        await expect(
+            api.preview("20", {
+                filter: () => {
+                    throw thrown
+                },
+                maxScanned: 1,
+                maxSelected: 1,
+            }),
+        ).rejects.toMatchObject({ reason: "filter", cause: thrown })
+    } finally {
+        await api.close()
+    }
+})
+
 test.each(modes)("%s permits at most one concurrent cleanup execution for an owned plan", async (mode) => {
     let release!: () => void
     const posted = new Promise<void>((resolve) => {

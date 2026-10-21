@@ -67,7 +67,7 @@ import {
 } from "./api/effect/bot.js"
 import type { Message, MessageCore, MessageFields, SelectedMessage } from "./messages.js"
 import { createClient, type Client, type ClientOptions } from "./api/effect/client.js"
-import { checkTestOptionKeys, TestHarness, type TestClientWork } from "./internal/testing/harness.js"
+import { checkTestOptionKeys, clientWork, TestHarness } from "./internal/testing/harness.js"
 import { botOptionKeys } from "./internal/bot-runner.js"
 import { clientServices } from "./internal/client-registry.js"
 import { TestTimeoutError, type UnhandledTestFailuresError } from "./internal/testing/errors.js"
@@ -315,19 +315,6 @@ export function createTestClient<E = never, R = never, const F extends MessageFi
     options: TestClientOptions<E, R, F> = {} as TestClientOptions<E, R, F>,
 ): Effect.Effect<TestClient<SelectedMessage<F>>, never, Scope.Scope | R> {
     return openTestClient(options).pipe(Effect.map(({ test }) => test))
-}
-
-/** The client's work in progress that idle and say wait for, including scheduled task runs and queued handler events */
-function clientWork(client: { diagnostics(): TestClientWork["diagnostics"] }): () => TestClientWork {
-    return () => {
-        const services = clientServices(client)
-        const handlers = services?.events.drainState()
-        return {
-            diagnostics: client.diagnostics(),
-            runningTasks: services?.tasks.running ?? 0,
-            pendingHandlers: handlers === undefined ? 0 : handlers.running + handlers.waiting,
-        }
-    }
 }
 
 /** Create a native test client together with the harness that createTestBot also drives */

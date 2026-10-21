@@ -28,7 +28,7 @@ import { record } from "./decode/primitives.js"
 import { readCaller, readInput, suspendMarked, thrownCause } from "./defects.js"
 import { resolveReactionEmoji } from "./reactions.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
-import { collectorBudgetMessage } from "./collector.js"
+import { collectorBudgetMessage, guildId } from "./collector.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
@@ -37,16 +37,6 @@ type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "gu
         readonly emoji?: Exclude<ReturnType<typeof resolveReactionEmoji>, undefined>
         readonly idleMs: number | undefined
     } & OperationOptions
-
-const maximumGuildId = "18446744073709551615"
-
-function guildId(value: unknown): value is string {
-    return (
-        typeof value === "string" &&
-        /^[1-9][0-9]{0,19}$/.test(value) &&
-        (value.length < maximumGuildId.length || value <= maximumGuildId)
-    )
-}
 
 function settings(options: unknown, defaultApi: boolean): Settings | ConfigurationError {
     const input = options === undefined ? {} : options

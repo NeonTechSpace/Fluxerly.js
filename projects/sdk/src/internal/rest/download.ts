@@ -18,7 +18,7 @@ import { readCaller, suspendMarked, thrownCause } from "../defects.js"
 import { mapFailureCause, TransportError, withDeadline } from "../effect-failures.js"
 import type { InstanceEndpointContext } from "../instance.js"
 import type { HttpTransport } from "../transport/index.js"
-import { completeCleanup } from "./attempt.js"
+import { completeCleanup } from "../transfer-source.js"
 import { RestFailure } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 

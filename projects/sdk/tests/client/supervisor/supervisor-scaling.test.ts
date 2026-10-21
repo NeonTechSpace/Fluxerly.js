@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events"
 import { setImmediate as turn } from "node:timers/promises"
 import { Effect } from "effect"
 import type { ResultAsync } from "neverthrow"
@@ -15,63 +14,13 @@ import { ConfigurationError, supervisor } from "../../../src/index.js"
 import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import type { SupervisorOptions, SupervisorStatus } from "../../../src/supervisor.js"
 import { modes, type Mode } from "../../support/both-apis.js"
+import { forkScripted as forkScriptedChildren, type ScriptedChild as Child } from "../../support/scripted-child.js"
 import { startInstance } from "../../support/instance.js"
 import { captureLogs } from "../../support/log-capture.js"
 import { fakeHostTime, hostTurnsUntil } from "../../support/client-clock.js"
 import { sendJson, type RecordedRequest, type RouteHandler } from "../../support/rest-server.js"
 
-type Message = { readonly type: string; readonly [key: string]: unknown }
-
-/**
- * A scripted child process: It says hello, finishes configuration when assigned and records every parent message.
- * It exits at once when asked to stop, unless holdShutdown is set, in which case the test calls exit.
- * The test drives the rest of the protocol through emit
- */
-function scriptedChild(pid: number, holdShutdown = false) {
-    const received: Message[] = []
-    const child = Object.assign(new EventEmitter(), {
-        pid,
-        connected: true,
-        exitCode: null as number | null,
-        signalCode: null as NodeJS.Signals | null,
-        received,
-        send(message: Message) {
-            received.push(message)
-            if (message.type === "assignment")
-                queueMicrotask(() => child.emit("message", { type: "ready", generation: message.generation }))
-            if (message.type === "shutdown" && !holdShutdown) child.exit(0)
-            return true
-        },
-        kill() {
-            child.exit(0)
-            return true
-        },
-        exit(code: number) {
-            if (!child.connected) return
-            child.connected = false
-            child.exitCode = code
-            queueMicrotask(() => {
-                child.emit("disconnect")
-                child.emit("exit", code, null)
-            })
-        },
-    })
-    queueMicrotask(() => child.emit("message", { type: "hello" }))
-    return child
-}
-
-type Child = ReturnType<typeof scriptedChild>
-
-/** Fork scripted children in order. Those whose fork index holdShutdown selects exit only when the test says so */
-function forkScripted(holdShutdown: (index: number) => boolean = () => false) {
-    const children: Child[] = []
-    fork.mockImplementation(() => {
-        const child = scriptedChild(200 + children.length, holdShutdown(children.length))
-        children.push(child)
-        return child
-    })
-    return children
-}
+const forkScripted = (holdShutdown?: (index: number) => boolean) => forkScriptedChildren(fork, 200, holdShutdown)
 
 /** The same lifecycle in either public API, with Promise results that hold the failure or undefined */
 async function managed(mode: Mode, options: SupervisorOptions) {

@@ -14,7 +14,7 @@ import type {
 } from "#sdk/expressions"
 import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, record, snapshotArray } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { normalizedText as text } from "./field-text.js"
@@ -25,16 +25,6 @@ export type ExpressionUpdate<K extends ExpressionKind> = Readonly<{
     guildId: string
     items: readonly ExpressionResources[K][]
 }>
-
-function snapshotArray(value: unknown, maximum: number): readonly unknown[] | undefined {
-    if (!Array.isArray(value)) return undefined
-    const count = value.length
-    if (count > maximum) return undefined
-    // oxlint-disable-next-line unicorn/no-new-array -- preallocates the counted length once, and the loop below assigns every index
-    const items = new Array<unknown>(count)
-    for (let index = 0; index < count; index++) items[index] = value[index]
-    return Object.freeze(items)
-}
 
 function decodeExpression<K extends ExpressionKind>(
     kind: K,

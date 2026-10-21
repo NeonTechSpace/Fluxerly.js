@@ -52,3 +52,25 @@ test("Nightly snapshots name their version and list pending notes above the rele
         await rm(output, { recursive: true, force: true })
     }
 })
+
+test("The quick start runs init at the documented version and a source preview does not offer it", async () => {
+    const output = await mkdtemp(join(tmpdir(), "fluxerly-init-docs-"))
+    if (dirname(resolve(output)) !== resolve(tmpdir())) throw new Error("Unexpected init fixture directory")
+    const version = "1000.1.0-nightly.20261019.3"
+    const name = JSON.parse(await readFile(join(webRoot, "../sdk/package.json"), "utf8")).name
+    try {
+        await generateVersion(version, join(output, "released"), { unreleased: "" })
+        await generateVersion("preview", join(output, "preview"))
+        const released = await readFile(join(output, "released/quick-start.md"), "utf8")
+        for (const runner of ["npx", "pnpm dlx", "bunx"]) assert.ok(released.includes(`\`${runner} ${name}@${version} init\``), runner)
+        // A runner without a version would fetch the npm latest tag, whatever these docs describe
+        assert.doesNotMatch(released, new RegExp(`${name} init`))
+        const preview = await readFile(join(output, "preview/quick-start.md"), "utf8")
+        assert.match(preview, /This version is not released yet, so the project generator cannot run it/)
+        assert.doesNotMatch(preview, /dlx|npx|bunx/)
+        for (const slug of ["quick-start", "effect-first-bot"])
+            assert.doesNotMatch(await readFile(join(output, `released/${slug}.md`), "utf8"), /\{\{init\}\}/)
+    } finally {
+        await rm(output, { recursive: true, force: true })
+    }
+})

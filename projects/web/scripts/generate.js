@@ -259,10 +259,16 @@ export async function generateVersion(version, output, { plannedVersion, unrelea
     const installation = version === "preview"
         ? "This version is not available to install yet. Select a released version of the docs to follow this tutorial\n"
         : `This installs SDK **${version}**, matching these docs\n\n\`\`\`command\n${JSON.stringify({ kind: "install", package: manifest.name, version })}\n\`\`\`\n`
+    // One-off runners fetch the npm latest tag without a version, so the command names this version
+    const [npx, pnpm, bun] = ["npx", "pnpm dlx", "bunx"].map((runner) => `\`${runner} ${manifest.name}@${version} init\``)
+    const init = version === "preview"
+        ? "This version is not released yet, so the project generator cannot run it. Select a released version of the docs to generate the project\n"
+        : `Run ${npx}, ${pnpm} or ${bun} in the bot's folder and choose JavaScript, TypeScript or Effect\n`
     for (const guide of guides) {
         // Guide links already use the snapshot link placeholder
         const content = guide.content
             .replaceAll("{{installation}}", installation)
+            .replaceAll("{{init}}", init)
             // The tested Effect version is the lowest one a range peer accepts. Older SDKs declared one exact version
             .replaceAll("{{effect-version}}", manifest.peerDependencies.effect.replace(/^\^/, ""))
         if (content.replaceAll(linkPlaceholder, "").includes("{{"))

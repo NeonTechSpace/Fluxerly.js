@@ -29,11 +29,8 @@ export function setupCommandPreferences() {
             try {
                 const variant = commandVariant(JSON.parse(block.dataset.command ?? "null"), preferences.manager, getExampleLanguage())
                 const code = block.querySelector<HTMLElement>("[data-command-code]")
-                const note = block.querySelector<HTMLElement>("[data-command-note]")
-                if (!code || !note) continue
+                if (!code) continue
                 code.textContent = variant.command
-                note.textContent = variant.note
-                note.hidden = !variant.note
                 for (const select of block.querySelectorAll<HTMLSelectElement>("select[data-command-preference]")) {
                     const name = select.dataset.commandPreference
                     if (name !== "manager") continue

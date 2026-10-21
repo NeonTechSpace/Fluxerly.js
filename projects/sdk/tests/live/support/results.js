@@ -41,12 +41,3 @@ export function fromExit(exit) {
     if (failure?._tag === "Fail") throw failure.error
     throw Error("Unexpected operation outcome")
 }
-
-/** Like `settle`, but an Effect outcome is classified by `fromExit` */
-export async function settleExit(operation) {
-    const { Effect } = await import("effect")
-    if (Effect.isEffect(operation)) return fromExit(await Effect.runPromiseExit(operation))
-    const result = await operation
-    if (result.isErr()) throw result.error
-    return result.value
-}

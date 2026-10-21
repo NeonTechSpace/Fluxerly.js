@@ -6,7 +6,6 @@
  */
 import { ConfigurationError } from "#sdk/errors"
 import { InputValidationFailure } from "#sdk/input-validation"
-import { settingError } from "../client/configuration-fields.js"
 import { unsupportedKeyHint } from "../suggest.js"
 import { record } from "../decode/primitives.js"
 import { presenceInput, type FrozenPresence } from "../presence.js"
@@ -63,9 +62,13 @@ export function gatewayConfiguration(
     if (presenceSetting !== undefined) {
         const checked = presenceInput(presenceSetting)
         if (checked instanceof InputValidationFailure)
-            return settingError("presence", `The option "gateway.presence" is invalid: ${checked.detail.explanation}`, {
-                hint: 'Pass a PresenceInput such as { status: "online" }',
-            })
+            return new ConfigurationError(
+                "presence",
+                `The option "gateway.presence" is invalid: ${checked.detail.explanation}`,
+                {
+                    hint: 'Pass a PresenceInput such as { status: "online" }',
+                },
+            )
         presence = checked
     }
     return Object.freeze({
@@ -84,16 +87,19 @@ function ignoredList(
     if (value === undefined) return Object.freeze([])
     if (value === "auto") return "auto"
     if (!Array.isArray(value))
-        return settingError(
+        return new ConfigurationError(
             "ignoredEvents",
             'The option "gateway.ignoredEvents" must be "auto" or an array of dispatch names',
         )
     if (value.length > maxIgnoredEvents)
-        return settingError("ignoredEvents", 'The option "gateway.ignoredEvents" can list at most 256 dispatch names')
+        return new ConfigurationError(
+            "ignoredEvents",
+            'The option "gateway.ignoredEvents" can list at most 256 dispatch names',
+        )
     const names = new Set<string>()
     for (const name of Array.from(value)) {
         if (typeof name !== "string" || !dispatchName.test(name))
-            return settingError(
+            return new ConfigurationError(
                 "ignoredEvents",
                 'The option "gateway.ignoredEvents" must list dispatch names of 1 to 64 letters, digits and underscores, such as TYPING_START',
             )
@@ -102,7 +108,7 @@ function ignoredList(
     const needed = cacheNeeds(cacheKinds)
     for (const name of names) {
         if (protectedDispatchTypes.has(name))
-            return settingError(
+            return new ConfigurationError(
                 "ignoredEvents",
                 `The SDK needs ${name} dispatches to run the connection or to answer its own gateway requests, so gateway.ignoredEvents cannot include ${name}`,
                 {
@@ -110,7 +116,7 @@ function ignoredList(
                 },
             )
         if (needed.has(name))
-            return settingError(
+            return new ConfigurationError(
                 "ignoredEvents",
                 `${name} dispatches keep enabled caches current (${cacheKinds
                     .filter((kind) => cacheNeeds([kind]).has(name))
@@ -123,7 +129,7 @@ function ignoredList(
     }
     const list = Object.freeze([...names])
     if (Buffer.byteLength(JSON.stringify(list)) > maxIgnoredEventsBytes)
-        return settingError(
+        return new ConfigurationError(
             "ignoredEvents",
             `The option "gateway.ignoredEvents" must encode to at most 2,560 bytes of JSON, so the session start message fits Fluxer's 4,096-byte limit`,
         )
@@ -133,12 +139,15 @@ function ignoredList(
 function flagBits(value: unknown): number | ConfigurationError {
     if (value === undefined) return 0
     if (!record(value) || Object.keys(value).some((key) => key !== "debounceMessageReactions"))
-        return settingError(
+        return new ConfigurationError(
             "flags",
             'The option "gateway.flags" must contain only the boolean debounceMessageReactions',
         )
     const debounce = value.debounceMessageReactions
     if (debounce !== undefined && typeof debounce !== "boolean")
-        return settingError("flags", 'The option "gateway.flags.debounceMessageReactions" must be true or false')
+        return new ConfigurationError(
+            "flags",
+            'The option "gateway.flags.debounceMessageReactions" must be true or false',
+        )
     return debounce === true ? IdentifyFlag.debounceMessageReactions : 0
 }

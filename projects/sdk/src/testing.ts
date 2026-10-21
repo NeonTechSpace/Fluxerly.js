@@ -51,7 +51,7 @@ import { installTestBot, type BotOptions } from "./api/default/bot.js"
 import { clientServices } from "./internal/client-registry.js"
 import type { CommandArgumentSchema } from "./command-arguments.js"
 import { ConfigurationError } from "./errors.js"
-import { checkTestOptionKeys, TestHarness, type TestClientWork } from "./internal/testing/harness.js"
+import { checkTestOptionKeys, clientWork, TestHarness } from "./internal/testing/harness.js"
 import { botOptionKeys } from "./internal/bot-runner.js"
 import type {
     TestDisconnectOptions,
@@ -233,19 +233,6 @@ export function createTestClient<const F extends MessageFields | undefined = und
     options: TestClientOptions<F> = {} as TestClientOptions<F>,
 ): TestClient<SelectedMessage<F>> {
     return openTestClient(options).test
-}
-
-/** The client's work in progress that idle and say wait for, including scheduled task runs and queued handler events */
-function clientWork(client: { diagnostics(): TestClientWork["diagnostics"] }): () => TestClientWork {
-    return () => {
-        const services = clientServices(client)
-        const handlers = services?.events.drainState()
-        return {
-            diagnostics: client.diagnostics(),
-            runningTasks: services?.tasks.running ?? 0,
-            pendingHandlers: handlers === undefined ? 0 : handlers.running + handlers.waiting,
-        }
-    }
 }
 
 /** Create a test client together with the harness that createTestBot also drives */

@@ -38,7 +38,8 @@ type Settings<M extends MessageCore> = Required<Omit<CollectorOptions<M>, "filte
 
 const maximumGuildId = "18446744073709551615"
 
-function guildId(value: unknown): value is string {
+/** Whether a value is a community ID a collector can filter on: Decimal, nonzero and at most the largest 64-bit ID */
+export function guildId(value: unknown): value is string {
     return (
         typeof value === "string" &&
         /^[1-9][0-9]{0,19}$/.test(value) &&

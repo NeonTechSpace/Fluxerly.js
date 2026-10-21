@@ -30,8 +30,6 @@ test("SDK install variants pin a prerelease exactly and keep the normal range fo
         "pnpm add @neontechspace/fluxerly@1000.0.0",
         "bun add @neontechspace/fluxerly@1000.0.0",
     ])
-    assert.equal(commandVariant(install).note, "")
-    assert.equal(commandVariant(install, "pnpm").note, "")
 })
 
 test("Effect add and list use the chosen manager, while node execution follows the example language", () => {
@@ -51,9 +49,9 @@ test("Effect add and list use the chosen manager, while node execution follows t
         ["npm list effect", "pnpm list effect", "bun why effect"])
     for (const manager of managers) {
         const run = { kind: "run", command: "node --env-file=.env bot.js" }
-        assert.deepEqual(commandVariant(run, manager), { command: "node --env-file=.env bot.js", note: "" })
-        assert.deepEqual(commandVariant(run, manager, "ts"), { command: "node --env-file=.env bot.ts", note: "" })
-        assert.deepEqual(commandVariant({ kind: "run", command: "node bot.js" }, manager, "ts"), { command: "node bot.ts", note: "" })
+        assert.deepEqual(commandVariant(run, manager), { command: "node --env-file=.env bot.js" })
+        assert.deepEqual(commandVariant(run, manager, "ts"), { command: "node --env-file=.env bot.ts" })
+        assert.deepEqual(commandVariant({ kind: "run", command: "node bot.js" }, manager, "ts"), { command: "node bot.ts" })
     }
 })
 

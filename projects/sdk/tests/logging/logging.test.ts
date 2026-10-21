@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Logger, References, Scope } from "effect"
+import { Cause, Effect, Logger, References } from "effect"
 import { inspect } from "node:util"
 import { afterEach, expect, test, vi } from "vitest"
 import { apiErrorDetail } from "../../src/api-errors.js"
@@ -337,11 +337,10 @@ test("native records keep the real Cause and fluxerly annotations, and chosen De
     expect(entries[1]!.level).toBe("Debug")
 })
 
-test("overflow policies drop and record events, and unmanaged sources report the stop", async () => {
+test("overflow policies drop and record events, and unmanaged sources report the stop", () => {
     const records: LogRecord[] = []
     const logger = configured({ sink: (record: LogRecord) => records.push(record), dedupe: false })
     const bus = new EventBus(() => logger)
-    const scope = Scope.makeUnsafe()
     const oldest = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 2, overflow: "dropOldest" }))
     const newest = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 2, overflow: "dropNewest" }))
     const stopping = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 2 }))
@@ -364,7 +363,6 @@ test("overflow policies drop and record events, and unmanaged sources report the
         }),
     ])
     expect(oldest.active && newest.active).toBe(true)
-    await Effect.runPromise(Scope.close(scope, Exit.void))
     bus.stop()
 })
 

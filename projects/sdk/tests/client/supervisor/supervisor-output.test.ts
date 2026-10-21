@@ -9,13 +9,15 @@ import { requireBuiltSdk } from "../../support/built-sdk.js"
 requireBuiltSdk()
 
 const entry = fileURLToPath(new URL("./workers/supervisor-output-worker.js", import.meta.url))
+const sdkEntry = fileURLToPath(new URL("./workers/supervisor-output-sdk-worker.js", import.meta.url))
 const formatEntry = fileURLToPath(new URL("./workers/supervisor-output-format-worker.js", import.meta.url))
+const errorEntry = fileURLToPath(new URL("./workers/supervisor-output-error-worker.js", import.meta.url))
 
-/** Start the format worker under a prefix supervisor and return once its crash has been handled */
-async function runFormatWorker(format: "pretty" | "json") {
+/** Start a worker under a prefix supervisor and return once its crash has been handled */
+async function runFormatWorker(format: "pretty" | "json", workerEntry = formatEntry) {
     const logs = captureLogs()
     const created = supervisor.create({
-        entry: formatEntry,
+        entry: workerEntry,
         totalShards: 1,
         assignments: [{ id: "only", shardIds: [0] }],
         restart: false,
@@ -109,7 +111,7 @@ test("restarts are recorded with their delay and attempt", async () => {
     })
 })
 
-test("pretty prefix output passes the parent format to children and keeps a crash trace written just before exit", async () => {
+test("pretty prefix output labels readable child records and keeps a crash trace written just before exit", async () => {
     vi.stubEnv("FLUXERLY_LOG_FORMAT", undefined)
     vi.stubEnv("FLUXERLY_LOG_COLOR", undefined)
     const streams = capture()
@@ -117,7 +119,13 @@ test("pretty prefix output passes the parent format to children and keeps a cras
         await runFormatWorker("pretty")
         // Checked as soon as start settles: exit handling waited for both pipes to drain
         const out = streams.stdout.join("")
-        expect(out).toContain("[shard 0] format=pretty color=0\n")
+        // Children always log JSON without color, and the parent prints an SDK record as a readable line
+        expect(out).toContain("[shard 0] format=json color=0\n")
+        expect(out).toMatch(
+            /^\[shard 0\] \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} INFO {2}lifecycle {2}\[lifecycle\.fixture\] child record shards=1$/m,
+        )
+        expect(out).toContain('[shard 0] {"application":"own json"}\n')
+        expect(out).not.toContain('"code":"lifecycle.fixture"')
         const long = streams.stdout.find((line) => line.startsWith("[shard 0] long:"))!
         expect(long.length).toBeLessThan(maximumForwardedLineLength + 100)
         expect(long).toContain("[line truncated by the supervisor]")
@@ -128,6 +136,22 @@ test("pretty prefix output passes the parent format to children and keeps a cras
     } finally {
         streams.restore()
         vi.unstubAllEnvs()
+    }
+})
+
+test("pretty prefix output hides stack frames of expected SDK errors but keeps those of application errors", async () => {
+    const streams = capture()
+    try {
+        await runFormatWorker("pretty", errorEntry)
+        const out = streams.stdout.join("")
+        // The SDK error and its SDK cause print as a single process would print them, without frames
+        expect(out).toContain("[shard 0]     GuildOperationError [guild.rejected]: Guild rejected")
+        expect(out).toContain("[shard 0]     Caused by: RestError [rest.rejected]: Rejected")
+        expect(out).toContain("[shard 0]     TypeError: bad input")
+        expect(out.match(/at handler \(\/app\/fixture\.js/g)).toHaveLength(1)
+        expect(out).toContain("[shard 0]       at handler (/app/fixture.js:10:5)")
+    } finally {
+        streams.restore()
     }
 })
 
@@ -164,6 +188,64 @@ test("json prefix output stays valid JSON Lines with the child ID in each record
         expect(err.at(-1)).toMatchObject({ message: "last stack line", fields: { stream: "stderr" } })
     } finally {
         streams.restore()
+        vi.unstubAllEnvs()
+    }
+})
+
+test("a child SDK record reaches a JSON stderr intact while stdout is a terminal and shows readable text there", async () => {
+    vi.stubEnv("FLUXERLY_LOG_FORMAT", undefined)
+    vi.stubEnv("FLUXERLY_LOG_COLOR", undefined)
+    // The parent chooses pretty for a terminal stdout and json for a redirected stderr, as in node bot.js 2> errors.log
+    const stdoutTerminal = Object.getOwnPropertyDescriptor(process.stdout, "isTTY")
+    const stderrTerminal = Object.getOwnPropertyDescriptor(process.stderr, "isTTY")
+    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true })
+    Object.defineProperty(process.stderr, "isTTY", { value: false, configurable: true })
+    const streams = capture()
+    try {
+        const logs = captureLogs()
+        const created = supervisor.create({
+            entry: sdkEntry,
+            totalShards: 1,
+            assignments: [{ id: "only", shardIds: [0] }],
+            restart: false,
+            execArgv: [],
+            childEnvironment: { FLUXERLY_DEBUG: "unknown-category" },
+            logging: logs.logging,
+        })
+        const started = await created.start()
+        expect(started.isErr() && started.error).toMatchObject({ _tag: "SupervisorError", reason: "closed" })
+        await created.shutdown()
+        const records = streams.stderr
+            .join("")
+            .split("\n")
+            .filter((line) => line !== "")
+            .map((line) => JSON.parse(line) as Record<string, unknown>)
+        expect(records).toContainEqual(
+            expect.objectContaining({
+                level: "warn",
+                category: "sdk",
+                code: "sdk.unknownDebugCategory",
+                fields: expect.objectContaining({ child: "only" }),
+            }),
+        )
+        expect(records.some((record) => record.code === "supervisor.childOutput")).toBe(false)
+        // Standard output is a terminal, so the child's Info record is a labeled readable line and not JSON
+        const lines = streams.stdout
+            .join("")
+            .split("\n")
+            .filter((line) => line.startsWith("[shard 0] "))
+        expect(lines.length).toBeGreaterThan(0)
+        // The terminal stream keeps its color, so the level is wrapped in escape codes
+        expect(lines.some((line) => /INFO.*lifecycle .*\[lifecycle\.starting\]/.test(line))).toBe(true)
+        expect(lines.some((line) => line.startsWith("[shard 0] {"))).toBe(false)
+    } finally {
+        streams.restore()
+        for (const [stream, descriptor] of [
+            [process.stdout, stdoutTerminal],
+            [process.stderr, stderrTerminal],
+        ] as const)
+            if (descriptor) Object.defineProperty(stream, "isTTY", descriptor)
+            else delete (stream as { isTTY?: boolean }).isTTY
         vi.unstubAllEnvs()
     }
 })

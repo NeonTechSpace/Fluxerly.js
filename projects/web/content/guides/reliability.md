@@ -149,7 +149,7 @@ The SDK applies these rules automatically. They need no configuration, but expla
 <details>
 <summary>Automatic request retries</summary>
 
-A read that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice. A connection lost while the response body arrives counts as a network error.
+A GET request that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice. A connection lost while the response body arrives counts as a network error.
 A write is sent again only after Fluxer confirms a rate limit with HTTP 429, so a write with an unknown outcome is never repeated automatically.
 Each retry is counted in `diagnostics().counters.restRetries` and logged at Debug
 

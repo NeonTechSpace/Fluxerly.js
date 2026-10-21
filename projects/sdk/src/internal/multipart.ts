@@ -9,6 +9,7 @@ import {
     AttachmentTransferCleanupError,
     AttachmentTransferSource,
     AttachmentTransferVerificationCleanupError,
+    completeCleanup as runCleanup,
     type AttachmentTransferBody,
 } from "./transfer-source.js"
 
@@ -16,18 +17,8 @@ const chunkBytes = 65_536
 
 type Segment = { readonly bytes: Uint8Array } | { readonly file: FilePart; readonly source: AttachmentTransferSource }
 
-async function completeCleanup(actions: readonly (() => void | PromiseLike<void>)[]) {
-    const failures: unknown[] = []
-    for (const action of actions) {
-        try {
-            await action()
-        } catch (error) {
-            failures.push(error)
-        }
-    }
-    if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) throw new AggregateError(failures, "Attachment multipart cleanup failed")
-}
+const completeCleanup = (actions: readonly (() => void | PromiseLike<void>)[]) =>
+    runCleanup(actions, "Attachment multipart cleanup failed")
 
 /** Stream a message multipart body on demand without concatenating file bytes or adding an SDK file copy */
 export function multipart(body: EncodedBody, sources: readonly AttachmentTransferSource[]) {

@@ -26,21 +26,18 @@ import { expectErr } from "../support/settle.js"
 
 afterEach(() => vi.unstubAllGlobals())
 
-test.each([
-    ["default", builders],
-    ["native", nativeBuilders],
-])("%s EmbedBuilder.field rejects the removed boolean argument and a non-boolean inline", (_mode, api) => {
+test("EmbedBuilder.field rejects the removed boolean argument and a non-boolean inline", () => {
     for (const options of [true, "yes", null, { inline: "yes" }]) {
         let thrown: unknown
         try {
-            api.embed().field("State", "queued", options as never)
+            builders.embed().field("State", "queued", options as never)
         } catch (error) {
             thrown = error
         }
         expect(thrown).toMatchObject({ _tag: "ConfigurationError", field: "embedField" })
         expect((thrown as ConfigurationError).hint).toContain("{ inline: true }")
     }
-    expect(api.embed().field("State", "queued", { inline: false }).build().fields).toEqual([
+    expect(builders.embed().field("State", "queued", { inline: false }).build().fields).toEqual([
         { name: "State", value: "queued", inline: false },
     ])
 })
@@ -85,13 +82,14 @@ test("builders produce independent default plain-input snapshots without taking 
     expect(Object.isFrozen(first)).toBe(false)
 })
 
-test("embed builder snapshots raw inputs and native entry exports the same optional builder surface", () => {
+test("the native entry exports the same builders, which snapshot raw embed inputs", () => {
+    expect(nativeBuilders).toBe(builders)
     const raw = {
         title: "Raw",
         author: { name: "Author" },
         fields: [{ name: "Field", value: "value" }],
     } satisfies EmbedInput
-    const payload = nativeBuilders.message().embed(raw).build()
+    const payload = builders.message().embed(raw).build()
     raw.author!.name = "Changed"
     raw.fields[0]!.value = "changed"
 
@@ -100,10 +98,8 @@ test("embed builder snapshots raw inputs and native entry exports the same optio
     })
 })
 
-test.each([
-    ["default", () => builders.embed()],
-    ["native", () => nativeBuilders.embed()],
-] as const)("%s embed color converts number, hex and RGB input and rejects the rest with HelperError", (_, embed) => {
+test("embed color converts number, hex and RGB input and rejects the rest with HelperError", () => {
+    const embed = () => builders.embed()
     expect(embed().color(0xff8800).build()).toEqual({ color: 0xff8800 })
     expect(embed().color("#ff8800").build()).toEqual({ color: 0xff8800 })
     expect(embed().color([255, 136, 0]).build()).toEqual({ color: 0xff8800 })
@@ -122,10 +118,8 @@ test.each([
     expect(failure).toBeInstanceOf(HelperError)
 })
 
-test.each([
-    ["default", () => builders.embed()],
-    ["native", () => nativeBuilders.embed()],
-] as const)("%s embed timestamp converts Date and epoch input, keeps strings and rejects invalid times", (_, embed) => {
+test("embed timestamp converts Date and epoch input, keeps strings and rejects invalid times", () => {
+    const embed = () => builders.embed()
     const instant = "2023-11-14T22:13:20.000Z"
     expect(embed().timestamp(new Date(instant)).build()).toEqual({ timestamp: instant })
     expect(embed().timestamp(Date.parse(instant)).build()).toEqual({ timestamp: instant })
@@ -329,7 +323,7 @@ test("builders snapshot supported structural getter fields across both public en
     expect(message.attachments![0]!.data).toBe(bytes)
 
     expect(
-        nativeBuilders
+        builders
             .embed()
             .author(new GetterAuthor("Author"))
             .footer(new GetterFooter())

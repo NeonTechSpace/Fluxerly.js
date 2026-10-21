@@ -270,6 +270,14 @@ test.each(modes)(
     },
 )
 
+test("default observeState rejects a listener that is not a function", async () => {
+    const logs = sinkLogs()
+    const client = defaultApi(undefined, { sink: logs.sink })
+    expect(() => client.observeState("listener" as never)).toThrow(ConfigurationError)
+    await client.shutdown()
+    expect(logs.records).toEqual([])
+})
+
 test("default observer errors are reported with the thrown error", async () => {
     const logs = sinkLogs()
     const client = defaultApi(undefined, { sink: logs.sink })

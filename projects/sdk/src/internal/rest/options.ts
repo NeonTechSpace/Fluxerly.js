@@ -101,18 +101,12 @@ export function restConfiguration(value: unknown): RestConfiguration | Configura
     return Object.freeze(result as unknown as RestConfiguration)
 }
 
-/** Validated network implementations and the User-Agent sent with HTTP requests and gateway handshakes */
-export interface TransportConfiguration {
-    readonly transport: Transport
-    readonly userAgent: string
-}
-
 /**
  * Validate the transport client option, then wrap the implementations. Only reading the caller settings is marked as
  * application input, so the caller must run this under a defect boundary
  */
-export function transportConfiguration(value: unknown): TransportConfiguration | ConfigurationError {
-    if (value === undefined) return { transport: defaultTransport, userAgent: defaultUserAgent() }
+export function transportConfiguration(value: unknown): Transport | ConfigurationError {
+    if (value === undefined) return defaultTransport
     if (!record(value)) return configurationError("transport", "The option transport must be an object")
     const read = readCaller(() => {
         if (Object.keys(value).some((key) => !["fetch", "webSocket", "userAgent"].includes(key))) return undefined
@@ -138,8 +132,5 @@ export function transportConfiguration(value: unknown): TransportConfiguration |
         webSocket === undefined
             ? platformSocketFactory
             : (webSocket as (url: string, options: WebSocketOptions) => WebSocketLike & GatewaySocket)
-    return {
-        transport: Object.freeze({ http: withUserAgent(http, agent), sockets: withSocketUserAgent(sockets, agent) }),
-        userAgent: agent(),
-    }
+    return Object.freeze({ http: withUserAgent(http, agent), sockets: withSocketUserAgent(sockets, agent) })
 }

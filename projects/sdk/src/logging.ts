@@ -144,7 +144,7 @@ export interface LoggingOptions {
      * Without this setting, the FLUXERLY_LOG_FORMAT environment variable, pretty or json, read when the client is created,
      * chooses the format for both streams, and FLUXERLY_LOG_COLOR forces color on with 1, true, yes or on, and off with
      * 0, false, no or off, for pretty output. Another nonempty value of either variable is ignored with one
-     * sdk.unknownEnvironmentValue Warn at startup. NO_COLOR still disables color. A supervisor sets both variables for children whose output it forwards.
+     * sdk.unknownEnvironmentValue Warn at startup. NO_COLOR still disables color. A supervisor makes its default-API children log JSON and prints their records in the format of its own streams.
      * Native clients without sink or format send records to the Effect logger instead, and the environment variables do not change that
      */
     readonly format?: "pretty" | "json"

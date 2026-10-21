@@ -1,9 +1,8 @@
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
 import * as Effect from "effect/Effect"
-import * as Exit from "effect/Exit"
 import * as Scope from "effect/Scope"
-import { ok, ResultAsync } from "neverthrow"
-import { causeReasons, suspendInput } from "#sdk/internal/defects"
+import { ResultAsync } from "neverthrow"
+import { suspendInput } from "#sdk/internal/defects"
 import {
     createPkce,
     type OAuthPkce,
@@ -18,8 +17,8 @@ import {
     type DefaultOAuthOperationOptions,
 } from "#sdk/oauth"
 import { makeOAuthOwner } from "#sdk/internal/oauth"
-import { CancelledError, ConfigurationError, SdkDefect } from "#sdk/errors"
-import { executeOperation, fromExit } from "#sdk/internal/binding/execute"
+import { CancelledError, ConfigurationError } from "#sdk/errors"
+import { executeOperation, fromExit, runShutdown } from "#sdk/internal/binding/execute"
 
 function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
     if (Array.isArray(options)) return options
@@ -222,15 +221,7 @@ export const oauth: Readonly<{
         const created = fromExit(Effect.runSyncExit(makeOAuthOwner(config, scope)), "oauth.create")
         if (created.isErr()) throw created.error
         const owner = created.value
-        const shutdown = () =>
-            new ResultAsync<void, never>(
-                Effect.runPromiseExit(owner.shutdown()).then((exit) => {
-                    const result = fromExit(exit, "shutdown")
-                    if (result.isErr())
-                        throw new SdkDefect("shutdown", Exit.isFailure(exit) ? causeReasons(exit.cause) : [])
-                    return ok(undefined)
-                }),
-            )
+        const shutdown = () => runShutdown(owner.shutdown())
         return Object.freeze({
             authorizationUrl: (input: OAuthAuthorizationInput, options?: DefaultOAuthOperationOptions) =>
                 executeOperation(

@@ -28,8 +28,8 @@ import type {
 import type { CommandContextHelpOptions, CommandHelpOptions } from "#sdk/command-help"
 import { commandHelp, contextHelpOptions } from "#sdk/internal/command-help"
 import { parseQuotedPrefixCommand } from "#sdk/commands"
-import { ApplicationError, ConfigurationError, SdkDefect } from "#sdk/errors"
-import { readCaller, readInput, suspendMarked, thrownReason } from "#sdk/internal/defects"
+import { ConfigurationError } from "#sdk/errors"
+import { readCaller, readInput, suspendMarked } from "#sdk/internal/defects"
 import {
     configurationEffect,
     cooldownRequest,
@@ -40,12 +40,16 @@ import {
     type LocalMemoryCooldownStore,
     PrefixCommandRegistry,
     rejectionReply,
+    routerAdapterKeys,
     routerSubscriptionOptions,
     sameCommandPath,
     snapshotCommandDefinition,
     snapshotCommandCooldown,
     validateCommandShape,
     checkBotCommandKeys,
+    localSetup,
+    registerCallback,
+    snapshotFunctions,
 } from "#sdk/internal/commands"
 import { convertCommandArguments, parseCommandArgument } from "#sdk/internal/command-arguments"
 import { suggestName } from "#sdk/internal/suggest"
@@ -636,7 +640,7 @@ export const nativeCommands: NativeCommands = Object.freeze({
         localSetup(() =>
             freezeRouter(
                 new NativePrefixCommandRouterOwner<R, M>(
-                    new PrefixCommandRegistry<StoredNativeCommand<M>, M>(options, ["onUnmatched", "onReject", "use"]),
+                    new PrefixCommandRegistry<StoredNativeCommand<M>, M>(options, routerAdapterKeys),
                     readCaller(() => snapshotNativeSettings(options)),
                 ),
             ),
@@ -965,23 +969,11 @@ function snapshotNativeSettings<E, R, M extends MessageCore>(
     return Object.freeze({
         ...(onUnmatched === undefined ? {} : { onUnmatched: onUnmatched as NativeRouterSettings<M>["onUnmatched"] }),
         ...(onReject === undefined ? {} : { onReject: onReject as NativeRouterSettings<M>["onReject"] }),
-        use: nativeFunctions<NativePrefixCommandMiddleware<unknown, unknown, M>>(
+        use: snapshotFunctions<NativePrefixCommandMiddleware<unknown, unknown, M>>(
             use,
             'The option "use" must be an array of middleware functions',
         ),
     }) as NativeRouterSettings<M>
-}
-
-function nativeFunctions<F>(value: unknown, message: string): readonly F[] {
-    if (value === undefined) return Object.freeze([])
-    if (!Array.isArray(value)) throw new ConfigurationError("commands", message)
-    const copied: F[] = []
-    for (let index = 0; index < value.length; index += 1) {
-        if (!Object.hasOwn(value, index) || typeof value[index] !== "function")
-            throw new ConfigurationError("commands", message)
-        copied.push(value[index] as F)
-    }
-    return Object.freeze(copied)
 }
 
 /**
@@ -1105,7 +1097,7 @@ function snapshotNativeCommand<E, R, S extends CommandArgumentSchema, M extends 
             ? Object.freeze([])
             : typeof guard === "function"
               ? Object.freeze([guard])
-              : nativeFunctions<NativePrefixCommandGuard<E, R, M>>(
+              : snapshotFunctions<NativePrefixCommandGuard<E, R, M>>(
                     guard,
                     'The option "guard" must be a function or an array of functions',
                 )
@@ -1235,32 +1227,6 @@ function nativeCallback<A, E, R>(
 }
 
 /**
- * Run local command setup, keeping ConfigurationError for misuse. A throw from a marked read of caller definitions or
- * options is an application fault, and any other throw, such as from building the registry, is an SDK fault
- */
-function localSetup<A>(create: () => A): A {
-    try {
-        return create()
-    } catch (error) {
-        if (error instanceof ConfigurationError) throw error
-        throw new SdkDefect("commands", [thrownReason(error)])
-    }
-}
-
-/**
- * Run a runBot register callback. Misuse and SDK defects from the registrations it makes keep their errors, and any
- * other throw is the application's own failure, carried by ApplicationError naming `runBot commands`
- */
-function registerCallback<A>(register: () => A): A {
-    try {
-        return register()
-    } catch (error) {
-        if (error instanceof ConfigurationError || error instanceof SdkDefect) throw error
-        throw new ApplicationError("runBot commands", error)
-    }
-}
-
-/**
  * Create the native router a runBot commands option describes, registering its keyed commands or its register callback.
  * Rejections are answered with `onReject: "reply"` unless the option selects other feedback.
  * Bot-authored messages are skipped as the runBot ignoreBots setting says, unless the option sets its own ignoreBots.
@@ -1272,7 +1238,7 @@ export function nativeBotRouter<M extends MessageCore>(
 ): NativePrefixCommandRouter<unknown, M> {
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("commands", "The commands option must be an object")
-    checkBotCommandKeys(options, ["onUnmatched", "onReject", "use"])
+    checkBotCommandKeys(options, routerAdapterKeys)
     // The onError hook and delivery settings belong to the router's attachment, which runBot makes with them
     const {
         commands: definitions,

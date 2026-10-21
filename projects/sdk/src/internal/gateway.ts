@@ -3,20 +3,8 @@
  * [session](/projects/sdk/src/internal/gateway/session.ts), [frames](/projects/sdk/src/internal/gateway/frames.ts),
  * [dispatch table](/projects/sdk/src/internal/gateway/dispatch-table.ts) and
  * [commands](/projects/sdk/src/internal/gateway/commands.ts).
- * Invariant: Code outside the gateway reaches it only through this entry. Implements
- * [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
+ * Invariant: Code outside the gateway runs sessions only through this entry, while the command types, gateway options
+ * and Identify event filter in gateway/commands, gateway/options and gateway/event-dispatches are imported directly.
+ * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
-import type { Message } from "#sdk/messages"
-import { decodeGatewayMessage } from "./message.js"
-import { runGatewaySession, type GatewaySessionOptions } from "./gateway/session.js"
-
-export { AttemptFailure, classifyClose, runGatewaySession, type Session } from "./gateway/session.js"
-
-/**
- * Full-message gateway entry for independent internal protocol checks.
- * The supervisor test worker imports it from the built SDK, which lint cannot see before the build
- *
- * @public
- */
-export const runGateway = (options: Omit<GatewaySessionOptions<Message>, "messageDecoder">) =>
-    runGatewaySession({ ...options, messageDecoder: (value, type) => decodeGatewayMessage(value, undefined, type) })
+export { AttemptFailure, runGatewaySession, type Session } from "./gateway/session.js"

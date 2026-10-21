@@ -145,7 +145,6 @@ export function bindDefault<M extends MessageCore>(context: DefaultContext<M>): 
                         id as PaginationOperation,
                         args[entry.optionsAt] as DefaultMessageOperationOptions | undefined,
                     )
-            case "stream":
             case "custom":
                 return entry.default(context)
         }

@@ -12,7 +12,6 @@ import type { PermissionName } from "#sdk/helpers"
 import type { MessageCore } from "#sdk/messages"
 import { UserOperationError } from "#sdk/users"
 import { permissionLabel } from "./permission-labels.js"
-import { isUnconfirmedPermissions } from "./permissions.js"
 
 /** Deny reasons the built-in guards return, written for a reply to the invoking user */
 export const guardDenials = Object.freeze({
@@ -73,10 +72,3 @@ export const inGuild = (message: MessageCore): message is MessageCore & { readon
  */
 export const notPrivateChannel = (error: unknown): boolean =>
     error instanceof UserOperationError && error.reason === "response"
-
-/**
- * Whether a failed permission read proved that the member's permissions in the channel cannot be confirmed.
- * Fluxer sent the channel without its permission overwrite list. Other failures, such as network errors, timeouts,
- * rejections or snapshots that do not fit together, fail the command
- */
-export const unconfirmedPermissions = isUnconfirmedPermissions

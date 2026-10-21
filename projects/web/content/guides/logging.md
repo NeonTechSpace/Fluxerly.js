@@ -23,7 +23,7 @@ On a terminal the client prints one readable line per record: Time, level, categ
 2026-09-27 03:14:23.742 INFO  lifecycle  [lifecycle.shutdownComplete] Shutdown complete in 3 ms durationMs=3
 ```
 
-When a stream is not a terminal, such as under a process manager or in a container, its records are printed as one JSON object per line instead. Standard output and standard error decide separately. Set `format` to choose explicitly, or set the `FLUXERLY_LOG_FORMAT` environment variable to `pretty` or `json` for a client without `format`. A [supervisor](/docs/{{version}}/glossary/#supervisor) passes its own choice to the children whose output it forwards
+When a stream is not a terminal, such as under a process manager or in a container, its records are printed as one JSON object per line instead. Standard output and standard error decide separately. Set `format` to choose explicitly, or set the `FLUXERLY_LOG_FORMAT` environment variable to `pretty` or `json` for a client without `format`. A [supervisor](/docs/{{version}}/glossary/#supervisor) prints forwarded child records in the format of the stream they go to
 
 Readable output is colored on a terminal. Set `FLUXERLY_LOG_COLOR` to `1`, `true`, `yes` or `on` to force color, or to `0`, `false`, `no` or `off` to turn it off. The `NO_COLOR` variable also turns color off
 

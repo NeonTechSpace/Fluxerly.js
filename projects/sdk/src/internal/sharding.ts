@@ -9,7 +9,6 @@
  */
 import { ConfigurationError } from "#sdk/errors"
 import type { IdentifyCoordinator, SessionSnapshot, SessionStore } from "#sdk/sharding"
-import { settingError } from "./client/configuration-fields.js"
 import { record } from "./decode/primitives.js"
 import { maxGuildsPerShard, sessionRetentionMs } from "./protocol/gateway.js"
 import { unsupportedKeyHint } from "./suggest.js"
@@ -61,7 +60,7 @@ function hook<K extends string>(
     if (value === undefined) return undefined
     // Methods may come from a class prototype, and other members such as a store's own state are left alone
     if (!record(value) || methods.some((method) => typeof value[method] !== "function"))
-        return settingError(
+        return new ConfigurationError(
             field,
             field === "identify"
                 ? 'The option "sharding.identify" must be an object with a permit function'
@@ -228,6 +227,14 @@ function immutablePlan(totalShards: number, shardIds: readonly number[]): ShardP
 /** Allowed clock difference between the process that saved a snapshot and the one loading it */
 const snapshotClockSkewMs = 5_000
 
+/**
+ * The copy of a loaded snapshot that the session store holds while its session runs. Its empty session ID makes a
+ * later load start a new session unless shutdown saved a newer snapshot, and it no longer holds the session ID
+ */
+export function usedSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
+    return Object.freeze({ ...snapshot, sessionId: "" })
+}
+
 /** Check a loaded snapshot: The frozen copy to resume, or why it cannot be resumed */
 export function checkSnapshot(
     value: unknown,
@@ -235,6 +242,7 @@ export function checkSnapshot(
     totalShards: number,
     nowMs: number,
 ): { readonly snapshot: SessionSnapshot } | { readonly problem: string } {
+    if (record(value) && value.sessionId === "") return { problem: "an earlier start already resumed it" }
     if (
         !record(value) ||
         typeof value.sessionId !== "string" ||

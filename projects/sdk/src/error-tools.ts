@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause"
-import { FluxerlyError, type OperationOutcome } from "./errors.js"
+import { FluxerlyError, type ConnectionError, type OperationOutcome } from "./errors.js"
+import { retryableConnection } from "#sdk/internal/retryable-connection"
 import { HelperError } from "./helpers.js"
 import type { ApiErrorCode, ApiErrorDetail, ApiProviderCode } from "./api-errors.js"
 import { errorInfo, errorText } from "#sdk/internal/logging"
@@ -45,15 +46,10 @@ export interface DescribeErrorOptions {
  */
 export function describeError(error: unknown, options?: DescribeErrorOptions): string {
     const stack = options?.stack !== false
-    let cause = false
-    try {
-        cause = Cause.isCause(error)
-    } catch {
-        // allow-silent: a proxy that rejects inspection is described as a plain value below
-    }
+    const cause = causeOf(error)
     if (!cause) return describeOne(error, "", stack)
     // Each reason of an Effect Cause is described in order, so a cleanup defect is not lost behind the first failure
-    const reasons = (error as Cause.Cause<unknown>).reasons.map((reason) =>
+    const reasons = cause.reasons.map((reason) =>
         reason._tag === "Interrupt"
             ? "Interrupted"
             : reason._tag === "Fail"
@@ -65,13 +61,7 @@ export function describeError(error: unknown, options?: DescribeErrorOptions): s
 
 /** Describe one failure or defect value with masked text, indented for a Cause reason */
 function describeOne(error: unknown, indent: string, stack: boolean): string {
-    let sdk = false
-    try {
-        sdk = error instanceof FluxerlyError
-    } catch {
-        // allow-silent: a proxy that rejects prototype inspection is described as an application value below
-    }
-    return errorText(errorInfo(error, sdk ? "sdk" : "application"), indent, stack)
+    return errorText(errorInfo(error, sdkErrorOf(error) ? "sdk" : "application"), indent, stack)
 }
 
 const retryableReasons = new Set(["busy", "network", "timeout", "rateLimit"])
@@ -104,7 +94,7 @@ function isRetryableError(error: unknown): boolean {
         case "ConnectionTimeoutError":
             return true
         case "ConnectionError":
-            return (error as unknown as { reason: string }).reason === "network"
+            return retryableConnection(error as ConnectionError)
         case "ShardConnectionError":
             return isRetryableError(error.cause)
     }

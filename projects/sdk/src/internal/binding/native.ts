@@ -62,7 +62,6 @@ export function bindNative<M extends MessageCore>(owner: ClientOwner<M>): Native
                 return (...args: readonly unknown[]) => localValue(entry.run(owner, ...args), id)
             case "page":
                 return (...args: readonly unknown[]) => paginationStream(entry.run(owner, ...args))
-            case "stream":
             case "custom":
                 return entry.native(owner)
         }

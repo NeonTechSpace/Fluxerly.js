@@ -25,17 +25,12 @@ import type { ResourceConfiguration } from "./guild-cache.js"
 import { parseSharding, type ShardPlan } from "./sharding.js"
 import type { IdentifyCoordinator, SessionStore } from "#sdk/sharding"
 import { defaultRecovery, type RecoveryConfiguration } from "./client/backoff.js"
-import { settingError } from "./client/configuration-fields.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { gatewayConfiguration, type GatewayConfiguration } from "./gateway/options.js"
 import type { FilterCacheKind } from "./gateway/event-dispatches.js"
 import { instanceConfiguration, type InstanceConfiguration } from "./instance.js"
-import {
-    restConfiguration,
-    transportConfiguration,
-    type RestConfiguration,
-    type TransportConfiguration,
-} from "./rest/options.js"
+import { restConfiguration, transportConfiguration, type RestConfiguration } from "./rest/options.js"
+import type { Transport } from "./transport/index.js"
 
 export interface CacheConfiguration<M extends MessageCore = Message> {
     readonly maxEntries: number
@@ -202,8 +197,8 @@ export interface Configuration<M extends MessageCore = Message> {
     readonly onMalformedDispatch: "skip" | "terminate"
     /** REST scheduling limits and default deadline */
     readonly rest: RestConfiguration
-    /** Network implementations and User-Agent */
-    readonly transport: TransportConfiguration
+    /** Network implementations with the User-Agent applied */
+    readonly transport: Transport
 }
 
 /** Top-level client option keys, the same in both entry points */
@@ -224,7 +219,7 @@ export const clientOptionKeys = [
 ] as const
 
 /** Client option keys that supervisor.child.run accepts in clientOptions. The supervisor assigns token and the shards */
-const childClientOptionKeys: readonly string[] = clientOptionKeys.filter((key) => key !== "token")
+export const childClientOptionKeys: readonly string[] = clientOptionKeys.filter((key) => key !== "token")
 
 /**
  * Check the keys of supervisor.child.run clientOptions before they are copied, so a misspelled or unsupported key is
@@ -488,15 +483,19 @@ const timerMaximumMs = 2_147_483_647
 function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfiguration | ConfigurationError {
     if (value === undefined) return defaultRecovery
     const keys = ["minDelayMs", "maxDelayMs", "attemptTimeoutMs", "healthyResetMs", ...(native ? ["schedule"] : [])]
-    if (!record(value)) return settingError("recovery", "Recovery settings must be an object")
+    if (!record(value)) return new ConfigurationError("recovery", "Recovery settings must be an object")
     const unsupported = Object.keys(value).find((key) => !keys.includes(key))
     if (unsupported !== undefined)
-        return settingError("recovery", `Unsupported connection.recovery setting ${JSON.stringify(unsupported)}`, {
-            hint:
-                unsupported === "schedule"
-                    ? "Recovery schedules are available in the Effect entry point"
-                    : unsupportedKeyHint(unsupported, keys, "settings"),
-        })
+        return new ConfigurationError(
+            "recovery",
+            `Unsupported connection.recovery setting ${JSON.stringify(unsupported)}`,
+            {
+                hint:
+                    unsupported === "schedule"
+                        ? "Recovery schedules are available in the Effect entry point"
+                        : unsupportedKeyHint(unsupported, keys, "settings"),
+            },
+        )
     const integer = (
         field: "minDelayMs" | "maxDelayMs" | "attemptTimeoutMs" | "healthyResetMs",
         minimum: number,
@@ -506,7 +505,7 @@ function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfigu
         if (input === undefined) return fallback
         return typeof input === "number" && Number.isSafeInteger(input) && input >= minimum && input <= timerMaximumMs
             ? input
-            : settingError(
+            : new ConfigurationError(
                   field,
                   `The option "connection.recovery.${field}" must be an integer from ${minimum.toLocaleString("en-US")} through 2,147,483,647 milliseconds`,
               )
@@ -522,11 +521,18 @@ function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfigu
     const schedule = value.schedule
     if (schedule !== undefined) {
         if (!Schedule.isSchedule(schedule))
-            return settingError("schedule", 'The option "connection.recovery.schedule" must be an Effect Schedule')
+            return new ConfigurationError(
+                "schedule",
+                'The option "connection.recovery.schedule" must be an Effect Schedule',
+            )
         if (value.minDelayMs !== undefined || value.maxDelayMs !== undefined)
-            return settingError("schedule", "A recovery schedule replaces minDelayMs and maxDelayMs, so set only one", {
-                hint: "Remove minDelayMs and maxDelayMs, or remove schedule",
-            })
+            return new ConfigurationError(
+                "schedule",
+                "A recovery schedule replaces minDelayMs and maxDelayMs, so set only one",
+                {
+                    hint: "Remove minDelayMs and maxDelayMs, or remove schedule",
+                },
+            )
     }
     return Object.freeze({
         minDelayMs,

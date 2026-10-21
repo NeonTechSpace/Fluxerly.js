@@ -9,8 +9,8 @@ import {
     notPrivateChannel,
     ownerIds as validOwnerIds,
     permissionNames,
-    unconfirmedPermissions,
 } from "#sdk/internal/command-guards"
+import { isUnconfirmedPermissions } from "#sdk/internal/permissions"
 import { orThrow } from "./results.js"
 
 /**
@@ -143,7 +143,7 @@ export const guards: DefaultGuards = Object.freeze({
                 { guildId: message.guildId, userId: message.author.id, channelId: message.channelId },
                 { preferCache: true, signal },
             )
-            if (read.isErr() && unconfirmedPermissions(read.error)) return { deny: guardDenials.unconfirmedChannel }
+            if (read.isErr() && isUnconfirmedPermissions(read.error)) return { deny: guardDenials.unconfirmedChannel }
             const bits = orThrow(read)
             const missing = missingPermissions(bits, required)
             return missing.length === 0 || { deny: guardDenials.missing(missing) }

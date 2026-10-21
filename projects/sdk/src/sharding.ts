@@ -119,7 +119,7 @@ export interface IdentifyCoordinator {
  * @category Sharding and supervision
  */
 export interface SessionSnapshot {
-    /** Session ID from Fluxer's READY */
+    /** Session ID from Fluxer's READY, or empty in the copy that marks a loaded snapshot as used */
     readonly sessionId: string
     /** Last dispatch sequence this client received on the session, a non-negative integer */
     readonly sequence: number
@@ -141,9 +141,11 @@ export interface SessionSnapshot {
  * Persist resumable gateway sessions across restarts. Fluxer retains a disconnected session for 60,000 ms, so a
  * process that restarts within that window can Resume and receive the dispatches it missed, subject to Fluxer's replay
  * limits. Creation copies both functions, bound to their object.
- * Snapshots are saved only during shutdown, after each shard's socket has closed, never while a session is live and
- * not after a permanent connection failure, so a crash leaves no fresh snapshot. A saved session closes with private-use
- * code 4000 to preserve Resume. Without persistence, intentional final closure uses 1000, which destroys the session
+ * Resumable snapshots are saved only during shutdown, after each shard's socket has closed, never while a session is live
+ * and not after a permanent connection failure. Before resuming a loaded snapshot, the SDK replaces it with a used copy
+ * whose sessionId is empty, so a crash leaves no resumable snapshot and each snapshot is resumed at most once.
+ * A saved session closes with private-use code 4000 to preserve Resume. Without persistence, intentional final closure
+ * uses 1000, which destroys the session
  *
  * @category Sharding and supervision
  */
@@ -151,8 +153,8 @@ export interface SessionStore {
     /**
      * Return the snapshot saved for this shard, or undefined when none exists. The SDK calls this once per shard at the
      * first connection attempt after discovery, and allows 5,000 ms, within the startup deadline.
-     * A snapshot older than 60,000 ms, saved more than 5,000 ms in the future, malformed, for a different gateway
-     * endpoint or for a plan with a different totalShards is ignored and logged at Warn with code
+     * A snapshot older than 60,000 ms, saved more than 5,000 ms in the future, malformed, already marked as used, for a
+     * different gateway endpoint or for a plan with a different totalShards is ignored and logged at Warn with code
      * lifecycle.sessionSnapshotIgnored.
      * A rejection, thrown error or timeout is logged in full at Error with code lifecycle.sessionLoadFailed.
      * Either way the shard starts a new session, so load problems never fail startup.
@@ -167,10 +169,13 @@ export interface SessionStore {
      * Store a snapshot for this shard. The SDK calls this during shutdown for each shard that holds a resumable
      * session, after its socket has closed and before shutdown completes, and allows each call 5,000 ms.
      * Shutdown waits for these calls, then continues regardless of the outcome.
+     * At startup, after load returns a resumable snapshot, the SDK also calls this once with a copy whose sessionId is
+     * empty, with the same time limit as load. The shard resumes only after that call succeeds, and otherwise starts a
+     * new session.
      * A rejection, thrown error or timeout is logged in full at Error with code lifecycle.sessionSaveFailed
      *
      * @param shardId The local shard the snapshot belongs to
-     * @param snapshot The frozen resumable state
+     * @param snapshot The frozen resumable state, or at startup the used copy with an empty sessionId
      */
     save(shardId: number, snapshot: SessionSnapshot): Promise<void>
 }

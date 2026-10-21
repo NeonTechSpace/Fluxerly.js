@@ -70,7 +70,7 @@ import type { MessageCache, CacheRequest } from "../cache.js"
 import type { EncodedBody } from "../attachments.js"
 import { decodeUploadPlans, type UploadPlan } from "../uploads.js"
 import { readResponseJson } from "../response-json.js"
-import { AttachmentTransferSource } from "../transfer-source.js"
+import { AttachmentTransferSource, completeCleanup } from "../transfer-source.js"
 import type { InstanceEndpointContext } from "../instance.js"
 import { encodeReactionEmoji, encodeReactionUsersQuery, decodeReactionUsersPage } from "../reactions.js"
 import { decodePinsPage, encodePinsQuery } from "../pins.js"
@@ -103,7 +103,7 @@ import {
     type RestRequestFailure,
     type RestResponse,
 } from "#sdk/rest"
-import { completeCleanup, isReadRequest, runAttempt, type Request } from "./attempt.js"
+import { isReadRequest, runAttempt, type Request } from "./attempt.js"
 import { encodeRestRequest, readRestResponse } from "./request.js"
 import {
     inputFailure,
@@ -320,13 +320,6 @@ function unsupportedOptionFailure(options: unknown, keys: readonly string[]): Re
     return unsupported && inputFailure(unsupported.detail)
 }
 
-/** Reject options that are not an object or contain fields other than timeoutMs and signal */
-function timeoutOptionsFailure(options: unknown): RestFailure | undefined {
-    if (options !== undefined && !record(options))
-        return localInputFailure("options", "type", "the operation options must be an object")
-    return unsupportedOptionFailure(options, operationOptionKeys)
-}
-
 /** How one operation is scheduled through repeated attempts */
 interface ExchangeOptions<A> {
     readonly request: Request<A>
@@ -387,8 +380,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = attachmentRefresh(urls)
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
-            const invalid = timeoutOptionsFailure(options)
-            if (invalid) return Effect.fail(invalid)
             return this.#execute(
                 token,
                 {
@@ -562,8 +553,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             if (!identifier(channel))
                 return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
-            const invalid = timeoutOptionsFailure(options)
-            if (invalid) return Effect.fail(invalid)
             return this.#execute(
                 token,
                 {
@@ -748,8 +737,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             if (!identifier(channelId))
                 return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
-            const invalid = timeoutOptionsFailure(options)
-            if (invalid) return Effect.fail(invalid)
             return this.#execute(
                 token,
                 {
@@ -1131,7 +1118,6 @@ export class RestOwner<M extends MessageCore = Message> {
                         }),
                     )
                 until = runtime.logical.now() + response.retry
-                if (response.global) runtime.admission.pauseGlobal(until)
                 if (until >= deadline) {
                     // No wait happens: The request fails now, so this is not counted as a rate-limit wait
                     runtime.logging?.log(
@@ -1364,8 +1350,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
-            if (options !== undefined && !record(options))
-                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             const audit = input.audited ? auditSettings(options) : undefined
             if (audit instanceof InputValidationFailure) return Effect.fail(inputFailure(audit.detail))
             const auditReason = input.auditReason ?? audit?.auditReason
@@ -1418,8 +1402,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
-            if (options !== undefined && !record(options))
-                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             const audit = input.audited ? auditSettings(options) : undefined
             if (audit instanceof InputValidationFailure) return Effect.fail(inputFailure(audit.detail))
             const acceptedOptions = input.audited ? [...operationOptionKeys, "auditReason"] : operationOptionKeys
@@ -1464,8 +1446,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
-            const invalid = timeoutOptionsFailure(options)
-            if (invalid) return Effect.fail(invalid)
             return this.#execute(
                 token,
                 {
@@ -1495,8 +1475,6 @@ export class RestOwner<M extends MessageCore = Message> {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
-            const invalid = timeoutOptionsFailure(options)
-            if (invalid) return Effect.fail(invalid)
             return this.#execute(
                 token,
                 {
@@ -1526,8 +1504,6 @@ export class RestOwner<M extends MessageCore = Message> {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const input = build()
             if (input instanceof InputValidationFailure) return Effect.fail(inputFailure(input.detail))
-            if (options !== undefined && !record(options))
-                return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             const acceptedOptions =
                 input.method !== "GET" && !input.tokenAuth
                     ? [...operationOptionKeys, "auditReason"]

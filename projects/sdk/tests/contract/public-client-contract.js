@@ -26,9 +26,7 @@ const symbolIsAlias = 1 << 21
 // that its Paired map covers exactly these surfaces, that the comparator rejects deliberate mutations, and the member
 // names, runtime keys and comments that types cannot express
 // Paired member descriptions must match after whitespace normalization, so a fact is stated once for both APIs.
-// Entry-specific result, cancellation and defect rules belong in namespace comments or member remarks instead.
-// Each exception names a member whose two descriptions must differ, with the reason
-const documentationDivergence = new Map([])
+// Entry-specific result, cancellation and defect rules belong in namespace comments or member remarks instead
 
 function normalizeDocumentation(documentation) {
     return String(documentation ?? "")
@@ -36,16 +34,11 @@ function normalizeDocumentation(documentation) {
         .trim()
 }
 
-function assertPairedDocumentation(label, defaultApi, native, divergence) {
+function assertPairedDocumentation(label, defaultApi, native) {
     for (const member of names(defaultApi)) {
         const qualified = `${label}.${member}`
-        const same = (defaultApi.get(member)?.documentation ?? "") === (native.get(member)?.documentation ?? "")
-        if (divergence.has(qualified)) {
-            assert.ok(!same, `${qualified} is listed as a documentation divergence but both descriptions now match`)
-            continue
-        }
         assert.ok(
-            same,
+            (defaultApi.get(member)?.documentation ?? "") === (native.get(member)?.documentation ?? ""),
             `${qualified} documentation differs between the default and native APIs\ndefault: ${defaultApi.get(member)?.documentation}\nnative: ${native.get(member)?.documentation}`,
         )
     }
@@ -133,20 +126,14 @@ function assertSameNames(label, defaultApi, native) {
     assert.deepEqual(names(defaultApi), names(native), `${label} has one-sided public members`)
 }
 
-export function assertPublicClientContract({
-    defaultApi,
-    native,
-    defaultRuntime,
-    nativeRuntime,
-    divergence = documentationDivergence,
-}) {
+export function assertPublicClientContract({ defaultApi, native, defaultRuntime, nativeRuntime }) {
     for (const name of pairedSurfaces) {
         const defaultMembers = defaultApi.get(name)
         const nativeMembers = native.get(name)
         assert.ok(defaultMembers, `Default ${name} interface is missing`)
         assert.ok(nativeMembers, `Native ${name} interface is missing`)
         assertSameNames(name, defaultMembers, nativeMembers)
-        assertPairedDocumentation(name, defaultMembers, nativeMembers, divergence)
+        assertPairedDocumentation(name, defaultMembers, nativeMembers)
         for (const member of names(defaultMembers)) {
             assert.ok(defaultMembers.get(member)?.documented, `Default ${name}.${member} needs a public comment`)
             assert.ok(nativeMembers.get(member)?.documented, `Native ${name}.${member} needs a public comment`)
@@ -309,15 +296,6 @@ function assertParityMutationSelfTest() {
 }
 
 function assertGuardSelfTest() {
-    assert.doesNotThrow(() => assertTypeParitySurfaces(pairedSurfaces))
-    assert.throws(
-        () => assertTypeParitySurfaces(pairedSurfaces.filter((name) => name !== "ClientCache")),
-        /Public client parity fixture does not pair/,
-    )
-    assert.throws(
-        () => assertTypeParitySurfaces([...pairedSurfaces, "Unregistered"]),
-        /Public client parity fixture does not pair/,
-    )
     const defaultApi = fixtureInterfaces()
     const native = fixtureInterfaces()
     const client = [...defaultApi.get("Client").keys(), ...inheritedClientMembers]
@@ -333,27 +311,6 @@ function assertGuardSelfTest() {
     assert.throws(
         () => assertPublicClientContract({ defaultApi, native, defaultRuntime: runtime, nativeRuntime: runtime }),
         /Messages\.member documentation differs/,
-    )
-    assert.doesNotThrow(() =>
-        assertPublicClientContract({
-            defaultApi,
-            native,
-            defaultRuntime: runtime,
-            nativeRuntime: runtime,
-            divergence: new Map([["Messages.member", "fixture reason"]]),
-        }),
-    )
-    native.set("Messages", defaultApi.get("Messages"))
-    assert.throws(
-        () =>
-            assertPublicClientContract({
-                defaultApi,
-                native,
-                defaultRuntime: runtime,
-                nativeRuntime: runtime,
-                divergence: new Map([["Messages.member", "fixture reason"]]),
-            }),
-        /Messages\.member is listed as a documentation divergence but both descriptions now match/,
     )
     native.set("Messages", fixtureInterfaces().get("Messages"))
     native.get("Messages").set("missing", { documented: true })

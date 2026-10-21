@@ -18,13 +18,11 @@ import {
     webhookMessageDelete,
 } from "#sdk/internal/webhooks"
 import * as Effect from "effect/Effect"
-import * as Exit from "effect/Exit"
-import { ok, ResultAsync } from "neverthrow"
-import { causeReasons } from "#sdk/internal/defects"
+import { ResultAsync } from "neverthrow"
 import { CancelledError, ConfigurationError, SdkDefect } from "#sdk/errors"
 import type { Message, DefaultMessageOperationOptions } from "#sdk/messages"
 import { type Instance, type DefaultInstanceResolveOptions } from "./instance.js"
-import { executeOperation, fromExit } from "#sdk/internal/binding/execute"
+import { executeOperation, fromExit, runShutdown } from "#sdk/internal/binding/execute"
 
 /**
  * Send and manage messages with one incoming webhook's token, without a bot token or gateway.
@@ -196,48 +194,39 @@ export function createWebhookClient(options: WebhookClientOptions): WebhookClien
         throw new SdkDefect("createWebhookClient", [{ kind: "Failure", failure: result.error }])
     }
     const owner = result.value
-    const execute = executeOperation
-    const shutdown = () =>
-        new ResultAsync<void, never>(
-            Effect.runPromiseExit(owner.shutdown()).then((exit) => {
-                const result = fromExit(exit, "shutdown")
-                if (result.isErr())
-                    throw new SdkDefect("shutdown", Exit.isFailure(exit) ? causeReasons(exit.cause) : [])
-                return ok(undefined)
-            }),
-        )
+    const shutdown = () => runShutdown(owner.shutdown())
     return Object.freeze({
         id: owner.id,
         instance: Object.freeze({
             resolve: (options?: DefaultInstanceResolveOptions) =>
-                execute(owner.instance.resolveInfo(options), "instance.resolve", options),
+                executeOperation(owner.instance.resolveInfo(options), "instance.resolve", options),
         }),
         fetch: (options?: DefaultMessageOperationOptions) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.fetchToken", () => webhookTokenFetch(owner.id), options),
                 "webhooks.fetchToken",
                 options,
             ),
         edit: (input: WebhookTokenEdit, options?: DefaultMessageOperationOptions) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.editToken", () => webhookTokenEdit(owner.id, input), options),
                 "webhooks.editToken",
                 options,
             ),
         delete: (options?: DefaultMessageOperationOptions) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.deleteToken", () => webhookTokenDelete(owner.id), options),
                 "webhooks.deleteToken",
                 options,
             ),
         send: (input: WebhookMessageInput | string, options?: DefaultMessageOperationOptions) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
                 "webhooks.send",
                 options,
             ),
         fetchMessage: (id: string, options?: DefaultWebhookMessageOperationOptions) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.fetchMessage", () => webhookMessageFetch(owner.id, id, options), options),
                 "webhooks.fetchMessage",
                 options,
@@ -247,13 +236,13 @@ export function createWebhookClient(options: WebhookClientOptions): WebhookClien
             input: WebhookMessageEdit | string,
             options?: DefaultWebhookMessageOperationOptions,
         ) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.editMessage", () => webhookMessageEdit(owner.id, id, input, options), options),
                 "webhooks.editMessage",
                 options,
             ),
         deleteMessage: (id: string, options?: DefaultWebhookMessageOperationOptions) =>
-            execute(
+            executeOperation(
                 owner.run("webhooks.deleteMessage", () => webhookMessageDelete(owner.id, id, options), options),
                 "webhooks.deleteMessage",
                 options,

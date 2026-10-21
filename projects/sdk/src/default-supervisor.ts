@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 import type { ClientOptions } from "#sdk/client"
-import type { SessionStore } from "#sdk/sharding"
 import {
     ApplicationError,
     CancelledError,
@@ -13,17 +12,18 @@ import {
     type ConnectError,
     type DefectReason,
 } from "#sdk/errors"
-import { attachAccountLimits, attachIdentifyGate } from "#sdk/internal/client"
 import { throwIfErr } from "#sdk/internal/failures"
 import { operationSignalError } from "#sdk/internal/operation-signal"
 import {
     ChildBridge,
+    childClientOptions,
     childFailureReason,
     createSupervisor,
+    readChildOptions,
     supervisorOptionError,
+    type ChildSettings,
     type SupervisorOwner,
 } from "#sdk/internal/supervisor"
-import { childClientOptionsError } from "#sdk/internal/configuration"
 import {
     SupervisorChildError,
     type SupervisorAssignment,
@@ -205,78 +205,6 @@ function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
     )
 }
 
-/** Child options read once before the helper waits for an assignment */
-interface ChildSettings {
-    readonly clientOptions: Omit<ClientOptions, "token" | "sharding">
-    /** The child's session store, added to the shards the parent assigns */
-    readonly sessions: SessionStore | undefined
-    readonly token: string | undefined
-    readonly configure: DefaultSupervisorChildOptions["configure"]
-}
-
-/**
- * Read the child options once, so later getter changes cannot alter the client or configure callback. A throw here comes
- * from reading the caller options
- */
-function readChildOptions(options: DefaultSupervisorChildOptions): ChildSettings | ConfigurationError {
-    const invalidOptions = supervisorOptionError(
-        options,
-        ["token", "clientOptions", "configure"],
-        "configuration",
-        "Supervisor child options",
-    )
-    if (invalidOptions) return invalidOptions
-    const clientOptions = options.clientOptions
-    const invalid = childClientOptionsError(clientOptions)
-    if (invalid) return invalid
-    const {
-        messageFields,
-        instance,
-        rest,
-        transport,
-        uploads,
-        logging,
-        onError,
-        gateway,
-        cache,
-        connection,
-        observe,
-        sharding,
-    } = clientOptions ?? {}
-    const configure = options.configure
-    return {
-        sessions: sharding?.sessions,
-        clientOptions: {
-            ...(messageFields === undefined ? {} : { messageFields }),
-            ...(instance === undefined ? {} : { instance }),
-            ...(rest === undefined ? {} : { rest }),
-            ...(transport === undefined ? {} : { transport }),
-            ...(uploads === undefined ? {} : { uploads }),
-            ...(logging === undefined ? {} : { logging }),
-            ...(onError === undefined ? {} : { onError }),
-            ...(gateway === undefined ? {} : { gateway }),
-            ...(cache === undefined ? {} : { cache }),
-            ...(connection === undefined ? {} : { connection }),
-            ...(observe === undefined ? {} : { observe }),
-        },
-        token: options.token,
-        // Keep the options object as the receiver, as a method call on it would
-        configure: (context) => Reflect.apply(configure, options, [context]),
-    }
-}
-
-function childClientOptions(
-    settings: ChildSettings,
-    assignment: SupervisorAssignment,
-    bridge: ChildBridge,
-): ClientOptions {
-    const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
-    return attachAccountLimits(
-        attachIdentifyGate({ ...settings.clientOptions, token: settings.token, sharding }, bridge.identifyGate),
-        bridge.accountLimits,
-    )
-}
-
 /** Build default-API supervisor tools around this entry point's client creator */
 export function makeDefaultSupervisor(createClient: (options: ClientOptions) => Client): DefaultSupervisorTools {
     const child = Object.freeze({
@@ -311,9 +239,12 @@ export function makeDefaultSupervisor(createClient: (options: ClientOptions) => 
                     }
                     try {
                         main: {
-                            let settings: ChildSettings
+                            let settings: ChildSettings<ClientOptions, DefaultSupervisorChildOptions["configure"]>
                             try {
-                                const read = readChildOptions(options)
+                                const read = readChildOptions<
+                                    ClientOptions,
+                                    DefaultSupervisorChildOptions["configure"]
+                                >(options)
                                 if (read instanceof ConfigurationError) {
                                     outcome = err(read)
                                     break main

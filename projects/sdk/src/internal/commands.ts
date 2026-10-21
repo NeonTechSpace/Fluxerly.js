@@ -23,10 +23,11 @@ import type {
 import {
     commandArgumentMetadata,
     type CommandArgumentConversion,
+    durationText,
     snapshotCommandArguments,
 } from "#sdk/internal/command-arguments"
-import { ConfigurationError } from "#sdk/errors"
-import { readCaller } from "./defects.js"
+import { ApplicationError, ConfigurationError, SdkDefect } from "#sdk/errors"
+import { readCaller, thrownReason } from "./defects.js"
 import { MessageType, type Message, type MessageCore } from "#sdk/messages"
 import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
@@ -129,16 +130,10 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
         groupLookup: ReadonlyMap<string, PrefixCommandGroupMetadata>,
         entries: readonly PrefixCommandMetadata[],
     ): PrefixCommandRegistry<D, M> {
-        return new PrefixCommandRegistry<D, M>(
-            this.#options,
-            ["prefix", "parse", "ignoreBots", "caseSensitive", "mentionPrefix"],
-            definitions,
-            commands,
-            groups,
-            groupLookup,
-            entries,
-            { cooldowns: this.cooldowns, feedback: this.feedback },
-        )
+        return new PrefixCommandRegistry<D, M>(this.#options, [], definitions, commands, groups, groupLookup, entries, {
+            cooldowns: this.cooldowns,
+            feedback: this.feedback,
+        })
     }
 
     /** Immutable registration-order help metadata with no callbacks or local storage references */
@@ -148,10 +143,6 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
 
     get groups(): readonly PrefixCommandGroupMetadata[] {
         return this.#groups
-    }
-
-    get entries(): readonly PrefixCommandMetadata[] {
-        return this.#entries
     }
 
     /**
@@ -237,7 +228,6 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
 
     /** Match a message against the prefixes the adapter resolved for it, then consume groups and parse the command */
     resolve(message: M, prefixes: unknown): PrefixCommandMatch<D> | PrefixCommandUnmatchedMatch | undefined {
-        if (this.ignores(message)) return undefined
         const prefix = this.matchPrefix(message, prefixes)
         if (prefix === undefined) return undefined
         let source = message.content.slice(prefix.length)
@@ -936,6 +926,45 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
     }
 }
 
+/** Copy an optional array of functions, rejecting a hole or a non-function with the given message */
+export function snapshotFunctions<F>(value: unknown, message: string): readonly F[] {
+    if (value === undefined) return Object.freeze([])
+    if (!Array.isArray(value)) throw new ConfigurationError("commands", message)
+    const copied: F[] = []
+    for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index) || typeof value[index] !== "function")
+            throw new ConfigurationError("commands", message)
+        copied.push(value[index] as F)
+    }
+    return Object.freeze(copied)
+}
+
+/**
+ * Run local command setup, keeping ConfigurationError for misuse. A throw from a marked read of caller definitions,
+ * options or claims is an application fault, and any other throw, such as from building the registry, is an SDK fault
+ */
+export function localSetup<A>(create: () => A): A {
+    try {
+        return create()
+    } catch (error) {
+        if (error instanceof ConfigurationError) throw error
+        throw new SdkDefect("commands", [thrownReason(error)])
+    }
+}
+
+/**
+ * Run a runBot register callback. Misuse and SDK defects from the registrations it makes keep their errors, and any
+ * other throw is the application's own failure, carried by ApplicationError naming `runBot commands`
+ */
+export function registerCallback<A>(register: () => A): A {
+    try {
+        return register()
+    } catch (error) {
+        if (error instanceof ConfigurationError || error instanceof SdkDefect) throw error
+        throw new ApplicationError("runBot commands", error)
+    }
+}
+
 /**
  * Impersonal reply text for a rejected command, used by `onReject: "reply"`.
  * A guard denial without a reason returns undefined, so a false verdict has no generic reply.
@@ -952,14 +981,13 @@ export function rejectionReply(
         case "CommandGuardRejected":
             return rejection.reason
         case "CommandCooldownActive": {
-            const seconds = Math.max(1, Math.ceil((rejection.retryAtMs - now) / 1_000))
-            return `This command is on cooldown. Try again in ${seconds} ${seconds === 1 ? "second" : "seconds"}`
+            return `This command is on cooldown. Try again in ${remainingText(rejection.retryAtMs - now)}`
         }
         case "CommandArgumentRejected": {
             const usage =
                 command === undefined
                     ? ""
-                    : `. Usage: ${prefix}${(command.path ?? [command.name]).join(" ")}${commandUsage(command) ? " " + commandUsage(command) : ""}`
+                    : `. Usage: ${displayPrefix(prefix)}${(command.path ?? [command.name]).join(" ")}${commandUsage(command) ? " " + commandUsage(command) : ""}`
             if (rejection.reason === "Unexpected") return `Too many arguments${usage}`
             const argument = command?.arguments?.find((entry) => entry.name === rejection.argument)
             if (rejection.reason === "Missing") return `Missing ${rejection.argument}${usage}`
@@ -970,8 +998,40 @@ export function rejectionReply(
     }
 }
 
+/** A wait as text in at most two units, rounded up: Seconds up to one minute, minutes below one hour, then hours and
+ * minutes, and from one day days and hours
+ */
+function remainingText(milliseconds: number): string {
+    const seconds = Math.max(1, Math.ceil(milliseconds / 1_000))
+    const minutes = Math.ceil(seconds / 60)
+    const hours = Math.ceil(minutes / 60)
+    const units: readonly (readonly [number, string])[] =
+        seconds <= 60
+            ? [[seconds, "second"]]
+            : minutes < 60
+              ? [[minutes, "minute"]]
+              : minutes < 1_440
+                ? [
+                      [Math.floor(minutes / 60), "hour"],
+                      [minutes % 60, "minute"],
+                  ]
+                : [
+                      [Math.floor(hours / 24), "day"],
+                      [hours % 24, "hour"],
+                  ]
+    return units
+        .filter(([count]) => count > 0)
+        .map(([count, unit]) => `${count} ${unit}${count === 1 ? "" : "s"}`)
+        .join(" ")
+}
+
+/** The prefix as shown before a command name, with a space after a bot mention, which does not read as part of the name */
+export function displayPrefix(prefix: string): string {
+    return /^<@!?\d+>$/.test(prefix) ? prefix + " " : prefix
+}
+
 /** Generated usage syntax such as `<text> [count]`, or the command's explicit usage */
-function commandUsage(command: PrefixCommandMetadata): string {
+export function commandUsage(command: PrefixCommandMetadata): string {
     return (
         command.usage ??
         command.arguments
@@ -999,7 +1059,7 @@ function expectation(argument: NonNullable<PrefixCommandMetadata["arguments"]>[n
         case "number":
             return `a number${range(String)}`
         case "duration":
-            return `a duration${argument.wholeSeconds === true ? " in whole seconds" : ""} such as 10m or 1h30m${range((value) => `${value} ms`)}`
+            return `a duration${argument.wholeSeconds === true ? " in whole seconds" : ""} such as 10m or 1h30m${range(durationText)}`
         case "boolean":
             return "true or false"
         case "id":
@@ -1023,6 +1083,9 @@ function expectation(argument: NonNullable<PrefixCommandMetadata["arguments"]>[n
 
 /** Router option keys shared by both APIs. Each API adds its own callback keys */
 const routerOptionKeys = ["prefix", "parse", "ignoreBots", "caseSensitive", "mentionPrefix", "cooldowns"] as const
+
+/** Router option keys both APIs add to the shared ones, validated by each API's adapter */
+export const routerAdapterKeys = ["onUnmatched", "onReject", "use"] as const
 
 /** Subscription delivery settings that a runBot commands option passes to the router's attach unchanged */
 export const botCommandDeliveryKeys = [

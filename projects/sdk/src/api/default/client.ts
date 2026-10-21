@@ -3,7 +3,7 @@ import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Scope from "effect/Scope"
-import { ok, ResultAsync } from "neverthrow"
+import { ResultAsync } from "neverthrow"
 import { causeReasons, defectReason, suspendInput } from "#sdk/internal/defects"
 import { shutdownDrainMs } from "#sdk/internal/client/drain"
 import { scheduleTiming } from "#sdk/internal/scheduled-tasks"
@@ -61,7 +61,7 @@ import { type GatewayCommands } from "./gateway.js"
 import { type ClientLogging } from "./logging.js"
 import { type Instance } from "./instance.js"
 import { bindDefault, defaultContext } from "#sdk/internal/binding/default"
-import { fromExit } from "#sdk/internal/binding/execute"
+import { localValue, runShutdown } from "#sdk/internal/binding/execute"
 import { type Presence } from "./presence.js"
 import { type CurrentBotApplication } from "./application.js"
 import { type Users } from "./users.js"
@@ -508,7 +508,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * @remarks
      * The listener runs asynchronously, one call at a time per subscriber, awaiting a returned promise.
      * A listener that throws, rejects or returns an Err result goes to the client-level onError as an observer failure, or is logged at Error, and does not close the client.
-     * The returned observer's close ends delivery, but cannot cancel listener code already running
+     * The returned observer's close ends delivery, but cannot cancel listener code already running.
+     * A listener that is not a function throws ConfigurationError
      */
     observeState(listener: (state: ConnectionState) => unknown): StateObserver
 }
@@ -607,15 +608,8 @@ export function createClient<const F extends MessageFields | undefined = undefin
     }
     // Registration misuse throws its ConfigurationError, as other local misuse does. A closing client is not misuse: the
     // event bus returns an already-closed source for it
-    const register = <A, E>(effect: Effect.Effect<A, E>, operation: "on" | "subscribe"): A => {
-        const exit = Effect.runSyncExit(owner.logging.provide(effect))
-        if (Exit.isSuccess(exit)) return exit.value
-        if (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause))
-            throw new SdkDefect(operation, causeReasons(exit.cause))
-        const reason = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-        if (reason?._tag === "Fail") throw reason.error
-        throw new SdkDefect(operation, causeReasons(exit.cause))
-    }
+    const register = <A, E>(effect: Effect.Effect<A, E>, operation: "on" | "subscribe"): A =>
+        localValue(owner.logging.provide(effect), operation)
     const shutdown = (options?: ShutdownOptions) => {
         let drainMs: number | ConfigurationError
         try {
@@ -628,15 +622,8 @@ export function createClient<const F extends MessageFields | undefined = undefin
             Error.captureStackTrace(drainMs, shutdown)
             throw drainMs
         }
-        return new ResultAsync<void, never>(
-            Effect.runPromiseExit(
-                owner.logging.provide(owner.shutdown(drainMs).pipe(Effect.ensuring(Scope.close(scope, Exit.void)))),
-            ).then((exit) => {
-                const result = fromExit(exit, "shutdown")
-                if (result.isErr())
-                    throw new SdkDefect("shutdown", Exit.isFailure(exit) ? causeReasons(exit.cause) : [])
-                return ok(undefined)
-            }),
+        return runShutdown(
+            owner.logging.provide(owner.shutdown(drainMs).pipe(Effect.ensuring(Scope.close(scope, Exit.void)))),
         )
     }
     const schedule = (task: (signal: AbortSignal) => unknown, options?: ScheduleOptions): ScheduledTask => {
@@ -790,6 +777,8 @@ export function createClient<const F extends MessageFields | undefined = undefin
                 await shutdown()
             },
             observeState: (listener: (state: ConnectionState) => unknown) => {
+                if (typeof listener !== "function")
+                    throw new ConfigurationError("listener", "The state listener must be a function")
                 let active = true
                 let busy = false
                 let pending: ConnectionState | undefined

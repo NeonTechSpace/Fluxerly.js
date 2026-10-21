@@ -267,12 +267,6 @@ function iso8601(value: string) {
     return /^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d{1,9})?)?(?:Z|[+-]\d\d:\d\d)$/.test(value)
 }
 
-/** Returns an independent immutable snapshot, so later caller mutation cannot alter an accepted presence intent */
-export function validatePresenceInput(value: unknown): FrozenPresence | undefined {
-    const validated = presenceInput(value)
-    return validated instanceof InputValidationFailure ? undefined : validated
-}
-
 /**
  * Validate and freeze one presence input, returning SDK-authored detail for invalid input.
  * Each field is read once, so the validated value is the one retained

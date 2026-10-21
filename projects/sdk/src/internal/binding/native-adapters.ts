@@ -26,8 +26,8 @@ import type {
     ReactionCollector,
     ReactionCollectorOptions,
 } from "#sdk/api/effect/collectors"
-import { collect, type MessageCollector } from "#sdk/internal/collector"
-import { collectReactions, type ReactionCollector as ReactionCollection } from "#sdk/internal/reaction-collector"
+import { collect } from "#sdk/internal/collector"
+import { collectReactions } from "#sdk/internal/reaction-collector"
 import { effectInstance, type ResolvedInstance } from "#sdk/api/effect/instance"
 import type { ClientOwner } from "#sdk/internal/client"
 import { memberChunkStream } from "#sdk/internal/member-chunks"
@@ -90,15 +90,8 @@ export const nativeAttachmentStream =
         )
     }
 
-function nativeCollector<M extends MessageCore>(source: MessageCollector<M>): Collector<M> {
-    return Object.freeze({
-        close: () => Effect.sync(() => source.stop()),
-        result: () => Deferred.await(source.closed),
-    })
-}
-
 // Keep completed handles outside the registration closure so they do not retain options or the caller's scope
-function nativeReactionCollector(source: ReactionCollection): ReactionCollector {
+function nativeCollector<A, E>(source: { readonly closed: Deferred.Deferred<A, E>; stop(): void }) {
     return Object.freeze({
         close: () => Effect.sync(() => source.stop()),
         result: () => Deferred.await(source.closed),
@@ -164,7 +157,8 @@ export const nativeCollect =
                                 const callerScope = yield* Effect.scope
                                 // A scoped waiter releases its registration when done, rather than retaining every completed collector until scope closure
                                 yield* releaseWhenClosed(source, callerScope)
-                                return nativeCollector(source)
+                                const handle: Collector<M> = nativeCollector(source)
+                                return handle
                             }),
                         (failure): Collector<M> => failedNative<CollectorResult<M>>(failure),
                     ),
@@ -185,7 +179,8 @@ export const nativeCollectReactions =
                             Effect.gen(function* () {
                                 const callerScope = yield* Effect.scope
                                 yield* releaseWhenClosed(source, callerScope)
-                                return nativeReactionCollector(source)
+                                const handle: ReactionCollector = nativeCollector(source)
+                                return handle
                             }),
                         (failure): ReactionCollector => failedNative<ReactionCollectorResult>(failure),
                     ),

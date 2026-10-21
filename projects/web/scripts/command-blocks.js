@@ -33,7 +33,6 @@ export function commandVariant(metadata, manager = "npm", language = "js") {
     if (!Object.hasOwn(packageManagers, manager) || !["js", "ts"].includes(language)) throw new Error("Invalid command preference")
     const commands = packageManagers[manager]
     let command
-    let note = ""
     // A prerelease's API can change between versions, so its install pins the exact version, and a Stable install keeps
     // the package manager's normal range. Older SDKs required one exact Effect release candidate, which stays pinned
     if (value.kind === "install" || value.kind === "add") {
@@ -43,7 +42,7 @@ export function commandVariant(metadata, manager = "npm", language = "js") {
     else if (value.kind === "dev") command = `${commands.add} ${commands.dev} ${value.package}`
     else if (value.kind === "list") command = `${commands.list} ${value.package}`
     else command = language === "ts" ? value.command.replace(/bot\.js$/, "bot.ts") : value.command
-    return { command, note }
+    return { command }
 }
 
 export function escapeHtml(value) {
@@ -54,14 +53,13 @@ export function escapeHtml(value) {
 
 export function renderCommandBlock(metadata) {
     const value = validateCommand(metadata)
-    const { command, note } = commandVariant(value)
+    const { command } = commandVariant(value)
     return `<div class="command-block" data-command-block data-command="${escapeHtml(JSON.stringify(value))}">
 <div class="command-controls">
 <label>Package manager <select aria-label="Package manager" data-command-preference="manager" disabled>${Object.keys(packageManagers).map((name) => `<option value="${name}">${name}</option>`).join("")}</select></label>
 <button type="button" data-command-copy hidden>Copy</button><span data-command-copy-status role="status"></span>
 </div>
 <pre tabindex="0"><code data-command-code>${escapeHtml(command)}</code></pre>
-<p data-command-note aria-live="polite"${note ? "" : " hidden"}>${escapeHtml(note)}</p>
 <p class="command-no-script" data-command-fallback>Enable JavaScript to change command preferences</p>
 </div>`
 }

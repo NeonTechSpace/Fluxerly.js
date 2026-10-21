@@ -441,6 +441,9 @@ export type Operation =
     | "reactionCollector.result"
     | "paginate"
 
+const rejectedTokenHint =
+    "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it"
+
 /** Fluxer rejected the bot token during connection startup or recovery.
  * Check the token and the application owner's account standing before connecting again.
  * A closed or disabled owner account can cause rejection of a valid token, and a new token does not fix that account standing.
@@ -454,7 +457,7 @@ export class AuthenticationError extends FluxerlyError {
     constructor() {
         super("Fluxer rejected the bot token", {
             code: "auth.rejected",
-            hint: "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it",
+            hint: rejectedTokenHint,
         })
         this.name = this._tag
     }
@@ -495,7 +498,7 @@ export class ConnectionError extends FluxerlyError {
             hint:
                 options?.hint ??
                 (status === CloseCode.authenticationFailed
-                    ? "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it"
+                    ? rejectedTokenHint
                     : status === CloseCode.shardingRequired
                       ? 'Set sharding to "auto", or configure sharding with a larger totalShards'
                       : status === CloseCode.invalidShard

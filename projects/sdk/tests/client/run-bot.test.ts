@@ -1172,7 +1172,7 @@ describe("public runBot", () => {
         expect(signalListeners()).toEqual(before)
     })
 
-    test("default runBot handles process signals unless processSignals is false and removes them after shutdown", async () => {
+    test("default runBot handles process signals and removes them after shutdown", async () => {
         const fixture = await gateway(true)
         const before = signalListeners()
         const running = runBot({ token })
@@ -1181,19 +1181,6 @@ describe("public runBot", () => {
         process.emit("SIGINT")
         expect((await running).isOk()).toBe(true)
         expect(signalListeners()).toEqual(before)
-
-        const abort = new AbortController()
-        const installed = deferred<void>()
-        const optedOut = runBot({
-            token,
-            signal: abort.signal,
-            processSignals: false,
-            setup: () => installed.resolve(),
-        })
-        await installed.promise
-        expect(signalListeners()).toEqual(before)
-        abort.abort()
-        expect((await optedOut).isOk()).toBe(true)
     })
 
     test("native runBot handles process signals only when processSignals is true", async () => {

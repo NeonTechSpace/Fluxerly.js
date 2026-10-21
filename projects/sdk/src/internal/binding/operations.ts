@@ -267,7 +267,7 @@ export interface PageEntry<M extends MessageCore, Args extends readonly unknown[
 
 /** A member whose two API styles need their own adapters, such as byte streams, collectors and callbacks */
 export interface CustomEntry<M extends MessageCore, D, N> {
-    readonly kind: "stream" | "custom"
+    readonly kind: "custom"
     readonly default: (context: DefaultContext<M>) => D
     readonly native: (owner: ClientOwner<M>) => N
 }
@@ -281,7 +281,7 @@ export type BindableEntry<M extends MessageCore> =
     | PageEntry<M, readonly unknown[], unknown, unknown>
     | CustomEntry<M, unknown, unknown>
 
-type EntryId<NS extends string, K extends string, E> = E extends { readonly kind: "stream" | "custom" }
+type EntryId<NS extends string, K extends string, E> = E extends { readonly kind: "custom" }
     ? Operation
     : E extends { readonly id: infer I }
       ? I
@@ -321,13 +321,12 @@ function defineOperations<M extends MessageCore>() {
         run: (owner: Owner, ...args: Args) => Effect.Effect<Pagination<A, E>, PaginationError>,
     ): PageEntry<M, Args, A, E> => Object.freeze({ kind: "page", optionsAt, run })
     const custom = <D, N>(
-        kind: "stream" | "custom",
         defaultAdapter: (context: DefaultContext<M>) => D,
         nativeAdapter: (owner: Owner) => N,
-    ): CustomEntry<M, D, N> => Object.freeze({ kind, default: defaultAdapter, native: nativeAdapter })
+    ): CustomEntry<M, D, N> => Object.freeze({ kind: "custom", default: defaultAdapter, native: nativeAdapter })
     return checked({
         instance: {
-            resolve: custom("custom", defaultInstanceResolve<M>, nativeInstanceResolve<M>),
+            resolve: custom(defaultInstanceResolve<M>, nativeInstanceResolve<M>),
         },
         presence: {
             set: lookup((owner: Owner, input: PresenceInput) => owner.setPresence(input)),
@@ -336,17 +335,17 @@ function defineOperations<M extends MessageCore>() {
             ),
         },
         cache: {
-            entries: custom("custom", defaultCacheEntries<M>, nativeCacheEntries<M>),
-            clear: custom("custom", defaultCacheClear<M>, nativeCacheClear<M>),
-            delete: custom("custom", defaultCacheDelete<M>, nativeCacheDelete<M>),
-            onChange: custom("custom", defaultCacheOnChange<M>, nativeCacheOnChange<M>),
+            entries: custom(defaultCacheEntries<M>, nativeCacheEntries<M>),
+            clear: custom(defaultCacheClear<M>, nativeCacheClear<M>),
+            delete: custom(defaultCacheDelete<M>, nativeCacheDelete<M>),
+            onChange: custom(defaultCacheOnChange<M>, nativeCacheOnChange<M>),
         },
         logging: {
             configure: pure((owner: Owner, settings: LogLevelSettings) => configureLogging(owner.logging, settings)),
         },
         rest: {
             // Generic in the response body and typed with each API's own request shape, so each API adapts it
-            request: custom("custom", defaultRestRequest<M>, nativeRestRequest<M>),
+            request: custom(defaultRestRequest<M>, nativeRestRequest<M>),
         },
         gateway: {
             // The default API passes its options as a fourth argument, which the public Effect member does not have
@@ -645,7 +644,7 @@ function defineOperations<M extends MessageCore>() {
             ),
         },
         members: {
-            iterateChunks: custom("stream", defaultMemberChunks<M>, nativeMemberChunks<M>),
+            iterateChunks: custom(defaultMemberChunks<M>, nativeMemberChunks<M>),
             setRoles: op(
                 2,
                 (
@@ -887,7 +886,7 @@ function defineOperations<M extends MessageCore>() {
             download: op(1, (owner: Owner, attachment: Attachment, options: AttachmentDownloadOptions) =>
                 owner.downloadAttachment(attachment, options),
             ),
-            stream: custom("stream", defaultAttachmentStream<M>, nativeAttachmentStream<M>),
+            stream: custom(defaultAttachmentStream<M>, nativeAttachmentStream<M>),
         },
         messages: {
             publish: named(
@@ -1043,8 +1042,8 @@ function defineOperations<M extends MessageCore>() {
                     ) => owner.reaction("removeReaction", message, emoji, options),
                 ),
             ),
-            collect: custom("custom", defaultCollect<M>, nativeCollect<M>),
-            collectReactions: custom("custom", defaultCollectReactions<M>, nativeCollectReactions<M>),
+            collect: custom(defaultCollect<M>, nativeCollect<M>),
+            collectReactions: custom(defaultCollectReactions<M>, nativeCollectReactions<M>),
             paginate: named(
                 "paginate",
                 op(2, (owner: Owner, channelId: string, pages: readonly PageInput[], options: ChannelPaginateOptions) =>
@@ -1070,7 +1069,7 @@ function defineOperations<M extends MessageCore>() {
                     owner.typing(channelId, options),
                 ),
             ),
-            keepTyping: custom("custom", defaultKeepTyping<M>, nativeKeepTyping<M>),
+            keepTyping: custom(defaultKeepTyping<M>, nativeKeepTyping<M>),
             reply: named(
                 "reply",
                 op(2, (owner: Owner, message: MessageReference, input: ReplyInput | string, options?: SendOptions) =>

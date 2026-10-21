@@ -36,7 +36,7 @@ import { MessageOperationError } from "#sdk/message-errors"
 import type { DefaultMessageOperationOptions, MessageCore, MessageReference } from "#sdk/messages"
 import type { Collector, ReactionCollector } from "#sdk/api/default/collectors"
 import type { DefaultInstanceResolveOptions } from "#sdk/api/default/instance"
-import { collect, type MessageCollector } from "#sdk/internal/collector"
+import { collect } from "#sdk/internal/collector"
 import { defectReason, readCaller, readInput, suspendMarked } from "#sdk/internal/defects"
 import { memberChunkIterationOptions } from "#sdk/internal/member-chunks"
 import { operationSignalError } from "#sdk/internal/operation-signal"
@@ -83,9 +83,11 @@ function failedCollector<A>(
     })
 }
 
-function defaultCollector<M extends MessageCore>(source: MessageCollector<M>): Collector<M> {
-    const result = (options?: OperationOptions) =>
-        executeOperation(Deferred.await(source.closed), "collector.result", options)
+function defaultCollector<A>(
+    source: { readonly closed: Deferred.Deferred<A, CollectorFailure>; stop(): void },
+    operation: "collector.result" | "reactionCollector.result",
+) {
+    const result = (options?: OperationOptions) => executeOperation(Deferred.await(source.closed), operation, options)
     return Object.freeze({
         close: () => source.stop(),
         result,
@@ -417,7 +419,7 @@ export const defaultCollect =
                 ),
             ),
             "collect",
-            defaultCollector,
+            (source) => defaultCollector(source, "collector.result"),
             (failure) => failedCollector<CollectorResult<M>>(failure, "collector.result"),
         )
 
@@ -442,19 +444,7 @@ export const defaultCollectReactions =
         return openCollector(
             exit,
             "collectReactions",
-            (source) => {
-                const result = (options?: OperationOptions) =>
-                    executeOperation(Deferred.await(source.closed), "reactionCollector.result", options)
-                return Object.freeze({
-                    close: () => source.stop(),
-                    result,
-                    [Symbol.asyncDispose]: async () => {
-                        source.stop()
-                        // The collection outcome stays readable through result, so disposal only awaits cleanup
-                        await result()
-                    },
-                })
-            },
+            (source) => defaultCollector(source, "reactionCollector.result"),
             (failure) => failedCollector<ReactionCollectorResult>(failure, "reactionCollector.result"),
         )
     }

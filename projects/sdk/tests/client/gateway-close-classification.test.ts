@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { AuthenticationError, ConnectionError, RateLimitError } from "../../src/errors.js"
-import { classifyClose } from "../../src/internal/gateway.js"
+import { classifyClose } from "../../src/internal/gateway/session.js"
 
 describe("pinned provider gateway close lifecycle", () => {
     test("keeps established sessions resumable after timeout and rate-limit closes", () => {

@@ -62,6 +62,25 @@ function store(snapshot?: unknown) {
     return { saved, sessions }
 }
 
+/** A store that keeps snapshots across clients, as files do across processes. After crash(), saves are lost */
+function persistentStore() {
+    const snapshots = new Map<number, SessionSnapshot>()
+    let crashed = false
+    const sessions: SessionStore = {
+        load: async (shardId) => snapshots.get(shardId),
+        save: async (shardId, snapshot) => {
+            if (!crashed) snapshots.set(shardId, snapshot)
+        },
+    }
+    return {
+        snapshots,
+        sessions,
+        crash: () => {
+            crashed = true
+        },
+    }
+}
+
 describeBothApis("sharding.sessions", (mode) => {
     test("saves each resumable session at shutdown after its socket closed", async () => {
         vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000)
@@ -210,6 +229,114 @@ describeBothApis("sharding.sessions", (mode) => {
         expect(server.commandsWithOp(Opcode.resume)).toEqual([])
         expect(server.commandsWithOp(Opcode.identify)).toHaveLength(1)
         expect(logs.withCode("lifecycle.sessionSnapshotIgnored")).toEqual([expect.objectContaining({ level: "warn" })])
+    })
+
+    test.each([1, 2])(
+        "resumes a loaded snapshot once, so a restart after a crash starts new sessions (%i shards)",
+        async (totalShards) => {
+            const stoppedAt = 1_700_000_000_000
+            const now = vi.spyOn(Date, "now")
+            const { snapshots, sessions, crash } = persistentStore()
+            for (let shardId = 0; shardId < totalShards; shardId++)
+                snapshots.set(shardId, {
+                    sessionId: `saved-session-${shardId}`,
+                    sequence: 41,
+                    resumeUrl: hostedGateway,
+                    savedAt: stoppedAt,
+                    totalShards,
+                })
+            // A clean stop saved the sessions, and a restart 3 seconds later resumes them
+            now.mockReturnValue(stoppedAt + 3_000)
+            const first = await start(mode, sessions, totalShards)
+            await settle((first.client as Client).connect())
+            expect(first.server.commandsWithOp(Opcode.resume)).toHaveLength(totalShards)
+            // That process crashes 17 seconds later, so no shutdown saves its sessions
+            crash()
+            await settle((first.client as Client).shutdown())
+            // The next restart is still within 60 seconds of the clean stop, but the snapshots were already resumed
+            now.mockReturnValue(stoppedAt + 21_000)
+            const second = await start(mode, sessions, totalShards)
+            await settle((second.client as Client).connect())
+            expect(second.server.commandsWithOp(Opcode.resume)).toEqual([])
+            expect(second.server.commandsWithOp(Opcode.identify)).toHaveLength(totalShards)
+            expect(second.logs.withCode("lifecycle.sessionSnapshotIgnored")).toEqual(
+                Array.from({ length: totalShards }, () =>
+                    expect.objectContaining({
+                        level: "warn",
+                        message: expect.stringContaining("because an earlier start already resumed it"),
+                    }),
+                ),
+            )
+            expect([...snapshots.values()].map((snapshot) => snapshot.sessionId)).toEqual(
+                Array.from({ length: totalShards }, () => ""),
+            )
+        },
+    )
+
+    test("resumes again after a clean stop of a start that resumed a saved session", async () => {
+        const stoppedAt = 1_700_000_000_000
+        const now = vi.spyOn(Date, "now")
+        const { snapshots, sessions } = persistentStore()
+        snapshots.set(0, {
+            sessionId: "saved-session",
+            sequence: 41,
+            resumeUrl: hostedGateway,
+            savedAt: stoppedAt,
+            totalShards: 1,
+        })
+        now.mockReturnValue(stoppedAt + 3_000)
+        const first = await start(mode, sessions)
+        await settle((first.client as Client).connect())
+        expect(first.server.commandsWithOp(Opcode.resume)[0]!.d).toMatchObject({ session_id: "saved-session", seq: 41 })
+        // While the resumed session runs, the store no longer offers it
+        expect(snapshots.get(0)).toEqual(expect.objectContaining({ sessionId: "", sequence: 41 }))
+        const typed = settle((first.client as Client).waitFor("typingStart"))
+        first.server.send({
+            op: Opcode.dispatch,
+            s: 42,
+            t: "TYPING_START",
+            d: { channel_id: "20", user_id: "30", timestamp: 1 },
+        })
+        await typed
+        await settle((first.client as Client).shutdown())
+        const saved = snapshots.get(0)
+        expect(saved).toEqual(
+            expect.objectContaining({ sessionId: "saved-session", sequence: 42, savedAt: stoppedAt + 3_000 }),
+        )
+        now.mockReturnValue(stoppedAt + 6_000)
+        const second = await start(mode, sessions)
+        await settle((second.client as Client).connect())
+        expect(second.server.commandsWithOp(Opcode.identify)).toEqual([])
+        expect(second.server.commandsWithOp(Opcode.resume)[0]!.d).toMatchObject({
+            session_id: "saved-session",
+            seq: 42,
+        })
+    })
+
+    test("starts a new session when the store cannot mark a loaded snapshot as used", async () => {
+        const now = 1_700_000_000_000
+        vi.spyOn(Date, "now").mockReturnValue(now)
+        const sessions: SessionStore = {
+            load: async () => ({
+                sessionId: "saved-session",
+                sequence: 41,
+                resumeUrl: hostedGateway,
+                savedAt: now,
+                totalShards: 1,
+            }),
+            save: () => Promise.reject(new Error("Store offline")),
+        }
+        const { server, client, logs } = await start(mode, sessions)
+        await settle((client as Client).connect())
+        // Resuming a snapshot the store still offers could repeat its replay after a crash
+        expect(server.commandsWithOp(Opcode.resume)).toEqual([])
+        expect(server.commandsWithOp(Opcode.identify)).toHaveLength(1)
+        expect(logs.withCode("lifecycle.sessionSaveFailed")).toEqual([
+            expect.objectContaining({
+                level: "error",
+                message: "Shard 0 could not mark its saved session as used, so it starts a new session",
+            }),
+        ])
     })
 
     test("logs store failures in full without failing startup or shutdown", async () => {

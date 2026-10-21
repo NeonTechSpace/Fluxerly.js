@@ -49,12 +49,13 @@ test("default readiness rejects a value that is not a signal before observing th
 })
 
 test.each(["default", "native"] as const)("%s parent option objects suggest corrected keys", async (mode) => {
-    for (const [options, expected] of [
-        [{ ...parentOptions, startpTimeoutMs: 100 }, "startupTimeoutMs"],
+    for (const [options, expected, field] of [
+        [{ ...parentOptions, startpTimeoutMs: 100 }, "startupTimeoutMs", "supervisor"],
+        [{ ...parentOptions, restrat: {} }, "restart", "supervisor"],
         [{ ...parentOptions, restart: { maxAttemps: 1 } }, "maxAttempts"],
         [{ ...parentOptions, identify: { minimumSpcingMs: 1000 } }, "minimumSpacingMs"],
         [{ ...parentOptions, processes: undefined, assignments: [{ id: "one", shardId: [0] }] }, "shardIds"],
-    ] as const) {
+    ] as const satisfies readonly (readonly [object, string, string?])[]) {
         let error: unknown
         if (mode === "default") {
             try {
@@ -70,6 +71,9 @@ test.each(["default", "native"] as const)("%s parent option objects suggest corr
             error = reason?._tag === "Die" ? reason.defect : undefined
         }
         expect(error).toBeInstanceOf(ConfigurationError)
-        expect(error).toMatchObject({ hint: expect.stringContaining(`"${expected}"`) })
+        expect(error).toMatchObject({
+            ...(field === undefined ? {} : { field }),
+            hint: expect.stringContaining(`"${expected}"`),
+        })
     }
 })

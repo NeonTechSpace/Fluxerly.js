@@ -14,6 +14,7 @@ import type { LogCategory, LogRecord, LoggingOptions, LogSink, LogThreshold } fr
 import type { TransportOptions } from "#sdk/rest"
 import type { ClientDiagnostics } from "#sdk/client"
 import type { LogCode } from "../code-catalogue.js"
+import { clientServices } from "../client-registry.js"
 import { clientOptionKeys } from "../configuration.js"
 import { unsupportedKeyHint } from "../suggest.js"
 import { createFixtures, fixtureToken, type Fixtures, type WireMessage } from "./fixtures.js"
@@ -38,6 +39,19 @@ export interface TestClientWork {
     readonly pendingHandlers: number
 }
 
+/** The client's work in progress that idle and say wait for, including scheduled task runs and queued handler events */
+export function clientWork(client: { diagnostics(): TestClientWork["diagnostics"] }): () => TestClientWork {
+    return () => {
+        const services = clientServices(client)
+        const handlers = services?.events.drainState()
+        return {
+            diagnostics: client.diagnostics(),
+            runningTasks: services?.tasks.running ?? 0,
+            pendingHandlers: handlers === undefined ? 0 : handlers.running + handlers.waiting,
+        }
+    }
+}
+
 /**
  * Codes the failure reporter logs at Error for a handler, command, callback, scheduled task or onError hook failure, or
  * a subscription stopped by overflow. The reported value can be any error, such as the Fluxer rejection of a failed
@@ -58,13 +72,12 @@ const reportedFailureCodes: ReadonlySet<LogCode> = new Set<LogCode>([
 
 /**
  * Whether a record reports a failure no application code handled: A failure the reporter logged at Error because no
- * onError hook took it, or another application callback failure logged at Error or Fatal. Failures of the test's own
- * response handlers are excluded, because they deliberately simulate network errors
+ * onError hook took it, or another application callback failure logged at Error or Fatal
  */
 function unhandledFailure(record: LogRecord): boolean {
     if (record.level !== "error" && record.level !== "fatal") return false
     if (reportedFailureCodes.has(record.code as LogCode)) return true
-    return record.error?.origin === "application" && !record.code.startsWith("testing.")
+    return record.error?.origin === "application"
 }
 
 /** Whether a record at this level and category passes the caller's thresholds, as the SDK logger decides */

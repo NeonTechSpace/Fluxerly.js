@@ -69,3 +69,38 @@ test.each(modes)(
         })
     },
 )
+
+test.each(modes)(
+    "%s evicts the cached guild after discovery and vanity writes instead of storing their replies",
+    async (mode) => {
+        const client = await setup(mode)
+        const guild = { id: "200", owner_id: "300", name: "Guild", features: [] }
+        const application = {
+            guild_id: "200",
+            status: "pending",
+            description: "Fixture community description",
+            category_type: 4,
+            primary_language: "en-US",
+            custom_tags: [],
+            applied_at: "2026-09-09T10:00:00.000Z",
+            reviewed_at: null,
+            review_reason: null,
+            removed_at: null,
+            removal_reason: null,
+        }
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+            if (init.method === "GET") return Response.json(guild)
+            return Response.json(url.endsWith("/vanity-url") ? { code: "fixture-code", uses: 0 } : application)
+        })
+        await settle(client.guilds.fetch("200"))
+        expect(await settle(client.guilds.get("200"))).toMatchObject({ name: "Guild" })
+        await settle(client.discovery.apply("200", { description: "Fixture community description", categoryId: 4 }))
+        expect(await settle(client.guilds.get("200"))).toBeUndefined()
+        expect(await settle(client.cache.entries("guilds"))).toEqual([])
+        await settle(client.guilds.fetch("200"))
+        await settle(client.guilds.editVanityUrl("200", "fixture-code"))
+        expect(await settle(client.guilds.get("200"))).toBeUndefined()
+        // A vanity reply has no guild ID, so a stored reply would sit in the enumeration under no usable key
+        expect(await settle(client.cache.entries("guilds"))).toEqual([])
+    },
+)

@@ -313,7 +313,7 @@ export function discoveryWrite(
         bucket: "guild:discovery:update",
         method: patch ? "PATCH" : "POST",
         json,
-        cache: { selection: { kind: "guilds", guildId }, mutation: true },
+        cache: { selection: { kind: "guilds", guildId }, mutation: true, evictOnly: true },
         decode: (value) => application(value, guildId),
     }
 }

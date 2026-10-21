@@ -8,7 +8,7 @@ import { Effect, Exit, Scope, Stream } from "effect"
 import WebSocket from "ws"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createFailureClassifier, createReporter } from "./support/reporting.js"
-import { fromExit, settleExit as value } from "./support/results.js"
+import { fromExit, settle as value } from "./support/results.js"
 import { readSandbox } from "./support/sandbox-api.js"
 
 const mode = process.argv[2]

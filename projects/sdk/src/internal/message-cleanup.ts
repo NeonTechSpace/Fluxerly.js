@@ -376,13 +376,14 @@ export function previewCleanup<M extends MessageCore = Message>(
                 for (const message of page) {
                     scannedCount++
                     const accepted = yield* matches(selected, message).pipe(
-                        mapFailureCause(() =>
+                        mapFailureCause((source) =>
                             error({
                                 phase: "preview",
                                 reason: "filter",
                                 outcome: "notDispatched",
                                 scannedCount,
                                 ids: selectedIds(messages),
+                                cause: source.cause,
                             }),
                         ),
                     )

@@ -71,10 +71,7 @@ function pathFailure(path: unknown): InputValidationFailure | undefined {
             }),
         )
     if (
-        segments.some((segment) => {
-            const decoded = segment.replace(/%2e/gi, ".")
-            return segment === "" || decoded === "." || decoded === ".." || /%(?:2f|5c)/i.test(segment)
-        })
+        segments.some((segment) => segment === "" || segment === "." || segment === ".." || /%(?:2f|5c)/i.test(segment))
     )
         return inputValidationFailure(
             "path",
