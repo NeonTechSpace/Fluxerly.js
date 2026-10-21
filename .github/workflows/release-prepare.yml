@@ -2,7 +2,7 @@ name: Release prepare
 on:
   # The daily run prepares a nightly build of main and starts its publication
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '17 2 * * *'
   workflow_dispatch:
     inputs:
       source_ref:
