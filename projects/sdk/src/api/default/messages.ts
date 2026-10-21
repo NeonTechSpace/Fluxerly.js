@@ -777,7 +777,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Keep the bot's typing indicator active while a task runs, returning the task's value.
      * The first typing request must succeed before the task starts, and an initial failure prevents the task from running.
      * Refreshes run no sooner than every 8,000 ms until the task settles, below Fluxer's documented limit of 20 requests per 10 seconds per channel.
-     * A later typing or client-close failure stops refreshes without interrupting the task, and is reported after the task settles.
+     * A later typing or client-close failure stops refreshes without interrupting the task, and never changes the result, which is the task's own.
+     * Only a typing failure other than client closure is logged, once at Warn with code rest.typingRefreshStopped.
      * Client shutdown stops and waits for the helper's refresh work, not arbitrary application work.
      * No detached refresh loop, cache entry, presence change or gateway state change is created
      *
@@ -785,7 +786,7 @@ export interface Messages<M extends MessageCore = Message> {
      * The task is an async function that receives a signal aborted on caller cancellation or helper cleanup.
      * The task must cooperate with that signal, because a promise that ignores it can delay cancellation.
      * A thrown or rejected task rejects with SdkDefect rather than returning an expected Err.
-     * If task failure and refresh cleanup both fail, SdkDefect retains safe details for both
+     * A defect in the refresh work also rejects with SdkDefect, which retains safe details for both when the task rejected too
      *
      * @example
      * ```ts

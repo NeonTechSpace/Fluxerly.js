@@ -517,6 +517,12 @@ export const logCodes = {
             "A successful response to an SDK operation did not match the expected shape. The failing field or check is in fields.field",
         action: "Check test fixtures, or report it if Fluxer's responses changed",
     },
+    "rest.typingRefreshStopped": {
+        levels: ["warn"],
+        meaning:
+            "A typing indicator refresh of keepTyping failed, so refreshing stopped while the task keeps running and its result is not changed. The record is logged when the refresh fails, before the task settles, and the channel is in fields.channelId. A refresh stopped by client closure is not logged",
+        action: "Check the record's error for why the typing request failed. The indicator can expire before the task settles",
+    },
     "rest.payloadSent": {
         levels: ["trace"],
         meaning: "The masked body of a REST request, printed only in unsafe payload mode",

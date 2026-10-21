@@ -738,13 +738,14 @@ export interface Messages<M extends MessageCore = Message> {
      * Keep the bot's typing indicator active while a task runs, returning the task's value.
      * The first typing request must succeed before the task starts, and an initial failure prevents the task from running.
      * Refreshes run no sooner than every 8,000 ms until the task settles, below Fluxer's documented limit of 20 requests per 10 seconds per channel.
-     * A later typing or client-close failure stops refreshes without interrupting the task, and is reported after the task settles.
+     * A later typing or client-close failure stops refreshes without interrupting the task, and never changes the result, which is the task's own.
+     * Only a typing failure other than client closure is logged, once at Warn with code rest.typingRefreshStopped.
      * Client shutdown stops and waits for the helper's refresh work, not arbitrary application work.
      * No detached refresh loop, cache entry, presence change or gateway state change is created
      *
      * @remarks
      * The task is an Effect that runs with the caller's services, and its scope, services and errors stay with the caller.
-     * A retained refresh failure combines with the task's Cause.
+     * A defect in the refresh work joins the task's Cause.
      * Interruption stops and awaits the helper
      *
      * @example

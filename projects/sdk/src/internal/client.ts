@@ -1589,6 +1589,18 @@ export class ClientOwner<M extends MessageCore = Message> {
                         const refresh = yield* Effect.forkChild(
                             Deferred.await(started).pipe(
                                 Effect.andThen(owner.#refreshTyping(channelId, options)),
+                                Effect.tapError((error) =>
+                                    error instanceof ClientClosedError
+                                        ? Effect.void
+                                        : owner.logging.logEffect({
+                                              level: "warn",
+                                              category: "rest",
+                                              code: "rest.typingRefreshStopped",
+                                              message: `The typing indicator refresh for channel ${channelId} stopped after a failure, so the indicator can expire before the task settles. The task keeps running and its result is unchanged`,
+                                              fields: { channelId },
+                                              error,
+                                          }),
+                                ),
                                 Effect.ensuring(Effect.sync(() => owner.#typing.delete(id))),
                             ),
                         )
@@ -1614,15 +1626,20 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    #stopTyping(fiber: Fiber.Fiber<never, MessageOperationFailure>): Effect.Effect<void, MessageOperationFailure> {
+    /**
+     * Stop the refresh fiber and wait for it. Only a defect in the refresh work is returned to the caller, because an
+     * expected refresh failure is already logged where it happened and never changes the task's result
+     */
+    #stopTyping(fiber: Fiber.Fiber<never, MessageOperationFailure>): Effect.Effect<void> {
         return Effect.uninterruptible(
             Fiber.interrupt(fiber).pipe(
                 Effect.andThen(Fiber.await(fiber)),
-                Effect.flatMap((exit) =>
-                    Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
-                        ? Effect.failCause(exit.cause)
-                        : Effect.void,
-                ),
+                Effect.flatMap((exit) => {
+                    const reasons = Exit.isFailure(exit)
+                        ? exit.cause.reasons.filter((reason) => reason._tag === "Die")
+                        : []
+                    return reasons.length ? Effect.failCause(Cause.fromReasons<never>(reasons)) : Effect.void
+                }),
             ),
         )
     }

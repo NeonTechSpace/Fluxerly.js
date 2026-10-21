@@ -1,14 +1,15 @@
 import { Context, Deferred, Effect, Exit, Fiber } from "effect"
-import { afterEach, expect, test, vi } from "vitest"
+import { afterEach, describe, expect, test, vi } from "vitest"
 import {
     ClientClosedError,
-    MessageOperationError,
     SdkDefect,
+    type Client,
     type MessageOperationFailure,
     type TypingStart,
 } from "../../../src/index.js"
-import { createClient as createNative } from "../../../src/effect.js"
-import { defaultApi } from "../../support/both-apis.js"
+import { createClient as createNative, type Client as NativeClient } from "../../../src/effect.js"
+import { defaultApi, modes, setup, type Mode } from "../../support/both-apis.js"
+import { captureLogs } from "../../support/log-capture.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 
@@ -71,24 +72,6 @@ test("native typing is lazy and repeatable with the same one-shot request", asyn
             }),
         ),
     )
-})
-
-test("an initial typing HTTP failure prevents default task invocation", async () => {
-    const requests = typingFetch([500])
-    const client = defaultApi()
-    let called = false
-
-    const result = await client.messages.keepTyping("20", async () => {
-        called = true
-        return "unexpected"
-    })
-
-    expect(result.isErr() && result.error).toMatchObject({
-        _tag: "MessageOperationError",
-        operation: "typing",
-    })
-    expect(called).toBe(false)
-    expect(requests).toEqual([{ url: "https://api.fluxer.app/v1/channels/20/typing", method: "POST", body: undefined }])
 })
 
 test("native keepTyping preserves its caller context", async () => {
@@ -262,91 +245,180 @@ test("native interruption stops refresh work before the caller scope continues",
     await running
 })
 
-test("typing refresh and task failures retain both native causes and default safe causes", async () => {
-    vi.useFakeTimers()
-    const defaultRequests = typingFetch([204, 500])
-    const defaultClient = defaultApi()
-    let rejectTask: ((error: Error) => void) | undefined
-    const defaultResult = defaultClient.messages.keepTyping(
-        "20",
-        () =>
-            new Promise<never>((_resolve, reject) => {
-                rejectTask = reject
-            }),
-    )
-    await settled()
-    await vi.advanceTimersByTimeAsync(100)
-    await settled()
-    await vi.advanceTimersByTimeAsync(8_000)
-    await settled()
-    expect(defaultRequests).toHaveLength(2)
-    rejectTask!(new Error("task failed"))
-    await expect(defaultResult).rejects.toMatchObject({
-        name: "SdkDefect",
-        operation: "keepTyping",
-        reasons: expect.arrayContaining([
-            expect.objectContaining({
-                kind: "Failure",
-                failure: expect.objectContaining({ _tag: "MessageOperationError", operation: "typing" }),
-            }),
-            expect.objectContaining({ kind: "Defect" }),
-        ]),
-    } satisfies Partial<SdkDefect>)
+type TaskFailure = { readonly _tag: "TaskFailure" }
 
-    vi.unstubAllGlobals()
-    const nativeRequests = typingFetch([204, 500])
-    const task = Deferred.makeUnsafe<never, { readonly _tag: "TaskFailure" }>()
-    const nativeResult = Effect.runPromiseExit(
-        Effect.scoped(
-            Effect.gen(function* () {
-                const client = yield* createNative({ token: "fixture-only-not-a-credential" })
-                return yield* client.messages.keepTyping("20", Deferred.await(task))
-            }),
-        ),
-    )
+/**
+ * Run keepTyping on a task that the test settles, in either API, and report the outcome as its value or its failures.
+ * The default API reports a task failure as a rejected SdkDefect, so both styles list their failure reasons
+ */
+async function keepTypingScenario(mode: Mode, statuses: readonly number[], options?: { readonly timeoutMs?: number }) {
+    vi.useFakeTimers()
+    const requests = typingFetch(statuses)
+    const logs = captureLogs()
+    const client = await setup(mode, { logging: logs.logging })
+    const task = Deferred.makeUnsafe<string, TaskFailure>()
+    let started = false
+    const outcome: PromiseLike<{ readonly value: string } | { readonly failures: readonly unknown[] }> =
+        mode === "default"
+            ? (client as Client).messages
+                  .keepTyping(
+                      "20",
+                      async () => {
+                          started = true
+                          return await Effect.runPromise(Deferred.await(task))
+                      },
+                      options,
+                  )
+                  .then(
+                      (result) => (result.isOk() ? { value: result.value } : { failures: [result.error] }),
+                      (error: unknown) => {
+                          if (!(error instanceof SdkDefect)) throw error
+                          return {
+                              failures: error.reasons.map((reason) =>
+                                  reason.kind === "Failure" ? reason.failure : reason,
+                              ),
+                          }
+                      },
+                  )
+            : Effect.runPromiseExit(
+                  (client as NativeClient).messages.keepTyping(
+                      "20",
+                      Effect.suspend(() => {
+                          started = true
+                          return Deferred.await(task)
+                      }),
+                      options,
+                  ),
+              ).then((exit) =>
+                  Exit.isSuccess(exit)
+                      ? { value: exit.value }
+                      : {
+                            failures: exit.cause.reasons.map((reason) =>
+                                reason._tag === "Fail" ? reason.error : reason._tag === "Die" ? reason.defect : reason,
+                            ),
+                        },
+              )
     await settled()
     await vi.advanceTimersByTimeAsync(100)
     await settled()
-    await vi.advanceTimersByTimeAsync(8_000)
-    await settled()
-    expect(nativeRequests).toHaveLength(2)
-    Deferred.doneUnsafe(task, Effect.fail({ _tag: "TaskFailure" as const }))
-    const nativeExit = await nativeResult
-    expect(Exit.isFailure(nativeExit)).toBe(true)
-    if (Exit.isFailure(nativeExit))
-        expect(nativeExit.cause.reasons).toEqual(
-            expect.arrayContaining([
-                expect.objectContaining({ _tag: "Fail", error: expect.any(MessageOperationError) }),
-                expect.objectContaining({ _tag: "Fail", error: { _tag: "TaskFailure" } }),
-            ]),
-        )
+    return {
+        requests,
+        logs,
+        client,
+        outcome,
+        started: () => started,
+        refresh: async () => {
+            await vi.advanceTimersByTimeAsync(8_000)
+            await settled()
+        },
+        succeed: (value: string) => Deferred.doneUnsafe(task, Effect.succeed(value)),
+        fail: () => Deferred.doneUnsafe(task, Effect.fail({ _tag: "TaskFailure" as const })),
+    }
+}
+
+const stoppedRefresh = "rest.typingRefreshStopped"
+
+describe.each(modes)("%s keepTyping after a typing refresh failure", (mode) => {
+    test("returns the task's value and logs the stopped refresh once at Warn", async () => {
+        const scenario = await keepTypingScenario(mode, [204, 500])
+        let settled = false
+        void Promise.resolve(scenario.outcome).then(() => {
+            settled = true
+        })
+        await scenario.refresh()
+        expect(scenario.requests).toHaveLength(2)
+        // The stop is logged when the refresh fails, before the task settles
+        expect(settled).toBe(false)
+        expect(scenario.logs.withCode(stoppedRefresh)).toHaveLength(1)
+
+        // Refreshing stopped for good while the task still runs, so no further request follows the failed one
+        await vi.advanceTimersByTimeAsync(32_000)
+        expect(scenario.requests).toHaveLength(2)
+        scenario.succeed("prepared")
+
+        expect(await scenario.outcome).toEqual({ value: "prepared" })
+        const records = scenario.logs.withCode(stoppedRefresh)
+        expect(records).toHaveLength(1)
+        expect(records[0]).toMatchObject({
+            level: "warn",
+            category: "rest",
+            fields: { channelId: "20" },
+            error: { name: "MessageOperationError" },
+        })
+    })
+
+    test("returns only the task's failure and still logs the stopped refresh", async () => {
+        const scenario = await keepTypingScenario(mode, [204, 500])
+        await scenario.refresh()
+
+        scenario.fail()
+
+        const outcome = await scenario.outcome
+        const failures = "failures" in outcome ? outcome.failures : []
+        expect(failures).toEqual([
+            mode === "default" ? expect.objectContaining({ kind: "Defect" }) : { _tag: "TaskFailure" },
+        ])
+        expect(scenario.logs.withCode(stoppedRefresh)).toHaveLength(1)
+    })
 })
 
-test("client shutdown stops and awaits refreshes without claiming to cancel default task work", async () => {
-    vi.useFakeTimers()
-    const requests = typingFetch()
-    const client = defaultApi()
-    let finish: ((value: string) => void) | undefined
-    const result = client.messages.keepTyping(
-        "20",
-        () =>
-            new Promise<string>((resolve) => {
-                finish = resolve
-            }),
-    )
-    await settled()
-    await vi.advanceTimersByTimeAsync(100)
-    await settled()
-    expect(finish).toBeTypeOf("function")
-    const shutdown = client.shutdown()
-    await vi.advanceTimersByTimeAsync(0)
-    await settled()
-    await shutdown
-    await vi.advanceTimersByTimeAsync(16_000)
-    expect(requests).toHaveLength(1)
-    finish!("completed after shutdown")
-    const closed = await result
-    expect(closed.isErr() && closed.error).toBeInstanceOf(ClientClosedError)
+describe.each(modes)("%s keepTyping after a defect in the refresh work", (mode) => {
+    test("surfaces the defect without a stopped-refresh record", async () => {
+        let reads = 0
+        // The first typing request reads the budget once and succeeds, and the refresh's read throws
+        const options = {
+            get timeoutMs(): number {
+                if (++reads > 1) throw new Error("refresh options defect")
+                return 30_000
+            },
+        }
+        const scenario = await keepTypingScenario(mode, [204], options)
+        await scenario.refresh()
+        scenario.succeed("prepared")
+
+        const outcome = await scenario.outcome
+        const failures = "failures" in outcome ? outcome.failures : []
+        expect(failures).toEqual([
+            mode === "default"
+                ? expect.objectContaining({ kind: "Defect" })
+                : expect.objectContaining({ message: "refresh options defect" }),
+        ])
+        expect(scenario.logs.withCode(stoppedRefresh)).toEqual([])
+    })
+})
+
+describe.each(modes)("%s keepTyping when the client closes during the task", (mode) => {
+    test("stops refreshing without a Warn and keeps the task's own result", async () => {
+        const scenario = await keepTypingScenario(mode, [204])
+        expect(scenario.started()).toBe(true)
+
+        const shutdown =
+            mode === "default"
+                ? (scenario.client as Client).shutdown()
+                : Effect.runPromise((scenario.client as NativeClient).shutdown())
+        await vi.advanceTimersByTimeAsync(0)
+        await settled()
+        await shutdown
+        await vi.advanceTimersByTimeAsync(16_000)
+        expect(scenario.requests).toHaveLength(1)
+        scenario.succeed("completed after shutdown")
+
+        expect(await scenario.outcome).toEqual({ value: "completed after shutdown" })
+        expect(scenario.logs.records.filter((record) => record.level === "warn")).toEqual([])
+    })
+})
+
+describe.each(modes)("%s keepTyping after a failed first typing request", (mode) => {
+    test("fails without starting the task or logging a stopped refresh", async () => {
+        const scenario = await keepTypingScenario(mode, [500])
+        const outcome = await scenario.outcome
+
+        expect(scenario.started()).toBe(false)
+        expect(scenario.requests).toHaveLength(1)
+        const failures = "failures" in outcome ? outcome.failures : []
+        expect(failures).toEqual([expect.objectContaining({ _tag: "MessageOperationError", operation: "typing" })])
+        expect(scenario.logs.withCode(stoppedRefresh)).toEqual([])
+    })
 })
 
 async function gatewayFixture() {
