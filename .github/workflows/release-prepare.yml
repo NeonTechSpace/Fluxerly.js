@@ -180,6 +180,11 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+        id: setup
+        with:
+          working-directory: projects
+          install: false
       # Nightly builds are published without external review. Release publish still inspects the candidate and waits
       # for this run to finish before it trusts the preparation
       - name: Dispatch Release publish for the nightly candidate

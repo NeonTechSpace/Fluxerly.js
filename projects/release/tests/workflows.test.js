@@ -158,7 +158,10 @@ test("Contribution callbacks execute only trusted main code with no install or P
     const checkout = job.steps.find((step) => String(step.uses).startsWith("actions/checkout@"))
     assert.equal(checkout.with.ref, "${{ github.event.repository.default_branch }}")
     assert.deepEqual(job.steps.filter((step) => step.run).map((step) => step.run), ["node .github/scripts/contributions.mjs"])
-    assert.deepEqual(job.steps.filter((step) => step.uses).map((step) => step.uses), [checkout.uses])
+    const setup = job.steps.find((step) => String(step.uses).startsWith("pnpm/setup@"))
+    assert.equal(setup.with.install, false)
+    assert.equal(setup.with.cache, false)
+    assert.deepEqual(job.steps.filter((step) => step.uses).map((step) => step.uses), [checkout.uses, setup.uses])
     assert.equal(job.steps.at(-1).env.GH_TOKEN, "${{ github.token }}")
 })
 
@@ -217,7 +220,8 @@ test("Nightly preparation runs daily and starts only Release publish from main f
     // The trigger decides, because a reviewed-source run executes code that could forge a nightly output.
     // A skipped nightly has no candidate to publish
     assert.equal(job.if, `(${nightly}) && needs.prepare.outputs.skipped == 'false'`)
-    assert.equal(job.steps.some((step) => /^pnpm\/setup@|^actions\/setup-node@/.test(String(step.uses))), false)
+    // Node is set up only for the job summary, without installing the workspace
+    assert.equal(job.steps.find((step) => step.id === "setup").with.install, false)
     const runs = job.steps.filter((step) => step.run)
     assert.equal(runs.length, 1, "The publish job runs only its dispatch")
     const [dispatch] = runs
@@ -446,6 +450,18 @@ test("Setup runs projects/.node-version or the Node floor declared by the SDK ma
         }
     // A floor bump that misses one of these copies fails here rather than testing an old Node
     assert.deepEqual(floorJobs.sort(), ["ci.yml/consumers", "release-prepare.yml/prepare", "release-publish.yml/smoke"])
+})
+
+test("Every job that runs Node sets up the pinned version first", () => {
+    const runsNode = (step) => step.uses === "$/.github/actions/summary" || /(^|[\s;&|(])node\s/m.test(step.run ?? "")
+    for (const { file, id, job } of jobs()) {
+        const steps = job.steps ?? []
+        const first = steps.findIndex(runsNode)
+        if (first === -1) continue
+        // Otherwise the step runs the runner image's Node instead of projects/.node-version or the SDK floor
+        const setup = steps.findIndex((step) => String(step.uses).startsWith("pnpm/setup@"))
+        assert.ok(setup !== -1 && setup < first, `${file}/${id} runs Node before pnpm/setup`)
+    }
 })
 
 test("Job summaries escape untrusted values and never present failures or commands as success", () => {
