@@ -238,6 +238,22 @@ test.each(modes)("%s ban lists are remote, frozen and fail without partial resul
     expect(await api.bans()).toEqual([])
 })
 
+test.each(modes)("%s keeps moderator ID 0 on a ban placed by Fluxer staff", async (mode) => {
+    rest(async () =>
+        Response.json([
+            {
+                user: { id: "30", username: "fixture" },
+                reason: null,
+                moderator_id: "0",
+                banned_at: "2026-09-09T00:00:00Z",
+                expires_at: null,
+            },
+        ]),
+    )
+    const api = await setup(mode, { members: true })
+    expect((await api.bans())[0]).toMatchObject({ userId: "30", moderatorId: "0" })
+})
+
 test.each(modes)("%s dispatched moderation rejection blocks delayed cache restoration without replay", async (mode) => {
     const api = await setup(mode, { members: true })
     rest(async () => Response.json(member()))

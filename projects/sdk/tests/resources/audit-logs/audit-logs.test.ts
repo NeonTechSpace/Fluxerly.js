@@ -107,6 +107,15 @@ test.each(modes)("%s fetches filtered pages through the public client without re
     }
 })
 
+// Fluxer d3d3a5f: GuildModerationService and GuildInvitePauseApplier record staff and automatic actions as SYSTEM_USER_ID 0
+test("keeps the Fluxer system user ID 0 on an entry made by staff", () => {
+    const request = validRequest(auditLogPage("20", { actionType: AuditLogActions.MemberBanAdd }))
+    const result = request.decode(
+        page([entry({ action_type: AuditLogActions.MemberBanAdd, user_id: "0", target_id: "31", options: undefined })]),
+    )
+    expect(result?.entries[0]).toMatchObject({ actionType: AuditLogActions.MemberBanAdd, userId: "0", targetId: "31" })
+})
+
 // Fluxer 597116a: GuildMemberService records the member snapshots' roles lists, sorted, as one roles change
 test("keeps a member role change as the full role ID lists before and after", () => {
     const request = validRequest(auditLogPage("20", { userId: "30" }))

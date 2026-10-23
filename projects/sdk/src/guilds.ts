@@ -773,7 +773,7 @@ export interface GuildBan extends MemberReference {
     readonly isBot: boolean
     /** Stored reason, preserving absent versus null */
     readonly reason?: string | null
-    /** Decimal user ID of the moderator */
+    /** Decimal user ID of the moderator. "0" is the Fluxer system user, which records a ban that Fluxer staff placed */
     readonly moderatorId: string
     /** ISO 8601 time the ban was recorded */
     readonly bannedAt: string

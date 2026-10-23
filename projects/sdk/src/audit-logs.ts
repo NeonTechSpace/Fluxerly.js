@@ -236,7 +236,7 @@ export interface AuditLogEntry {
     readonly id: string
     /** Recorded Fluxer action, compared with AuditLogActions values. An action Fluxer adds later keeps its number here */
     readonly actionType: number
-    /** Acting user ID when Fluxer supplied one */
+    /** Acting user ID when Fluxer supplied one. "0" is the Fluxer system user, which records a member removal, ban or ban removal that Fluxer staff made and, as a GuildUpdate, an invite pause that Fluxer places, lifts or lets expire */
     readonly userId?: string | null
     /** Affected entity ID or invite code when Fluxer supplied one, not necessarily a decimal ID */
     readonly targetId?: string | null
