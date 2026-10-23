@@ -724,6 +724,44 @@ test.each(modes)("%s reads an announced web domain migration and records it once
     ])
 })
 
+const discoveryFeatures = [
+    ["true", { presigned_attachment_uploads: false, discovery_enabled: true }, true],
+    ["false", { presigned_attachment_uploads: false, discovery_enabled: false }, false],
+    ["absent", { presigned_attachment_uploads: false }, true],
+] as const
+
+for (const [name, features, expected] of discoveryFeatures)
+    test.each(modes)(`%s exposes a ${name} discovery_enabled flag as discoveryEnabled ${expected}`, async (mode) => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => Response.json(document({ features }))),
+        )
+        const value = await client(mode)
+        const resolved = await settle(value.instance.resolve())
+        expect(resolved.discoveryEnabled).toBe(expected)
+    })
+
+test.each(modes)("%s rejects a discovery document whose discovery_enabled is not a boolean", async (mode) => {
+    for (const discoveryEnabled of ["false", 0, null, {}]) {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                Response.json(
+                    document({
+                        features: { presigned_attachment_uploads: false, discovery_enabled: discoveryEnabled },
+                    }),
+                ),
+            ),
+        )
+        const value = await client(mode)
+        await expect(settle(value.instance.resolve())).rejects.toMatchObject({
+            _tag: "ConnectionError",
+            reason: "protocol",
+        })
+        vi.unstubAllGlobals()
+    }
+})
+
 test.each([undefined, null, { enabled: "yes" }, []])(
     "a malformed or absent domain migration %j is null",
     async (migration) => {

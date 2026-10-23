@@ -16,6 +16,7 @@ import type { GuildOperationFailure, GuildOperationOptions } from "#sdk/guilds"
  * Reads retry transient transport and HTTP 500/502/503/504 failures at most twice. Writes retry only confirmed 429 rejections.
  * Input, HTTP and malformed-response failures use GuildOperationError. Closing clients use ClientClosedError.
  * Interruption waits for owned cleanup. Defects retain Cause.
+ * When the resolved instance reports discoveryEnabled false, search and the application writes fail with reason rejected, HTTP 400 and details.providerCode DISCOVERY_DISABLED.
  * Application writes may publish or unpublish a listing, invalidate guild snapshots and cannot promise rollback.
  * There is no hidden eligibility read, automatic resubmission, review approval or directory-joining operation
  *
@@ -37,6 +38,7 @@ export interface Discovery {
      * Fetch a community's current directory eligibility and application state.
      * Use a decimal guild ID with ManageGuild permission.
      * A result with eligible false can mean discovery is disabled or the member threshold is unmet, without distinguishing them.
+     * The resolved instance's discoveryEnabled value shows whether discovery is switched on.
      * Eligibility can change before application.
      * Reviewed or removed applications include their available reasons
      */

@@ -148,7 +148,7 @@ export interface DiscoveryApplication {
 export interface DiscoveryStatus {
     /** Current application or listing, null when no record exists */
     readonly application: DiscoveryApplication | null
-    /** False when directory discovery is disabled or the community fails current eligibility */
+    /** False when directory discovery is disabled (see ResolvedInstance.discoveryEnabled) or the community fails current eligibility */
     readonly eligible: boolean
     /** Provider's current minimum member count, not a local configuration setting */
     readonly minMemberCount: number

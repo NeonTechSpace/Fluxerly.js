@@ -23,6 +23,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * Client closure returns ClientClosedError.
  * Abort waits for cleanup and returns CancelledError.
  * Unexpected failures reject with SdkDefect.
+ * When the resolved instance reports discoveryEnabled false, search and the application writes fail with reason rejected, HTTP 400 and details.providerCode DISCOVERY_DISABLED.
  * Application writes may publish or remove a listing and invalidate cached guild data.
  * No eligibility check, approval, resubmission or joining is performed automatically.
  * A failed write does not guarantee rollback
@@ -45,6 +46,7 @@ export interface Discovery {
      * Fetch a community's current directory eligibility and application state.
      * Use a decimal guild ID with ManageGuild permission.
      * A result with eligible false can mean discovery is disabled or the member threshold is unmet, without distinguishing them.
+     * The resolved instance's discoveryEnabled value shows whether discovery is switched on.
      * Eligibility can change before application.
      * Reviewed or removed applications include their available reasons
      */

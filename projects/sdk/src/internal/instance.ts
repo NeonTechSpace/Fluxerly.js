@@ -232,6 +232,10 @@ function parseDocument(value: unknown, allowInsecure: boolean): ResolvedContext 
         typeof value.features.presigned_attachment_uploads !== "boolean"
     )
         return undefined
+    // Fluxer documents a missing discovery_enabled as enabled, while a present non-boolean is an invalid document
+    const advertisedDiscovery = value.features.discovery_enabled
+    if (advertisedDiscovery !== undefined && typeof advertisedDiscovery !== "boolean") return undefined
+    const discoveryEnabled = advertisedDiscovery ?? true
     const context: InstanceEndpointContext = Object.freeze({
         apiPublic,
         gateway,
@@ -249,6 +253,7 @@ function parseDocument(value: unknown, allowInsecure: boolean): ResolvedContext 
             apiCodeVersion,
             endpoints,
             presignedAttachmentUploads: context.presignedAttachmentUploads,
+            discoveryEnabled,
             assets: createInstanceAssets(media, staticCdn),
             links: createInstanceLinks(webapp),
             domainMigration: domainMigration(value.domain_migration),

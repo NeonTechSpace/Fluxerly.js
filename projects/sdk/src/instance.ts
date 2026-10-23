@@ -70,6 +70,12 @@ export interface ResolvedInstance {
     readonly endpoints: InstanceEndpoints
     /** Whether this instance advertises temporary upload URLs for attachment transfers */
     readonly presignedAttachmentUploads: boolean
+    /** Whether this instance has community directory discovery switched on.
+     * True when discovery omits the flag, as Fluxer documents. A present value that is not a boolean makes the discovery document invalid.
+     * When false, the discovery namespace's search, apply, edit and withdraw operations fail with reason rejected, HTTP 400 and details.providerCode DISCOVERY_DISABLED, while fetchStatus and fetchCategories still answer.
+     * The value is a snapshot from when the client resolved the instance, so an operator's later change appears only in a new client
+     */
+    readonly discoveryEnabled: boolean
     /** Pure asset URL helpers bound to this instance's media and static-CDN bases.
      * They follow the assets namespace's input-field and fallback rules, return URLs directly and throw AssetUrlError for invalid input
      */
