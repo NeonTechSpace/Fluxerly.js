@@ -1,10 +1,11 @@
-// Deletion of the designated bot's own message history in one test-owned channel and its test-owned thread, or with
-// `--guild` in the whole sandbox guild, covering success, a lost response and post-dispatch cancellation, each
-// reconciled by unique markers. Channel mode also deletes by the thread ID and checks that only the thread is cleared.
+// Deletion of the designated bot's own message history in one test-owned channel and its test-owned active and
+// archived threads, or with `--guild` in the whole sandbox guild, covering success, a lost response and post-dispatch
+// cancellation, each reconciled by unique markers. Channel mode also deletes by the active thread's ID and checks that
+// only that thread is cleared.
 // Journal `.env.test.own-history.local` records sandbox and bot identity, a unique marker, the test-owned channels,
-// thread and messages, deletion phases and an optional other-author control sample. An existing journal is recovered
-// instead of running the checks: only the journaled thread and channels are removed, without repeating any history
-// deletion
+// threads and messages, the archive step, deletion phases and an optional other-author control sample. An existing
+// journal is recovered instead of running the checks: only the journaled threads and channels are removed, without
+// repeating any history deletion
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { Cause, Effect, Exit, Scope } from "effect"
@@ -79,15 +80,24 @@ function assertJournal() {
         assert.equal(entry.type, 0)
         if (entry.id !== undefined) assert.match(entry.id, /^\d+$/)
     }
-    assert.ok(Array.isArray(journal.threads) && journal.threads.length <= 1)
+    assert.ok(Array.isArray(journal.threads) && journal.threads.length <= 2)
     const primaryId = journal.channels.find((entry) => entry.marker === `${journal.marker}-primary`)?.id
+    const expectedThreadMarkers = new Set([`${journal.marker}-thread`, `${journal.marker}-archived`])
+    const seenThreadMarkers = new Set()
     for (const entry of journal.threads) {
-        assert.equal(entry?.marker, `${journal.marker}-thread`)
+        assert.ok(expectedThreadMarkers.has(entry?.marker))
+        assert.ok(!seenThreadMarkers.has(entry.marker))
+        seenThreadMarkers.add(entry.marker)
         assert.equal(entry.name, entry.marker)
         assert.equal(entry.type, 11)
         assert.match(entry.parentId ?? "", /^\d+$/)
         assert.equal(entry.parentId, primaryId)
         if (entry.id !== undefined) assert.match(entry.id, /^\d+$/)
+        // Only the archived thread has an archive step, which needs the creation to be reconciled first
+        if (entry.archivePhase !== undefined) {
+            assert.equal(entry.marker, `${journal.marker}-archived`)
+            assert.ok(entry.id !== undefined && ["dispatching", "archived"].includes(entry.archivePhase))
+        }
     }
 }
 
@@ -136,8 +146,8 @@ async function findOwnedThread(entry) {
     return matches[0]
 }
 
-async function createOwnedThread(parent) {
-    const marker = `${journal.marker}-thread`
+async function createOwnedThread(parent, kind) {
+    const marker = `${journal.marker}-${kind}`
     const entry = { marker, name: marker, type: 11, parentId: parent.id, phase: "creating" }
     journal.threads.push(entry)
     save()
@@ -158,6 +168,23 @@ async function createOwnedThread(parent) {
     entry.phase = "created"
     save()
     return entry
+}
+
+// Archiving follows the creation reconciliation, so a thread whose creation response was lost is still found as active
+async function archiveOwnedThread(entry) {
+    entry.archivePhase = "dispatching"
+    save()
+    let thread
+    try {
+        thread = (await api("PATCH", `/channels/${entry.id}`, { archived: true })).data
+    } catch {
+        // The archive intent is already durable. Read the thread back instead of replaying a possibly applied PATCH
+        thread = (await api("GET", `/channels/${entry.id}`)).data
+    }
+    assert.equal(thread?.id, entry.id)
+    assert.equal(thread.thread_metadata?.archived, true)
+    entry.archivePhase = "archived"
+    save()
 }
 
 async function findOwnedMessage(channelId, marker) {
@@ -340,7 +367,7 @@ async function cleanup() {
     requestDeadline = AbortSignal.timeout(30_000)
     try {
         assertJournal()
-        // The thread goes first, while its parent still exists to locate one whose creation response was lost
+        // The threads go first, while their parent still exists to locate one whose creation response was lost
         for (const entry of journal.threads) {
             if (entry.id === undefined) {
                 const located = await findOwnedThread(entry)
@@ -401,7 +428,7 @@ async function cleanup() {
         assert.ok(journal.threads.every((entry) => !active.data.threads.some((thread) => thread?.name === entry.name)))
         journalFile.remove()
         journal = undefined
-        report("test_owned_channels_and_thread_removed")
+        report("test_owned_channels_and_threads_removed")
     } finally {
         requestDeadline = priorRequestDeadline
     }
@@ -449,16 +476,24 @@ try {
         stage = "create_test_owned_channels"
         const primary = await createOwnedChannel("primary")
         const control = await createOwnedChannel("control")
-        const thread = await createOwnedThread(primary)
+        const thread = await createOwnedThread(primary, "thread")
+        const archivedThread = await createOwnedThread(primary, "archived")
         report(stage)
 
         stage = "create_test_owned_messages"
         const primaryMarker = await createOwnedMessage(primary, "primary")
         const controlMarker = await createOwnedMessage(control, "control")
         const threadMarker = await createOwnedMessage(thread, "thread")
+        const archivedMarker = await createOwnedMessage(archivedThread, "archived")
         await assertMarkerPresent(primaryMarker)
         await assertMarkerPresent(controlMarker)
         await assertMarkerPresent(threadMarker)
+        await assertMarkerPresent(archivedMarker)
+        report(stage)
+
+        stage = "archive_test_owned_thread"
+        await archiveOwnedThread(archivedThread)
+        await assertMarkerPresent(archivedMarker)
         report(stage)
 
         const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
@@ -473,21 +508,23 @@ try {
         await cache(primaryMarker)
         await cache(controlMarker)
         await cache(threadMarker)
+        await cache(archivedMarker)
         report(stage)
 
         stage = "whole_history_success"
         await deleteOwnMessages(primary, "success")
         await assertMarkerAbsent(primaryMarker)
         await assertMarkerAbsent(threadMarker)
+        await assertMarkerAbsent(archivedMarker)
         if (guildMode) await assertMarkerAbsent(controlMarker)
         else await assertMarkerPresent(controlMarker)
-        await assertCacheCleared([primaryMarker, controlMarker, threadMarker])
+        await assertCacheCleared([primaryMarker, controlMarker, threadMarker, archivedMarker])
         await assertBotMembership()
         if (guildMode) await assertNonBotControl()
         report(
             guildMode
                 ? "selected_markers_removed_and_membership_preserved"
-                : "channel_and_thread_markers_removed_control_and_membership_preserved",
+                : "channel_and_thread_markers_removed_including_archived_control_and_membership_preserved",
             guildMode ? { nonBotSampleObserved: Boolean(journal.nonBotControl) } : {},
         )
 
