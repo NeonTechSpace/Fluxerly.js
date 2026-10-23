@@ -1,8 +1,10 @@
-// Deletion of the designated bot's own message history in one test-owned channel, or with `--guild` in the whole
-// sandbox guild, covering success, a lost response and post-dispatch cancellation, each reconciled by unique markers.
-// Journal `.env.test.own-history.local` records sandbox and bot identity, a unique marker, the test-owned channels and
-// messages, deletion phases and an optional other-author control sample. An existing journal is recovered instead of
-// running the checks: only journaled channels are removed, without repeating any history deletion
+// Deletion of the designated bot's own message history in one test-owned channel and its test-owned thread, or with
+// `--guild` in the whole sandbox guild, covering success, a lost response and post-dispatch cancellation, each
+// reconciled by unique markers. Channel mode also deletes by the thread ID and checks that only the thread is cleared.
+// Journal `.env.test.own-history.local` records sandbox and bot identity, a unique marker, the test-owned channels,
+// thread and messages, deletion phases and an optional other-author control sample. An existing journal is recovered
+// instead of running the checks: only the journaled thread and channels are removed, without repeating any history
+// deletion
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { Cause, Effect, Exit, Scope } from "effect"
@@ -77,6 +79,16 @@ function assertJournal() {
         assert.equal(entry.type, 0)
         if (entry.id !== undefined) assert.match(entry.id, /^\d+$/)
     }
+    assert.ok(Array.isArray(journal.threads) && journal.threads.length <= 1)
+    const primaryId = journal.channels.find((entry) => entry.marker === `${journal.marker}-primary`)?.id
+    for (const entry of journal.threads) {
+        assert.equal(entry?.marker, `${journal.marker}-thread`)
+        assert.equal(entry.name, entry.marker)
+        assert.equal(entry.type, 11)
+        assert.match(entry.parentId ?? "", /^\d+$/)
+        assert.equal(entry.parentId, primaryId)
+        if (entry.id !== undefined) assert.match(entry.id, /^\d+$/)
+    }
 }
 
 async function findOwnedChannel(entry) {
@@ -107,6 +119,40 @@ async function createOwnedChannel(kind) {
     assert.match(created?.id ?? "", /^\d+$/)
     assert.equal(created.guild_id, guildId)
     assert.equal(created.type, entry.type)
+    assert.equal(created.name, entry.name)
+    entry.id = created.id
+    entry.phase = "created"
+    save()
+    return entry
+}
+
+async function findOwnedThread(entry) {
+    const active = await api("GET", `/guilds/${guildId}/threads/active`)
+    assert.ok(Array.isArray(active.data?.threads))
+    const matches = active.data.threads.filter(
+        (thread) => thread?.parent_id === entry.parentId && thread?.name === entry.marker,
+    )
+    assert.ok(matches.length <= 1)
+    return matches[0]
+}
+
+async function createOwnedThread(parent) {
+    const marker = `${journal.marker}-thread`
+    const entry = { marker, name: marker, type: 11, parentId: parent.id, phase: "creating" }
+    journal.threads.push(entry)
+    save()
+    let created
+    try {
+        created = (await api("POST", `/channels/${parent.id}/threads`, { name: entry.name, type: entry.type })).data
+    } catch {
+        // The creation intent is already durable. Reconcile its unique marker instead of replaying a possibly applied POST
+        created = await findOwnedThread(entry)
+        assert.ok(created, "Unresolved test-thread creation")
+    }
+    assert.match(created?.id ?? "", /^\d+$/)
+    assert.equal(created.guild_id, guildId)
+    assert.equal(created.type, entry.type)
+    assert.equal(created.parent_id, parent.id)
     assert.equal(created.name, entry.name)
     entry.id = created.id
     entry.phase = "created"
@@ -209,26 +255,27 @@ async function assertBotMembership() {
     assert.equal(membership.data?.user?.id, botId)
 }
 
-function deleteOperation(primary, signal = operationDeadline.signal) {
+function deleteOperation(target, signal = operationDeadline.signal) {
     return guildMode
         ? client.guilds.deleteOwnMessages(guildId, mode === "default" ? { confirm: true, signal } : { confirm: true })
         : client.messages.deleteOwnMessages(
-              primary.id,
+              target.id,
               mode === "default" ? { confirm: true, signal } : { confirm: true },
           )
 }
 
-async function deleteOwnMessages(primary, kind) {
+// Channel mode deletes in `target`, the primary channel or its thread. Guild mode ignores it
+async function deleteOwnMessages(target, kind) {
     const cancellation = new AbortController()
     const signal = AbortSignal.any([operationDeadline.signal, cancellation.signal])
-    const deletion = { kind, phase: "dispatching" }
+    const deletion = { kind, ...(guildMode ? {} : { channelId: target.id }), phase: "dispatching" }
     journal.deletions.push(deletion)
     save()
     const requests = []
     let attempts = 0
     const expectedPath = guildMode
         ? `/v1/users/@me/guilds/${guildId}/messages/bulk-delete-mine`
-        : `/v1/channels/${primary.id}/messages/bulk-delete-mine`
+        : `/v1/channels/${target.id}/messages/bulk-delete-mine`
     globalThis.fetch = async (url, init) => {
         if (init?.method !== "POST" || new URL(String(url)).pathname !== expectedPath) return rawFetch(url, init)
         attempts++
@@ -253,21 +300,21 @@ async function deleteOwnMessages(primary, kind) {
         if (kind === "cancelled") {
             const outcome =
                 mode === "default"
-                    ? await deleteOperation(primary, signal)
-                    : await Effect.runPromiseExit(deleteOperation(primary), { signal })
+                    ? await deleteOperation(target, signal)
+                    : await Effect.runPromiseExit(deleteOperation(target), { signal })
             if (mode === "default") assert.ok(outcome.isErr() && outcome.error._tag === "CancelledError")
             else assert.ok(Exit.isFailure(outcome) && Cause.hasInterruptsOnly(outcome.cause))
             deletion.phase = "cancelled"
         } else if (kind === "lost_response") {
             await assert.rejects(
-                () => value(deleteOperation(primary), mode === "effect" ? operationDeadline.signal : undefined),
+                () => value(deleteOperation(target), mode === "effect" ? operationDeadline.signal : undefined),
                 (error) =>
                     error?._tag === (guildMode ? "GuildOperationError" : "MessageOperationError") &&
                     error?.outcome === "unknown",
             )
             deletion.phase = "unknown"
         } else {
-            await value(deleteOperation(primary), mode === "effect" ? operationDeadline.signal : undefined)
+            await value(deleteOperation(target), mode === "effect" ? operationDeadline.signal : undefined)
             deletion.phase = "succeeded"
         }
     } finally {
@@ -293,6 +340,31 @@ async function cleanup() {
     requestDeadline = AbortSignal.timeout(30_000)
     try {
         assertJournal()
+        // The thread goes first, while its parent still exists to locate one whose creation response was lost
+        for (const entry of journal.threads) {
+            if (entry.id === undefined) {
+                const located = await findOwnedThread(entry)
+                assert.ok(located, "Unresolved thread creation retains its journal")
+                entry.id = located.id
+                entry.phase = "reconciled"
+                save()
+            }
+            const current = await api("GET", `/channels/${entry.id}`)
+            if (current.status !== 404) {
+                assert.equal(current.status, 200)
+                assert.equal(current.data?.id, entry.id)
+                assert.equal(current.data?.guild_id, guildId)
+                assert.equal(current.data?.type, entry.type)
+                assert.equal(current.data?.parent_id, entry.parentId)
+                assert.equal(current.data?.name, entry.name)
+                entry.cleanupPhase = "dispatching"
+                save()
+                assert.equal((await api("DELETE", `/channels/${entry.id}`)).status, 204)
+                assert.equal((await api("GET", `/channels/${entry.id}`)).status, 404)
+            }
+            entry.cleanupPhase = "verified"
+            save()
+        }
         for (const entry of journal.channels) {
             const located = await findOwnedChannel(entry)
             if (!located) {
@@ -324,9 +396,12 @@ async function cleanup() {
         const remaining = await api("GET", `/guilds/${guildId}/channels`)
         assert.ok(Array.isArray(remaining.data))
         assert.ok(journal.channels.every((entry) => !remaining.data.some((channel) => channel?.name === entry.name)))
+        const active = await api("GET", `/guilds/${guildId}/threads/active`)
+        assert.ok(Array.isArray(active.data?.threads))
+        assert.ok(journal.threads.every((entry) => !active.data.threads.some((thread) => thread?.name === entry.name)))
         journalFile.remove()
         journal = undefined
-        report("test_owned_channels_removed")
+        report("test_owned_channels_and_thread_removed")
     } finally {
         requestDeadline = priorRequestDeadline
     }
@@ -364,6 +439,7 @@ try {
             botId,
             marker: `fluxerly-own-history-${randomUUID().replaceAll("-", "")}`,
             channels: [],
+            threads: [],
             messages: [],
             deletions: [],
         }
@@ -373,13 +449,16 @@ try {
         stage = "create_test_owned_channels"
         const primary = await createOwnedChannel("primary")
         const control = await createOwnedChannel("control")
+        const thread = await createOwnedThread(primary)
         report(stage)
 
         stage = "create_test_owned_messages"
         const primaryMarker = await createOwnedMessage(primary, "primary")
         const controlMarker = await createOwnedMessage(control, "control")
+        const threadMarker = await createOwnedMessage(thread, "thread")
         await assertMarkerPresent(primaryMarker)
         await assertMarkerPresent(controlMarker)
+        await assertMarkerPresent(threadMarker)
         report(stage)
 
         const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
@@ -393,20 +472,22 @@ try {
         stage = "cache_selected_markers"
         await cache(primaryMarker)
         await cache(controlMarker)
+        await cache(threadMarker)
         report(stage)
 
         stage = "whole_history_success"
         await deleteOwnMessages(primary, "success")
         await assertMarkerAbsent(primaryMarker)
+        await assertMarkerAbsent(threadMarker)
         if (guildMode) await assertMarkerAbsent(controlMarker)
         else await assertMarkerPresent(controlMarker)
-        await assertCacheCleared([primaryMarker, controlMarker])
+        await assertCacheCleared([primaryMarker, controlMarker, threadMarker])
         await assertBotMembership()
         if (guildMode) await assertNonBotControl()
         report(
             guildMode
                 ? "selected_markers_removed_and_membership_preserved"
-                : "selected_marker_removed_control_and_membership_preserved",
+                : "channel_and_thread_markers_removed_control_and_membership_preserved",
             guildMode ? { nonBotSampleObserved: Boolean(journal.nonBotControl) } : {},
         )
 
@@ -432,6 +513,18 @@ try {
         await assertBotMembership()
         if (guildMode) await assertNonBotControl()
         report("post_dispatch_cancellation_without_retry_reconciled_by_marker")
+
+        if (!guildMode) {
+            stage = "thread_only_success"
+            const parentMarker = await createOwnedMessage(primary, "parent")
+            const threadOnlyMarker = await createOwnedMessage(thread, "thread-only")
+            await deleteOwnMessages(thread, "success")
+            await assertMarkerAbsent(threadOnlyMarker)
+            await assertMarkerPresent(parentMarker)
+            await assertMarkerPresent(controlMarker)
+            report("thread_marker_removed_parent_and_control_preserved")
+        }
+
         console.log(
             JSON.stringify({
                 mode,

@@ -1028,8 +1028,8 @@ export interface Messages<M extends MessageCore = Message> {
         options?: DefaultMessageAuditOperationOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
-     * Irreversibly delete this bot's entire authored message history in one channel.
-     * Use a decimal channel ID.
+     * Irreversibly delete this bot's entire authored message history in one channel and in every thread under it, active or archived.
+     * Use a decimal channel ID. A thread ID clears only that thread, and for a forum or media channel the deleted messages are the ones in its posts.
      * Other authors' messages are preserved, and no gateway connection, community leave or role change is performed
      *
      * Success follows Fluxer's empty HTTP 202 response.
