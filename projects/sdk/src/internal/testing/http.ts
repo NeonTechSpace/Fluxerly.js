@@ -9,6 +9,7 @@
  */
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { LogRecord } from "#sdk/logging"
+import { normalizeText } from "../field-text.js"
 import { hostedDiscoveryDocument, hostedDiscoveryUrl } from "./discovery.js"
 import { fixtureTimestamp, type Fixtures, type WireMessage, type WireUser } from "./fixtures.js"
 import type {
@@ -77,7 +78,7 @@ function echoedEmbed(embed: unknown): unknown {
     }
 }
 
-/** Build the message a send or edit request describes, echoing the fields a bot usually sets */
+/** Build the message a send or edit request describes, echoing the fields a bot usually sets as Fluxer stores them */
 function echoedMessage(replies: TestReplies, request: TestRequest, edit: boolean): WireMessage {
     const [, , channelId, , messageId] = request.path.split("/")
     const body =
@@ -86,7 +87,7 @@ function echoedMessage(replies: TestReplies, request: TestRequest, edit: boolean
         id: edit ? messageId! : replies.fixtures.nextId(),
         channel_id: channelId!,
         author: replies.author,
-        content: typeof body.content === "string" ? body.content : "",
+        content: typeof body.content === "string" ? normalizeText(body.content) : "",
         embeds: Array.isArray(body.embeds) ? body.embeds.map(echoedEmbed) : [],
         flags: typeof body.flags === "number" ? body.flags : 0,
         tts: body.tts === true,

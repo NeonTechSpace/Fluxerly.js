@@ -16,6 +16,7 @@ import type { ClientDiagnostics } from "#sdk/client"
 import type { LogCode } from "../code-catalogue.js"
 import { clientServices } from "../client-registry.js"
 import { clientOptionKeys } from "../configuration.js"
+import { normalizeText } from "../field-text.js"
 import { unsupportedKeyHint } from "../suggest.js"
 import { createFixtures, fixtureToken, type Fixtures, type WireMessage } from "./fixtures.js"
 import { TestGateway } from "./gateway.js"
@@ -303,7 +304,9 @@ export class TestHarness {
             throw new ConfigurationError("configuration", "Test say message overrides must be an object of wire fields")
         if (this.#closed) return Promise.reject(new ClientClosedError())
         const before = this.http.requests().length
-        this.gateway.emit("MESSAGE_CREATE", this.fixtures.message({ ...overrides, content }), undefined)
+        // Fluxer normalizes typed content before delivery, so "!ping " arrives as "!ping"
+        const message = this.fixtures.message({ ...overrides, content: normalizeText(content) })
+        this.gateway.emit("MESSAGE_CREATE", message, undefined)
         return this.idle(work, options, signal).then(() => this.http.sentMessages(this.http.requests().slice(before)))
     }
 

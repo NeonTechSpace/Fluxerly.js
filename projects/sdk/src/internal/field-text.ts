@@ -1,6 +1,7 @@
 /**
  * Request-only text normalization for names and nicknames, following pinned Fluxer schema rules.
- * Invariant: Normalization applies only to text sent to Fluxer, never to received values.
+ * Invariant: Normalization applies only to text sent to Fluxer, never to received values. The test transport also
+ * applies it to message content it stores in Fluxer's place.
  * Implements [SDK contracts: Validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements)
  */
 // Request-only rules from Fluxer schema primitives at 70e1ce682ac1da6502ea08253296aa4727330ce8
@@ -11,7 +12,8 @@ export function normalizedText(value: unknown, minimum: number, maximum: number)
     return length >= minimum && length <= maximum
 }
 
-function normalizeText(value: string): string {
+/** Fluxer's base string normalization, which message content also receives before it is stored and delivered */
+export function normalizeText(value: string): string {
     // oxlint-disable-next-line no-control-regex -- the provider strips form feed before measuring text
     return value.replace(/[\u000c\u202e]/g, "").trim()
 }

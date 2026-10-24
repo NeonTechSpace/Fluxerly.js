@@ -361,7 +361,11 @@ describe.each(modes)("%s test client", (mode) => {
         })
         const edited = await settle(client.messages.edit(sent, { content: "edited" }))
         expect(edited).toMatchObject({ id: sent.id, content: "edited", editedAt: expect.anything() })
-        expect(driver.test.requests().map((request) => request.matched)).toEqual([false, false])
+        // The echo stores content as Fluxer does, without surrounding whitespace
+        expect(await settle(client.messages.send(fixtures.ids.channel, " padded\n"))).toMatchObject({
+            content: "padded",
+        })
+        expect(driver.test.requests().map((request) => request.matched)).toEqual([false, false, false])
         expect(driver.test.logs()).not.toContainEqual(expect.objectContaining({ code: "testing.unmatchedRequest" }))
 
         // A registered response still wins over the automatic reply

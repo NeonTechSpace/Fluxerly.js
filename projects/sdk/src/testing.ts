@@ -307,10 +307,12 @@ export interface TestBot<M extends MessageCore = Message> extends TestClient<M> 
      * fields the automatic reply echoes, so it shows what the bot sent even when a rest.respond handler answered.
      * Edits, reactions and other requests are not included, and remain visible through requests().
      * The message comes from the fixture set's default human author in its default channel and community, and
-     * options.message replaces any of those wire fields. Like idle, say has no deadline unless options.timeoutMs is
-     * set, then rejects with TestTimeoutError when the bot is still busy after it, and rejects with ClientClosedError
-     * after shutdown. It throws ConfigurationError for content that is not a string, invalid options, before ready and
-     * when gateway filtering would suppress the message, as emit does
+     * options.message replaces any of those wire fields. The content is normalized as Fluxer normalizes sent text,
+     * without form feed (U+000C) or U+202E and with surrounding whitespace trimmed, so "!ping " arrives as "!ping".
+     * Use emit with fixtures.message to deliver content unchanged. Like idle, say has no deadline unless
+     * options.timeoutMs is set, then rejects with TestTimeoutError when the bot is still busy after it, and rejects
+     * with ClientClosedError after shutdown. It throws ConfigurationError for content that is not a string, invalid
+     * options, before ready and when gateway filtering would suppress the message, as emit does
      *
      * @example
      * ```ts

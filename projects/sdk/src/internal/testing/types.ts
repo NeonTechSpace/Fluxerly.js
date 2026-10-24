@@ -225,7 +225,9 @@ export interface TestSayOptions extends TestWaitOptions {
  * Register fake Fluxer HTTP API responses for a test client.
  * Without a registration, message sends (POST /channels/:id/messages) and edits (PATCH /channels/:id/messages/:id)
  * receive an automatic reply: A message by the bot account that echoes the request's content, embeds, flags and tts,
- * with a new fixture ID for a send and the edited ID for an edit. Other unmatched requests receive a Fluxer-shaped 404
+ * with a new fixture ID for a send and the edited ID for an edit. Other unmatched requests receive a Fluxer-shaped 404.
+ * The echoed content is normalized as Fluxer stores it, without form feed (U+000C) or U+202E and with surrounding
+ * whitespace trimmed
  *
  * @category Testing
  */

@@ -136,6 +136,14 @@ test.each(modes)("%s say returns the messages the bot sent in response, or nothi
     expect(bot.requests()).toHaveLength(2)
 })
 
+test.each(modes)("%s say delivers content as Fluxer normalizes typed text", async (mode) => {
+    const bot = await open(mode, [])
+    await bot.ready()
+    // Fluxer removes form feed and U+202E and trims surrounding whitespace, so the exact "hi" match still replies
+    expect(await bot.say(" \fhi\u202e\n")).toEqual([expect.objectContaining({ content: "Hello" })])
+    expect(await bot.say("!ping ")).toEqual([expect.objectContaining({ content: "Pong!" })])
+})
+
 test.each(modes)("%s say reports what the bot sent even when a registered response answers", async (mode) => {
     const bot = await open(mode, [])
     const replies = bot.replies()
