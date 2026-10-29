@@ -140,7 +140,7 @@
 
 ### Major Changes
 
-- abb5d3f: The coding agent guide moved from `consumer/AGENTS.md` to `agents/AGENTS.md` in the installed package. An application's `AGENTS.md` section from an earlier `fluxerly agents` run points at the old path, so run `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` again after updating
+- abb5d3f: The coding agent guide moved from `consumer/AGENTS.md` to `agents/AGENTS.md` in the installed package. An application's `AGENTS.md` section from an earlier `fluxerly agents` run points at the old path, so run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` again after updating
 
     The README now links the documentation's `llms.txt` for agents that read web pages, and its Effect section describes the accepted Effect 4 range instead of an exact version
 
@@ -244,7 +244,7 @@
 
 ### Minor Changes
 
-- a47b104: The package installs a `fluxerly` command. Running `npx fluxerly agents`, `pnpm exec fluxerly agents` or `bunx fluxerly agents` in an application's folder copies the SDK's rules for coding agents into its `AGENTS.md`, which coding agents read automatically, and records the installed SDK version. Running it again replaces only that section, and a broken section marker stops the command without changing the file
+- a47b104: The package installs a `fluxerly` command. Running `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in an application's folder copies the SDK's rules for coding agents into its `AGENTS.md`, which coding agents read automatically, and records the installed SDK version. Running it again replaces only that section, and a broken section marker stops the command without changing the file
 
     The consumer guide at `consumer/AGENTS.md` starts with those rules, includes the starter bot and a Result check, and lists the differences from discord.js. The package's entry points name the guide in their overview
 

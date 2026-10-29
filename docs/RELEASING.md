@@ -104,7 +104,7 @@ Publication, verification, status and the GitHub announcement download the tarba
 ### Version and content rules
 
 [Epoch Semantic Versioning](/docs/TECHNOLOGY.md#versioning-and-release-stages) defines compatibility and readiness separately.
-A version PR selects RC or Stable. Nightly versions exist only in their candidates and are never committed. Each new prerelease counter starts at zero.
+A version PR selects RC or Stable. Nightly versions exist only in their candidates and are never committed. Each new RC counter starts at zero, while a nightly uses its run number.
 The release wrapper retains the cycle's stable starting version in `projects/.changeset/pre.json` as `releaseBase`, with `null` for the initial `1000.0.0` cycle.
 Pending and archived Changesets together determine the target's compatibility impact, while only pending notes enter a new preview's changelog. Stable collects the complete cycle's notes.
 Before the Stable version PR, edit or delete archived notes in `projects/.changeset/pre/` that later changes in the cycle superseded, so the Stable changelog never announces an API that the same release removes.

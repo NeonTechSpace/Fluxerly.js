@@ -146,8 +146,6 @@ export function planVersion({
     const promotion = current.major >= 1000 && current.core === core && current.channel !== channel
     if (!allowNoChanges && !bump && !promotion)
         throw new Error("No pending Changesets fragments or readiness promotion")
-    if (!allowNoChanges && !bump && current.channel === channel)
-        throw new Error("No pending Changesets fragments or readiness promotion")
     if (promotion && compareVersions(`${core}${channel === "stable" ? "" : `-${channel}.0`}`, currentVersion) <= 0)
         throw new Error("Readiness promotion must advance SemVer ordering")
     if (channel === "stable" && current.channel === "rc" && current.core !== core)

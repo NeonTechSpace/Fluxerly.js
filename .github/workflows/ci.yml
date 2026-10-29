@@ -246,8 +246,10 @@ jobs:
         if: matrix.runtime
         run: pnpm --filter @neontechspace/fluxerly test
         working-directory: projects
-      - name: Check packed JavaScript and TypeScript consumers
+      # The sdk job's check already packs and runs these consumers on the development Node version
+      - name: Check packed JavaScript and TypeScript consumers on the declared Node floor
         id: package
+        if: matrix.runtime
         run: pnpm --filter @neontechspace/fluxerly test:package
         working-directory: projects
       - name: Check npm-installed consumers
