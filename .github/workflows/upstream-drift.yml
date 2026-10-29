@@ -1,7 +1,9 @@
 name: Upstream drift
 on:
+  # Midnight local time through daylight saving changes
   schedule:
-    - cron: '23 6 * * *'
+    - cron: '0 0 * * *'
+      timezone: Europe/Berlin
   workflow_dispatch:
 permissions:
   contents: read
