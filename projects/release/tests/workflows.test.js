@@ -185,11 +185,12 @@ test("Dependency notes execute only reviewed base code and treat the PR branch a
     assert.equal(workflow.concurrency["cancel-in-progress"], false)
 })
 
-test("Nightly preparation runs daily and starts only Release publish from main for an unskipped nightly candidate", () => {
+test("Nightly preparation runs every six hours and starts only Release publish from main for an unskipped nightly candidate", () => {
     const workflow = workflows["release-prepare.yml"]
-    const [minute, hour, day, month, weekday] = workflow.on.schedule[0].cron.split(" ")
-    assert.deepEqual([day, month, weekday], ["*", "*", "*"])
-    assert.ok(Number(minute) >= 0 && Number(minute) < 60 && Number(hour) >= 0 && Number(hour) < 24)
+    const [schedule] = workflow.on.schedule
+    assert.equal(schedule.cron, "0 0,6,12,18 * * *")
+    // GitHub reads schedules as UTC unless a timezone is named, so this keeps the runs at the same Berlin times all year
+    assert.equal(schedule.timezone, "Europe/Berlin")
     assert.deepEqual(
         [workflow.on.workflow_dispatch.inputs.nightly.type, workflow.on.workflow_dispatch.inputs.nightly.default],
         ["boolean", false],

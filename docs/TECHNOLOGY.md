@@ -49,7 +49,7 @@ The release suffix describes readiness, independently of compatibility changes
 
 | Suffix | Meaning |
 | --- | --- |
-| `-nightly.YYYYMMDD.N` | Automatic build of `main`, published daily when the SDK changed. It can include breaking changes at any time |
+| `-nightly.YYYYMMDD.N` | Automatic build of `main`, published every six hours when the SDK changed. It can include breaking changes at any time |
 | `-rc.N` | Release candidate for the next Stable, with no known release blockers, under final validation. It can still include breaking changes |
 | No suffix | Stable release supported for public use |
 
@@ -244,7 +244,7 @@ The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
 Check, version PR, candidate preparation, publication, Preview and daily upstream drift workflows are configured under [.github/workflows](/.github/workflows/).
-Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a daily schedule prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
+Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a schedule every six hours prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
 [Releasing](/docs/RELEASING.md) describes each trigger and when a nightly is skipped.
 Preview releases are published to npm, and the Preview documentation website is live.
 Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for the published versions

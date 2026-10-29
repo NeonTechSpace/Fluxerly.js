@@ -25,10 +25,10 @@ GitHub refuses to create a release whose source commit has workflow files that d
 ## Nightly builds
 
 Nightly builds need no manual step.
-Every day at 01:00 UTC, [Release prepare](/.github/workflows/release-prepare.yml) builds `main` as the next nightly version and starts [Release publish](/.github/workflows/release-publish.yml) itself, without a checksum review.
+Every six hours, at 00:00, 06:00, 12:00 and 18:00 Berlin time, [Release prepare](/.github/workflows/release-prepare.yml) builds `main` as the next nightly version and starts [Release publish](/.github/workflows/release-publish.yml) itself, without a checksum review.
 Publication then runs the same checks as any release and announces a GitHub prerelease that carries the docs snapshot
 
-A day whose SDK content matches the previous nightly publishes nothing.
+A run whose SDK content matches the previous nightly publishes nothing.
 It also publishes nothing when the content matches the published RC or Stable of the source version and no nightly on that line was published after it.
 Pending Changesets notes appear as unreleased changes in the nightly's release notes and docs changelog, and they stay pending for the next RC or Stable.
 To publish a nightly sooner, dispatch Release prepare from `main` with `nightly` selected. A nightly always builds the commit the workflow runs from and ignores `source_ref`
@@ -38,7 +38,7 @@ The `YYYYMMDD` part is the UTC date of the Release prepare run's preparation ste
 The date comes first so builds sort by day, and the run number then keeps them from ever repeating.
 Overlapping nightly runs get different versions, because each run number is different.
 Nightly versions published before this format use `CORE-nightly.N`. They stay valid and sort below every dated nightly of the same core, and every nightly sorts below the RC of its core.
-A nightly run is superseded when the newest nightly on its line, published after its preparation, has the same content. When a higher nightly on its line already exists, any nightly published after its preparation with the same content supersedes it, and the newest matching one is reported. The run's Release publish step succeeds without publishing, prints the superseding version and skips the registry install, announcement and docs preview jobs. This covers overlapping runs on one commit, such as the daily schedule and a manual dispatch. The fingerprint reads share a one-minute budget that is checked between reads, and each read can take longer.
+A nightly run is superseded when the newest nightly on its line, published after its preparation, has the same content. When a higher nightly on its line already exists, any nightly published after its preparation with the same content supersedes it, and the newest matching one is reported. The run's Release publish step succeeds without publishing, prints the superseding version and skips the registry install, announcement and docs preview jobs. This covers overlapping runs on one commit, such as the scheduled run and a manual dispatch. The fingerprint reads share a one-minute budget that is checked between reads, and each read can take longer.
 When no such nightly matches and a later one exists, the run fails with the newer version error. When only earlier ones exist, the run publishes. A candidate whose own version is already on npm is confirmed instead.
 When a pending major or minor note is removed, the next nightly's version can drop below the newest nightly. It then publishes under a staging tag such as `nightly-1000-1`, while the `nightly` tag and `/docs/nightly/` keep the higher build until a later nightly passes it. The [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags) can point `nightly` at the newer build
 
@@ -158,7 +158,7 @@ A failed registry lookup, including a missing package, always stops the release
 | --- | --- | --- |
 | [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The `check` job requires all of them, or reuses an earlier passing run for identical content |
 | [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref`, `channel` and optional `epoch` and `line`. Opens the version pull request |
-| [Release prepare](/.github/workflows/release-prepare.yml) | Daily for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
+| [Release prepare](/.github/workflows/release-prepare.yml) | Every six hours for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
 | [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the Preview |
 | [Docs preview](/.github/workflows/docs-preview.yml) | Called by Release publish, or manual | Always builds `main` and deploys only the Preview target |
 

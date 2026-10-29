@@ -1,8 +1,10 @@
 name: Release prepare
 on:
-  # The daily run prepares a nightly build of main and starts its publication
+  # Every six hours a run prepares a nightly build of main and starts its publication. Berlin time keeps the runs at
+  # 00:00, 06:00, 12:00 and 18:00 local time through daylight saving changes
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 0,6,12,18 * * *'
+      timezone: Europe/Berlin
   workflow_dispatch:
     inputs:
       source_ref:
