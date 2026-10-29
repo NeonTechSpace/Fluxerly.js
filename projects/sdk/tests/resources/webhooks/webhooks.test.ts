@@ -16,6 +16,7 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { expectErr, settle } from "../../support/settle.js"
+import { fixtureHost } from "../../support/loopback.js"
 import { expectThrown } from "../defects.js"
 
 const secret = "test_only_secret"
@@ -804,7 +805,7 @@ test("multipart bytes cross a real HTTP transport with correct framing", async (
         res.setHeader("content-type", "application/json")
         res.end(JSON.stringify(message()))
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing fixture address")
@@ -815,7 +816,9 @@ test("multipart bytes cross a real HTTP transport with correct framing", async (
                 server.closeAllConnections()
             }),
     )
-    stubFetchWithHostedDiscovery((_url: string, init: RequestInit) => fetch(`http://127.0.0.1:${address.port}`, init))
+    stubFetchWithHostedDiscovery((_url: string, init: RequestInit) =>
+        fetch(`http://${address.address}:${address.port}`, init),
+    )
     const { webhook } = await setup("default")
     await settle(
         webhook.send({

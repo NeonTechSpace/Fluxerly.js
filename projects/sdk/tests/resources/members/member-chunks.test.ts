@@ -10,7 +10,6 @@ import {
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
-import { monotonicClock } from "../../support/clock.js"
 import { startHostedLoopback } from "../../support/instance.js"
 import { wsTarget } from "../../support/ws-redirect.js"
 
@@ -212,8 +211,8 @@ for (const mode of modes) {
     })
 
     test(`${mode} drains a multi-batch response after its arrival deadline without retaining the member slot`, async () => {
+        const clock = sdkClock()
         const f = await fixture(mode)
-        const clock = monotonicClock()
         const iterator = f.iterate({ all: true }, { timeoutMs: 250 })
         const first = iterator.next()
         const sent = await f.request(1)
@@ -223,8 +222,8 @@ for (const mode of modes) {
         const handled = f.handled()
         f.chunk(sent.nonce, [member("31")], 1, 2)
         await handled
-        // Reads check the deadline against logical time, so the drain happens after it without waiting
-        clock.advance(300)
+        // Reads check the deadline against SDK time, so the drain happens after it without waiting
+        await clock.advance(300)
         expect((await iterator.next()).value).toMatchObject({ index: 1, count: 2, members: [{ userId: "31" }] })
         expect((await iterator.next()).done).toBe(true)
         const replacement = f.iterate({ query: "", limit: 1 })
@@ -574,15 +573,15 @@ for (const mode of modes) {
     })
 
     test(`${mode} rejects an incomplete response on deadline, cancellation, gap and closure without resend`, async () => {
+        const clock = sdkClock()
         const f = await fixture(mode)
-        const clock = monotonicClock()
         const timed = f.iterate({ all: true }, { timeoutMs: 250 })
         const first = timed.next()
         const sent = await f.request(1)
         f.chunk(sent.nonce, [member("30")], 0, 2)
         await first
-        // A read checks the deadline against logical time, so the deadline passes without waiting
-        clock.advance(300)
+        // A read checks the deadline against SDK time, so the deadline passes without waiting
+        await clock.advance(300)
         await expect(timed.next()).rejects.toMatchObject({ reason: "timeout" })
         const cancelled = f.iterate()
         const pending = cancelled.next().catch((error) => error)

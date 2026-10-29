@@ -21,6 +21,7 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { expectErr, settle, type Operation } from "../../support/settle.js"
 import { waitUntil } from "../../support/clock.js"
 import { sdkClock } from "../../support/client-clock.js"
+import { fixtureHost } from "../../support/loopback.js"
 
 let close: (() => Promise<void>) | undefined
 
@@ -360,8 +361,9 @@ async function fixture(
         response.statusCode = 404
         response.end(JSON.stringify({ error: "invalid_grant" }))
     })
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-    base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const host = await fixtureHost()
+    await new Promise<void>((resolve) => server.listen(0, host, resolve))
+    base = `http://${host}:${(server.address() as { port: number }).port}`
     let closing: Promise<void> | undefined
     close = () =>
         (closing ??= new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))))

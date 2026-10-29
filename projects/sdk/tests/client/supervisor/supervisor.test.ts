@@ -10,6 +10,7 @@ import { Opcode as GatewayOpcode } from "../../../src/internal/protocol/gateway.
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { requireBuiltSdk } from "../../support/built-sdk.js"
 import { realTimeUntil } from "../../support/client-clock.js"
+import { fixtureHost } from "../../support/loopback.js"
 
 // These tests run the built SDK, so a stale or missing dist fails them before they start
 requireBuiltSdk()
@@ -46,7 +47,7 @@ async function firstRequestBarrier() {
         held = response
         entered.resolve()
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     onTestFinished(async () => {
         server.closeAllConnections()
@@ -55,7 +56,7 @@ async function firstRequestBarrier() {
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing grant barrier address")
     return {
-        url: `http://127.0.0.1:${address.port}/`,
+        url: `http://${address.address}:${address.port}/`,
         entered: entered.promise,
         release() {
             released = true

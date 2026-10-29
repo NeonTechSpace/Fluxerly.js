@@ -8,6 +8,7 @@ import { createClient as createNative } from "../../src/effect.js"
 import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { outcome, sdkClock } from "../support/client-clock.js"
+import { fixtureHost } from "../support/loopback.js"
 
 const transport = vi.hoisted(() => ({
     url: "",
@@ -69,11 +70,11 @@ async function fixture(mode: Mode, initial = ready(), fragmented = false) {
             } else socket.send(payload)
         })
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw Error("Expected owned loopback address")
-    transport.url = `ws://127.0.0.1:${address.port}`
+    transport.url = `ws://${address.address}:${address.port}`
     vi.stubGlobal("fetch", async () => Response.json(hostedDiscoveryDocument))
     const scope = Scope.makeUnsafe()
     const options = { token: "fixture-only-not-a-credential", connection: { startupTimeoutMs: 3000 } }

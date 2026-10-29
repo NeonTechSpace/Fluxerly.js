@@ -1,3 +1,4 @@
+import { once } from "node:events"
 import { Session } from "node:inspector"
 import { setImmediate as turn } from "node:timers/promises"
 import { runInNewContext } from "node:vm"
@@ -773,7 +774,15 @@ test.each(modes)("%s shutdown releases reaction collector handles and never runs
     // A pending drain that shutdown left scheduled would run its filter on this turn
     await turn()
     expect(filter).not.toHaveBeenCalled()
-    await expect.poll(() => openedSince(before)).toEqual([])
+    // The fixture's end of each gateway connection finishes closing on later turns, so wait for both ends to close
+    // rather than polling real time, then any handle still open is one the client leaked
+    await Promise.all(
+        [...wsTarget.sockets, ...current!.sockets].map((socket) =>
+            socket.readyState === socket.CLOSED ? undefined : once(socket, "close"),
+        ),
+    )
+    await turn()
+    expect(openedSince(before)).toEqual([])
     expect(wsTarget.sockets.every((s) => s.readyState === 3 && s.listenerCount("message") === 0)).toBe(true)
 })
 

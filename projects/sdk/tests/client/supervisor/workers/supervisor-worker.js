@@ -5,7 +5,7 @@ import { runFixtureGateway } from "./supervisor-gateway.js"
 const barrierUrl = process.env.FLUXERLY_SUPERVISOR_GRANT_BARRIER
 if (barrierUrl) {
     const barrier = new URL(barrierUrl)
-    if (barrier.protocol !== "http:" || barrier.hostname !== "127.0.0.1")
+    if (barrier.protocol !== "http:" || !/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(barrier.hostname))
         throw new Error("Unexpected grant barrier origin")
     // Hold this child's first Identify grant until the test answers, as a child that is slow to send its Identify would
     const emit = process.emit

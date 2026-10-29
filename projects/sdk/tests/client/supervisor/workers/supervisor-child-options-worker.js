@@ -12,7 +12,7 @@ if (
     throw new Error("Missing supervisor child options fixture settings")
 
 const origin = new URL(originValue)
-if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.pathname !== "/")
+if (origin.protocol !== "http:" || !/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(origin.hostname) || origin.pathname !== "/")
     throw new Error("Unexpected supervisor child options origin")
 
 const nativeFetch = globalThis.fetch

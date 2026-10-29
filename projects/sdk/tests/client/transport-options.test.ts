@@ -17,6 +17,7 @@ import { creationField } from "../support/client-creation.js"
 import { hostedDiscoveryDocument, stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { startInstance } from "../support/instance.js"
 import { expectErr, settle } from "../support/settle.js"
+import { fixtureHost } from "../support/loopback.js"
 
 const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
     version: string
@@ -165,13 +166,13 @@ describeBothApis("transport option", (mode) => {
 
 test("the default socket factory sends the SDK User-Agent in the WebSocket handshake", async () => {
     // A bare server rather than startGatewayServer, because only the factory's upgrade request is under test
-    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" })
+    const server = new WebSocketServer({ port: 0, host: await fixtureHost() })
     await once(server, "listening")
-    const address = server.address() as { port: number }
+    const address = server.address() as { address: string; port: number }
     const handshake = new Promise<string | undefined>((resolve) =>
         server.once("connection", (_socket, request) => resolve(request.headers["user-agent"])),
     )
-    const socket = defaultSocketFactory(`ws://127.0.0.1:${address.port}`, {
+    const socket = defaultSocketFactory(`ws://${address.address}:${address.port}`, {
         perMessageDeflate: false,
         followRedirects: false,
         maxPayload: 1024,

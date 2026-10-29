@@ -6,7 +6,7 @@ if (typeof originValue !== "string" || typeof mode !== "string" || token !== "su
     throw new Error("Missing loopback supervisor child settings")
 
 const origin = new URL(originValue)
-if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1")
+if (origin.protocol !== "http:" || !/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(origin.hostname))
     throw new Error("Unexpected loopback supervisor origin")
 
 // Retry jitter is not under test in this fixture. Keep recovery and invalid-session delays deterministic.

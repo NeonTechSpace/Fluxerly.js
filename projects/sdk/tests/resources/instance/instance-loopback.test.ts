@@ -13,6 +13,7 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { waitUntil } from "../../support/clock.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
 import { settle } from "../../support/settle.js"
+import { fixtureHost } from "../../support/loopback.js"
 
 const botToken = "loopback_bot_token"
 const webhookToken = "loopback_webhook_token"
@@ -129,13 +130,13 @@ async function loopbackFixture() {
         socket.once("close", () => serverSockets.delete(socket))
     })
     server.on("upgrade", (request: IncomingMessage) => gatewayRequests.push(request.url ?? ""))
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const gateway = await startGatewayServer({ server, redirect: false })
     const gatewaySockets = gateway.sockets
     const address = server.address()
     if (!address || typeof address === "string") throw Error("Expected an owned loopback address")
-    origin = `http://127.0.0.1:${address.port}`
+    origin = `http://${address.address}:${address.port}`
     globalThis.fetch = ((input, init) => {
         const target = new URL(input instanceof Request ? input.url : input.toString())
         if (target.origin !== origin) {

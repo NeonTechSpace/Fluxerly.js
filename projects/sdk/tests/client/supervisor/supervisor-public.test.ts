@@ -11,6 +11,7 @@ import type { SupervisorAssignmentOptions, SupervisorOptions, SupervisorStatus }
 import { modes, type Mode } from "../../support/both-apis.js"
 import { requireBuiltSdk } from "../../support/built-sdk.js"
 import { realTimeUntil } from "../../support/client-clock.js"
+import { fixtureHost } from "../../support/loopback.js"
 
 // These tests run the built SDK, so a stale or missing dist fails them before they start
 requireBuiltSdk()
@@ -236,11 +237,11 @@ async function loopbackGateway({
             else awaitingReady.set(socket, [shardId, totalShards])
         })
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing supervisor loopback address")
-    origin = `http://127.0.0.1:${address.port}`
+    origin = `http://${address.address}:${address.port}`
     return {
         origin,
         identifies,
@@ -310,12 +311,12 @@ async function disconnectBarrier(phase = "terminal") {
         response = current
         entered.resolve()
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing supervisor disconnect barrier address")
     return {
-        origin: `http://127.0.0.1:${address.port}/disconnect?phase=${phase}`,
+        origin: `http://${address.address}:${address.port}/disconnect?phase=${phase}`,
         entered: entered.promise,
         release() {
             response?.writeHead(204)

@@ -8,6 +8,7 @@ import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import type { SupervisorOptions, SupervisorStatus } from "../../../src/supervisor.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { requireBuiltSdk } from "../../support/built-sdk.js"
+import { fixtureHost } from "../../support/loopback.js"
 
 // These tests run the built SDK, so a stale or missing dist fails them before they start
 requireBuiltSdk()
@@ -92,11 +93,11 @@ async function selectedInstanceFixture() {
         response.statusCode = 404
         response.end()
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing supervisor child options address")
-    origin = `http://127.0.0.1:${address.port}`
+    origin = `http://${address.address}:${address.port}`
     return {
         origin,
         discoveries,

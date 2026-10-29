@@ -25,6 +25,7 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { driveSdkTime, fakeHostTime, hostTurnsUntil, sdkClock } from "../../support/client-clock.js"
 import { sendJson, startRestServer } from "../../support/rest-server.js"
 import { settle, typedResult } from "../../support/settle.js"
+import { fixtureHost } from "../../support/loopback.js"
 import { expectDefect } from "../defects.js"
 
 /**
@@ -2407,11 +2408,11 @@ test.each(modes)("%s recovers a cancelled concurrent streamed copy through owned
         response.statusCode = 404
         response.end()
     })
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing copy fixture address")
-    origin = `http://127.0.0.1:${address.port}`
+    origin = `http://${address.address}:${address.port}`
     try {
         const api = await driver(mode, { instance: { url: origin, allowInsecure: true } })
         const input = { ...streamInput, url: `${origin}/attachments/20/40/fixture.bin` }

@@ -9,6 +9,7 @@ import { modes, type Mode } from "../../support/both-apis.js"
 import { sdkClock, type SdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { wsTarget } from "../../support/ws-redirect.js"
+import { fixtureHost } from "../../support/loopback.js"
 import { attachIdentifyGate, type IdentifyGate } from "#sdk/internal/client"
 
 vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
@@ -165,15 +166,15 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
         })
     })
 
-    server.listen(0, "127.0.0.1")
+    server.listen(0, await fixtureHost())
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Expected owned loopback address")
-    wsTarget.url = `ws://127.0.0.1:${address.port}`
+    wsTarget.url = `ws://${address.address}:${address.port}`
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
         const requested = new URL(url)
         expect(requested.origin).toBe("https://api.fluxer.app")
-        return fetch(`http://127.0.0.1:${address.port}${requested.pathname}${requested.search}`, init)
+        return fetch(`http://${address.address}:${address.port}${requested.pathname}${requested.search}`, init)
     })
 
     return {
