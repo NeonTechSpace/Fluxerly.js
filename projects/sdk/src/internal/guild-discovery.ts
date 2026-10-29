@@ -19,6 +19,7 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import { identifier, record } from "./decode/primitives.js"
 import { nonNegativeInteger as integer } from "./decode/primitives.js"
 import { nullableTimestamp as nullableTime, timestamp } from "./decode/timestamp.js"
+import { checkFields, choiceField, field, type FieldRules, integerField, textField } from "./field-rules.js"
 
 const text = (value: unknown, min: number, max: number): value is string =>
     typeof value === "string" && value.length >= min && value.length <= max
@@ -134,68 +135,44 @@ function discoveryGuild(value: unknown): DiscoveryGuild | undefined {
     })
 }
 
+const languageTag = (value: unknown): value is string =>
+    text(value, 2, 35) && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(value)
+const sortByWire = { memberCount: "member_count", onlineCount: "online_count", relevance: "relevance" }
+
+const searchRules: FieldRules = {
+    query: textField(0, 100, "Discovery query must contain at most 100 UTF-16 code units"),
+    categoryId: integerField(0, 8, "Discovery category ID must be an integer from 0 through 8"),
+    primaryLanguage: field(
+        languageTag,
+        "format",
+        "Discovery primary language must be a 2 through 35 UTF-16 code unit language tag",
+    ),
+    tag: textField(0, 30, "Discovery tag must contain at most 30 UTF-16 code units"),
+    sortBy: choiceField(Object.keys(sortByWire), "Discovery sortBy must be memberCount, onlineCount, or relevance"),
+    limit: integerField(1, 48, "Discovery limit must be an integer from 1 through 48"),
+    offset: integerField(0, Number.MAX_SAFE_INTEGER, "Discovery offset must be a nonnegative safe integer"),
+}
+
 /** Build one volatile directory search page. Offset pagination has no snapshot or traversal guarantee */
 export function discoverySearch(
     query?: DiscoverySearchQuery,
 ): GuildRequest<DiscoverySearchPage> | InputValidationFailure {
     if (query !== undefined && !record(query))
         return inputValidationFailure("query", "type", "Discovery search query must be an object")
-    const input = query as DiscoverySearchQuery | undefined
-    const unsupported =
-        input === undefined
-            ? undefined
-            : unsupportedKeyFailure(
-                  input,
-                  ["query", "categoryId", "primaryLanguage", "tag", "sortBy", "limit", "offset"],
-                  "query",
-                  "the discovery search query",
-              )
+    const input: Record<string, unknown> = query ?? {}
+    const unsupported = unsupportedKeyFailure(input, Object.keys(searchRules), "query", "the discovery search query")
     if (unsupported) return unsupported
-    if (input?.query !== undefined && !text(input.query, 0, 100))
-        return inputValidationFailure(
-            "query.query",
-            "length",
-            "Discovery query must contain at most 100 UTF-16 code units",
-        )
-    if (input?.categoryId !== undefined && !integer(input.categoryId, 8))
-        return inputValidationFailure(
-            "query.categoryId",
-            "range",
-            "Discovery category ID must be an integer from 0 through 8",
-        )
-    if (
-        input?.primaryLanguage !== undefined &&
-        (!text(input.primaryLanguage, 2, 35) || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(input.primaryLanguage))
-    )
-        return inputValidationFailure(
-            "query.primaryLanguage",
-            "format",
-            "Discovery primary language must be a 2 through 35 UTF-16 code unit language tag",
-        )
-    if (input?.tag !== undefined && !text(input.tag, 0, 30))
-        return inputValidationFailure("query.tag", "length", "Discovery tag must contain at most 30 UTF-16 code units")
-    if (input?.sortBy !== undefined && !["memberCount", "onlineCount", "relevance"].includes(input.sortBy))
-        return inputValidationFailure(
-            "query.sortBy",
-            "allowedValue",
-            "Discovery sortBy must be memberCount, onlineCount, or relevance",
-        )
-    if (input?.limit !== undefined && (!integer(input.limit, 48) || input.limit === 0))
-        return inputValidationFailure("query.limit", "range", "Discovery limit must be an integer from 1 through 48")
-    if (input?.offset !== undefined && !integer(input.offset))
-        return inputValidationFailure("query.offset", "range", "Discovery offset must be a nonnegative safe integer")
-    const limit = input?.limit ?? 24
-    const offset = input?.offset ?? 0
+    const checked = checkFields(input, searchRules, "query.")
+    if (checked instanceof InputValidationFailure) return checked
+    const search = checked as DiscoverySearchQuery
+    const limit = search.limit ?? 24
+    const offset = search.offset ?? 0
     const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset) })
-    if (input?.query !== undefined) parameters.set("query", input.query)
-    if (input?.categoryId !== undefined) parameters.set("category", String(input.categoryId))
-    if (input?.primaryLanguage !== undefined) parameters.set("language", input.primaryLanguage)
-    if (input?.tag !== undefined) parameters.set("tag", input.tag)
-    if (input?.sortBy !== undefined)
-        parameters.set(
-            "sort_by",
-            { memberCount: "member_count", onlineCount: "online_count", relevance: "relevance" }[input.sortBy],
-        )
+    if (search.query !== undefined) parameters.set("query", search.query)
+    if (search.categoryId !== undefined) parameters.set("category", String(search.categoryId))
+    if (search.primaryLanguage !== undefined) parameters.set("language", search.primaryLanguage)
+    if (search.tag !== undefined) parameters.set("tag", search.tag)
+    if (search.sortBy !== undefined) parameters.set("sort_by", sortByWire[search.sortBy])
     return {
         guildId: "discovery",
         bucket: "discovery:search",

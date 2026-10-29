@@ -26,8 +26,19 @@ import {
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { EncodedBody } from "./attachments.js"
 import { decodeGuildChannel, decodeGuildChannels, url } from "./channel-decode.js"
-import { count as nonNegativeInt32, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
-import { channelName, normalizedText, rawText } from "./field-text.js"
+import { count as nonNegativeInt32, fieldsOnce, identifier, record } from "./decode/primitives.js"
+import { channelName, normalizedText } from "./field-text.js"
+import {
+    booleanField,
+    checkFields,
+    choiceField,
+    field,
+    type FieldRules,
+    idField,
+    integerField,
+    nullable,
+    textField,
+} from "./field-rules.js"
 
 /** Validated request description, with the shared REST owner retaining admission, cleanup and rate state */
 export interface ChannelRequest<A> {
@@ -80,10 +91,6 @@ const nullableIdentifier = (value: unknown): value is string | null => value ===
 const writablePermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
 
-function nullableValue(value: unknown, guard: (candidate: unknown) => boolean): boolean {
-    return value === null || guard(value)
-}
-
 const threadDefaultKeys = ["defaultAutoArchiveMinutes", "defaultThreadRateLimitPerUser"]
 const forumSettingKeys = ["availableTags", "defaultReactionEmoji", "defaultSortOrder", "defaultTagSetting", "flags"]
 /** Fluxer's limit on the tags of one forum or media channel */
@@ -95,6 +102,101 @@ const forumSortOrderValues: readonly unknown[] = Object.values(ForumSortOrder)
 const forumLayoutValues: readonly unknown[] = Object.values(ForumLayout)
 const forumFlagBits = ChannelFlags.RequireTag
 const mediaFlagBits = ChannelFlags.RequireTag | ChannelFlags.HideMediaDownloadOptions
+
+const topic = (maximum: number) =>
+    nullable(
+        field(
+            (value) => normalizedText(value, 1, maximum),
+            "length",
+            `Channel topic must be null or contain 1 through ${maximum.toLocaleString("en-US")} UTF-16 code units after Fluxer's normalization`,
+        ),
+    )
+const flags = (settable: number, explanation: string) =>
+    field((value) => nonNegativeInt32(value) && (value & ~settable) === 0, "allowedValue", explanation)
+const nsfwExplanation = "Channel nsfw must be boolean, or null when editing"
+
+/**
+ * Rules for the optional fields of a channel edit, in the order Fluxerly checks them. An edit cannot tell the type of
+ * the channel, so it accepts the longer forum topic and the flags of either forum type, and Fluxer checks them
+ */
+const editRules: FieldRules = {
+    name: field(
+        channelName,
+        "length",
+        "Channel name must contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
+    ),
+    topic: topic(forumTopicMaxLength),
+    url: nullable(field(url, "format", "Channel URL must be null or a valid absolute URL")),
+    parentId: nullable(idField("Channel parentId must be null or a decimal string")),
+    bitrate: nullable(
+        integerField(
+            8_000,
+            384_000,
+            "Channel bitrate must be null or an integer from 8,000 through 384,000 bits per second",
+        ),
+    ),
+    userLimit: nullable(integerField(0, 99, "Channel userLimit must be null or an integer from 0 through 99")),
+    voiceConnectionLimit: nullable(
+        integerField(1, 100, "Channel voiceConnectionLimit must be null or an integer from 1 through 100"),
+    ),
+    nsfw: nullable(booleanField(nsfwExplanation)),
+    nsfwOverride: nullable(booleanField("Channel nsfwOverride must be boolean or null")),
+    contentWarningLevel: choiceField([0, 1], "Channel contentWarningLevel must be 0 or 1"),
+    contentWarningText: nullable(
+        textField(0, 200, "Channel contentWarningText must be null or contain at most 200 raw UTF-16 code units"),
+    ),
+    rateLimitPerUser: nullable(
+        integerField(0, 21_600, "Channel rateLimitPerUser must be null or an integer from 0 through 21,600 seconds"),
+    ),
+    rtcRegion: nullable(
+        field(
+            (value) => normalizedText(value, 1, 64),
+            "length",
+            "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
+        ),
+    ),
+    defaultAutoArchiveMinutes: nullable(
+        choiceField(
+            threadAutoArchiveValues,
+            "Channel defaultAutoArchiveMinutes must be null, or 60, 1440, 4320 or 10080 minutes",
+        ),
+    ),
+    defaultThreadRateLimitPerUser: nullable(
+        integerField(
+            0,
+            21_600,
+            "Channel defaultThreadRateLimitPerUser must be null or an integer from 0 through 21,600 seconds",
+        ),
+    ),
+    defaultSortOrder: nullable(
+        choiceField(
+            forumSortOrderValues,
+            "Channel defaultSortOrder must be null, 0 (latest activity) or 1 (creation time)",
+        ),
+    ),
+    defaultForumLayout: nullable(
+        choiceField(forumLayoutValues, "Channel defaultForumLayout must be null, 0 (default), 1 (list) or 2 (grid)"),
+    ),
+    defaultTagSetting: nullable(
+        choiceField(["match_some", "match_all"], 'Channel defaultTagSetting must be null, "match_some" or "match_all"'),
+    ),
+    flags: flags(
+        mediaFlagBits,
+        "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag or ChannelFlags.HideMediaDownloadOptions",
+    ),
+}
+/** A created channel cannot set nsfw to null. A created media channel keeps the longer topic and both flag bits */
+const mediaCreateRules: FieldRules = { ...editRules, nsfw: booleanField(nsfwExplanation) }
+/** Other created channels have the shorter text topic */
+const createRules: FieldRules = { ...mediaCreateRules, topic: topic(textTopicMaxLength) }
+/** A created forum channel can set only the flag bits of its own type */
+const forumCreateRules: FieldRules = {
+    ...mediaCreateRules,
+    flags: flags(
+        forumFlagBits,
+        "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag on a forum channel",
+    ),
+}
 
 function validateOptionalFields(input: Record<string, unknown>, create: boolean): true | InputValidationFailure {
     // A created channel's type selects which thread and forum settings it can have. An edit cannot tell the type of
@@ -180,159 +282,15 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
         )
     if (create && input.name === undefined)
         return inputValidationFailure("name", "required", "Channel name is required")
-    if (input.name !== undefined && !channelName(input.name))
-        return inputValidationFailure(
-            "name",
-            "length",
-            "Channel name must contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
-        )
-    // Forum and media channels allow a longer topic. An edit cannot tell the channel's type, so Fluxer checks the
-    // text limit there
-    const topicMaxLength = forumParent || !create ? forumTopicMaxLength : textTopicMaxLength
-    if (
-        input.topic !== undefined &&
-        !nullableValue(input.topic, (candidate) => normalizedText(candidate, 1, topicMaxLength))
-    )
-        return inputValidationFailure(
-            "topic",
-            "length",
-            `Channel topic must be null or contain 1 through ${topicMaxLength.toLocaleString("en-US")} UTF-16 code units after Fluxer's normalization`,
-        )
-    if (input.url !== undefined && !nullableValue(input.url, url))
-        return inputValidationFailure("url", "format", "Channel URL must be null or a valid absolute URL")
-    if (input.parentId !== undefined && !nullableIdentifier(input.parentId))
-        return inputValidationFailure("parentId", "format", "Channel parentId must be null or a decimal string")
-    if (
-        input.bitrate !== undefined &&
-        !nullableValue(input.bitrate, (candidate) => int32(candidate) && candidate >= 8_000 && candidate <= 384_000)
-    )
-        return inputValidationFailure(
-            "bitrate",
-            "range",
-            "Channel bitrate must be null or an integer from 8,000 through 384,000 bits per second",
-        )
-    if (
-        input.userLimit !== undefined &&
-        !nullableValue(input.userLimit, (candidate) => int32(candidate) && candidate >= 0 && candidate <= 99)
-    )
-        return inputValidationFailure(
-            "userLimit",
-            "range",
-            "Channel userLimit must be null or an integer from 0 through 99",
-        )
-    if (
-        input.voiceConnectionLimit !== undefined &&
-        !nullableValue(
-            input.voiceConnectionLimit,
-            (candidate) => int32(candidate) && candidate >= 1 && candidate <= 100,
-        )
-    )
-        return inputValidationFailure(
-            "voiceConnectionLimit",
-            "range",
-            "Channel voiceConnectionLimit must be null or an integer from 1 through 100",
-        )
-    if (input.nsfw !== undefined && !(typeof input.nsfw === "boolean" || (!create && input.nsfw === null)))
-        return inputValidationFailure("nsfw", "type", "Channel nsfw must be boolean, or null when editing")
-    if (input.nsfwOverride !== undefined && !(typeof input.nsfwOverride === "boolean" || input.nsfwOverride === null))
-        return inputValidationFailure("nsfwOverride", "type", "Channel nsfwOverride must be boolean or null")
-    if (input.contentWarningLevel !== undefined && input.contentWarningLevel !== 0 && input.contentWarningLevel !== 1)
-        return inputValidationFailure(
-            "contentWarningLevel",
-            "allowedValue",
-            "Channel contentWarningLevel must be 0 or 1",
-        )
-    if (
-        input.contentWarningText !== undefined &&
-        !nullableValue(input.contentWarningText, (candidate) => rawText(candidate, 0, 200))
-    )
-        return inputValidationFailure(
-            "contentWarningText",
-            "length",
-            "Channel contentWarningText must be null or contain at most 200 raw UTF-16 code units",
-        )
-    if (
-        input.rateLimitPerUser !== undefined &&
-        !nullableValue(input.rateLimitPerUser, (candidate) => int32(candidate) && candidate >= 0 && candidate <= 21_600)
-    )
-        return inputValidationFailure(
-            "rateLimitPerUser",
-            "range",
-            "Channel rateLimitPerUser must be null or an integer from 0 through 21,600 seconds",
-        )
-    if (
-        input.rtcRegion !== undefined &&
-        !nullableValue(input.rtcRegion, (candidate) => normalizedText(candidate, 1, 64))
-    )
-        return inputValidationFailure(
-            "rtcRegion",
-            "length",
-            "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
-        )
-    if (
-        input.defaultAutoArchiveMinutes !== undefined &&
-        !nullableValue(input.defaultAutoArchiveMinutes, (candidate) => threadAutoArchiveValues.includes(candidate))
-    )
-        return inputValidationFailure(
-            "defaultAutoArchiveMinutes",
-            "allowedValue",
-            "Channel defaultAutoArchiveMinutes must be null, or 60, 1440, 4320 or 10080 minutes",
-        )
-    if (
-        input.defaultThreadRateLimitPerUser !== undefined &&
-        !nullableValue(
-            input.defaultThreadRateLimitPerUser,
-            (candidate) => int32(candidate) && candidate >= 0 && candidate <= 21_600,
-        )
-    )
-        return inputValidationFailure(
-            "defaultThreadRateLimitPerUser",
-            "range",
-            "Channel defaultThreadRateLimitPerUser must be null or an integer from 0 through 21,600 seconds",
-        )
-    if (
-        input.defaultSortOrder !== undefined &&
-        !nullableValue(input.defaultSortOrder, (candidate) => forumSortOrderValues.includes(candidate))
-    )
-        return inputValidationFailure(
-            "defaultSortOrder",
-            "allowedValue",
-            "Channel defaultSortOrder must be null, 0 (latest activity) or 1 (creation time)",
-        )
-    if (
-        input.defaultForumLayout !== undefined &&
-        !nullableValue(input.defaultForumLayout, (candidate) => forumLayoutValues.includes(candidate))
-    )
-        return inputValidationFailure(
-            "defaultForumLayout",
-            "allowedValue",
-            "Channel defaultForumLayout must be null, 0 (default), 1 (list) or 2 (grid)",
-        )
-    if (
-        input.defaultTagSetting !== undefined &&
-        input.defaultTagSetting !== null &&
-        input.defaultTagSetting !== "match_some" &&
-        input.defaultTagSetting !== "match_all"
-    )
-        return inputValidationFailure(
-            "defaultTagSetting",
-            "allowedValue",
-            'Channel defaultTagSetting must be null, "match_some" or "match_all"',
-        )
-    if (input.flags !== undefined) {
-        // A created forum channel can set only the bits that its own type allows. An edit accepts the bits of either
-        // type, because Fluxer checks them against the channel it edits
-        const settable = create && type === ChannelType.Forum ? forumFlagBits : mediaFlagBits
-        if (!int32(input.flags) || input.flags < 0 || (input.flags & ~settable) !== 0)
-            return inputValidationFailure(
-                "flags",
-                "allowedValue",
-                create && type === ChannelType.Forum
-                    ? "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag on a forum channel"
-                    : "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag or ChannelFlags.HideMediaDownloadOptions",
-            )
-    }
-    return true
+    const rules = create
+        ? type === ChannelType.Forum
+            ? forumCreateRules
+            : forumParent
+              ? mediaCreateRules
+              : createRules
+        : editRules
+    const checked = checkFields(input, rules, "")
+    return checked instanceof InputValidationFailure ? checked : true
 }
 
 /**

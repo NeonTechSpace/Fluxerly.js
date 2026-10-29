@@ -36,7 +36,18 @@ import { count, fieldsOnce, identifier, integerInRange, record, snapshotArray } 
 import { rejectCheck } from "./decode/trace.js"
 import { timestamp } from "./decode/timestamp.js"
 import { suspendInput } from "./defects.js"
-import { normalizedText, rawText } from "./field-text.js"
+import { normalizedText } from "./field-text.js"
+import {
+    booleanField as booleanRule,
+    checkedField,
+    checkFields,
+    choiceField,
+    type FieldRules,
+    idField,
+    integerField,
+    textField,
+    wireFields,
+} from "./field-rules.js"
 import { encodeMessage, snapshotReference } from "./message.js"
 import type { MessageDecoder } from "./message-fields.js"
 
@@ -385,7 +396,36 @@ export function threadArchived(
     }
 }
 
-const searchSortBy: ReadonlySet<unknown> = new Set(["last_message_time", "archive_time", "relevance", "creation_time"])
+const searchRules: FieldRules = {
+    name: textField(0, 100, "Thread search name must contain at most 100 UTF-16 code units"),
+    tagIds: checkedField((value) => tagIds(value, "query.tagIds", maxSearchTags)),
+    tagSetting: choiceField(
+        ["match_some", "match_all"],
+        'Thread search tagSetting must be "match_some" or "match_all"',
+    ),
+    archived: booleanRule("Thread search archived must be a boolean"),
+    sortBy: choiceField(
+        ["last_message_time", "archive_time", "relevance", "creation_time"],
+        'Thread search sortBy must be "last_message_time", "archive_time", "relevance" or "creation_time"',
+    ),
+    sortOrder: choiceField(["asc", "desc"], 'Thread search sortOrder must be "asc" or "desc"'),
+    limit: integerField(1, 25, "Thread search limit must be an integer from 1 through 25"),
+    offset: integerField(0, 9975, "Thread search offset must be an integer from 0 through 9,975"),
+    maxId: idField("Thread search cursor IDs must be decimal strings"),
+    minId: idField("Thread search cursor IDs must be decimal strings"),
+}
+const searchWireNames: Readonly<Record<string, string>> = {
+    name: "name",
+    tagIds: "tag",
+    tagSetting: "tag_setting",
+    archived: "archived",
+    sortBy: "sort_by",
+    sortOrder: "sort_order",
+    limit: "limit",
+    offset: "offset",
+    maxId: "max_id",
+    minId: "min_id",
+}
 
 export function threadSearch<M extends MessageCore>(
     channelId: string,
@@ -395,80 +435,19 @@ export function threadSearch<M extends MessageCore>(
     if (!identifier(channelId)) return channelIdFailure()
     const input = query === undefined ? {} : query
     if (!record(input)) return inputValidationFailure("query", "type", "Thread search query must be an object")
-    const unsupported = unsupportedKeyFailure(
-        input,
-        ["name", "tagIds", "tagSetting", "archived", "sortBy", "sortOrder", "limit", "offset", "maxId", "minId"],
-        "query",
-        "the thread search query",
-    )
+    const keys = Object.keys(searchRules)
+    const unsupported = unsupportedKeyFailure(input, keys, "query", "the thread search query")
     if (unsupported) return unsupported
     const field = fieldsOnce(input)
+    const supplied = Object.fromEntries(keys.map((key) => [key, field(key)]))
+    // A null limit means the default, and Fluxer receives a limit only when the query names one
+    const checked = checkFields({ ...supplied, limit: supplied.limit ?? 25 }, searchRules, "query.")
+    if (checked instanceof InputValidationFailure) return checked
+    const limit = checked.limit as number
+    const sent = wireFields({ ...checked, limit: supplied.limit === undefined ? undefined : limit }, searchWireNames)
     const params = new URLSearchParams()
-    const name = field("name")
-    if (name !== undefined && !rawText(name, 0, 100))
-        return inputValidationFailure(
-            "query.name",
-            "length",
-            "Thread search name must contain at most 100 UTF-16 code units",
-        )
-    if (name !== undefined) params.set("name", name)
-    const tagsInput = field("tagIds")
-    const tags = tagsInput === undefined ? undefined : tagIds(tagsInput, "query.tagIds", maxSearchTags)
-    if (tags instanceof InputValidationFailure) return tags
-    for (const tag of tags ?? []) params.append("tag", tag)
-    const tagSetting = field("tagSetting")
-    if (tagSetting !== undefined && tagSetting !== "match_some" && tagSetting !== "match_all")
-        return inputValidationFailure(
-            "query.tagSetting",
-            "allowedValue",
-            'Thread search tagSetting must be "match_some" or "match_all"',
-        )
-    if (tagSetting !== undefined) params.set("tag_setting", tagSetting)
-    const archived = field("archived")
-    if (archived !== undefined && typeof archived !== "boolean")
-        return inputValidationFailure("query.archived", "type", "Thread search archived must be a boolean")
-    if (archived !== undefined) params.set("archived", String(archived))
-    const sortBy = field("sortBy")
-    if (sortBy !== undefined && !searchSortBy.has(sortBy))
-        return inputValidationFailure(
-            "query.sortBy",
-            "allowedValue",
-            'Thread search sortBy must be "last_message_time", "archive_time", "relevance" or "creation_time"',
-        )
-    if (sortBy !== undefined) params.set("sort_by", sortBy as string)
-    const sortOrder = field("sortOrder")
-    if (sortOrder !== undefined && sortOrder !== "asc" && sortOrder !== "desc")
-        return inputValidationFailure(
-            "query.sortOrder",
-            "allowedValue",
-            'Thread search sortOrder must be "asc" or "desc"',
-        )
-    if (sortOrder !== undefined) params.set("sort_order", sortOrder)
-    const limit = field("limit") ?? 25
-    if (!integerInRange(limit, 1, 25))
-        return inputValidationFailure(
-            "query.limit",
-            "range",
-            "Thread search limit must be an integer from 1 through 25",
-        )
-    if (field("limit") !== undefined) params.set("limit", String(limit))
-    const offset = field("offset")
-    if (offset !== undefined && !integerInRange(offset, 0, 9975))
-        return inputValidationFailure(
-            "query.offset",
-            "range",
-            "Thread search offset must be an integer from 0 through 9,975",
-        )
-    if (offset !== undefined) params.set("offset", String(offset))
-    for (const [key, wire] of [
-        ["maxId", "max_id"],
-        ["minId", "min_id"],
-    ] as const) {
-        const id = field(key)
-        if (id !== undefined && !identifier(id))
-            return inputValidationFailure(`query.${key}`, "format", "Thread search cursor IDs must be decimal strings")
-        if (id !== undefined) params.set(wire, id)
-    }
+    for (const [wire, value] of Object.entries(sent))
+        for (const item of Array.isArray(value) ? value : [value]) params.append(wire, String(item))
     const search = params.toString()
     return {
         majorId: channelId,
