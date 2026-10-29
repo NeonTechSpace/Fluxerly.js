@@ -14,9 +14,28 @@ const isReference = (page: Page) => page.slugs[1] === "api"
 // The changelog is release history, not usage, and would crowd the AI files
 const isChangelog = (page: Page) => page.slugs.length === 2 && page.slugs[1] === "changelog"
 
-/** Markdown twin of a non-reference page, next to its HTML page */
+/** Markdown twin of a page, next to its HTML page */
 export function markdownTwinUrl(slugs: string[]) {
     return `/docs/${slugs.length === 1 ? `${slugs[0]}/index` : slugs.join("/")}.md`
+}
+
+/**
+ * Whether a page has a Markdown twin: every guide, the overview and the changelog, plus the reference overview and
+ * its method-by-task index. Symbol pages stay HTML, and llms-reference.txt condenses them
+ */
+export function hasMarkdownTwin(page: Page) {
+    return !isReference(page) || page.slugs.length === 2 || (page.slugs.length === 3 && page.slugs[2] === "tasks")
+}
+
+let twins: Map<string, string> | undefined
+
+// Links to a page with a Markdown twin point to the twin, so an assistant reading Markdown keeps reading Markdown
+function markdownLinks(markdown: string) {
+    twins ??= new Map(source.getPages().filter(hasMarkdownTwin).map((page) => [page.url.replace(/\/$/, ""), markdownTwinUrl(page.slugs)]))
+    return markdown.replace(/\]\((\/docs\/[^)\s#]*)(#[^)\s]*)?\)/g, (link, path: string, anchor = "") => {
+        const twin = twins!.get(path.replace(/\/$/, ""))
+        return twin ? `](${twin}${anchor})` : link
+    })
 }
 
 function label(version: string) {
@@ -54,7 +73,7 @@ function readableCommands(markdown: string) {
 /** Guide Markdown with its title, without generated metadata or browser-only syntax */
 export function pageMarkdown(page: Page) {
     const description = page.data.description ? `\n\n${page.data.description}` : ""
-    return `# ${page.data.title}${description}\n\n${readableCommands(page.data.entry.body ?? "").trim()}\n`
+    return `# ${page.data.title}${description}\n\n${markdownLinks(readableCommands(page.data.entry.body ?? "")).trim()}\n`
 }
 
 function describe(page: Page) {
@@ -70,17 +89,21 @@ const entry = (page: Page, url: string) => {
     return `- [${page.data.title}](${url})${description ? `: ${description}` : ""}`
 }
 
+// The index stays small enough to read whole: guides and the reference entry points, not every symbol page
 export function llmsIndex(version: string) {
     const pages = versionPages(version)
     const guides = pages.filter((page) => !isReference(page))
-    const reference = pages.filter(isReference)
+    const start = guides.find((page) => page.slugs.length === 2 && page.slugs[1] === "where-do-i")
+    const reference = pages.filter((page) => isReference(page) && (hasMarkdownTwin(page) || page.slugs[2] === "modules"))
+    const twin = (page: Page) => (hasMarkdownTwin(page) ? markdownTwinUrl(page.slugs) : page.url)
     return [
         `# Fluxerly.js documentation`,
-        `> Documentation for the Fluxerly.js SDK (${label(version)}). Guides are linked as Markdown. Every guide is in /docs/${version}/llms-full.txt and a condensed API reference is in /docs/${version}/llms-reference.txt`,
+        `> Documentation for the Fluxerly.js SDK (${label(version)}). Start with Where do I…? to find the guide or method for a task. Links to guides and to the reference overview and task index are Markdown. When the installed package is a different version, prefer its type declarations, which document that version. Every guide is in /docs/${version}/llms-full.txt and a condensed API reference with every signature is in /docs/${version}/llms-reference.txt, both large files`,
+        ...(start ? [`## Start here`, entry(start, twin(start))] : []),
         `## Guides`,
-        guides.map((page) => entry(page, markdownTwinUrl(page.slugs))).join("\n"),
+        guides.filter((page) => page !== start).map((page) => entry(page, twin(page))).join("\n"),
         `## API reference`,
-        reference.map((page) => entry(page, page.url)).join("\n"),
+        [...reference.map((page) => entry(page, twin(page))), `- [Condensed API reference](/docs/${version}/llms-reference.txt): Every symbol with its signatures and first summary sentences`].join("\n"),
     ].join("\n\n") + "\n"
 }
 

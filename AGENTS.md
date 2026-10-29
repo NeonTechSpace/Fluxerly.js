@@ -7,6 +7,9 @@
 | Testing and live sandbox checks | [Development checks](/docs/REPOSITORY.md#development-checks) and the [live check guide](/projects/sdk/tests/live/README.md) |
 | Releasing | [Releasing](/docs/RELEASING.md) |
 | Website documentation, reference generation and Preview delivery | [Documentation maintenance](/docs/DOCUMENTATION.md) |
+| Changing what coding agents read when they build bots with the SDK | [Agent guide](/projects/sdk/agents/AGENTS.md), the `fluxerly agents` command in [agents-section.ts](/projects/sdk/src/internal/agents-section.ts) and the website's [assistant files](/projects/web/src/lib/assistant-docs.ts) |
+
+Run pnpm commands from [projects/](/projects/), the workspace root, and follow the AGENTS.md file of each edited folder, such as [projects/AGENTS.md](/projects/AGENTS.md) and [projects/sdk/AGENTS.md](/projects/sdk/AGENTS.md)
 
 Before adding, expanding or reviewing repository Markdown, apply the [documentation placement check](/docs/DOCUMENTATION.md#documentation-placement)
 

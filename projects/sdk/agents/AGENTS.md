@@ -21,25 +21,30 @@ Paths starting with `node_modules/@neontechspace/fluxerly/` point into the insta
 
 ## Start from the starter bot
 
-This is `node_modules/@neontechspace/fluxerly/examples/starter/bot.js`. The same folder has `bot.ts` and the native Effect `bot-effect.ts`
+This is `node_modules/@neontechspace/fluxerly/examples/starter/bot.js`, the bot that `fluxerly init` writes. The same folder has `bot.ts`, with the same code, and the native Effect `bot-effect.ts`
 
 ```js
-import { runBot } from "@neontechspace/fluxerly"
+import { defineBot, runBot } from "@neontechspace/fluxerly"
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return
+// The bot's options without its token, so its test can run them through createTestBot without a token or a network
+export const bot = defineBot({
+    commands: {
+        prefix: "!",
+        commands: {
             // Returning the reply reports a failed send to the log
-            return reply("Pong!")
+            ping: { execute: ({ reply }) => reply("Pong!") },
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 ```
 
-Run it with `node --env-file=.env bot.js`, where `.env` holds `FLUXER_BOT_TOKEN=...`
+Run it with `node --env-file=.env bot.js`, where `.env` holds `FLUXER_BOT_TOKEN=...`.
+Keep the options in the exported `defineBot` call and the `import.meta.main` start line, so a test can import `bot` and pass it to `createTestBot` from `@neontechspace/fluxerly/testing` without a token or a network.
+A project from `fluxerly init` has such a test in `bot.test.js` or `bot.test.ts`, run by `npm test`, `pnpm test` or `bun run test`
 
 ## Patterns that do not exist in Fluxerly
 
@@ -74,14 +79,32 @@ Sending a single message over HTTP needs no gateway connection. For a long-runni
 
 1. Read `node_modules/@neontechspace/fluxerly/package.json` for the installed SDK version, required Node.js version and supported import paths under `exports`
 2. Unless the application already uses Effect or explicitly requests it, use `@neontechspace/fluxerly` and its Result-based API without adding an Effect runtime
-3. Follow the `types` path of the chosen entry, such as `dist/index.d.ts`, and search that file for the requested member.
-   Read its JSDoc and follow referenced declarations for the needed options and error types, rather than reading the entire file.
+3. Find the task in the map below and open the declaration file it names.
+   Read the member's JSDoc and follow referenced declarations for its options and error types, rather than reading whole files.
    These comments document the installed SDK version
 4. Look for existing SDK helpers, command routing and paginated iterators before writing equivalent code
 
-When the declarations do not answer a question, the documentation website has files for AI tools.
-The index at https://preview.fluxerly.neontechspace.com/docs/latest/llms.txt links every guide as a small Markdown file, `llms-full.txt` holds every guide and `llms-reference.txt` holds a condensed API reference.
-Prefer the installed declarations when they differ from the website
+Paths in the map are relative to `node_modules/@neontechspace/fluxerly/`. The Effect API uses the same names under `dist/api/effect/`, imported from `@neontechspace/fluxerly/effect`
+
+- Run a bot with event handlers and commands: `dist/api/default/bot.d.ts`, starting with `defineBot`, `runBot` and their options
+- Prefix commands, arguments and help pages: `dist/api/default/commands.d.ts`, `dist/command-arguments.d.ts`, starting with the `commands` option of `runBot`
+- Send, reply, edit, delete, react, pin and read history: `dist/api/default/messages.d.ts`, starting with `client.messages`
+- Embeds and message content: `dist/builders.d.ts`, `dist/messages.d.ts`, starting with `EmbedBuilder`, `MessageBuilder`
+- Wait for replies or reactions: `dist/api/default/messages.d.ts`, `dist/collectors.d.ts`, starting with `client.messages.collect`, `client.messages.collectReactions`
+- Ban, kick, time out, rename and change member roles: `dist/api/default/members.d.ts`, starting with `client.members`
+- Roles and the role hierarchy: `dist/api/default/roles.d.ts`, `dist/role-hierarchy.d.ts`, starting with `client.roles`, `hierarchy`
+- Check permissions: `dist/api/default/permissions.d.ts`, `dist/api/default/helpers.d.ts`, starting with `client.permissions`, `permissionBits`
+- Channels, threads and forums: `dist/api/default/channels.d.ts`, `dist/api/default/threads.d.ts`, starting with `client.channels`, `client.threads`
+- Community data and settings: `dist/api/default/guilds.d.ts`, starting with `client.guilds`
+- Event names, payloads and handler context: `dist/events.d.ts`, starting with `EventMap`, `EventContext`
+- Errors and Results: `dist/errors.d.ts`, `dist/error-tools.d.ts`, starting with `errors`, `describeError`
+- Logging: `dist/logging.d.ts`, starting with the `logging` option of `runBot` and `createClient`
+- Mentions, links, text and colors: `dist/api/default/helpers.d.ts`, starting with `format`, `links`, `text`, `colors`
+- Tests without a token or network: `dist/testing.d.ts`, starting with `createTestBot`
+
+When the declarations do not answer a question, the documentation website has Markdown files for AI tools.
+Start with the task index at https://preview.fluxerly.neontechspace.com/docs/latest/where-do-i.md, which links the guide section for each common task, or the list of every client method by task at https://preview.fluxerly.neontechspace.com/docs/latest/api/tasks.md.
+The index of all guides is https://preview.fluxerly.neontechspace.com/docs/latest/llms.txt, and its first lines name the SDK version it documents. `latest` follows the newest release, so when that version differs from the installed one, trust the installed declarations
 
 ## Project requirements
 

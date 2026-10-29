@@ -5,7 +5,7 @@ import Layout from '../../components/Layout.astro'
 import { source } from '../../lib/source'
 import { breadcrumbsFor, treeForVersion } from '../../lib/docs-tree'
 import { searchIndexUrl } from '../../lib/search-index'
-import { markdownTwinUrl } from '../../lib/assistant-docs'
+import { hasMarkdownTwin, markdownTwinUrl } from '../../lib/assistant-docs'
 import versions from '../../../content/versions.json'
 import { parseVersion } from '../../../scripts/versions.js'
 
@@ -45,7 +45,7 @@ const pageTree = source.getPageTree()
 const pageUrl = source.getPage(routeSlugs)!.url
 const referenceMeta = (await getCollection('meta')).find((meta) =>
   meta.filePath?.replaceAll('\\', '/').endsWith(`content/docs/${routeVersion}/api/meta.json`))
-const markdownUrl = isReference ? undefined : markdownTwinUrl(routeSlugs)
+const markdownUrl = hasMarkdownTwin(source.getPage(routeSlugs)!) ? markdownTwinUrl(routeSlugs) : undefined
 const assistantIndexUrl = `/docs/${routeVersion}/llms.txt`
 const alternates = [
   ...(markdownUrl ? [{ href: markdownUrl, type: 'text/markdown', title: 'This page as Markdown' }] : []),

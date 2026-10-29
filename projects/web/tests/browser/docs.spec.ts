@@ -569,14 +569,26 @@ test("Guide pages copy their Markdown twin and link to it without JavaScript", a
     } finally { await noScript.close() }
 })
 
-test("Assistant indexes list the version's guides and reference pages", async ({ request }) => {
+test("Assistant indexes list the version's guides and reference entry points", async ({ request }) => {
     const index = await request.get("/docs/preview/llms.txt")
     expect(index.status()).toBe(200)
     expect(index.headers()["x-robots-tag"]).toBe("noindex, nofollow")
     const text = await index.text()
     for (const guide of authoredGuides) expect(text).toContain(`](/docs/preview/${guide.slug}.md)`)
-    expect(text).toContain("](/docs/preview/api/interfaces/js-ts.Client)")
+    // The task index leads, and the reference appears through its entry points rather than every symbol page
+    expect(text.indexOf("](/docs/preview/where-do-i.md)")).toBeLessThan(text.indexOf("## Guides"))
+    expect(text).toContain("](/docs/preview/api.md)")
+    expect(text).toContain("](/docs/preview/api/tasks.md)")
+    expect(text).toContain("](/docs/preview/api/modules/js-ts)")
+    expect(text).not.toContain("/api/interfaces/")
     expect(text).toContain("/docs/preview/llms-reference.txt")
+    const tasks = await request.get("/docs/preview/api/tasks.md")
+    expect(tasks.headers()["content-type"]).toContain("text/markdown")
+    expect(await tasks.text()).toContain("`client.members.ban`")
+    // A Markdown twin links other twins as Markdown, and symbol pages as HTML
+    const whereDoI = await (await request.get("/docs/preview/where-do-i.md")).text()
+    expect(whereDoI).toContain("](/docs/preview/glossary.md)")
+    expect(whereDoI).not.toContain("](/docs/preview/glossary/)")
     const full = (await (await request.get("/docs/preview/llms-full.txt")).text()).replaceAll("\r\n", "\n")
     expect(full).toContain(`# Guide: ${quickStartTitle}`)
     // Guides and reference are separate files so each fits in one AI context, and release history stays out

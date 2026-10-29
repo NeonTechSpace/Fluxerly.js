@@ -584,6 +584,13 @@ try {
             .map((match) => match[1])
             .filter((example) => example.includes('from "effect"') === (kind === "effect"))
         assert.equal(guideExample.length, 1, `Expected one ${kind} example in the shipped agent guide`)
+        // Every declaration file the guide's task map names exists in the installed package
+        const guidePaths = [
+            ...readFileSync(join(installed, "agents/AGENTS.md"), "utf8").matchAll(/`(dist\/[\w/.-]+\.d\.ts)`/g),
+        ].map((match) => match[1])
+        assert.ok(guidePaths.length > 10, "Expected the shipped agent guide to map tasks to declaration files")
+        for (const path of guidePaths)
+            assert.ok(existsSync(join(installed, path)), `The agent guide names missing ${path}`)
         writeFileSync(join(consumer, "agent-guide.ts"), guideExample[0])
         run(
             process.execPath,
