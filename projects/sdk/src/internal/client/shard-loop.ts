@@ -33,9 +33,9 @@ import type { SessionStore } from "#sdk/sharding"
 import { nowMs } from "../clock.js"
 import type { Configuration } from "../configuration.js"
 import type { CountOwner } from "../counts.js"
-import { mapFailureCause, withDeadline } from "../effect-failures.js"
+import { failures, mapCause, mapFailureCause, withDeadline } from "../effect-failures.js"
 import type { EventBus } from "../events.js"
-import { primaryError } from "../failures.js"
+import { primaryFault } from "../failures.js"
 import { AttemptFailure, runGatewaySession, type Session } from "../gateway.js"
 import { gatewayUrl, type InstanceResolver } from "../instance.js"
 import type { ClientLogger, LogInput } from "../logging.js"
@@ -330,6 +330,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                 if (!url) {
                     const endpoint = yield* host.instance.resolve().pipe(
                         mapFailureCause(
+                            failures(ConnectionError, RateLimitError, ClientClosedError),
                             (error) =>
                                 new AttemptFailure(
                                     error instanceof ClientClosedError
@@ -479,19 +480,20 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                             Exit.isFailure(result) &&
                             (Cause.hasDies(result.cause) || Cause.hasInterrupts(result.cause))
                         ) {
+                            const mapped = mapCause(
+                                result.cause,
+                                failures(AttemptFailure),
+                                (failure) => failure.failure,
+                            )
                             if (Cause.hasDies(result.cause))
                                 log({
                                     level: "error",
                                     code: "lifecycle.connectionEnded",
                                     message: `Shard ${shard.shardId} stopped because of an unexpected SDK fault`,
-                                    error: primaryError(
-                                        Cause.fromReasons(
-                                            result.cause.reasons.filter((reason) => reason._tag === "Die"),
-                                        ),
-                                    ),
-                                    cause: Cause.map(result.cause, (failure) => failure.failure),
+                                    error: primaryFault(mapped),
+                                    cause: mapped,
                                 })
-                            return Effect.failCause(Cause.map(result.cause, (failure) => failure.failure))
+                            return Effect.failCause(mapped)
                         }
                         return Effect.succeed(result)
                     }),

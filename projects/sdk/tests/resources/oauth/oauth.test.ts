@@ -1451,8 +1451,9 @@ describe("oauth", () => {
                 if (cleanupDefects) {
                     expect(result).toMatchObject({
                         name: "SdkDefect",
+                        // Effect turns a typed failure beside a defect into a defect that keeps its value
                         reasons: [
-                            { kind: "Failure", failure: { _tag: "OAuthOperationError" } },
+                            { kind: "Defect", defect: { _tag: "OAuthOperationError" } },
                             { kind: "Defect", defect: cleanup },
                         ],
                     })
@@ -1640,7 +1641,7 @@ describe("oauth", () => {
         }
     })
 
-    test.each(modes)("%s retains discovery throttling alongside reader-cleanup defects", async (mode) => {
+    test.each(modes)("%s retains discovery throttling as a defect beside reader-cleanup defects", async (mode) => {
         const { base } = await fixture()
         const config = { clientId: "1", clientSecret: "secret", instance: { url: base, allowInsecure: true } }
         const originalFetch = globalThis.fetch
@@ -1675,10 +1676,12 @@ describe("oauth", () => {
                 const made = defaultApi.create(config)
                 try {
                     const error = await Promise.resolve(made.refresh("refresh")).catch((error) => error)
+                    // Effect turns the throttling failure beside the cleanup defect into a defect, and the cleanup stays the cause
                     expect(error).toMatchObject({
                         name: "SdkDefect",
+                        cause: cleanup,
                         reasons: [
-                            { kind: "Failure", failure: expected },
+                            { kind: "Defect", origin: "sdk", defect: expected },
                             { kind: "Defect", defect: cleanup },
                         ],
                     })
@@ -1691,14 +1694,12 @@ describe("oauth", () => {
                 const client = await Effect.runPromise(native.create(config).pipe(Scope.provide(scope)))
                 try {
                     const exit = await Effect.runPromiseExit(client.refresh("refresh"))
-                    expect(exit).toMatchObject({
-                        cause: {
-                            reasons: [
-                                { _tag: "Fail", error: expected },
-                                { _tag: "Die", defect: cleanup },
-                            ],
-                        },
-                    })
+                    expect(Exit.isFailure(exit)).toBe(true)
+                    if (Exit.isFailure(exit))
+                        expect(exit.cause.reasons).toMatchObject([
+                            { _tag: "Die", defect: expected },
+                            { _tag: "Die", defect: cleanup },
+                        ])
                 } finally {
                     await Effect.runPromise(Scope.close(scope, Exit.void))
                 }
@@ -1784,7 +1785,7 @@ describe("oauth", () => {
         }
     })
 
-    test("retains a response failure with its reader-cleanup defect and masks credentials in the default rejection", async () => {
+    test("retains a response failure as a defect beside its reader-cleanup defect and masks credentials in the default rejection", async () => {
         const { base } = await fixture()
         const cleanup = new Error("OAuth reader cleanup marker client_secret=fixture-planted-secret")
         const made = defaultApi.create({
@@ -1822,9 +1823,10 @@ describe("oauth", () => {
             expect(error).toMatchObject({
                 name: "SdkDefect",
                 reasons: [
+                    // Effect turns a typed failure beside a defect into a defect that keeps its value
                     {
-                        kind: "Failure",
-                        failure: { _tag: "OAuthOperationError", reason: "response", outcome: "unknown", status: 200 },
+                        kind: "Defect",
+                        defect: { _tag: "OAuthOperationError", reason: "response", outcome: "unknown", status: 200 },
                     },
                     { kind: "Defect", defect: cleanup },
                 ],

@@ -693,7 +693,7 @@ test.each(modes)("%s awaits the timed-out batch response cleanup before failing"
     expect(posts).toBe(2)
 })
 
-test.each(modes)("%s preserves cleanup expected failures alongside response cleanup defects", async (mode) => {
+test.each(modes)("%s keeps cleanup failures as defects beside response cleanup defects", async (mode) => {
     const cleanup = new Error("private cleanup response defect")
     let stage: "preview" | "cleanup" = "preview"
     let cancellations = 0
@@ -703,6 +703,7 @@ test.each(modes)("%s preserves cleanup expected failures alongside response clea
         return Response.json([wire("30")])
     })
 
+    // Effect turns each cleanup failure beside the response cleanup defect into a defect that keeps the public error
     if (mode === "default") {
         const client = createClient(configuration)
         try {
@@ -712,16 +713,18 @@ test.each(modes)("%s preserves cleanup expected failures alongside response clea
             expect(previewFailure).toMatchObject({
                 name: "SdkDefect",
                 operation: "previewCleanup",
+                cause: cleanup,
                 reasons: expect.arrayContaining([
                     {
-                        kind: "Failure",
-                        failure: expect.objectContaining({
+                        kind: "Defect",
+                        origin: "sdk",
+                        defect: expect.objectContaining({
                             _tag: "MessageCleanupError",
                             phase: "preview",
                             reason: "rejected",
                         }),
                     },
-                    expect.objectContaining({ kind: "Defect" }),
+                    expect.objectContaining({ kind: "Defect", defect: cleanup }),
                 ]),
             } satisfies Partial<SdkDefect>)
             stage = "cleanup"
@@ -732,16 +735,18 @@ test.each(modes)("%s preserves cleanup expected failures alongside response clea
             expect(executionFailure).toMatchObject({
                 name: "SdkDefect",
                 operation: "cleanup",
+                cause: cleanup,
                 reasons: expect.arrayContaining([
                     {
-                        kind: "Failure",
-                        failure: expect.objectContaining({
+                        kind: "Defect",
+                        origin: "sdk",
+                        defect: expect.objectContaining({
                             _tag: "MessageCleanupError",
                             phase: "cleanup",
                             reason: "rejected",
                         }),
                     },
-                    expect.objectContaining({ kind: "Defect" }),
+                    expect.objectContaining({ kind: "Defect", defect: cleanup }),
                 ]),
             } satisfies Partial<SdkDefect>)
         } finally {
@@ -759,8 +764,8 @@ test.each(modes)("%s preserves cleanup expected failures alongside response clea
                 expect(previewExit.cause.reasons).toEqual(
                     expect.arrayContaining([
                         expect.objectContaining({
-                            _tag: "Fail",
-                            error: expect.objectContaining({ _tag: "MessageCleanupError", phase: "preview" }),
+                            _tag: "Die",
+                            defect: expect.objectContaining({ _tag: "MessageCleanupError", phase: "preview" }),
                         }),
                         expect.objectContaining({ _tag: "Die", defect: cleanup }),
                     ]),
@@ -776,8 +781,8 @@ test.each(modes)("%s preserves cleanup expected failures alongside response clea
                 expect(cleanupExit.cause.reasons).toEqual(
                     expect.arrayContaining([
                         expect.objectContaining({
-                            _tag: "Fail",
-                            error: expect.objectContaining({ _tag: "MessageCleanupError", phase: "cleanup" }),
+                            _tag: "Die",
+                            defect: expect.objectContaining({ _tag: "MessageCleanupError", phase: "cleanup" }),
                         }),
                         expect.objectContaining({ _tag: "Die", defect: cleanup }),
                     ]),

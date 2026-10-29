@@ -218,7 +218,7 @@ test.each(modes)("%s rejects an oversized selected-instance document", async (mo
 
 for (const status of [200, 429])
     test.each(modes)(
-        `%s retains bounded discovery failure and both reader cleanup defects for HTTP ${status}`,
+        `%s retains bounded discovery failure as a defect beside both reader cleanup defects for HTTP ${status}`,
         async (mode) => {
             const cancellation = new Error("reader cancellation marker")
             const release = new Error("reader release marker")
@@ -243,6 +243,7 @@ for (const status of [200, 429])
                 status === 200
                     ? { _tag: "ConnectionError", reason: "protocol", status: 200 }
                     : { _tag: "RateLimitError", retryAfterMs: 2000 }
+            // Effect turns a typed failure beside a defect into a defect that keeps its value
             if (mode === "default") {
                 const error = await Promise.resolve((value as DefaultClient).instance.resolve()).catch(
                     (error: unknown) => error,
@@ -250,11 +251,11 @@ for (const status of [200, 429])
                 expect(error).toMatchObject({
                     name: "SdkDefect",
                     reasons: [
-                        { kind: "Failure", failure: expect.objectContaining(expected) },
+                        { kind: "Defect", defect: expect.objectContaining(expected) },
                         { kind: "Defect", defect: expect.any(AggregateError) },
                     ],
                 })
-                const defect = (error as SdkDefect).reasons.find((reason) => reason.kind === "Defect")
+                const defect = (error as SdkDefect).reasons[1]
                 if (defect?.kind === "Defect")
                     expect((defect.defect as AggregateError).errors).toEqual([cancellation, release])
             } else {
@@ -262,10 +263,10 @@ for (const status of [200, 429])
                 expect(Exit.isFailure(exit)).toBe(true)
                 if (Exit.isFailure(exit)) {
                     expect(exit.cause.reasons).toEqual([
-                        expect.objectContaining({ _tag: "Fail", error: expect.objectContaining(expected) }),
+                        expect.objectContaining({ _tag: "Die", defect: expect.objectContaining(expected) }),
                         expect.objectContaining({ _tag: "Die", defect: expect.any(AggregateError) }),
                     ])
-                    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
+                    const defect = exit.cause.reasons[1]
                     if (defect?._tag === "Die")
                         expect((defect.defect as AggregateError).errors).toEqual([cancellation, release])
                 }

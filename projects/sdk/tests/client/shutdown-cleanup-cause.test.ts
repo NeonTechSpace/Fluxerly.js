@@ -25,14 +25,15 @@ function expectShutdownCause(exit: Exit.Exit<void, never>, cleanup: Error) {
     if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
 }
 
+// Effect turns a typed failure beside a defect into a defect that keeps its value
 function expectConnectionAndCleanup(exit: Exit.Exit<void, unknown>, cleanup: Error) {
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isSuccess(exit)) return
-    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-    expect(failure?._tag).toBe("Fail")
-    if (failure?._tag === "Fail") expect(failure.error).toMatchObject({ _tag: "ConnectionError" })
-    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
-    expect(defect?._tag).toBe("Die")
+    expect(exit.cause.reasons).toMatchObject([
+        { _tag: "Die", defect: { _tag: "ConnectionError", phase: "gateway", reason: "protocol" } },
+        { _tag: "Die" },
+    ])
+    const defect = exit.cause.reasons[1]
     if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
 }
 
@@ -79,7 +80,7 @@ test("shutdown keeps interrupted cleanup causes structural across native, defaul
     }
 })
 
-test("waitForClose and run retain a permanent connection failure beside its cleanup defect", async () => {
+test("waitForClose and run retain a permanent connection failure as a defect beside its cleanup defect", async () => {
     const server = await fixture()
     const cleanup = new Error("private-mixed-cleanup-sentinel")
     const waitScope = Scope.makeUnsafe()

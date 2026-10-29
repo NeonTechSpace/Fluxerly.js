@@ -118,7 +118,7 @@ Learn the core concepts in the [Effect v4 introduction](https://effect.website/d
 
 Applications that import Effect directly must declare it as a direct dependency, using a version within the installed SDK's `peerDependencies.effect` range. Read `node_modules/@neontechspace/fluxerly/package.json`, or the [SDK manifest](/projects/sdk/package.json) for this checkout
 
-Fluxerly is tested against the lowest version in that range and a newer Effect 4 development version. Later Effect 4 releases are accepted. Do not install Effect 3 or an Effect 4 prerelease. The versioned documentation gives the matching install command
+Fluxerly is tested against the lowest version in that range and against its Effect 4 development version, which can be newer. Later Effect 4 releases are accepted. Do not install Effect 3 or an Effect 4 prerelease. The versioned documentation gives the matching install command
 
 </details>
 

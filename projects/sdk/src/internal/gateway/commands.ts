@@ -84,6 +84,9 @@ export function commandSender(options: {
 /** Why a gateway.send submission could not be handed to the socket */
 export type SubmitFailure = "closed" | "busy"
 
+/** Selects a SubmitFailure, for mapping it to the public error */
+export const isSubmitFailure = (value: unknown): value is SubmitFailure => value === "closed" || value === "busy"
+
 /** Most internal commands one socket holds while they wait for the pacing budget */
 const maxPendingInternalCommands = 500
 

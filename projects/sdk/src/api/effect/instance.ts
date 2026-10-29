@@ -44,7 +44,8 @@ export interface Instance {
      * Document, rate-limit, timeout, closure and invalid timeout-option failures are expected failures
      *
      * @remarks
-     * Cleanup defects remain in the Cause alongside any failure or interruption
+     * Cleanup defects remain in the Cause alongside any failure or interruption. Effect reports a failure that occurs
+     * together with a cleanup defect as a defect that keeps the failure's value
      */
     resolve(options?: InstanceResolveOptions): Effect.Effect<ResolvedInstance, InstanceResolveError>
 }

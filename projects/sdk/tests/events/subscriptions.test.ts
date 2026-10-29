@@ -547,6 +547,24 @@ test.each(["default", "native"] as const)(
     },
 )
 
+test("native registration in an already closed scope closes at once and does not hold shutdown", async () => {
+    const server = await fixture()
+    const clientScope = Scope.makeUnsafe()
+    onTestFinished(() => Effect.runPromise(Scope.close(clientScope, Exit.void)))
+    const client = await Effect.runPromise(createNative({ token }).pipe(Scope.provide(clientScope)))
+    await settle(client.connect())
+    const closed = Scope.makeUnsafe()
+    await Effect.runPromise(Scope.close(closed, Exit.void))
+    const handler = vi.fn(() => Effect.void)
+    const exit = await Effect.runPromiseExit(client.on("messageCreate", handler).pipe(Scope.provide(closed)))
+    if (Exit.isSuccess(exit)) await settle(exit.value.waitForClose())
+    else expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(client.diagnostics().events.subscriptions).toBe(0)
+    server.dispatch("10")
+    await settle(client.shutdown())
+    expect(handler).not.toHaveBeenCalled()
+})
+
 test("a handler at its concurrency limit waits for the next free slot without spinning", async () => {
     // Counts every Effect operation of the subscription's fibers, which inherit the registration context
     class CountingScheduler extends Scheduler.MixedScheduler {

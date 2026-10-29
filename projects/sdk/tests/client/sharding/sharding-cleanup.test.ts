@@ -229,77 +229,91 @@ afterEach(() => {
     transport.terminationGate = undefined
 })
 
-test.each(modes)("%s retains a permanent shard failure and a sibling socket cleanup defect", async (mode) => {
-    // SDK time stands still between steps, so the fixture's 100 ms heartbeats cannot time out on a slow machine
-    const clock = sdkClock()
-    const cleanup = new Error("private socket cleanup detail")
-    const fixture = await gatewayFixture()
-    // One startup attempt, so the invalid READY below ends startup instead of retrying with a new session
-    const driver = await makeDriver(mode, undefined, 1)
-    try {
-        const pending = driver.defaultApi
-            ? Promise.resolve(driver.defaultApi.connect())
-            : Effect.runPromiseExit(driver.native!.connect())
-        const { first, second } = await waitForIdentifies(fixture, clock)
-        fixture.ready(first)
-        await vi.waitFor(
-            () => expect(driver.client.shards.find((shard) => shard.shardId === 0)?.state).toBe("Connected"),
-            { interval: 5 },
-        )
-        const cleanupGate = fixture.failClose(0, cleanup)
-        const [shardId, totalShards] = shardTuple(second)
-        fixture.ready(second, [(shardId + 1) % totalShards, totalShards])
-        let settled = false
-        void pending.then(
-            () => {
-                settled = true
-            },
-            () => {
-                settled = true
-            },
-        )
-        await cleanupGate.started
-        await Promise.resolve()
-        expect(settled).toBe(false)
-        cleanupGate.unblock()
+test.each(modes)(
+    "%s retains a permanent shard failure as a defect beside a sibling socket cleanup defect",
+    async (mode) => {
+        // SDK time stands still between steps, so the fixture's 100 ms heartbeats cannot time out on a slow machine
+        const clock = sdkClock()
+        const cleanup = new Error("private socket cleanup detail")
+        const fixture = await gatewayFixture()
+        // One startup attempt, so the invalid READY below ends startup instead of retrying with a new session
+        const driver = await makeDriver(mode, undefined, 1)
+        try {
+            const pending = driver.defaultApi
+                ? Promise.resolve(driver.defaultApi.connect())
+                : Effect.runPromiseExit(driver.native!.connect())
+            const { first, second } = await waitForIdentifies(fixture, clock)
+            fixture.ready(first)
+            await vi.waitFor(
+                () => expect(driver.client.shards.find((shard) => shard.shardId === 0)?.state).toBe("Connected"),
+                { interval: 5 },
+            )
+            const cleanupGate = fixture.failClose(0, cleanup)
+            const [shardId, totalShards] = shardTuple(second)
+            fixture.ready(second, [(shardId + 1) % totalShards, totalShards])
+            let settled = false
+            void pending.then(
+                () => {
+                    settled = true
+                },
+                () => {
+                    settled = true
+                },
+            )
+            await cleanupGate.started
+            await Promise.resolve()
+            expect(settled).toBe(false)
+            cleanupGate.unblock()
 
-        if (driver.defaultApi) {
-            const error = await pending.catch((reason) => reason)
-            await fixture.waitClientClosed(0)
-            expectDefaultDefect(error, {
-                kind: "Failure",
-                failure: expect.objectContaining({
-                    _tag: "ShardConnectionError",
-                    shardId,
-                    failure: expect.objectContaining({ _tag: "ConnectionError", phase: "gateway", reason: "protocol" }),
-                }),
+            const shardFailure = expect.objectContaining({
+                _tag: "ShardConnectionError",
+                shardId,
+                failure: expect.objectContaining({ _tag: "ConnectionError", phase: "gateway", reason: "protocol" }),
             })
-        } else {
-            const exit = await (pending as Promise<Exit.Exit<void, unknown>>)
-            await fixture.waitClientClosed(0)
-            expectNativeDefect(exit, cleanup, {
-                _tag: "Fail",
-                error: expect.objectContaining({
-                    _tag: "ShardConnectionError",
-                    shardId,
-                    failure: expect.objectContaining({ _tag: "ConnectionError", phase: "gateway", reason: "protocol" }),
-                }),
-            })
+            // Effect turns the shard failure beside the cleanup defect into a defect, and it is listed once
+            if (driver.defaultApi) {
+                const error = await pending.catch((reason) => reason)
+                await fixture.waitClientClosed(0)
+                expect(error).toBeInstanceOf(SdkDefect)
+                expect(error).toMatchObject({
+                    operation: "connect",
+                    reasons: [
+                        { kind: "Defect", defect: shardFailure },
+                        { kind: "Defect", defect: cleanup },
+                    ],
+                })
+                expect((error as SdkDefect).reasons).toHaveLength(2)
+                expect(JSON.stringify(error)).toContain("private socket cleanup detail")
+            } else {
+                const exit = await (pending as Promise<Exit.Exit<void, unknown>>)
+                await fixture.waitClientClosed(0)
+                expect(Exit.isFailure(exit)).toBe(true)
+                if (Exit.isFailure(exit)) {
+                    expect(exit.cause.reasons).toHaveLength(2)
+                    expect(exit.cause.reasons).toMatchObject([
+                        { _tag: "Die", defect: shardFailure },
+                        { _tag: "Die", defect: cleanup },
+                    ])
+                    const defect = exit.cause.reasons[1]
+                    if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
+                }
+            }
+            expect(fixture.clientClosed(0)).toBe(true)
+            expect(driver.client.state).toBe("Closed")
+        } finally {
+            await driver.close()
+            await fixture.close()
         }
-        expect(fixture.clientClosed(0)).toBe(true)
-        expect(driver.client.state).toBe("Closed")
-    } finally {
-        await driver.close()
-        await fixture.close()
-    }
-})
+    },
+)
 
-test.each(modes)("%s retains a startup timeout and a socket cleanup defect", async (mode) => {
+test.each(modes)("%s retains a startup timeout as a defect beside the socket cleanup defect", async (mode) => {
     const clock = sdkClock()
     const cleanup = new Error("private socket cleanup detail")
     const timeoutMs = 750
     // Two spaced shards get one extra second of startup budget for the sibling's Identify spacing
     const budgetMs = timeoutMs + 1_000
+    const timeoutFailure = expect.objectContaining({ _tag: "ConnectionTimeoutError", timeoutMs: budgetMs })
     const fixture = await gatewayFixture()
     const driver = await makeDriver(mode, timeoutMs)
     try {
@@ -327,17 +341,28 @@ test.each(modes)("%s retains a startup timeout and a socket cleanup defect", asy
         if (driver.defaultApi) {
             const error = await pending.catch((reason) => reason)
             await fixture.waitClientClosed(startedShard)
-            expectDefaultDefect(error, {
-                kind: "Failure",
-                failure: expect.objectContaining({ _tag: "ConnectionTimeoutError", timeoutMs: budgetMs }),
+            // Effect turns a typed failure beside a defect into a defect that keeps its value
+            expect(error).toBeInstanceOf(SdkDefect)
+            expect(error).toMatchObject({
+                operation: "connect",
+                reasons: [
+                    { kind: "Defect", defect: timeoutFailure },
+                    { kind: "Defect", defect: cleanup },
+                ],
             })
+            expect(JSON.stringify(error)).toContain("private socket cleanup detail")
         } else {
             const exit = await (pending as Promise<Exit.Exit<void, unknown>>)
             await fixture.waitClientClosed(startedShard)
-            expectNativeDefect(exit, cleanup, {
-                _tag: "Fail",
-                error: expect.objectContaining({ _tag: "ConnectionTimeoutError", timeoutMs: budgetMs }),
-            })
+            expect(Exit.isFailure(exit)).toBe(true)
+            if (Exit.isFailure(exit)) {
+                expect(exit.cause.reasons).toMatchObject([
+                    { _tag: "Die", defect: timeoutFailure },
+                    { _tag: "Die", defect: cleanup },
+                ])
+                const defect = exit.cause.reasons[1]
+                if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
+            }
         }
         expect(fixture.clientClosed(startedShard)).toBe(true)
         expect(driver.client.state).toBe("Closed")

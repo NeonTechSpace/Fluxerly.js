@@ -4,7 +4,7 @@
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Effect from "effect/Effect"
-import { isThreadChannel } from "#sdk/channels"
+import { ChannelOperationError, isThreadChannel } from "#sdk/channels"
 import type { ChannelOperationFailure, GuildChannel, PermissionOverwrite } from "#sdk/channels"
 import type { GuildOperationFailure, GuildOperationOptions, GuildRole, MemberReference } from "#sdk/guilds"
 import { ClientClosedError } from "#sdk/errors"
@@ -16,6 +16,7 @@ import { channelFetch, channelList } from "./channels.js"
 import type { ClientOwner } from "./client.js"
 import { guildFetch, memberFetch, roleList } from "./guilds.js"
 import { identifier, record } from "./decode/primitives.js"
+import { failures, mapFailureCause } from "./effect-failures.js"
 import { readCaller, suspendInput, suspendMarked } from "./defects.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
@@ -406,8 +407,14 @@ function unconfirmedFailure(
 }
 
 /** Map a cache lookup refused by a closing client to the closure that REST reads report, as no request was sent */
-const closedBeforeRead = <A, E>(lookup: Effect.Effect<A, E>) =>
-    lookup.pipe(Effect.mapError((error) => (error instanceof ClientClosedError ? closedBeforeSend() : error)))
+const closedBeforeRead = <A>(
+    lookup: Effect.Effect<A, ClientClosedError | GuildOperationError | ChannelOperationError>,
+) =>
+    lookup.pipe(
+        mapFailureCause(failures(ClientClosedError, GuildOperationError, ChannelOperationError), (error) =>
+            error instanceof ClientClosedError ? closedBeforeSend() : error,
+        ),
+    )
 
 /**
  * Fetches independent guild, member, role, and optional channel observations, then calculates their raw bitfield.
@@ -488,7 +495,11 @@ export function fetchPermissions(
                 roles,
                 ...(channel === undefined ? {} : { channel }),
                 ...(parentChannel === undefined ? {} : { parentChannel }),
-            }).pipe(Effect.mapError((error) => remoteCalculationFailure(error, "permissions.fetch")))
+            }).pipe(
+                mapFailureCause(failures(GuildOperationError), (error) =>
+                    remoteCalculationFailure(error, "permissions.fetch"),
+                ),
+            )
         })
     })
 }
@@ -538,7 +549,9 @@ export function fetchChannelPermissions(
                 if (channel.permissionOverwrites === undefined)
                     return yield* Effect.fail(unconfirmedFailure(channel.id, operation))
                 const permissions = yield* calculatePermissions({ guild, member, roles, channel }).pipe(
-                    Effect.mapError((error) => remoteCalculationFailure(error, operation)),
+                    mapFailureCause(failures(GuildOperationError), (error) =>
+                        remoteCalculationFailure(error, operation),
+                    ),
                 )
                 results.push(Object.freeze({ channel, permissions }))
             }

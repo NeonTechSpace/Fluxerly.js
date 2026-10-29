@@ -97,7 +97,7 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 ### Optional consumer Effect integration
 
 The SDK development dependency pins an exact stable Effect 4 version within the required peer range.
-Packed consumers separately test the range's minimum, such as `4.0.0` for `^4.0.0`.
+Packed consumers separately test the range's minimum, such as `4.1.0` for `^4.1.0`.
 Updating the development dependency does not raise that minimum. Other releases within the range are accepted but are not individually tested. Effect 3 and Effect 4 prereleases are unsupported
 
 Modern npm, pnpm and Bun install required peers automatically by default.
@@ -226,6 +226,7 @@ Other formatting options use Prettier's stable defaults, without plugins or expe
 The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation and linting.
 Oxlint lints SDK source, scripts, examples and tests, release tooling and website scripts with type-aware rules through oxlint-tsgolint.
 Knip reports unused SDK files and exports, and CSpell checks SDK source comments, website guides and repository documents against the [project word list](/projects/cspell-words.txt).
+A source scan completes the lint. The [failure-mapping check](/projects/sdk/scripts/failure-mapping.js) fails when SDK source maps failures with `Effect.mapError` or `Cause.map` instead of the helpers that also map failures Effect turned into defects.
 These tools are exact workspace development dependencies configured in [projects/](/projects/).
 In CI, actionlint lints the workflow files and zizmor audits them.
 Website formatting has not been selected.

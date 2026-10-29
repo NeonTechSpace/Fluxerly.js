@@ -152,7 +152,7 @@ test.each(modes)("%s cancels stalled API error reads without retaining their bod
 })
 
 test.each(modes)(
-    "%s retains a rejected outcome with the API error body cleanup defect and masks its credentials",
+    "%s retains a rejected outcome as a defect beside the API error body cleanup defect and masks its credentials",
     async (mode) => {
         fakeHostTime()
         const cleanup = new Error(`API error cleanup marker authorization: Bot ${fixtureToken}`)
@@ -176,8 +176,9 @@ test.each(modes)(
             expect(error).toBeInstanceOf(SdkDefect)
             expect(error).toMatchObject({
                 operation: "fetch",
+                // Effect turns a typed failure beside a defect into a defect that keeps its value
                 reasons: [
-                    { kind: "Failure", failure: rejected },
+                    { kind: "Defect", defect: rejected },
                     { kind: "Defect", defect: expect.objectContaining({ name: "ApiErrorBodyCleanupError" }) },
                 ],
             })
@@ -190,14 +191,15 @@ test.each(modes)(
             const exit = await Effect.runPromiseExit((client as NativeClient).messages.fetch(target))
             expect(Exit.isFailure(exit)).toBe(true)
             if (Exit.isFailure(exit)) {
+                // Effect turns a typed failure beside a defect into a defect that keeps its value
                 expect(exit.cause.reasons).toEqual([
-                    expect.objectContaining({ _tag: "Fail", error: rejected }),
+                    expect.objectContaining({ _tag: "Die", defect: rejected }),
                     expect.objectContaining({
                         _tag: "Die",
                         defect: expect.objectContaining({ name: "ApiErrorBodyCleanupError" }),
                     }),
                 ])
-                const die = exit.cause.reasons.find((reason) => reason._tag === "Die")
+                const die = exit.cause.reasons[1]
                 defect = die?._tag === "Die" ? die.defect : undefined
             }
             const text = describeError(defect)

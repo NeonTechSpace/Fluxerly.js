@@ -13,12 +13,16 @@ test("live result helpers preserve success values and pure typed failures", asyn
     })
 })
 
-test("live result capture preserves a mixed failure and defect while settlement keeps defect details private", async () => {
-    const mixed = Effect.fail(rejection).pipe(Effect.ensuring(Effect.die(new Error("fixture private defect detail"))))
+test("live result capture preserves a failure converted beside a defect while settlement keeps defect details private", async () => {
+    const defect = new Error("fixture private defect detail")
+    const mixed = Effect.fail(rejection).pipe(Effect.ensuring(Effect.die(defect)))
     const exit = await Effect.runPromiseExit(typedResult(Effect, mixed))
     expect(Exit.isFailure(exit)).toBe(true)
-    expect(Cause.hasFails(exit.cause)).toBe(true)
-    expect(Cause.hasDies(exit.cause)).toBe(true)
+    // Effect turns a typed failure beside a defect into a defect that keeps its value
+    expect(Cause.hasFails(exit.cause)).toBe(false)
+    expect(exit.cause.reasons.map((reason) => reason._tag)).toEqual(["Die", "Die"])
+    expect(exit.cause.reasons[0].defect).toBe(rejection)
+    expect(exit.cause.reasons[1].defect).toBe(defect)
     const error = await settle(mixed).catch((failure) => failure)
     expect(error).toBeInstanceOf(Error)
     expect(error.message).not.toContain("fixture private defect detail")

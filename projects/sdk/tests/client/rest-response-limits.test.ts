@@ -121,7 +121,7 @@ test.each(modes)("%s rejects oversized message and resource responses without re
     }
 })
 
-test.each(modes)("%s awaits oversized reader cleanup and preserves its failure alongside defects", async (mode) => {
+test.each(modes)("%s awaits oversized reader cleanup and keeps its failure and cleanup as defects", async (mode) => {
     let begin!: () => void
     let release!: () => void
     const entered = new Promise<void>((resolve) => {
@@ -161,28 +161,22 @@ test.each(modes)("%s awaits oversized reader cleanup and preserves its failure a
         release()
     }
     const error = await pending
+    // Effect turns a typed failure beside a defect into a defect that keeps its value
+    const responseFailure = { _tag: "MessageOperationError", reason: "response", outcome: "unknown", status: 200 }
     if (mode === "default") {
         expect(error).toBeInstanceOf(SdkDefect)
         expect(error).toMatchObject({
             reasons: [
-                {
-                    kind: "Failure",
-                    failure: { _tag: "MessageOperationError", reason: "response", outcome: "unknown", status: 200 },
-                },
-                expect.objectContaining({ kind: "Defect" }),
+                { kind: "Defect", defect: responseFailure },
+                { kind: "Defect", defect: privateError },
             ],
         })
         expect(JSON.stringify(error)).toContain(privateError.message)
     } else {
-        expect(error.reasons).toEqual(
-            expect.arrayContaining([
-                expect.objectContaining({
-                    _tag: "Fail",
-                    error: expect.objectContaining({ reason: "response", outcome: "unknown" }),
-                }),
-                expect.objectContaining({ _tag: "Die", defect: privateError }),
-            ]),
-        )
+        expect(error.reasons).toEqual([
+            expect.objectContaining({ _tag: "Die", defect: expect.objectContaining(responseFailure) }),
+            expect.objectContaining({ _tag: "Die", defect: privateError }),
+        ])
     }
     expect(response.body!.locked).toBe(false)
     expect(fetch).toHaveBeenCalledTimes(1)

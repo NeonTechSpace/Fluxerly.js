@@ -1102,7 +1102,7 @@ describe("public runBot", () => {
         await interrupted.promise
     })
 
-    test("default runner retains trusted startup failure plus cleanup defect without private text", async () => {
+    test("default runner retains trusted startup failure as a defect plus cleanup defect without private text", async () => {
         const cleanup = new Error("private discovery cleanup detail")
         vi.stubGlobal(
             "fetch",
@@ -1121,13 +1121,17 @@ describe("public runBot", () => {
         const failure = await Promise.resolve(runBot({ token, connection: { maxStartupAttempts: 2 } })).catch(
             (error: unknown) => error,
         )
+        // Effect turns a typed failure beside a defect into a defect that keeps its value
         expect(failure).toMatchObject({
             name: "SdkDefect",
             operation: "runBot",
-            reasons: expect.arrayContaining([
-                { kind: "Failure", failure: expect.objectContaining({ _tag: "ConnectionError", phase: "discovery" }) },
-                expect.objectContaining({ kind: "Defect" }),
-            ]),
+            reasons: [
+                {
+                    kind: "Defect",
+                    defect: expect.objectContaining({ _tag: "ConnectionError", phase: "discovery", status: 401 }),
+                },
+                { kind: "Defect", defect: cleanup },
+            ],
         })
         expect(JSON.stringify(failure)).toContain("private discovery cleanup detail")
     })
@@ -1428,7 +1432,7 @@ describe("public runBot", () => {
 })
 
 describe("shared runner failure preservation", () => {
-    test("operation, worker and shutdown failures remain in Cause", async () => {
+    test("operation, worker and shutdown failures remain in Cause as defects in order", async () => {
         const operation = new Error("operation")
         const worker = new Error("worker")
         const cleanup = new Error("cleanup")
@@ -1442,9 +1446,12 @@ describe("shared runner failure preservation", () => {
         )
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
-            expect(exit.cause.reasons.some((reason) => reason._tag === "Fail" && reason.error === operation)).toBe(true)
-            expect(exit.cause.reasons.some((reason) => reason._tag === "Fail" && reason.error === worker)).toBe(true)
-            expect(exit.cause.reasons.some((reason) => reason._tag === "Die" && reason.defect === cleanup)).toBe(true)
+            // Effect turns a typed failure beside a defect into a defect that keeps its value
+            expect(exit.cause.reasons.map((reason) => reason._tag)).toEqual(["Die", "Die", "Die"])
+            const defects = exit.cause.reasons.map((reason) => (reason._tag === "Die" ? reason.defect : undefined))
+            expect(defects[0]).toBe(operation)
+            expect(defects[1]).toBe(worker)
+            expect(defects[2]).toBe(cleanup)
         }
     })
 

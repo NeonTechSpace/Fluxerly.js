@@ -69,7 +69,7 @@ test("native child stop interrupts configuration, awaits cleanup and does not st
     expect(control.bridge.close).toHaveBeenCalledTimes(1)
 })
 
-test("native child configuration retains its primary failure and cleanup defect", async () => {
+test("native child configuration retains its primary failure as a defect beside the cleanup defect", async () => {
     const control = controlledBridge()
     const client = controlledClient()
     const tools = await childTools(control, client)
@@ -86,12 +86,11 @@ test("native child configuration retains its primary failure and cleanup defect"
     )
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) {
-        expect(exit.cause.reasons).toEqual(
-            expect.arrayContaining([
-                expect.objectContaining({ _tag: "Fail", error: primary }),
-                expect.objectContaining({ _tag: "Die", defect: cleanup }),
-            ]),
-        )
+        // Effect turns a typed failure beside a defect into a defect that keeps its value
+        expect(exit.cause.reasons).toEqual([
+            expect.objectContaining({ _tag: "Die", defect: primary }),
+            expect.objectContaining({ _tag: "Die", defect: cleanup }),
+        ])
     }
     expect(control.bridge.failed).toHaveBeenCalledWith("configure")
 })
@@ -118,7 +117,7 @@ test("native child stop retains a losing configuration cleanup defect without a 
     expect(control.bridge.failed).not.toHaveBeenCalled()
 })
 
-test("native child disconnect retains both the terminal failure and losing configuration cleanup defect", async () => {
+test("native child disconnect retains the terminal failure as a defect beside the losing configuration cleanup defect", async () => {
     const control = controlledBridge()
     const client = controlledClient()
     const tools = await childTools(control, client)
@@ -135,12 +134,14 @@ test("native child disconnect retains both the terminal failure and losing confi
     const exit = await running
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) {
-        expect(exit.cause.reasons).toEqual(
-            expect.arrayContaining([
-                expect.objectContaining({ _tag: "Fail", error: expect.objectContaining({ reason: "disconnected" }) }),
-                expect.objectContaining({ _tag: "Die", defect: cleanup }),
-            ]),
-        )
+        // Effect turns a typed failure beside a defect into a defect that keeps its value
+        expect(exit.cause.reasons).toEqual([
+            expect.objectContaining({
+                _tag: "Die",
+                defect: expect.objectContaining({ _tag: "SupervisorChildError", reason: "disconnected" }),
+            }),
+            expect.objectContaining({ _tag: "Die", defect: cleanup }),
+        ])
     }
     expect(client.run).not.toHaveBeenCalled()
     expect(control.bridge.failed).toHaveBeenCalledWith("configure")
@@ -185,13 +186,15 @@ test.each(["stop", "disconnect"] as const)(
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
             expect(exit.cause.reasons).toContainEqual(expect.objectContaining({ _tag: "Die", defect: cleanup }))
+            // Effect turns a typed failure beside a defect into a defect that keeps its value
             if (terminal === "disconnect")
-                expect(exit.cause.reasons).toContainEqual(
+                expect(exit.cause.reasons).toEqual([
                     expect.objectContaining({
-                        _tag: "Fail",
-                        error: expect.objectContaining({ reason: "disconnected" }),
+                        _tag: "Die",
+                        defect: expect.objectContaining({ _tag: "SupervisorChildError", reason: "disconnected" }),
                     }),
-                )
+                    expect.objectContaining({ _tag: "Die", defect: cleanup }),
+                ])
         }
         if (terminal === "stop") expect(control.bridge.failed).not.toHaveBeenCalled()
         else expect(control.bridge.failed).toHaveBeenCalledWith("configure")

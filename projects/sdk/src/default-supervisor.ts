@@ -170,6 +170,18 @@ function defectReasons(error: unknown): DefectReason[] {
     return [defectReason(error)]
 }
 
+/** Keep the first entry for each failure or fault value, which separate cleanup paths of one child run can each report */
+function distinctReasons(reasons: readonly DefectReason[]): DefectReason[] {
+    const seen = new Set<unknown>()
+    return reasons.filter((reason) => {
+        if (reason.kind === "Interruption") return true
+        const value = reason.kind === "Failure" ? reason.failure : reason.defect
+        if (seen.has(value)) return false
+        seen.add(value)
+        return true
+    })
+}
+
 function bridgeResult<A>(effect: Effect.Effect<A, SupervisorChildError>): Promise<Result<A, SupervisorChildError>> {
     return Effect.runPromiseExit(effect).then((exit) => resultFromExit(exit, "supervisor.child.run"))
 }
@@ -372,7 +384,7 @@ export function makeDefaultSupervisor(createClient: (options: ClientOptions) => 
                     }
                     if (defects.length > 0) {
                         if (outcome.isErr()) defects.unshift({ kind: "Failure", failure: outcome.error })
-                        throw new SdkDefect("supervisor.child.run", defects)
+                        throw new SdkDefect("supervisor.child.run", distinctReasons(defects))
                     }
                     return outcome
                 })(),

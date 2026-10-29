@@ -19,6 +19,10 @@ const applicationInput = Context.make(ApplicationInput, true)
 /** A Die cause for a value thrown while the SDK read caller-supplied input, marked as an application fault */
 export const inputDefect = (defect: unknown): Cause.Cause<never> => Cause.annotate(Cause.die(defect), applicationInput)
 
+/** Whether a Cause reason is a value the application threw while the SDK read its input */
+export const applicationMarked = (reason: Cause.Reason<unknown>): boolean =>
+    Context.getOrUndefined(Cause.reasonAnnotations(reason), ApplicationInput) === true
+
 /** A value thrown by a marked read of caller-supplied input, carried through SDK code to the boundary that reports it */
 class InputFault {
     constructor(readonly defect: unknown) {}
@@ -104,12 +108,7 @@ export function causeReasons(cause: Cause.Cause<unknown>): DefectReason[] {
                   failure: reason.error as Extract<DefectReason, { readonly kind: "Failure" }>["failure"],
               })
             : reason._tag === "Die"
-              ? defectReason(
-                    reason.defect,
-                    Context.getOrUndefined(Cause.reasonAnnotations(reason), ApplicationInput)
-                        ? "application"
-                        : undefined,
-                )
+              ? defectReason(reason.defect, applicationMarked(reason) ? "application" : undefined)
               : Object.freeze({ kind: "Interruption" }),
     )
 }

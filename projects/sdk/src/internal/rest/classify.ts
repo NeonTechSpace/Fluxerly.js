@@ -14,7 +14,7 @@ import {
     type InputValidationDetail,
 } from "#sdk/input-validation"
 import { record } from "../decode/primitives.js"
-import { TransportError } from "../effect-failures.js"
+import { failures, TransportError } from "../effect-failures.js"
 import { linkRejectionError } from "../rejection-scope.js"
 
 /** Whether an operation's request may have reached Fluxer */
@@ -86,6 +86,12 @@ export class RestFailure extends Error {
         )
     }
 }
+
+/** The failures of REST work, matched by mapFailureCause so a RestFailure never reaches callers */
+export const restFailures = failures(RestFailure, ClientClosedError)
+
+/** The failures of instance discovery inside a REST admission slot */
+export const discoveryFailures = failures(RestFailure, ClientClosedError, ConnectionError, RateLimitError)
 
 /** A local validation failure before any request was sent */
 export function inputFailure(detail: InputValidationDetail): RestFailure {

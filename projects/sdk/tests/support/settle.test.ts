@@ -38,10 +38,13 @@ test.each([
     await expect(helper(Effect.die(defect))).rejects.toThrow("fixture cleanup defect")
 })
 
-test("expectFailure and typedResult preserve every reason in a mixed Cause", async () => {
+test("expectFailure and typedResult preserve a failure converted beside a cleanup defect", async () => {
     const cause = await expectFailure(mixed)
-    expect(Cause.hasFails(cause)).toBe(true)
-    expect(Cause.hasDies(cause)).toBe(true)
+    // Effect turns a typed failure beside a defect into a defect that keeps its value
+    expect(Cause.hasFails(cause)).toBe(false)
+    expect(cause.reasons.map((reason) => reason._tag)).toEqual(["Die", "Die"])
+    expect(cause.reasons.map((reason) => reason._tag === "Die" && reason.defect)).toEqual([rejection, defect])
+    expect(cause.reasons[0]?._tag === "Die" && cause.reasons[0].defect).toBe(rejection)
     const exit = await Effect.runPromiseExit(typedResult(mixed))
     expect(Exit.isFailure(exit) && exit.cause).toEqual(cause)
     await expect(outcome(mixed)).rejects.toThrow("fixture cleanup defect")

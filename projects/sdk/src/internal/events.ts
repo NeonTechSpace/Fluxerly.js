@@ -1649,6 +1649,12 @@ export class EventBus<M extends MessageCore = Message> {
                     // allow-silent: The source.finish call retains the subscription outcome for waitForClose
                     Effect.catchCause(() => Effect.void),
                 )
+                // Effect 4.0.6 and later never start work forked into a closed scope, so close the subscription here
+                if (scope.state._tag === "Closed") {
+                    source.stop()
+                    source.finish(Exit.interrupt())
+                    return source
+                }
                 // Effect.forkIn retains the registration caller's context, with no hidden native runPromise or detached runtime
                 // Install closure before enabling interruption, including cancellation before the first fiber turn
                 const fiber = yield* Effect.forkIn(program, scope, { uninterruptible: true })

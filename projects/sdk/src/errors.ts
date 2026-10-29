@@ -785,7 +785,9 @@ export type ConnectError = ConnectionFailure | ClientBusyError | ClientClosedErr
 
 /** Details of what caused an SdkDefect in the default API.
  * Failure holds an expected SDK error, Defect holds an unexpected fault with its original value, and Interruption marks cancellation.
- * More than one entry can describe both the original failure and a cleanup fault
+ * More than one entry can describe both the original failure and a cleanup fault.
+ * Effect reports an expected failure that occurs together with a fault as a fault too, so that failure appears as a Defect
+ * entry holding the expected SDK error
  *
  * @category Errors
  */
@@ -844,7 +846,10 @@ export type DefectReason =
  * An unexpected fault thrown or rejected by the default API instead of returned as a typed error result.
  * Client creation throws synchronously, while asynchronous operations reject.
  * This includes expected failures or cancellation combined with an unexpected cleanup fault.
- * The first fault is the standard cause property, and reasons list every failure, fault and interruption entry.
+ * Effect reports an expected failure that occurs together with a fault as a fault too, so its entry has kind Defect and
+ * holds the expected SDK error.
+ * The first fault the application raised or that is not an expected SDK error, such as a cleanup fault, is the standard
+ * cause property and names the message and code. Reasons list every failure, fault and interruption entry.
  * A fault from an application callback, such as a default keepTyping task, is an ApplicationError with origin application.
  * A throw while the SDK reads caller-supplied options or input, such as from a property getter or a caller AbortSignal
  * listener method, keeps the thrown value as the cause with origin application. Either application origin sets code
@@ -863,7 +868,10 @@ export class SdkDefect extends FluxerlyError {
         /** Cause entries, which can include both the primary failure and cleanup faults */
         readonly reasons: readonly DefectReason[] = [],
     ) {
-        const fault = reasons.find((reason) => reason.kind === "Defect")
+        // An expected failure that Effect reported as a fault only accompanies the actual fault, which names the defect
+        const faults = reasons.filter((reason) => reason.kind === "Defect")
+        const fault =
+            faults.find((reason) => reason.origin === "application" || !expectedSdkError(reason.defect)) ?? faults[0]
         const application = fault?.kind === "Defect" && fault.origin === "application"
         super(
             application
@@ -883,5 +891,15 @@ export class SdkDefect extends FluxerlyError {
         )
         this.reasons = Object.freeze([...reasons])
         this.name = "SdkDefect"
+    }
+}
+
+/** @internal Whether a fault value is an expected SDK error, which Effect reports as a fault when another fault occurs with it */
+export function expectedSdkError(value: unknown): boolean {
+    try {
+        return value instanceof FluxerlyError && !(value instanceof SdkDefect) && !(value instanceof ApplicationError)
+    } catch {
+        // allow-silent: A proxy that rejects prototype inspection is an application value, not an SDK error
+        return false
     }
 }

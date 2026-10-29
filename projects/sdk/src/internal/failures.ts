@@ -12,11 +12,13 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import * as Queue from "effect/Queue"
+import { expectedSdkError } from "#sdk/errors"
 import type { EventName } from "#sdk/events"
 import type { FailureKind, FailureMessageReference, FailureReport } from "#sdk/failures"
 import type { LogCategory } from "#sdk/logging"
 import { errorInfo, errorText, type ClientLogger } from "./logging.js"
 import { messageText } from "./masking.js"
+import { applicationMarked } from "./defects.js"
 import type { LogCode } from "./code-catalogue.js"
 import { fiberRejectionScope } from "./rejection-scope.js"
 
@@ -33,6 +35,16 @@ export interface ReportInput {
     readonly command?: string | undefined
     readonly subscriptionId?: string | undefined
     readonly message?: FailureMessageReference | undefined
+}
+
+/**
+ * The fault a defect report names: The first defect the application raised or that is not an expected SDK error, since
+ * Effect turns a typed failure beside a defect into a defect too, otherwise the first defect
+ */
+export function primaryFault(cause: Cause.Cause<unknown>): unknown {
+    const dies = cause.reasons.filter((reason) => reason._tag === "Die")
+    const fault = dies.find((reason) => applicationMarked(reason) || !expectedSdkError(reason.defect)) ?? dies[0]
+    return fault === undefined ? Cause.squash(cause) : fault.defect
 }
 
 /** The value a failure report exposes: The first typed failure, otherwise the first defect */

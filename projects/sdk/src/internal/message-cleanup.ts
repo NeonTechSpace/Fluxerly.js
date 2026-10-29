@@ -29,7 +29,7 @@ import {
 import { MessageOperationError } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
-import { mapFailureCause } from "./effect-failures.js"
+import { failures, mapFailureCause } from "./effect-failures.js"
 import { identifier, record } from "./decode/primitives.js"
 import { readCaller, suspendInput, suspendMarked } from "./defects.js"
 
@@ -106,6 +106,8 @@ function error(input: {
 }
 
 /** A cleanup failure caused by a failed message operation or client closure, keeping the progress made so far */
+const operationFailures = failures(MessageOperationError, ClientClosedError)
+
 function wrappedFailure(
     source: MessageOperationError | ClientClosedError,
     progress: {
@@ -365,7 +367,7 @@ export function previewCleanup<M extends MessageCore = Message>(
                         options,
                     )
                     .pipe(
-                        mapFailureCause((source) =>
+                        mapFailureCause(operationFailures, (source) =>
                             wrappedFailure(source, { phase: "preview", scannedCount, ids: selectedIds(messages) }),
                         ),
                     )
@@ -376,7 +378,7 @@ export function previewCleanup<M extends MessageCore = Message>(
                 for (const message of page) {
                     scannedCount++
                     const accepted = yield* matches(selected, message).pipe(
-                        mapFailureCause((source) =>
+                        mapFailureCause(failures(MessageCleanupError), (source) =>
                             error({
                                 phase: "preview",
                                 reason: "filter",
@@ -499,7 +501,7 @@ export function cleanup<M extends MessageCore = Message>(
                         }),
                     )
                 yield* owner.deleteMany(plan.channelId, current.messageIds, options).pipe(
-                    mapFailureCause((source) => {
+                    mapFailureCause(operationFailures, (source) => {
                         const failure = wrappedFailure(source, {
                             phase: "cleanup",
                             scannedCount: plan.scannedCount,

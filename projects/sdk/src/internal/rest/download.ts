@@ -19,7 +19,7 @@ import { mapFailureCause, TransportError, withDeadline } from "../effect-failure
 import type { InstanceEndpointContext } from "../instance.js"
 import type { HttpTransport } from "../transport/index.js"
 import { completeCleanup } from "../transfer-source.js"
-import { RestFailure } from "./classify.js"
+import { discoveryFailures, RestFailure, restFailures } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 
 /** Largest accepted maxBytes, 50 MiB */
@@ -405,7 +405,7 @@ function mediaInstance<M extends MessageCore>(runtime: RestRuntime<M>) {
                 () => runtime.resolveInstance(),
                 (release) => Effect.sync(release),
             ).pipe(
-                mapFailureCause((error) =>
+                mapFailureCause(discoveryFailures, (error) =>
                     error instanceof ClientClosedError
                         ? error
                         : error instanceof RestFailure
@@ -432,7 +432,7 @@ function mediaSlot<M extends MessageCore>(runtime: RestRuntime<M>) {
         .acquire({ route: "media:download", bytes: 0, rateLimited: false, media: true })
         .pipe(Effect.interruptible)
         .pipe(
-            mapFailureCause((error) =>
+            mapFailureCause(restFailures, (error) =>
                 error instanceof ClientClosedError
                     ? error
                     : error instanceof RestFailure

@@ -77,7 +77,8 @@ interface ResolvedContext {
     readonly value: ResolvedInstance
 }
 
-type InternalResolveError = ConnectionError | RateLimitError | ClientClosedError
+/** The failures of instance discovery before they become public errors */
+export type InternalResolveError = ConnectionError | RateLimitError | ClientClosedError
 
 interface ResolveTask {
     readonly result: Deferred.Deferred<ResolvedContext, InternalResolveError>

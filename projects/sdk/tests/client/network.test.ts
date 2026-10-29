@@ -821,7 +821,7 @@ test.each([
 })
 
 test.each(["default", "native"])(
-    "%s retains a protocol failure alongside a cleanup defect and still releases the socket",
+    "%s retains a protocol failure as a defect beside the cleanup defect and still releases the socket",
     async (mode) => {
         const server = await fixture({ holdReady: true })
         const scope = Scope.makeUnsafe()
@@ -848,21 +848,27 @@ test.each(["default", "native"])(
         server.sockets[0]!.send("not JSON")
         const result = await outcome
         expect(wsTarget.sockets[0]!.readyState).toBe(WebSocket.CLOSED)
+        // Effect turns a typed failure beside a defect into a defect that keeps its value
+        const protocolFailure = expect.objectContaining({
+            _tag: "ConnectionError",
+            phase: "gateway",
+            reason: "protocol",
+        })
         if (mode === "default") {
             expect(result).toHaveProperty("error")
             if (!("error" in result) || !(result.error instanceof SdkDefect)) throw new Error("Expected an SDK defect")
-            expect(result.error.reasons).toEqual(
-                expect.arrayContaining([
-                    { kind: "Failure", failure: expect.objectContaining({ _tag: "ConnectionError" }) },
-                    expect.objectContaining({ kind: "Defect" }),
-                ]),
-            )
+            expect(result.error.reasons).toMatchObject([
+                { kind: "Defect", defect: protocolFailure },
+                { kind: "Defect", defect: expect.objectContaining({ message: "private-close-detail" }) },
+            ])
             expect(inspect(result.error)).toContain("private-close-detail")
         } else {
             if (!("value" in result) || !("_tag" in result.value) || result.value._tag !== "Failure")
                 throw new Error("Expected native failure")
-            expect(Cause.hasFails(result.value.cause)).toBe(true)
-            expect(Cause.hasDies(result.value.cause)).toBe(true)
+            expect(result.value.cause.reasons).toMatchObject([
+                { _tag: "Die", defect: protocolFailure },
+                { _tag: "Die", defect: expect.objectContaining({ message: "private-close-detail" }) },
+            ])
         }
     },
 )

@@ -148,6 +148,7 @@ export interface ClientOptions<E = never, R = never, F extends MessageFields | u
  * The scope that creates the client owns its connection work and permanent cleanup.
  * Expected errors use Effect's error channel. Unexpected faults and cancellation remain in Cause.
  * Cleanup defects stop retries and preserve any operation failure or interruption alongside the defect in Cause.
+ * Effect reports an operation failure that occurs together with a defect as a defect that keeps the failure's value.
  * Successful REST JSON responses are limited to 16 MiB before parsing. This is not a total memory limit. Upload planning and completion responses have a separate 1 MiB limit
  *
  * A confirmed HTTP 429 response with a valid retry delay pauses all API routes on this client when
@@ -534,7 +535,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      *
      * @remarks
      * Closing the client's creation Scope still shuts down the client.
-     * Background and cleanup faults remain in the Cause, alongside any expected failure
+     * Background and cleanup faults remain in the Cause, alongside any expected failure, which Effect then reports as a
+     * defect that keeps its value
      */
     waitForClose(): Effect.Effect<void, ConnectionFailure>
     /**

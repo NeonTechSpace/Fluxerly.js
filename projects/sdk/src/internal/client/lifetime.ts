@@ -12,10 +12,27 @@ import type * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
-import { ConnectionTimeoutError, ShardConnectionError, type ConnectError, type ConnectionFailure } from "#sdk/errors"
+import {
+    AuthenticationError,
+    ConnectionError,
+    ConnectionTimeoutError,
+    RateLimitError,
+    ShardConnectionError,
+    type ConnectError,
+    type ConnectionFailure,
+} from "#sdk/errors"
 import { nowMs } from "../clock.js"
-import { mapFailureCause, withDeadline } from "../effect-failures.js"
+import { failures, holdsReason, mapFailureCause, withDeadline } from "../effect-failures.js"
 import type { ClientLogger } from "../logging.js"
+
+/** The classes of ConnectionFailure, for mapping a shard's run failures */
+const connectionFailures = failures(
+    AuthenticationError,
+    ConnectionError,
+    ConnectionTimeoutError,
+    RateLimitError,
+    ShardConnectionError,
+)
 
 /** Short readable duration for log messages. Each range ends where rounding would reach the next unit */
 export function formatDuration(milliseconds: number): string {
@@ -47,7 +64,7 @@ export function superviseShards<Shard extends { readonly shardId: number }>(opti
                 shards,
                 (shard) =>
                     runShard(shard, deadline).pipe(
-                        mapFailureCause((failure) =>
+                        mapFailureCause(connectionFailures, (failure) =>
                             attributeShards && !(failure instanceof ShardConnectionError)
                                 ? new ShardConnectionError(shard.shardId, failure)
                                 : failure,
@@ -75,7 +92,7 @@ export function superviseShards<Shard extends { readonly shardId: number }>(opti
                         ? exit.cause.reasons.filter(
                               (reason) =>
                                   reason._tag !== "Interrupt" &&
-                                  (!Exit.isFailure(outcome) || !outcome.cause.reasons.includes(reason)),
+                                  (!Exit.isFailure(outcome) || !holdsReason(outcome.cause, reason)),
                           )
                         : [],
                 )

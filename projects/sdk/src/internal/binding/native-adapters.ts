@@ -103,19 +103,22 @@ const releaseWhenClosed = <A, E>(
     source: { readonly closed: Deferred.Deferred<A, E>; stop(): void },
     callerScope: Scope.Scope,
 ) =>
-    Effect.forkIn(
-        Deferred.await(source.closed).pipe(
-            Effect.asVoid,
-            Effect.interruptible,
-            Effect.onExit(() =>
-                Effect.sync(() => source.stop()).pipe(Effect.andThen(Effect.exit(Deferred.await(source.closed)))),
-            ),
-            // allow-silent: The collector retains its closure outcome for result
-            Effect.catchCause(() => Effect.void),
-        ),
-        callerScope,
-        { uninterruptible: true },
-    )
+    // Effect 4.0.6 and later never start work forked into a closed scope, so stop the collector here
+    callerScope.state._tag === "Closed"
+        ? Effect.sync(() => source.stop())
+        : Effect.forkIn(
+              Deferred.await(source.closed).pipe(
+                  Effect.asVoid,
+                  Effect.interruptible,
+                  Effect.onExit(() =>
+                      Effect.sync(() => source.stop()).pipe(Effect.andThen(Effect.exit(Deferred.await(source.closed)))),
+                  ),
+                  // allow-silent: The collector retains its closure outcome for result
+                  Effect.catchCause(() => Effect.void),
+              ),
+              callerScope,
+              { uninterruptible: true },
+          )
 
 /**
  * Keep a runtime registration failure, such as a gateway that is not ready or a client that began shutting down, as a

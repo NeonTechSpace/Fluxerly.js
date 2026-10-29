@@ -71,7 +71,7 @@ import type { EncodedBody } from "../attachments.js"
 import { decodeUploadPlans, type UploadPlan } from "../uploads.js"
 import { readResponseJson } from "../response-json.js"
 import { AttachmentTransferSource, completeCleanup } from "../transfer-source.js"
-import type { InstanceEndpointContext } from "../instance.js"
+import type { InstanceEndpointContext, InternalResolveError } from "../instance.js"
 import { encodeReactionEmoji, encodeReactionUsersQuery, decodeReactionUsersPage } from "../reactions.js"
 import { decodePinsPage, encodePinsQuery } from "../pins.js"
 import { decodeMessageSearchPage, encodeMessageSearch } from "../message-search.js"
@@ -108,6 +108,8 @@ import { encodeRestRequest, readRestResponse } from "./request.js"
 import {
     inputFailure,
     instanceFailure,
+    restFailures,
+    discoveryFailures,
     localInputFailure,
     operationFailure,
     RestFailure,
@@ -144,7 +146,7 @@ export interface RestOwnerOptions<M extends MessageCore> {
     readonly channels?: ChannelCache | undefined
     readonly users?: UserCache | undefined
     /** The owner's instance resolver. The first successful result is kept for the owner's lifetime */
-    readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, unknown>
+    readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, InternalResolveError>
     readonly decodeMessage: MessageDecoder<M>
     readonly logical: LogicalScheduler
     readonly logging?: ClientLogger | undefined
@@ -180,7 +182,7 @@ export class RestRuntime<M extends MessageCore> {
     readonly users: UserCache | undefined
     readonly logical: LogicalScheduler
     readonly logging: ClientLogger | undefined
-    readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, unknown>
+    readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, InternalResolveError>
 
     /** Logical time of the last rest.busy Warn, repeated at most once per busyWarnIntervalMs */
     #busyWarnedAt: number | undefined
@@ -397,7 +399,11 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, AttachmentRefreshError, "attachments.refreshUrls")))
+        }).pipe(
+            mapFailureCause(restFailures, (error) =>
+                operationFailure(error, AttachmentRefreshError, "attachments.refreshUrls"),
+            ),
+        )
     }
 
     openDownload(
@@ -487,7 +493,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             ).pipe(
-                mapFailureCause((error) =>
+                mapFailureCause(restFailures, (error) =>
                     error instanceof RestFailure
                         ? linkRejectionError(
                               new MessageError({
@@ -567,7 +573,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "typing")))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, "typing")))
     }
 
     fetchHistory(
@@ -595,7 +601,9 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "fetchHistory")))
+        }).pipe(
+            mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, "fetchHistory")),
+        )
     }
 
     search(
@@ -627,7 +635,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "search")))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, "search")))
     }
 
     edit(
@@ -681,7 +689,11 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteAttachment")))
+        }).pipe(
+            mapFailureCause(restFailures, (error) =>
+                operationFailure(error, MessageOperationError, "deleteAttachment"),
+            ),
+        )
     }
 
     deleteMany(
@@ -725,7 +737,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 options,
                 [...operationOptionKeys, "auditReason"],
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteMany")))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, "deleteMany")))
     }
 
     deleteOwnMessages(
@@ -752,7 +764,11 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "deleteOwnMessages")))
+        }).pipe(
+            mapFailureCause(restFailures, (error) =>
+                operationFailure(error, MessageOperationError, "deleteOwnMessages"),
+            ),
+        )
     }
 
     fetchReactionUsers(
@@ -795,7 +811,11 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "fetchReactionUsers")))
+        }).pipe(
+            mapFailureCause(restFailures, (error) =>
+                operationFailure(error, MessageOperationError, "fetchReactionUsers"),
+            ),
+        )
     }
 
     fetchPins(
@@ -825,7 +845,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, "fetchPins")))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, "fetchPins")))
     }
 
     pin(
@@ -859,7 +879,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 options,
                 [...operationOptionKeys, "auditReason"],
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, operation)))
     }
 
     reaction(
@@ -907,7 +927,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, operation)))
     }
 
     #manage<A>(
@@ -964,7 +984,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 options,
                 operation === "delete" ? [...operationOptionKeys, "auditReason"] : operationOptionKeys,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, MessageOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, MessageOperationError, operation)))
     }
 
     /** Run attempts for one request until it succeeds, fails permanently, runs out of read retries or passes its deadline */
@@ -1003,7 +1023,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                 Effect.interruptible(
                                     runtime.admission.acquire({ route: route.key, bytes, until, deadline }),
                                 ).pipe(
-                                    mapFailureCause((error) =>
+                                    mapFailureCause(restFailures, (error) =>
                                         error instanceof RestFailure ? error.withOutcome(progress.outcome) : error,
                                     ),
                                 ),
@@ -1389,7 +1409,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 options,
                 acceptedOptions,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, GuildOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, GuildOperationError, operation)))
     }
 
     channel<A>(
@@ -1433,7 +1453,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 options,
                 acceptedOptions,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, ChannelOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, ChannelOperationError, operation)))
     }
 
     user<A>(
@@ -1463,7 +1483,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, UserOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, UserOperationError, operation)))
     }
 
     application<A>(
@@ -1491,7 +1511,9 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, BotApplicationOperationError, operation)))
+        }).pipe(
+            mapFailureCause(restFailures, (error) => operationFailure(error, BotApplicationOperationError, operation)),
+        )
     }
 
     webhook<A>(
@@ -1530,7 +1552,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 options,
                 acceptedOptions,
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, WebhookOperationError, operation)))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, WebhookOperationError, operation)))
     }
 
     /**
@@ -1630,7 +1652,7 @@ export class RestOwner<M extends MessageCore = Message> {
                         ),
                         () => runtime.resolveInstance(),
                         (release) => Effect.sync(release),
-                    ).pipe(mapFailureCause(instanceFailure)))
+                    ).pipe(mapFailureCause(discoveryFailures, instanceFailure)))
                 if (!resolved) runtime.instance = instance
                 request = { ...request, instance }
                 if (request.directMessageUser !== undefined) {
@@ -1669,7 +1691,7 @@ export class RestOwner<M extends MessageCore = Message> {
                             retainedBytes: bytes,
                         })
                         .pipe(
-                            mapFailureCause((error) =>
+                            mapFailureCause(restFailures, (error) =>
                                 error instanceof RestFailure ? error.withOutcome("notDispatched") : error,
                             ),
                             Effect.onExit((exit) =>
@@ -1702,7 +1724,7 @@ export class RestOwner<M extends MessageCore = Message> {
             }).pipe(
                 // Admission and the attempt close without knowing how far the request got, so the progress decides:
                 // Queued is notDispatched, waiting out a 429 is rejected and in flight is unknown
-                mapFailureCause((error) =>
+                mapFailureCause(restFailures, (error) =>
                     error instanceof ClientClosedError && error.outcome === undefined
                         ? new ClientClosedError({ outcome: progress.outcome, read: isReadRequest(request) })
                         : error,
@@ -1793,7 +1815,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 encoded.timeoutMs === undefined ? undefined : { timeoutMs: encoded.timeoutMs },
             )
-        }).pipe(mapFailureCause((error) => operationFailure(error, RestRequestError, "rest.request")))
+        }).pipe(mapFailureCause(restFailures, (error) => operationFailure(error, RestRequestError, "rest.request")))
     }
 
     /** Close admission and abort every request and download without waiting */

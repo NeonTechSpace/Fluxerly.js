@@ -1446,7 +1446,7 @@ test.each(modes)("%s fails a stream upload when its acquired reader cannot relea
 })
 
 test.each(modes)(
-    "%s keeps inline stream failures expected, cleanup failures defective and both retained",
+    "%s keeps an inline stream failure expected alone and a defect beside a cleanup defect",
     async (mode) => {
         for (const variant of ["eof", "eof-release", "release"] as const) {
             let cancelled = false
@@ -1486,26 +1486,35 @@ test.each(modes)(
                     expect(error).toMatchObject({ _tag: "MessageError", reason: "network", outcome: "unknown" })
                 } else {
                     expect(error).toMatchObject({ operation: "send" })
+                    // Effect turns a typed failure beside a defect into a defect that keeps its value
                     expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(
-                        variant === "eof-release" ? ["Failure", "Defect"] : ["Defect"],
+                        variant === "eof-release" ? ["Defect", "Defect"] : ["Defect"],
                     )
+                    if (variant === "eof-release")
+                        expect((error as SdkDefect).reasons[0]).toMatchObject({
+                            defect: { _tag: "MessageError", reason: "network", outcome: "unknown" },
+                        })
                 }
             } else {
                 const exit = await Effect.runPromiseExit(api.native!.messages.send("20", input))
                 expect(Exit.isFailure(exit)).toBe(true)
                 if (Exit.isFailure(exit)) {
                     expect(Cause.hasDies(exit.cause)).toBe(variant !== "eof")
-                    if (variant === "eof" || variant === "eof-release")
+                    const networkFailure = expect.objectContaining({
+                        _tag: "MessageError",
+                        reason: "network",
+                        outcome: "unknown",
+                    })
+                    if (variant === "eof")
                         expect(exit.cause.reasons).toContainEqual(
-                            expect.objectContaining({
-                                _tag: "Fail",
-                                error: expect.objectContaining({
-                                    _tag: "MessageError",
-                                    reason: "network",
-                                    outcome: "unknown",
-                                }),
-                            }),
+                            expect.objectContaining({ _tag: "Fail", error: networkFailure }),
                         )
+                    // Effect turns a typed failure beside a defect into a defect that keeps its value
+                    if (variant === "eof-release")
+                        expect(exit.cause.reasons).toMatchObject([
+                            { _tag: "Die", defect: networkFailure },
+                            { _tag: "Die", defect: { message: "fixture inline release failure" } },
+                        ])
                 }
             }
             expect(messages).toBe(0)
@@ -1515,7 +1524,7 @@ test.each(modes)(
     },
 )
 
-test.each(modes)("%s retains a bounded upload response failure with reader cleanup defects", async (mode) => {
+test.each(modes)("%s keeps a bounded upload response failure defect with reader cleanup defects", async (mode) => {
     for (const stage of ["plan", "complete"] as const) {
         let cancelled = false
         let released = false
@@ -1555,25 +1564,22 @@ test.each(modes)("%s retains a bounded upload response failure with reader clean
             const error = await api.send(input).catch((error) => error)
             expect(error).toBeInstanceOf(SdkDefect)
             expect((error as SdkDefect).operation).toBe("send")
-            expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(["Failure", "Defect"])
+            // Effect turns a typed failure beside a defect into a defect that keeps its value
+            expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(["Defect", "Defect"])
             expect((error as SdkDefect).reasons[0]).toMatchObject({
-                failure: { _tag: "MessageError", reason: "response", outcome: "notDispatched" },
+                defect: { _tag: "MessageError", reason: "response", outcome: "notDispatched" },
             })
         } else {
             const exit = await Effect.runPromiseExit(api.native!.messages.send("20", input))
             expect(Exit.isFailure(exit)).toBe(true)
             if (Exit.isFailure(exit)) {
-                expect(Cause.hasDies(exit.cause)).toBe(true)
-                expect(exit.cause.reasons).toContainEqual(
-                    expect.objectContaining({
-                        _tag: "Fail",
-                        error: expect.objectContaining({
-                            _tag: "MessageError",
-                            reason: "response",
-                            outcome: "notDispatched",
-                        }),
-                    }),
-                )
+                expect(exit.cause.reasons).toMatchObject([
+                    {
+                        _tag: "Die",
+                        defect: { _tag: "MessageError", reason: "response", outcome: "notDispatched" },
+                    },
+                    { _tag: "Die", defect: expect.any(AggregateError) },
+                ])
             }
         }
         expect(messages).toBe(0)
@@ -1692,6 +1698,7 @@ test.each(modes)("%s reports Node openAsBlob file mutation without dispatching a
     const path = join(directory, "source.bin")
     await writeFile(path, new Uint8Array([1, 2, 3]))
     const file = await openAsBlob(path)
+    const mutatedFile = { _tag: "MessageError", reason: "network", outcome: "notDispatched" }
     let messages = 0
     transport({
         plan: async (value) => {
@@ -1708,15 +1715,16 @@ test.each(modes)("%s reports Node openAsBlob file mutation without dispatching a
         const error = await api.send({ attachments: [{ file, filename: "source.bin" }] }).catch((error) => error)
         expect(error).toBeInstanceOf(SdkDefect)
         expect((error as SdkDefect).operation).toBe("send")
-        expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(["Failure", "Defect"])
+        // Effect turns a typed failure beside a defect into a defect that keeps its value
+        expect((error as SdkDefect).reasons.map((reason) => reason.kind)).toEqual(["Defect", "Defect"])
+        expect((error as SdkDefect).reasons[0]).toMatchObject({ defect: mutatedFile })
     } else {
         const exit = await Effect.runPromiseExit(
             api.native!.messages.send("20", { attachments: [{ file, filename: "source.bin" }] }),
         )
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
-            expect(Cause.hasFails(exit.cause)).toBe(true)
-            expect(Cause.hasDies(exit.cause)).toBe(true)
+            expect(exit.cause.reasons).toMatchObject([{ _tag: "Die", defect: mutatedFile }, { _tag: "Die" }])
         }
     }
     expect(messages).toBe(0)
@@ -2653,12 +2661,11 @@ test.each(modes)("%s preserves sanitized streamed response cleanup defects", asy
         )
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
-            expect(Cause.hasDies(exit.cause)).toBe(true)
-            expect(exit.cause.reasons).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({ _tag: "Fail", error: expect.objectContaining({ reason: "response" }) }),
-                ]),
-            )
+            // Effect turns a typed failure beside a defect into a defect that keeps its value
+            expect(exit.cause.reasons).toMatchObject([
+                { _tag: "Die", defect: { _tag: "AttachmentDownloadError", reason: "response", status: 403 } },
+                { _tag: "Die", defect: { name: "AttachmentStreamCleanupError" } },
+            ])
             expect(Cause.pretty(exit.cause)).toContain(marker)
         }
     }
@@ -2937,22 +2944,26 @@ test.each(modes)("%s preserves a foreign download-body cancellation defect", asy
         expect(thrown).toBeInstanceOf(SdkDefect)
         if (!(thrown instanceof SdkDefect)) throw new Error("Expected foreign download cleanup defect")
         const error = thrown
-        expect(error).toMatchObject({ operation: "attachments.download" })
-        const failure = error.reasons.find((reason) => reason.kind === "Failure")
-        expect(failure).toMatchObject({ kind: "Failure" })
-        if (failure?.kind === "Failure")
-            expect(failure.failure).toMatchObject({ _tag: "AttachmentDownloadError", reason: "tooLarge" })
-        expect(error.reasons.some((reason) => reason.kind === "Defect")).toBe(true)
+        // Effect turns a typed failure beside a defect into a defect that keeps its value
+        expect(error).toMatchObject({
+            operation: "attachments.download",
+            reasons: [
+                { kind: "Defect", defect: { _tag: "AttachmentDownloadError", reason: "tooLarge" } },
+                { kind: "Defect", defect: expect.any(AggregateError) },
+            ],
+        })
+        const cleanup = error.reasons[1]
+        if (cleanup?.kind === "Defect") expect((cleanup.defect as AggregateError).errors).toContain(foreign)
     } else {
         const exit = await Effect.runPromiseExit(api.native!.attachments.download(input, { maxBytes: 2 }))
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit)) {
-            const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
-            expect(defect).toMatchObject({ _tag: "Die" })
-            if (defect?._tag === "Die") {
-                expect(defect.defect).toBeInstanceOf(AggregateError)
-                expect((defect.defect as AggregateError).errors).toContain(foreign)
-            }
+            expect(exit.cause.reasons).toMatchObject([
+                { _tag: "Die", defect: { _tag: "AttachmentDownloadError", reason: "tooLarge" } },
+                { _tag: "Die", defect: expect.any(AggregateError) },
+            ])
+            const defect = exit.cause.reasons[1]
+            if (defect?._tag === "Die") expect((defect.defect as AggregateError).errors).toContain(foreign)
         }
     }
 })

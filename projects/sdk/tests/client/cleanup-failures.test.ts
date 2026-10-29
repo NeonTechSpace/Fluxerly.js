@@ -109,28 +109,22 @@ function expectRetainedErrorBodyCleanups(defect: unknown, cleanups: readonly unk
     expect(wrapped.map((error) => (error as Error).cause)).toEqual(cleanups)
 }
 
+// Effect turns a typed failure beside a defect into a defect that keeps its value, so the rejection is a defect here
 function expectDefaultRejected400WithCleanup(error: unknown, cleanups: readonly unknown[]) {
     expect(error).toBeInstanceOf(SdkDefect)
     expect(error).toMatchObject({
         operation: "fetch",
-        reasons: [
-            {
-                kind: "Failure",
-                failure: expectedRejected400(),
-            },
-            expect.objectContaining({ kind: "Defect" }),
-        ],
+        reasons: [{ kind: "Defect", defect: expectedRejected400() }, expect.objectContaining({ kind: "Defect" })],
     })
-    const defect = (error as SdkDefect).reasons.find((reason) => reason.kind === "Defect")
+    const defect = (error as SdkDefect).reasons[1]
     expectRetainedErrorBodyCleanups(defect?.kind === "Defect" ? defect.defect : undefined, cleanups)
 }
 
 function expectNativeRejected400WithCleanup(exit: Exit.Exit<unknown, unknown>, cleanups: readonly unknown[]) {
     expect(Exit.isFailure(exit)).toBe(true)
     if (!Exit.isFailure(exit)) return
-    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-    expect(failure).toMatchObject({ _tag: "Fail", error: expectedRejected400() })
-    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
+    expect(exit.cause.reasons).toMatchObject([{ _tag: "Die", defect: expectedRejected400() }, { _tag: "Die" }])
+    const defect = exit.cause.reasons[1]
     expectRetainedErrorBodyCleanups(defect?._tag === "Die" ? defect.defect : undefined, cleanups)
 }
 
@@ -237,7 +231,7 @@ test.each(modes)("%s retains caller cancellation and error-reader cleanup failur
     expect(cancellations).toBe(1)
 })
 
-test.each(modes)("%s preserves REST rejection and response-cleanup defects without a retry", async (mode) => {
+test.each(modes)("%s keeps a REST rejection defect and response-cleanup defect without a retry", async (mode) => {
     for (const status of [401, 503]) {
         const cleanup = new Error("private REST cleanup detail")
         let cancellations = 0
@@ -254,14 +248,14 @@ test.each(modes)("%s preserves REST rejection and response-cleanup defects witho
                     operation: "fetch",
                     reasons: [
                         {
-                            kind: "Failure",
-                            failure: expect.objectContaining({
+                            kind: "Defect",
+                            defect: expect.objectContaining({
                                 _tag: "MessageOperationError",
                                 operation: "fetch",
                                 status,
                             }),
                         },
-                        expect.objectContaining({ kind: "Defect" }),
+                        { kind: "Defect", defect: cleanup },
                     ],
                 })
                 expect(JSON.stringify(error)).toContain("private REST cleanup detail")
@@ -276,13 +270,18 @@ test.each(modes)("%s preserves REST rejection and response-cleanup defects witho
                 expect(cancellations).toBe(1)
                 expect(Exit.isFailure(exit)).toBe(true)
                 if (Exit.isFailure(exit)) {
-                    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-                    expect(failure).toMatchObject({
-                        _tag: "Fail",
-                        error: expect.objectContaining({ _tag: "MessageOperationError", operation: "fetch", status }),
-                    })
-                    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
-                    expect(defect).toMatchObject({ _tag: "Die" })
+                    expect(exit.cause.reasons).toMatchObject([
+                        {
+                            _tag: "Die",
+                            defect: expect.objectContaining({
+                                _tag: "MessageOperationError",
+                                operation: "fetch",
+                                status,
+                            }),
+                        },
+                        { _tag: "Die" },
+                    ])
+                    const defect = exit.cause.reasons[1]
                     if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
                 }
             } finally {
@@ -295,7 +294,7 @@ test.each(modes)("%s preserves REST rejection and response-cleanup defects witho
     }
 })
 
-test.each(modes)("%s preserves discovery HTTP failure and response-cleanup defects", async (mode) => {
+test.each(modes)("%s keeps a discovery HTTP failure defect and response-cleanup defect", async (mode) => {
     const cleanup = new Error("private discovery cleanup detail")
     let cancellations = 0
     const fetch = vi.fn(async () => responseWithCleanupFailure(401, cleanup, () => cancellations++))
@@ -311,8 +310,8 @@ test.each(modes)("%s preserves discovery HTTP failure and response-cleanup defec
                 operation: "connect",
                 reasons: [
                     {
-                        kind: "Failure",
-                        failure: expect.objectContaining({
+                        kind: "Defect",
+                        defect: expect.objectContaining({
                             _tag: "ConnectionError",
                             phase: "discovery",
                             reason: "network",
@@ -336,18 +335,19 @@ test.each(modes)("%s preserves discovery HTTP failure and response-cleanup defec
             expect(cancellations).toBe(1)
             expect(Exit.isFailure(exit)).toBe(true)
             if (Exit.isFailure(exit)) {
-                const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-                expect(failure).toMatchObject({
-                    _tag: "Fail",
-                    error: expect.objectContaining({
-                        _tag: "ConnectionError",
-                        phase: "discovery",
-                        reason: "network",
-                        status: 401,
-                    }),
-                })
-                const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
-                expect(defect).toMatchObject({ _tag: "Die" })
+                expect(exit.cause.reasons).toMatchObject([
+                    {
+                        _tag: "Die",
+                        defect: expect.objectContaining({
+                            _tag: "ConnectionError",
+                            phase: "discovery",
+                            reason: "network",
+                            status: 401,
+                        }),
+                    },
+                    { _tag: "Die" },
+                ])
+                const defect = exit.cause.reasons[1]
                 if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
             }
         } finally {
@@ -592,7 +592,7 @@ test.each(modes)("%s ignores only its own late discovery abort reason", async (m
 })
 
 test.each(cleanupRaceCases)(
-    "$mode $owner retains an HTTP failure and cleanup defect when interrupted during cleanup",
+    "$mode $owner retains interruption, an HTTP failure defect and the cleanup defect when interrupted during cleanup",
     async ({ mode, owner }) => {
         const cleanup = new Error("private interrupted cleanup detail")
         let cancellations = 0
@@ -662,15 +662,12 @@ test.each(cleanupRaceCases)(
                 expect(error).toBeInstanceOf(SdkDefect)
                 expect(error).toMatchObject({
                     operation,
-                    reasons: expect.arrayContaining([
-                        { kind: "Interruption" },
-                        {
-                            kind: "Failure",
-                            failure: authenticationFailure,
-                        },
-                        expect.objectContaining({ kind: "Defect" }),
-                    ]),
+                    reasons: expect.arrayContaining([{ kind: "Interruption" }]),
                 })
+                // Interruption can be recorded more than once, while the defects keep their order
+                expect(
+                    (error as SdkDefect).reasons.flatMap((reason) => (reason.kind === "Defect" ? [reason.defect] : [])),
+                ).toEqual([authenticationFailure, cleanup])
                 expect(JSON.stringify(error)).toContain("private interrupted cleanup detail")
             } finally {
                 release()
@@ -698,14 +695,9 @@ test.each(cleanupRaceCases)(
                 expect(Exit.isFailure(exit)).toBe(true)
                 if (Exit.isFailure(exit)) {
                     expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-                    const failure = exit.cause.reasons.find((reason) => reason._tag === "Fail")
-                    expect(failure).toMatchObject({
-                        _tag: "Fail",
-                        error: authenticationFailure,
-                    })
-                    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
-                    expect(defect).toMatchObject({ _tag: "Die" })
-                    if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
+                    const defects = exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)
+                    expect(defects).toEqual([authenticationFailure, cleanup])
+                    expect(defects[1]).toBe(cleanup)
                 }
             } finally {
                 release()
@@ -716,7 +708,7 @@ test.each(cleanupRaceCases)(
 )
 
 test.each(cleanupRaceCases)(
-    "$mode $owner retains HTTP and cleanup failures when its deadline expires during cleanup",
+    "$mode $owner retains timeout, HTTP failure and cleanup defects when its deadline expires during cleanup",
     async ({ mode, owner }) => {
         // The SDK deadline runs on the controlled Effect Clock, so it expires only when the test advances it
         const clock = sdkClock()
@@ -775,20 +767,10 @@ test.each(cleanupRaceCases)(
                 release()
                 const error = await result.catch((error) => error)
                 expect(error).toBeInstanceOf(SdkDefect)
-                expect(error).toMatchObject({
-                    operation,
-                    reasons: expect.arrayContaining([
-                        {
-                            kind: "Failure",
-                            failure: timeoutFailure,
-                        },
-                        {
-                            kind: "Failure",
-                            failure: authenticationFailure,
-                        },
-                        expect.objectContaining({ kind: "Defect" }),
-                    ]),
-                })
+                expect(error).toMatchObject({ operation })
+                expect(
+                    (error as SdkDefect).reasons.flatMap((reason) => (reason.kind === "Defect" ? [reason.defect] : [])),
+                ).toEqual([timeoutFailure, authenticationFailure, cleanup])
                 expect(JSON.stringify(error)).toContain("private timed cleanup detail")
             } finally {
                 release()
@@ -809,20 +791,9 @@ test.each(cleanupRaceCases)(
                 const exit = await result
                 expect(Exit.isFailure(exit)).toBe(true)
                 if (Exit.isFailure(exit)) {
-                    const failures = exit.cause.reasons.filter((reason) => reason._tag === "Fail")
-                    expect(failures).toEqual(
-                        expect.arrayContaining([
-                            expect.objectContaining({
-                                error: timeoutFailure,
-                            }),
-                            expect.objectContaining({
-                                error: authenticationFailure,
-                            }),
-                        ]),
-                    )
-                    const defect = exit.cause.reasons.find((reason) => reason._tag === "Die")
-                    expect(defect).toMatchObject({ _tag: "Die" })
-                    if (defect?._tag === "Die") expect(defect.defect).toBe(cleanup)
+                    const defects = exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)
+                    expect(defects).toEqual([timeoutFailure, authenticationFailure, cleanup])
+                    expect(defects[2]).toBe(cleanup)
                 }
             } finally {
                 release()

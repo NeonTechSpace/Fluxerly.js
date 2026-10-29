@@ -13,8 +13,9 @@ import {
     validateRunOptions,
 } from "#sdk/internal/bot-runner"
 import { ApplicationError, ConfigurationError, type ConnectError } from "#sdk/errors"
+import { failures, keepConvertedFailures, mapFailureCause } from "#sdk/internal/effect-failures"
 import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
-import type { SendError } from "#sdk/message-errors"
+import { EventOverflowError, type SendError } from "#sdk/message-errors"
 import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
 import type { HandlerOptions, EventContext, EventMap, EventName } from "#sdk/events"
 import type { CommandArgumentSchema } from "#sdk/command-arguments"
@@ -346,8 +347,9 @@ function nativeBotSetup(
 ): Effect.Effect<void, ApplicationError, Scope.Scope> {
     if (setup === undefined) return Effect.void
     return Effect.suspend(() => setup(client)).pipe(
-        // A setup failure, such as a failed read, is an application outcome. Defects stay defects
-        Effect.mapError((error) => new ApplicationError("runBot setup", error)),
+        // A setup failure, such as a failed read, is an application outcome. Defects stay defects, and the failure
+        // channel holds application values, so failures Effect turned into defects also stay as raised
+        mapFailureCause(keepConvertedFailures, (error) => new ApplicationError("runBot setup", error)),
         Effect.asVoid,
     ) as Effect.Effect<void, ApplicationError, Scope.Scope>
 }
@@ -555,7 +557,8 @@ export function runBot<
                     return subscriptions.map((subscription, index) => ({
                         waitForClose: () =>
                             subscription.waitForClose().pipe(
-                                Effect.mapError(
+                                mapFailureCause(
+                                    failures(EventOverflowError),
                                     (error) =>
                                         new CriticalWorkerStoppedError(index, {
                                             // The command router follows the event handlers and receives messageCreate

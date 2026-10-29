@@ -49,6 +49,7 @@ async function failureFixture() {
             reasons.some(
                 (reason) =>
                     reason !== "Failure:ConnectionError" &&
+                    reason !== "Defect:ConnectionError" &&
                     reason !== "Defect" &&
                     reason !== "Interruption" &&
                     reason !== "Unexpected",
@@ -171,7 +172,8 @@ test.each(modes)(
                 disconnectBefore: expect.any(Number),
                 disconnectAfter: expect.any(Number),
             })
-            expect(proof.reasons).toEqual(expect.arrayContaining(["Failure:ConnectionError", "Defect"]))
+            // Effect turns a typed failure beside a defect into a defect that keeps its value, listed once in both modes
+            expect(proof.reasons).toEqual(["Defect:ConnectionError", "Defect"])
             expect(proof.messageAfter).toBe(proof.messageBefore)
             expect(proof.disconnectAfter).toBe(proof.disconnectBefore)
         } finally {

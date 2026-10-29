@@ -21,6 +21,7 @@ import type { ClientOptions, ShutdownOptions } from "#sdk/client"
 import type { CommandArgumentSchema } from "#sdk/command-arguments"
 import { ApplicationError, CancelledError, ConfigurationError, SdkDefect, type ConnectError } from "#sdk/errors"
 import { EventOverflowError } from "#sdk/message-errors"
+import { failures, mapFailureCause } from "#sdk/internal/effect-failures"
 import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
 import type { HandlerOptions, EventContext, EventMap, EventName } from "#sdk/events"
 import type { FailureReport } from "#sdk/failures"
@@ -452,14 +453,16 @@ function startBot<const F extends MessageFields | undefined, const S extends Rea
                         // A subscription stopped by overflow "stop" stops the bot, naming its event and capacity
                         waitForClose: () =>
                             botOperation((signal) => subscription.waitForClose({ signal })).pipe(
-                                Effect.mapError((error) =>
-                                    error instanceof EventOverflowError
-                                        ? new CriticalWorkerStoppedError(index, {
-                                              // The command router follows the event handlers and receives messageCreate
-                                              event: entries[index]?.event ?? "messageCreate",
-                                              error,
-                                          })
-                                        : error,
+                                mapFailureCause(
+                                    failures(EventOverflowError, CancelledError, ConfigurationError),
+                                    (error) =>
+                                        error instanceof EventOverflowError
+                                            ? new CriticalWorkerStoppedError(index, {
+                                                  // The command router follows the event handlers and receives messageCreate
+                                                  event: entries[index]?.event ?? "messageCreate",
+                                                  error,
+                                              })
+                                            : error,
                                 ),
                             ),
                     })),

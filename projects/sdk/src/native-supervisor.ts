@@ -12,6 +12,7 @@ import {
     readChildOptions,
 } from "#sdk/internal/supervisor"
 import { readInput } from "#sdk/internal/defects"
+import { holdsReason } from "#sdk/internal/effect-failures"
 import {
     SupervisorChildError,
     type SupervisorAssignment,
@@ -137,7 +138,8 @@ export interface NativeSupervisorTools {
          * Message-channel loss or invalid coordination data fails with SupervisorChildError
          *
          * Parent stop during configure is not an application configuration failure, but cleanup failures remain in the cause.
-         * Defects remain in the cause alongside typed failures, including failures during cleanup
+         * Defects remain in the cause, including failures during cleanup. Effect reports a typed failure that occurs together
+         * with a defect as a defect that keeps the failure's value
          */
         run<E = never, R = never>(
             options: NativeSupervisorChildOptions<E, R>,
@@ -205,7 +207,7 @@ export function makeNativeSupervisor(
                                                       (reason) =>
                                                           reason._tag !== "Interrupt" &&
                                                           (!Exit.isFailure(outcome) ||
-                                                              !outcome.cause.reasons.includes(reason)),
+                                                              !holdsReason(outcome.cause, reason)),
                                                   )
                                                 : [],
                                         )

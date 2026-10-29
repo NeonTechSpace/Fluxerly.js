@@ -35,7 +35,8 @@ import {
     type ShardPlan,
 } from "./sharding.js"
 import { guildList } from "./guild-lifecycle.js"
-import type { IdentifyFields } from "./gateway/commands.js"
+import { isSubmitFailure, type IdentifyFields } from "./gateway/commands.js"
+import { failures, keepConvertedFailures, mapFailureCause } from "./effect-failures.js"
 import { automaticIgnoredEvents, suppressedRegistrations } from "./gateway/event-dispatches.js"
 import { maxClientPayloadBytes, Opcode, reservedClientOpcodes } from "./protocol/gateway.js"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
@@ -555,7 +556,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                   catch: (error) => error,
               }).pipe(
                   Effect.asVoid,
-                  Effect.mapError((error) => {
+                  // The coordinator is application code, so its failures are unknown values and stay as raised
+                  mapFailureCause(keepConvertedFailures, (error) => {
                       owner.logging.log({
                           level: "error",
                           category: "lifecycle",
@@ -582,7 +584,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             owner.identifyGate
                 ? owner.identifyGate
                       .permit(shardId, send)
-                      .pipe(Effect.mapError((error) => new AttemptFailure(error, true)))
+                      .pipe(mapFailureCause(failures(ConnectionError), (error) => new AttemptFailure(error, true)))
                 : Effect.sync(send)
         if (!plan.identifyShards) return permit.pipe(Effect.andThen(Effect.suspend(grant)))
         if (coordinator) return owner.#identify.withPermit(permit.pipe(Effect.andThen(Effect.suspend(grant))))
@@ -1307,7 +1309,8 @@ export class ClientOwner<M extends MessageCore = Message> {
             // resumes cannot withdraw a sent frame. It is counted, never refused
             const sent = op === Opcode.requestGuildMembers ? () => this.memberChunks.countSent() : undefined
             return shard.submit(op, JSON.parse(encoded), sent).pipe(
-                Effect.mapError(
+                mapFailureCause(
+                    isSubmitFailure,
                     (reason) =>
                         new GatewaySendError({
                             reason: reason === "busy" ? "busy" : "notReady",
@@ -2009,7 +2012,11 @@ export class ClientOwner<M extends MessageCore = Message> {
                         () => guildList({ limit: guildCountPageSize, ...(after === undefined ? {} : { after }) }),
                         { timeoutMs: remaining },
                     )
-                    .pipe(Effect.mapError((error) => automaticPlanFailure(error, timeoutMs)))
+                    .pipe(
+                        mapFailureCause(failures(GuildOperationError, ClientClosedError), (error) =>
+                            automaticPlanFailure(error, timeoutMs),
+                        ),
+                    )
                 // As in guilds.iterate, a page that repeats or goes back past the cursor would page until the deadline
                 const cursor = after
                 if (cursor !== undefined && page.some((guild) => BigInt(guild.id) <= BigInt(cursor)))

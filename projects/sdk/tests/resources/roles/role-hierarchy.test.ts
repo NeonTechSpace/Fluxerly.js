@@ -236,7 +236,7 @@ test.each(modes)("%s fetchCanManage reads four fresh inputs concurrently without
 })
 
 test.each(modes)(
-    "%s fetchCanManage keeps a mapped remote failure with a sibling response-cleanup defect",
+    "%s fetchCanManage keeps a mapped remote failure as a defect beside a sibling response-cleanup defect",
     async (mode) => {
         const cleanup = new Error("private hierarchy sibling cleanup defect")
         let releaseGuild!: (response: Response) => void
@@ -276,21 +276,26 @@ test.each(modes)(
                 releaseGuild(new Response(null, { status: 401 }))
                 await siblingAborted
                 releaseSibling(responseWithCleanupFailure(200, cleanup))
-                await expect(result).rejects.toMatchObject({
+                // Effect turns the mapped failure beside the cleanup defect into a defect, and the cleanup stays the cause
+                const error = await result.catch((reason: unknown) => reason)
+                expect(error).toMatchObject({
                     name: "SdkDefect",
                     operation: "members.fetchCanManage",
+                    cause: cleanup,
                     reasons: expect.arrayContaining([
                         {
-                            kind: "Failure",
-                            failure: expect.objectContaining({
+                            kind: "Defect",
+                            origin: "sdk",
+                            defect: expect.objectContaining({
                                 _tag: "GuildOperationError",
                                 operation: "members.fetchCanManage",
                                 status: 401,
                             }),
                         },
-                        expect.objectContaining({ kind: "Defect" }),
+                        expect.objectContaining({ kind: "Defect", defect: cleanup }),
                     ]),
                 } satisfies Partial<SdkDefect>)
+                expect((error as SdkDefect).reasons).toHaveLength(2)
             } finally {
                 value(await client.shutdown())
             }
@@ -305,12 +310,13 @@ test.each(modes)(
                 releaseSibling(responseWithCleanupFailure(200, cleanup))
                 const exit = await result
                 expect(Exit.isFailure(exit)).toBe(true)
+                if (Exit.isFailure(exit)) expect(exit.cause.reasons).toHaveLength(2)
                 if (Exit.isFailure(exit))
                     expect(exit.cause.reasons).toEqual(
                         expect.arrayContaining([
                             expect.objectContaining({
-                                _tag: "Fail",
-                                error: expect.objectContaining({
+                                _tag: "Die",
+                                defect: expect.objectContaining({
                                     _tag: "GuildOperationError",
                                     operation: "members.fetchCanManage",
                                     status: 401,

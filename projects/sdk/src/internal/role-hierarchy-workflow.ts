@@ -6,9 +6,10 @@
 import * as Effect from "effect/Effect"
 import type { CanManageOptions, GuildOperationFailure, GuildOperationOptions, MemberReference } from "#sdk/guilds"
 import { GuildOperationError } from "#sdk/guilds"
+import { ClientClosedError } from "#sdk/errors"
 import { composedStepFacts } from "#sdk/api-errors"
 import type { ClientOwner } from "./client.js"
-import { mapFailureCause } from "./effect-failures.js"
+import { failures, mapFailureCause } from "./effect-failures.js"
 import { guildFetch, memberFetch, memberSelf, roleList } from "./guilds.js"
 import { identifier, record } from "./decode/primitives.js"
 import { suspendInput } from "./defects.js"
@@ -134,7 +135,7 @@ export function fetchCanManage(
                     owner.guild("roles.fetchAll", () => roleList(member.guildId), roleOptions),
                 ],
                 { concurrency: "unbounded" },
-            ).pipe(mapFailureCause(remoteFailure))
+            ).pipe(mapFailureCause(failures(GuildOperationError, ClientClosedError), remoteFailure))
             const manageable = evaluateMemberHierarchy({ guild, actor, target: targetMember, roles })
             return manageable === undefined
                 ? yield* Effect.fail(

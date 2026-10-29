@@ -39,6 +39,11 @@ function record(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/** Name a defect by its SDK error tag only, so an expected error that Effect turned into a defect stays visible */
+function defectName(defect) {
+    return record(defect) && typeof defect._tag === "string" ? `Defect:${defect._tag}` : "Defect"
+}
+
 async function defaultReasons() {
     try {
         const { SdkDefect, supervisor } = await import("@neontechspace/fluxerly")
@@ -57,7 +62,7 @@ async function defaultReasons() {
             )
         if (!(outcome instanceof SdkDefect)) return ["Unexpected"]
         return outcome.reasons.map((reason) => {
-            if (reason.kind === "Defect") return "Defect"
+            if (reason.kind === "Defect") return defectName(reason.defect)
             if (reason.kind === "Interruption") return "Interruption"
             return `Failure:${record(reason.failure) && typeof reason.failure._tag === "string" ? reason.failure._tag : "Unknown"}`
         })
@@ -82,7 +87,7 @@ async function nativeReasons() {
         )
         if (!Exit.isFailure(exit)) return ["Unexpected"]
         return exit.cause.reasons.map((reason) => {
-            if (reason._tag === "Die") return "Defect"
+            if (reason._tag === "Die") return defectName(reason.defect)
             if (reason._tag !== "Fail") return "Interruption"
             return `Failure:${record(reason.error) && typeof reason.error._tag === "string" ? reason.error._tag : "Unknown"}`
         })
