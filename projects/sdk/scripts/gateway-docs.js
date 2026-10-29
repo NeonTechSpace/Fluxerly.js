@@ -11,6 +11,9 @@ import { documentsHash, githubSource, readGatewayDocs, validateManifest } from "
 
 const manifestPath = fileURLToPath(new URL("../../release/upstream/manifest.json", import.meta.url))
 const fixturePath = fileURLToPath(new URL("../tests/contract/fixtures/gateway-docs.json", import.meta.url))
+// Who receives each Dispatch event, which the gateway field check uses to place unhandled events in ledger categories.
+// Fluxer's event index dropped its scope column at 4e38842, so the SDK keeps this classification itself
+const scopesPath = fileURLToPath(new URL("../tests/contract/fixtures/gateway-docs-scopes.json", import.meta.url))
 // Documents whose Dispatch event sections are read. The other gateway documents describe commands, limits and codes
 const documentNames = ["events.md", "threads.md"]
 // Regenerating fails above this size, so growth of the committed fixture is reviewed rather than silent
@@ -124,9 +127,6 @@ export function readSections(file, markdown) {
     const events = new Map()
     /** @type {Map<string, ObjectSection>} */
     const objects = new Map()
-    /** The scope column of the event index table, by the anchor each row links to
-     * @type {Map<string, string>} */
-    const scopes = new Map()
     /** @type {{ kind: "event", name: string, lines: string[] } | { kind: "object", title: string, lines: string[] } | undefined} */
     let current
     /** @type {typeof current[]} */
@@ -137,8 +137,6 @@ export function readSections(file, markdown) {
         if (fenced) continue
         const event = /^###\s+(?:<span[^>]*><\/span>\s*)?([A-Z][A-Z0-9_]*)\s*$/.exec(line)
         const object = /^####\s+(.+?)\s*$/.exec(line)
-        const row = /^\|\s*\[[^\]]+\]\([^)#]*#([^)]+)\)\s*\|[^|]*\|\s*([^|]+?)\s*\|\s*$/.exec(line)
-        if (row) scopes.set(row[1], row[2])
         if (event || object || /^#{1,4}\s/.test(line)) {
             finished.push(current)
             current = event
@@ -168,7 +166,7 @@ export function readSections(file, markdown) {
             objects.set(key, { title: section.title, file, fields })
         }
     }
-    return { events, objects, scopes }
+    return { events, objects }
 }
 
 /**
@@ -195,12 +193,13 @@ function checkReferences(owners, objects) {
 
 /**
  * Reads the gateway documents at the pinned commit, checks them against the pinned hash and writes the formatted fixture
- * @param {{ source?: import("../../release/upstream.js").Source, manifestFile?: string, fixtureFile?: string }} [options]
+ * @param {{ source?: import("../../release/upstream.js").Source, manifestFile?: string, fixtureFile?: string, scopesFile?: string }} [options]
  */
 export async function writeGatewayDocs({
     source = githubSource,
     manifestFile = manifestPath,
     fixtureFile = fixturePath,
+    scopesFile = scopesPath,
 } = {}) {
     const manifest = validateManifest(JSON.parse(await readFile(manifestFile, "utf8")))
     const documents = await readGatewayDocs(manifest, source, manifest.commit)
@@ -211,8 +210,8 @@ export async function writeGatewayDocs({
     const events = new Map()
     /** @type {Map<string, ObjectSection>} */
     const objects = new Map()
-    /** @type {Map<string, string>} */
-    const scopes = new Map()
+    /** @type {Record<string, string>} */
+    const scopes = JSON.parse(await readFile(scopesFile, "utf8"))
     for (const name of documentNames) {
         const document = documents.find(({ path }) => path === `${manifest.gatewayDocs.path}/${name}`)
         if (!document) throw new Error(`The pinned gateway documents have no ${name}`)
@@ -225,13 +224,16 @@ export async function writeGatewayDocs({
             if (objects.has(key)) throw new Error(`The anchor ${key} is used in ${objects.get(key)?.file} and ${name}`)
             objects.set(key, value)
         }
-        for (const [key, value] of found.scopes) scopes.set(key, value)
     }
     for (const [name, event] of events) {
-        const scope = scopes.get(name.toLowerCase().replaceAll("_", "-"))
-        if (scope === undefined) throw new Error(`${name} has no row in the event index table`)
+        const scope = scopes[name]
+        if (typeof scope !== "string" || scope === "")
+            throw new Error(`${name} has no scope in fixtures/gateway-docs-scopes.json. Add who receives it`)
         event.scope = scope
     }
+    const stale = Object.keys(scopes).filter((name) => !events.has(name))
+    if (stale.length)
+        throw new Error(`fixtures/gateway-docs-scopes.json lists undocumented events: ${stale.join(", ")}`)
     checkReferences(events, objects)
     checkReferences(objects, objects)
     const sorted = (/** @type {Map<string, any>} */ map) =>

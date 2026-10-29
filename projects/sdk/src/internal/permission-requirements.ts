@@ -291,11 +291,11 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     fetchPins: requires("channel", ["ViewChannel"]),
     // channel/services/MessageInteractionService.ts:162
     fetchReactionUsers: requires("channel", ["ViewChannel"]),
-    // channel/services/MessageInteractionService.ts:180, channel/services/interaction/MessageReactionService.ts:208-209, 431-433
+    // channel/services/MessageInteractionService.ts:227, channel/services/interaction/MessageReactionService.ts:221-222, 409-418
     addReaction: requires(
         "channel",
         ["ViewChannel", "AddReactions"],
-        `Adding to an existing reaction needs no ${label("AddReactions")}, and a new reaction with a custom emoji also needs ${label("UseExternalEmojis")}`,
+        `Adding to an existing reaction needs no ${label("AddReactions")}, and a new reaction with a custom emoji from another community also needs ${label("UseExternalEmojis")}`,
     ),
     // channel/services/MessageInteractionService.ts:227, channel/services/interaction/MessageReactionService.ts:276-278
     removeReaction: requires("channel", ["ViewChannel"]),

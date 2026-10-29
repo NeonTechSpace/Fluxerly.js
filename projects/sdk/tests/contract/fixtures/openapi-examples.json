@@ -1,9 +1,9 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "d3d3a5faaf77bb778b9982c2517f483e8d403323",
+        "commit": "4e38842557d7231fe0a11338812141583fe88b69",
         "path": "fluxer_api/src/api/openapi/openapi.json",
-        "sha256": "a9bf21b99ffc4a2e89534c7b82cc886c3787c3104b4a25a9d8b1bd547097a96a"
+        "sha256": "6acd961a54313f9c798d235ad3363c584173f9844d4588389ad43d374690088e"
     },
     "factsSha256": "5bf75bdd8f429eca8e6a8e8c43440e0b0afbab72e1f0f8d899b038be6a7444bd",
     "schemas": {
@@ -5359,6 +5359,7 @@
                     "system_channel_flags": 0,
                     "afk_timeout": 0,
                     "features": [],
+                    "badge_ids": [],
                     "verification_level": 0,
                     "mfa_level": 0,
                     "nsfw_level": 0,
@@ -5393,6 +5394,7 @@
                     "afk_channel_id": "491643506160674192",
                     "afk_timeout": 2147483647,
                     "features": ["features"],
+                    "badge_ids": ["164964753743446886"],
                     "verification_level": 3,
                     "mfa_level": 1,
                     "nsfw_level": 3,
@@ -5543,7 +5545,8 @@
                     "online_count": 2147483647,
                     "approximate_member_count": 2147483647,
                     "approximate_presence_count": 2147483647,
-                    "threads_active": true
+                    "threads_active": true,
+                    "visiting": true
                 }
             },
             {
@@ -5570,6 +5573,7 @@
                     "afk_channel_id": null,
                     "afk_timeout": 2147483647,
                     "features": ["features"],
+                    "badge_ids": ["164964753743446886"],
                     "verification_level": 3,
                     "mfa_level": 1,
                     "nsfw_level": 3,
@@ -5717,7 +5721,8 @@
                     "online_count": 2147483647,
                     "approximate_member_count": 2147483647,
                     "approximate_presence_count": 2147483647,
-                    "threads_active": true
+                    "threads_active": true,
+                    "visiting": true
                 }
             }
         ],
@@ -5748,6 +5753,7 @@
                         "afk_channel_id": "491643506160674192",
                         "afk_timeout": 2147483647,
                         "features": ["features"],
+                        "badge_ids": ["164964753743446886"],
                         "verification_level": 3,
                         "mfa_level": 1,
                         "nsfw_level": 3,
@@ -5901,7 +5907,8 @@
                         "online_count": 2147483647,
                         "approximate_member_count": 2147483647,
                         "approximate_presence_count": 2147483647,
-                        "threads_active": true
+                        "threads_active": true,
+                        "visiting": true
                     }
                 ]
             },
@@ -5930,6 +5937,7 @@
                         "afk_channel_id": null,
                         "afk_timeout": 2147483647,
                         "features": ["features"],
+                        "badge_ids": ["164964753743446886"],
                         "verification_level": 3,
                         "mfa_level": 1,
                         "nsfw_level": 3,
@@ -6077,7 +6085,8 @@
                         "online_count": 2147483647,
                         "approximate_member_count": 2147483647,
                         "approximate_presence_count": 2147483647,
-                        "threads_active": true
+                        "threads_active": true,
+                        "visiting": true
                     }
                 ]
             }
@@ -6490,6 +6499,7 @@
                     "premium_lifetime_sequence": 0,
                     "premium_grace_ends_at": "2026-01-01T00:00:00.000Z",
                     "premium_discriminator": false,
+                    "hidden_profile_badges": [],
                     "premium_badge_hidden": false,
                     "premium_badge_masked": false,
                     "premium_badge_timestamp_hidden": false,
@@ -6552,6 +6562,7 @@
                     "premium_lifetime_sequence": 2147483647,
                     "premium_grace_ends_at": "2026-01-01T00:00:00.000Z",
                     "premium_discriminator": true,
+                    "hidden_profile_badges": ["hidden_profile_badges"],
                     "premium_badge_hidden": true,
                     "premium_badge_masked": true,
                     "premium_badge_timestamp_hidden": true,
@@ -6559,6 +6570,10 @@
                     "premium_purchase_disabled": true,
                     "premium_enabled_override": true,
                     "premium_perks_disabled": true,
+                    "operator_pass_badge_hidden": true,
+                    "operator_pass_badge_timestamp_hidden": true,
+                    "operator_pass_badge_count_hidden": true,
+                    "operator_pass_since": "operator_pass_since",
                     "password_last_changed_at": "2026-01-01T00:00:00.000Z",
                     "last_voice_activity_sharing_change_at": "2026-01-01T00:00:00.000Z",
                     "required_actions": ["required_actions"],
@@ -6574,7 +6589,13 @@
                     },
                     "age_verified_adult": true,
                     "terms_agreed_at": "2026-01-01T00:00:00.000Z",
-                    "privacy_agreed_at": "2026-01-01T00:00:00.000Z"
+                    "privacy_agreed_at": "2026-01-01T00:00:00.000Z",
+                    "claimed": true,
+                    "account_tier": "verified",
+                    "verification_need": "password",
+                    "has_password": true,
+                    "date_of_birth_required": true,
+                    "profile_restricted": true
                 }
             },
             {
@@ -6615,6 +6636,7 @@
                     "premium_lifetime_sequence": null,
                     "premium_grace_ends_at": null,
                     "premium_discriminator": true,
+                    "hidden_profile_badges": ["hidden_profile_badges"],
                     "premium_badge_hidden": true,
                     "premium_badge_masked": true,
                     "premium_badge_timestamp_hidden": true,
@@ -6622,6 +6644,10 @@
                     "premium_purchase_disabled": true,
                     "premium_enabled_override": true,
                     "premium_perks_disabled": true,
+                    "operator_pass_badge_hidden": true,
+                    "operator_pass_badge_timestamp_hidden": true,
+                    "operator_pass_badge_count_hidden": true,
+                    "operator_pass_since": null,
                     "password_last_changed_at": null,
                     "last_voice_activity_sharing_change_at": null,
                     "required_actions": ["required_actions"],
@@ -6633,7 +6659,13 @@
                     "pending_bulk_message_deletion": null,
                     "age_verified_adult": true,
                     "terms_agreed_at": null,
-                    "privacy_agreed_at": null
+                    "privacy_agreed_at": null,
+                    "claimed": true,
+                    "account_tier": "verified",
+                    "verification_need": null,
+                    "has_password": true,
+                    "date_of_birth_required": true,
+                    "profile_restricted": true
                 }
             }
         ],
@@ -6777,7 +6809,13 @@
                     "code": "code",
                     "temporary": false,
                     "type": 0,
-                    "guild": { "id": "744805132688845628", "name": "name", "splash_card_alignment": 0, "features": [] },
+                    "guild": {
+                        "id": "744805132688845628",
+                        "name": "name",
+                        "splash_card_alignment": 0,
+                        "features": [],
+                        "badge_ids": []
+                    },
                     "channel": { "id": "744805132688845628", "type": 0 },
                     "member_count": 0,
                     "presence_count": 0
@@ -6826,7 +6864,9 @@
                         "embed_splash": "embed_splash",
                         "embed_splash_width": 2147483647,
                         "embed_splash_height": 2147483647,
-                        "features": ["features"]
+                        "features": ["features"],
+                        "badge_ids": ["164964753743446886"],
+                        "visits_enabled": true
                     },
                     "channel": {
                         "id": "744805132688845628",
@@ -6888,7 +6928,9 @@
                         "embed_splash": null,
                         "embed_splash_width": null,
                         "embed_splash_height": null,
-                        "features": ["features"]
+                        "features": ["features"],
+                        "badge_ids": ["164964753743446886"],
+                        "visits_enabled": true
                     },
                     "channel": {
                         "id": "744805132688845628",
@@ -6908,7 +6950,13 @@
                     "code": "code",
                     "temporary": false,
                     "type": 0,
-                    "guild": { "id": "744805132688845628", "name": "name", "splash_card_alignment": 0, "features": [] },
+                    "guild": {
+                        "id": "744805132688845628",
+                        "name": "name",
+                        "splash_card_alignment": 0,
+                        "features": [],
+                        "badge_ids": []
+                    },
                     "channel": { "id": "744805132688845628", "type": 0 },
                     "member_count": 0,
                     "presence_count": 0,
@@ -6964,7 +7012,9 @@
                         "embed_splash": "embed_splash",
                         "embed_splash_width": 2147483647,
                         "embed_splash_height": 2147483647,
-                        "features": ["features"]
+                        "features": ["features"],
+                        "badge_ids": ["164964753743446886"],
+                        "visits_enabled": true
                     },
                     "channel": {
                         "id": "744805132688845628",
@@ -7033,7 +7083,9 @@
                         "embed_splash": null,
                         "embed_splash_width": null,
                         "embed_splash_height": null,
-                        "features": ["features"]
+                        "features": ["features"],
+                        "badge_ids": ["164964753743446886"],
+                        "visits_enabled": true
                     },
                     "channel": {
                         "id": "744805132688845628",
@@ -7086,7 +7138,9 @@
                             "embed_splash": "embed_splash",
                             "embed_splash_width": 2147483647,
                             "embed_splash_height": 2147483647,
-                            "features": ["features"]
+                            "features": ["features"],
+                            "badge_ids": ["164964753743446886"],
+                            "visits_enabled": true
                         },
                         "channel": {
                             "id": "744805132688845628",
@@ -7159,7 +7213,9 @@
                             "embed_splash": null,
                             "embed_splash_width": null,
                             "embed_splash_height": null,
-                            "features": ["features"]
+                            "features": ["features"],
+                            "badge_ids": ["164964753743446886"],
+                            "visits_enabled": true
                         },
                         "channel": {
                             "id": "744805132688845628",

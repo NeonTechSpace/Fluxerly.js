@@ -274,6 +274,8 @@ export const GuildFeatureToggles: Readonly<{
     CloneStickerEnabled: "CLONE_STICKER_ENABLED"
     /** Hide the community owner's crown indicator */
     HideOwnerCrown: "HIDE_OWNER_CROWN"
+    /** Let people visit the community without joining it. Fluxer enables this for new communities */
+    VisitsEnabled: "VISITS_ENABLED"
 }> = Object.freeze({
     InvitesDisabled: "INVITES_DISABLED",
     TextChannelFlexibleNames: "TEXT_CHANNEL_FLEXIBLE_NAMES",
@@ -281,6 +283,7 @@ export const GuildFeatureToggles: Readonly<{
     CloneEmojiEnabled: "CLONE_EMOJI_ENABLED",
     CloneStickerEnabled: "CLONE_STICKER_ENABLED",
     HideOwnerCrown: "HIDE_OWNER_CROWN",
+    VisitsEnabled: "VISITS_ENABLED",
 })
 
 /**
@@ -388,6 +391,8 @@ export interface GuildEdit {
      * Entries are copied by index when the operation starts.
      * Include CloneEmojiEnabled and CloneStickerEnabled to allow cloning from this community. Omitting them disables
      * that permission. Keep them in the list when changing another toggle if cloning should remain enabled.
+     * Fluxer enables VisitsEnabled for new communities, so include it to keep visits on. Omitting it turns visits off
+     * and ends current visits.
      * Deprecated CLONE_EMOJI_DISABLED and CLONE_STICKER_DISABLED values are rejected, not inverted or translated.
      * Fluxer preserves its managed, unknown and deprecated observed features. Disabling TextChannelFlexibleNames
      * makes Fluxer sanitize existing channel names, an external side effect that is not rolled back if the response

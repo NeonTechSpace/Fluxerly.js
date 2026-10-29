@@ -1,6 +1,6 @@
 {
     "CALL_UPDATE": { "like": "CALL_CREATE", "without": ["recipients", "created_at"] },
-    "CHANNEL_CREATE": { "fields": [{ "name": "guild_id", "optional": true, "shape": { "kind": "snowflake" } }] },
+    "CHANNEL_CREATE": { "fields": [] },
     "CHANNEL_DELETE": { "fields": [] },
     "CHANNEL_UPDATE": { "fields": [] },
     "GUILD_AUDIT_LOG_ENTRY_CREATE": {
@@ -27,11 +27,7 @@
     },
     "PRESENCE_UPDATE": { "object": "presence-object" },
     "THREAD_MEMBER_UPDATE": {
-        "fields": [
-            { "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } },
-            { "name": "muted", "optional": false, "shape": { "kind": "boolean" } },
-            { "name": "mute_config", "optional": false, "shape": { "kind": "object", "nullable": true } }
-        ]
+        "fields": [{ "name": "guild_id", "optional": false, "shape": { "kind": "snowflake" } }]
     },
     "THREAD_MEMBERS_UPDATE": {
         "within": {

@@ -134,7 +134,7 @@ test.each(modes)(
 )
 
 test.each(modes)("%s enables, preserves and disables source-guild cloning opt-ins", async (mode) => {
-    // Fluxer 4a285cbb117447ad714ec7b25df4b19c84902203, GuildOperationsService.computeUpdatedFeatures
+    // Fluxer 4e38842557d7231fe0a11338812141583fe88b69, GuildOperationsService.computeUpdatedFeatures
     // Keep this wire-contract fixture independent of the SDK constants; the opt-in upstream check detects later drift
     const toggleable = new Set([
         "INVITES_DISABLED",
@@ -143,6 +143,7 @@ test.each(modes)("%s enables, preserves and disables source-guild cloning opt-in
         "CLONE_EMOJI_ENABLED",
         "CLONE_STICKER_ENABLED",
         "HIDE_OWNER_CROWN",
+        "VISITS_ENABLED",
     ])
     const preserved = ["BANNER", "FUTURE_FEATURE", "CLONE_EMOJI_DISABLED", "CLONE_STICKER_DISABLED"]
     let features = [...preserved]
@@ -179,6 +180,25 @@ test.each(modes)("%s enables, preserves and disables source-guild cloning opt-in
     ])
     // Every edit is one PATCH, with no hidden guild read to merge the toggle set
     expect(methods).toEqual(Array(bodies.length).fill("PATCH"))
+})
+
+test.each(modes)("%s keeps community visits on only while the toggle list includes them", async (mode) => {
+    // Fluxer 4e38842 gives new communities VISITS_ENABLED and removes every toggleable feature an edit leaves out
+    let features = ["BANNER", "VISITS_ENABLED"]
+    const bodies: Record<string, unknown>[] = []
+    rest((_url, init) => {
+        const body = JSON.parse(String(init.body))
+        bodies.push(body)
+        if (body.features !== undefined) features = ["BANNER", ...body.features]
+        return Response.json(guild({ features }))
+    })
+    const api = await setup(mode)
+    const toggles = mode === "default" ? GuildFeatureToggles : NativeGuildFeatureToggles
+    const kept = await api.edit({ featureToggles: [toggles.VisitsEnabled, toggles.HideOwnerCrown] })
+    expect(kept.features).toEqual(["BANNER", "VISITS_ENABLED", "HIDE_OWNER_CROWN"])
+    const ended = await api.edit({ featureToggles: [toggles.HideOwnerCrown] })
+    expect(ended.features).toEqual(["BANNER", "HIDE_OWNER_CROWN"])
+    expect(bodies).toEqual([{ features: ["VISITS_ENABLED", "HIDE_OWNER_CROWN"] }, { features: ["HIDE_OWNER_CROWN"] }])
 })
 
 test.each(modes)("%s accepts image data URIs with MIME parameters", async (mode) => {

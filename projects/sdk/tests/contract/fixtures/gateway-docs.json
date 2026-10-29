@@ -1,15 +1,15 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "d3d3a5faaf77bb778b9982c2517f483e8d403323",
+        "commit": "4e38842557d7231fe0a11338812141583fe88b69",
         "path": "fluxer_docs/src/content/docs/gateway",
-        "sha256": "b8b14fc78ba0884a5e3d558b9f04c8e5330453dc00a05ce009200330e888bf5c"
+        "sha256": "154a7df55aac2264478b9626da4c2a0b9f0c805048ecd86397f245538de84d79"
     },
     "events": {
         "AUTH_SESSION_CHANGE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The account's authentication session was rotated by a password change. The event never includes the replacement token. The API closes every gateway session of the replaced authentication session before it sends the event, so those sessions do not receive it. The client that changed the password gets the replacement token and `auth_session_id_hash` in the HTTP response. It MUST use that token for every later HTTP request and for any later Identify, and MUST replace its own `auth_session_id_hash` from Ready with the one in the response.",
+            "prose": "A password change replaced the account's authentication session. Fluxer closes the Gateway sessions of the old authentication session before it sends this event, and they never receive it.",
             "fields": [
                 {
                     "name": "old_auth_session_id_hash",
@@ -28,7 +28,7 @@
         "CALL_CREATE": {
             "file": "events.md",
             "scope": "Call recipient",
-            "prose": "A private channel call began, or became visible in the session's initial state. Entries also include `region_id` and `server_id`, which clients MUST ignore Present on initial or recovered call state Initial call state arrives shortly after Ready. Recovered state can arrive after a lost call connection, whether or not the client received Call Delete. Recipients are every recipient of the channel, whether or not they joined the call. The same set receives Call Update and Call Delete.",
+            "prose": "A call started in a private channel, or the session learned of an active one after Ready or a lost connection. Every recipient of the channel receives it, and the same goes for Call Update and Call Delete. Only after Ready or a lost connection",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "message_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -62,7 +62,7 @@
         "CALL_DELETE": {
             "file": "events.md",
             "scope": "Call recipient",
-            "prose": "A call ended, or became unavailable. Absent when the call ended With `unavailable: true`, the client MUST keep the call as an unavailable entry. If it becomes available again, a fresh Call Create includes `recipients` and `created_at`. Recovery is not guaranteed.",
+            "prose": "A call ended or became unavailable. Keep an unavailable call until a new Call Create arrives.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "unavailable", "optional": true, "type": "boolean", "shape": { "kind": "boolean" } }
@@ -71,25 +71,25 @@
         "CALL_UPDATE": {
             "file": "events.md",
             "scope": "Call recipient",
-            "prose": "The ringing set, participant roster, or region of an active call changed. The payload has the same structure as Call Create without `recipients` and `created_at`. An operation with no visible effect produces no Call Update.",
+            "prose": "Who is ringing, who is in the call or the call's region changed. The payload has the same fields as Call Create without `recipients` and `created_at`.",
             "fields": []
         },
         "CHANNEL_CREATE": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "A channel became visible to the session, whether newly created or newly permitted. The payload is the complete channel object, with `guild_id` present for a guild channel. A session with thread access that gains view access to a channel with active threads then receives Thread List Sync for that channel.",
+            "prose": "A channel was created or the session can see it for the first time. The payload is the channel object.",
             "fields": []
         },
         "CHANNEL_DELETE": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "A channel left the session's visibility, whether deleted or newly hidden. The payload is the complete channel object as it was before the change. Recipients are the sessions that could see the channel before it was deleted. Deleting a channel deletes its threads, and Fluxer emits no Thread Delete for them. A client removes every thread whose `parent_id` is the channel.",
+            "prose": "A channel was deleted or the session can no longer see it. The payload is the channel object as it was before. Remove every thread whose `parent_id` is the channel yourself, because Fluxer sends no Thread Delete for them.",
             "fields": []
         },
         "CHANNEL_MEMBER_COUNTS_UPDATE": {
             "file": "events.md",
             "scope": "Command response",
-            "prose": "Answers Request Channel Member Counts for the requesting session. A channel the session cannot view, and a channel on which it lacks `VIEW_CHANNEL_MEMBERS`, has no entry in `counts`.",
+            "prose": "The answer to Request Channel Member Counts. You only get an entry for a channel where you have `VIEW_CHANNEL_MEMBERS`.",
             "fields": [
                 {
                     "name": "counts",
@@ -103,7 +103,7 @@
         "CHANNEL_PINS_ACK": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user acknowledged a channel's pins. Every session of the account receives it, including the one that issued the acknowledgement, except as stated below. A session without thread access receives no Channel Pins ACK for a thread.",
+            "prose": "The current user marked a channel's pins as seen.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -132,7 +132,7 @@
         "CHANNEL_RECIPIENT_ADD": {
             "file": "events.md",
             "scope": "Private channel",
-            "prose": "A user joined a group direct message the session belongs to.",
+            "prose": "A user joined a group direct message the session is in.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -146,7 +146,7 @@
         "CHANNEL_RECIPIENT_REMOVE": {
             "file": "events.md",
             "scope": "Private channel",
-            "prose": "A user left a group direct message the session belongs to.",
+            "prose": "A user left a group direct message the session is in.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -160,13 +160,13 @@
         "CHANNEL_UPDATE": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "A visible channel changed. The payload is the complete channel object. Converting a text channel into an announcement channel, or back, emits it with the new `type`. That conversion also emits Thread Update for each active public thread of the channel, as Thread types describes.",
+            "prose": "A visible channel changed. The payload is the channel object.",
             "fields": []
         },
         "CHANNEL_UPDATE_BULK": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "One operation changed several channels together, most often a reorder. Each recipient sees only channels they can view. An empty result produces no Dispatch and consumes no sequence number.",
+            "prose": "Several channels changed at once, usually in a reorder. Each session gets only the channels it can view.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -183,7 +183,7 @@
         "ENTRANCE_SOUND_PLAY": {
             "file": "events.md",
             "scope": "Voice channel",
-            "prose": "A participant asked for their entrance sound to play in a voice channel they are already connected to. Recipients are every other account with a voice state in that channel, one Dispatch each and at most one per account. The requesting account never receives its own sound.",
+            "prose": "A participant played their entrance sound in the voice channel they are in. Everyone else with a voice state in the channel receives it.",
             "fields": [
                 { "name": "user_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -203,7 +203,7 @@
         "FAVORITE_MEME_CREATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user saved a meme. The payload is the complete meme object.",
+            "prose": "The current user saved a meme. The payload is the meme object.",
             "fields": []
         },
         "FAVORITE_MEME_DELETE": {
@@ -215,13 +215,13 @@
         "FAVORITE_MEME_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "One of the current user's memes changed. The payload is the complete meme object.",
+            "prose": "One of the current user's memes changed. The payload is the meme object.",
             "fields": []
         },
         "FORUM_UNREADS": {
             "file": "threads.md",
             "scope": "Command response",
-            "prose": "The answer to Request Forum Unreads. Each forum unread object is `thread_id` with either `count` or `missing`. `count` is the number of messages after the sent `ack_message_id`, capped at 25. `missing` is true when the request sent no valid `ack_message_id` for that post.",
+            "prose": "The answer to Request Forum Unreads. Each forum unread object has `thread_id` and either `count` or `missing`. `count` is the number of messages after the `ack_message_id` in the request, capped at 25. `missing` is true when the request had no valid `ack_message_id` for that post.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -236,13 +236,13 @@
         "GUILD_AUDIT_LOG_ENTRY_CREATE": {
             "file": "events.md",
             "scope": "Holders of `VIEW_AUDIT_LOG`",
-            "prose": "An audit log entry was written. The payload is the guild audit log entry object that List guild audit logs returns for the same entry, with `guild_id` added. It always has `id`, `action_type`, `user_id`, and `target_id`. `reason` is resolved as the audit log reason describes, and `options` has only the published audit log options keys, with the same number and boolean types. `changes` is present when at least one change survives scrubbing. An update that changes nothing records no entry, as the audit actions registry states, so it emits no event. The `ip` change key is stripped from `changes`, so an entry whose only change was `ip` has no `changes` at all. A client MUST treat an absent `options` or `changes` as an empty set. Recipients are every session in the guild that holds `VIEW_AUDIT_LOG`, including the acting session. A session without thread access receives no `THREAD_CREATE`, `THREAD_UPDATE`, or `THREAD_DELETE` entry and no entry about a message in a thread.",
+            "prose": "An audit log entry was written. Every session with `VIEW_AUDIT_LOG` gets it. The payload is the audit log entry with `guild_id` added and any `ip` entry left out of `changes`. Treat a missing `options` or `changes` as empty.",
             "fields": []
         },
         "GUILD_BAN_ADD": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild ban was created. The object has `id` alone. No other account field is sent",
+            "prose": "A user was banned.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "user", "optional": false, "type": "object", "shape": { "kind": "object" } }
@@ -251,7 +251,7 @@
         "GUILD_BAN_REMOVE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild ban was removed. The object has `id` alone. No other account field is sent",
+            "prose": "A ban was removed.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "user", "optional": false, "type": "object", "shape": { "kind": "object" } }
@@ -260,7 +260,7 @@
         "GUILD_COUNTS_UPDATE": {
             "file": "events.md",
             "scope": "Command response",
-            "prose": "Answers Request Guild Counts for the requesting session. A guild that is not connected, or that missed its deadline, has no entry in `counts`.",
+            "prose": "The answer to Request Guild Counts. A guild that isn't connected or didn't answer in time has no entry.",
             "fields": [
                 {
                     "name": "counts",
@@ -274,13 +274,13 @@
         "GUILD_CREATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild became available to the session. The payload is a guild ready object. `roles`, `channels`, `emojis`, `stickers`, and `voice_states` are always complete. A client that stores any of them for the guild replaces its stored list with the new array. `members` is a partial list. A client adds or updates those members and keeps every other member it already stores. `threads` is the complete set Guild threads describes, and a client replaces its stored threads for the guild with it. Every session receives Guild Create when a guild becomes available after Ready, for example after joining one or after an unavailable guild recovers. A bot session also receives one for each available guild in the burst that follows Ready. A bot session's Guild Create has `unavailable: false` unless it is the first Guild Create for a guild the bot joined during the session and Ready did not list. That Dispatch has no `unavailable` field, even when a Guild Delete with `unavailable: true` for the guild came before it. A user session never receives the field on Guild Create.",
+            "prose": "A guild became available to the session, for example after joining it or when an unavailable guild recovers. The payload is a guild ready object. Replace your stored `roles`, `channels`, `emojis`, `stickers`, `voice_states` and `threads` for the guild with the new arrays. `members` is partial, and you add or update those members and keep the others. A later Guild Create without `visiting` means the account joined.",
             "fields": []
         },
         "GUILD_DELETE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild left the session's visibility, or became unavailable. Present only when the guild itself is deleted. The payload has `id` alone when the account leaves a guild or is removed from one, and `id` with `unavailable` in the unavailable form Without `unavailable`, the account is no longer a member, and a client deletes everything it stores for that guild. With `unavailable: true`, the guild is temporarily unreachable. A client keeps the guild as an unavailable entry until a later Guild Create sends its full state again.",
+            "prose": "The session lost a guild, or the guild became unavailable. Only when the guild itself was deleted Without `unavailable`, delete everything you store for the guild. With `unavailable: true`, keep it as unavailable until a Guild Create arrives.",
             "fields": [
                 { "name": "id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "guild_id", "optional": true, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -291,7 +291,7 @@
         "GUILD_EMOJIS_UPDATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild's emojis changed. A client that stores the guild's emojis replaces them with this array. Fluxer does not send per-emoji create, update, or delete events.",
+            "prose": "A guild's emojis changed. Replace your stored emojis with the array.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -312,7 +312,7 @@
         "GUILD_MEMBERS_CHUNK": {
             "file": "events.md",
             "scope": "Command response",
-            "prose": "Answers Request Guild Members for the requesting session. A request that matches no member still produces one chunk with an empty `members` array, `chunk_index` 0, and `chunk_count` 1. This event is delivered live and is never retained for Resume replay.",
+            "prose": "The answer to Request Guild Members. A request that matches nobody still gets one chunk with an empty `members`.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -342,13 +342,13 @@
         "GUILD_MEMBER_ADD": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A user became a member of a guild the session is connected to. The payload is the complete guild member object with `guild_id` added.",
+            "prose": "A user joined a guild. The payload is the guild member object with `guild_id` added.",
             "fields": []
         },
         "GUILD_MEMBER_LIST_UPDATE": {
             "file": "events.md",
             "scope": "Member list subscription",
-            "prose": "A member list the session subscribed to through Lazy Request resyncs the subscriber's ranges.",
+            "prose": "A member list the session subscribed to with Lazy Request changed, and the event resends the subscribed ranges.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "id", "optional": false, "type": "string", "shape": { "kind": "string" } },
@@ -372,7 +372,7 @@
         "GUILD_MEMBER_REMOVE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A user stopped being a member of a guild the session is connected to. The object has `id` alone. No other account field is sent, so a client MUST resolve the account from state it already holds In a guild with more than 250 members, a passive session receives this event only when the subject is its own user. Removal from the guild removes every membership in its threads. Fluxer emits a Thread Members Update for each of them, as Thread member flags states.",
+            "prose": "A user is no longer a member of a guild. Fluxer also sends a Thread Members Update for each thread they were in.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "user", "optional": false, "type": "object", "shape": { "kind": "object" } }
@@ -381,13 +381,13 @@
         "GUILD_MEMBER_UPDATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A member's guild state or public user representation changed. The payload is the complete guild member object with `guild_id` added. In a guild with more than 250 members, a passive session receives this event only when the subject is its own user.",
+            "prose": "A member or their public profile changed. The payload is the guild member object with `guild_id` added.",
             "fields": []
         },
         "GUILD_ROLE_CREATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A role was created in a guild.",
+            "prose": "A role was created.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -405,7 +405,7 @@
         "GUILD_ROLE_DELETE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A role was deleted from a guild.",
+            "prose": "A role was deleted.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "role_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } }
@@ -414,7 +414,7 @@
         "GUILD_ROLE_UPDATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "Exactly one role record changed.",
+            "prose": "One role changed.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -432,7 +432,7 @@
         "GUILD_ROLE_UPDATE_BULK": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "One operation changed several roles together, most often a reorder.",
+            "prose": "Several roles changed at once, usually in a reorder.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -453,7 +453,7 @@
         "GUILD_STICKERS_UPDATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild's stickers changed. A client that stores the guild's stickers replaces them with this array. Fluxer does not send per-sticker create, update, or delete events.",
+            "prose": "A guild's stickers changed. Replace your stored stickers with the array.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -474,25 +474,25 @@
         "GUILD_SYNC": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A session that asked for a sync through Lazy Request receives the guild's full current state again. The payload is a guild ready object, and a client handles it the same way as Guild Create. Fluxer sends a sync when a Lazy Request switches the guild between active and passive, and when `sync: true` names a guild the session has not already synced. A second `sync: true` for an already-synced guild sends nothing.",
+            "prose": "The guild's full state again, sent after a Lazy Request asks for a sync or switches the guild between active and passive. The payload is a guild ready object, handled like Guild Create.",
             "fields": []
         },
         "GUILD_UPDATE": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "A guild's configuration changed. The payload is the complete guild object with `guild_id` added, which repeats the object's own `id`. Guild Update is the only Dispatch an unavailable guild sends. A client learns from it that a guild entered or left the unavailable state.",
+            "prose": "A guild's settings changed. The payload is the guild object with `guild_id` added. An unavailable guild sends no other event.",
             "fields": []
         },
         "INVITE_CREATE": {
             "file": "events.md",
             "scope": "Invite audience",
-            "prose": "An invite was created. The payload is the complete invite object extended with its invite metadata. A guild invite reaches the sessions holding `MANAGE_CHANNELS` on the invite's channel. A group direct message invite reaches every recipient of that group, with no permission check.",
+            "prose": "An invite was created. The payload is the invite object with its invite metadata. A guild invite goes to sessions with `MANAGE_CHANNELS` on its channel, and a group direct message invite goes to every recipient.",
             "fields": []
         },
         "INVITE_DELETE": {
             "file": "events.md",
             "scope": "Invite audience",
-            "prose": "An invite was deleted. Present on every guild invite. A group direct message invite has no `guild_id` Recipients are chosen the same way as for Invite Create.",
+            "prose": "An invite was deleted. It goes to the same sessions as Invite Create.",
             "fields": [
                 { "name": "code", "optional": false, "type": "string", "shape": { "kind": "string" } },
                 { "name": "channel_id", "optional": true, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -502,7 +502,7 @@
         "MESSAGE_ACK": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user's read state advanced for a channel, usually because another of the account's sessions read it. Present only on the entry of a thread, a forum channel, or a media channel A session without thread access receives no Message ACK for an entry that has `flags`.",
+            "prose": "The current user's read state moved forward in a channel, usually from another of their sessions.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "message_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -515,7 +515,7 @@
         "MESSAGE_CREATE": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "A visible message was created. The payload is the complete message object with the fields below added. The `user` field is removed from it, and the account is in the message's `author` Each copy of a published message arrives in its following channel as Message Create, with the `IS_CROSSPOST` flag, and so does the `CHANNEL_FOLLOW_ADD` system message of a new follow. A copy mentions nobody. Message Create alone overrides both the passive filter and the `ignored_events` list, and the two use different tests. A direct mention, a mention of one of the user's roles, an everyone mention, or a here mention overrides the passive filter. A message the session's user wrote overrides the passive filter too. A direct, everyone, or here mention alone overrides the `ignored_events` list. A Message Create in a thread also needs one of the conditions in Dispatch events. Thread messages lists the members a message adds to the thread.",
+            "prose": "A message was created. The payload is the message object with these fields added. A published message also arrives as Message Create in each following channel, with the `IS_CROSSPOST` flag.",
             "fields": [
                 { "name": "channel_type", "optional": false, "type": "integer", "shape": { "kind": "integer" } },
                 {
@@ -541,7 +541,7 @@
         "MESSAGE_DELETE": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "One visible message was deleted. Both fields are omitted when an instance administrator deleted the message through the Admin API, when Fluxer deleted it because content moderation blocked a link preview in it, or when Fluxer removed a published message and its copies together, and `author_id` is also omitted for a message with no author The `user` field is removed from it, and the whole field is absent when `author_id` is absent or the author is no longer a member",
+            "prose": "A message was deleted. Absent when an instance admin or Fluxer itself deleted the message",
             "fields": [
                 { "name": "id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -568,7 +568,7 @@
         "MESSAGE_DELETE_BULK": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "Several messages in one channel were deleted together.",
+            "prose": "Several messages in one channel were deleted at once.",
             "fields": [
                 {
                     "name": "ids",
@@ -583,7 +583,7 @@
         "MESSAGE_REACTION_ADD": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "A user added a reaction to a message. In a guild channel the session named by the request's `session_id` is excluded and that field is removed from the payload. In a private channel the field is delivered as `session_id` and excludes nobody, so a client MUST tolerate receiving its own reaction back.",
+            "prose": "A user reacted to a message.",
             "fields": [
                 { "name": "user_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -604,13 +604,14 @@
                         "name": "guild member",
                         "link": "/http-api/guild-members/#guild-member-object"
                     }
-                }
+                },
+                { "name": "session_id", "optional": true, "type": "string", "shape": { "kind": "string" } }
             ]
         },
         "MESSAGE_REACTION_ADD_MANY": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "With the `DEBOUNCE_MESSAGE_REACTIONS` session flag, private-channel additions are grouped over 650 ms and delivered together. Each window keeps the latest 512 additions. Guild-channel additions always arrive as individual Message Reaction Add events. Every addition in `reactions` belongs to this message. A window covering several messages produces a separate Dispatch for each When the window closes holding exactly one addition, Fluxer sends Message Reaction Add to the session. A session without the flag receives one Message Reaction Add per addition.",
+            "prose": "Reactions in private channels, grouped over 650 ms, for a session with the `DEBOUNCE_MESSAGE_REACTIONS` session flag. Each window keeps only the latest 512 reactions and drops older ones. Each event covers one message. A window with a single reaction sends Message Reaction Add.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "message_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -626,7 +627,7 @@
         "MESSAGE_REACTION_REMOVE": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "One user's reaction was removed from a message. Exclusion works exactly as it does for Message Reaction Add, so the acting session is dropped in a guild channel and kept in a private one. With reaction debouncing enabled, an addition removed within the same window produces neither event for that message, user, and emoji.",
+            "prose": "A user's reaction was removed.",
             "fields": [
                 { "name": "user_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -647,13 +648,14 @@
                         "name": "guild member",
                         "link": "/http-api/guild-members/#guild-member-object"
                     }
-                }
+                },
+                { "name": "session_id", "optional": true, "type": "string", "shape": { "kind": "string" } }
             ]
         },
         "MESSAGE_REACTION_REMOVE_ALL": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "Every reaction was removed from a message at once.",
+            "prose": "Every reaction on a message was removed.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "message_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -663,7 +665,7 @@
         "MESSAGE_REACTION_REMOVE_EMOJI": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "Every reaction using one emoji was removed from a message.",
+            "prose": "Every reaction with one emoji was removed from a message.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "message_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -679,13 +681,13 @@
         "MESSAGE_UPDATE": {
             "file": "events.md",
             "scope": "Message access",
-            "prose": "A visible message changed. The payload is the complete current message object, with no `channel_type`, `nicks`, or `mention_here`. In a guild channel it is extended with `guild_id` and with `member`, the author's guild member object with its `user` field removed. Recipients must hold `READ_MESSAGE_HISTORY` on the channel, or the message must be newer than the guild's message history cutoff. In a guild with more than 250 members, a passive session receives this event only for a direct mention of its user, a mention of one of its roles, an everyone mention, or a here mention. Publishing a message emits it in the announcement channel with the `CROSSPOSTED` flag set. An edit of a published message emits it for each copy once Fluxer has copied the change, and deleting the published message emits it for each copy with the `SOURCE_MESSAGE_DELETED` flag and the content removed. Start thread from message emits it for the source message with `HAS_THREAD` and `thread`, and Delete thread emits it with `HAS_THREAD` cleared. A session without thread access receives neither.",
+            "prose": "A message changed. The payload is the full message object and, in a guild channel, `guild_id` and `member` as in Message Create. Sessions need `READ_MESSAGE_HISTORY` unless the message is newer than the guild's message history cutoff.",
             "fields": []
         },
         "PASSIVE_UPDATES": {
             "file": "events.md",
             "scope": "Passive session",
-            "prose": "A passive session in a guild with more than 250 members receives missed changes every 30,000 ms. No event is sent when nothing changed. Omitted when the set would be empty. A participant that left a viewable channel since the previous cycle appears here with `channel_id` set to null `channels` contains only the channels whose `last_message_id` changed since the previous update for that session, and only channels that session can view. `voice_states` contains only the voice states whose `version` advanced. For a session with thread access, `channels` also contains the active threads its user joined.",
+            "prose": "Fluxer sends this every 30 seconds, when something changed, for a guild with more than 250 members where the session is passive.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -705,13 +707,13 @@
         "PRESENCE_UPDATE": {
             "file": "events.md",
             "scope": "Presence subscription",
-            "prose": "One visible presence changed. The payload is a presence object. A session receives a presence for a friend, for a recipient of a group direct message it belongs to, and for a guild member it subscribed to through the `members` array of a Lazy Request. A bot session holds no friend or group direct message subscription, so the guild path is the only one that reaches it. Presence Updates normally follow Ready. The initial Presence Update burst omits users already included in Ready. If Ready takes more than 10,000 ms, Presence Updates can arrive before it. Later presences can be delayed until their guild, relationship, or group direct message becomes visible. They may arrive after Relationship Add, Relationship Update, Channel Create, Channel Update, or Channel Recipient Add. Delivery is not guaranteed for a subject that never becomes visible.",
+            "prose": "A visible presence changed. The payload is a presence object. You get presences for friends, group direct message recipients and the guild members you name in a Lazy Request, as Presence subscriptions describes.",
             "fields": []
         },
         "PRESENCE_UPDATE_BULK": {
             "file": "events.md",
             "scope": "Guild connection",
-            "prose": "Several visible presences are delivered in one Dispatch. A guild sends this only when it leaves the unavailable state. Every session that stayed connected receives it immediately after the Guild Create that restores the guild. Only visibly online presences are included, and the recipient's own presence is removed. A batch that would be empty produces no Dispatch, and a set larger than 500 is split across consecutive Dispatches Every entry has the batch's guild context. A client MUST treat each entry as if it named `guild_id` itself.",
+            "prose": "The online presences of a guild that was unavailable, sent right after the Guild Create that restores it.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -725,7 +727,7 @@
         "RATE_LIMITED": {
             "file": "events.md",
             "scope": "Command response",
-            "prose": "A Request Guild Members command was refused by the bot full-member-list budget. Delivered to the requesting session alone. `meta` has `guild_id` and, when the request named exactly one guild and supplied a valid nonce, `nonce`. That budget admits one unfiltered member request per bot account and guild every 30,000 ms, and `retry_after` is the remainder of that window in seconds. Every other command refusal is silent.",
+            "prose": "A bot sent Request Guild Members for the full member list of a guild more than once in 30 seconds. Only the requesting session receives it.",
             "fields": [
                 { "name": "opcode", "optional": false, "type": "integer", "shape": { "kind": "integer" } },
                 { "name": "retry_after", "optional": false, "type": "number", "shape": { "kind": "number" } },
@@ -735,7 +737,7 @@
         "READY": {
             "file": "events.md",
             "scope": "Session lifecycle",
-            "prose": "The initial session state. Sent once after a successful Identify, always with sequence 1. On a bot session every entry is an unavailable guild with `id` and `unavailable: true` alone. The burst described below then sends a Guild Create with the full state of each available guild, and a Guild Delete for each unavailable one Each entry has its `user` field removed and the removed accounts appear in `users` instead, so a client resolves a relationship through the entry's `id` A bot session always receives an empty array here Collected from the account's relationships, the recipients of its private channels, and the members in `guilds`, deduplicated by account ID. A bot session always receives an empty array here A session without thread access receives no read state that has `flags`, no channel override of a forum or media channel, and no `flags` on an override Ready is sent outside the replay buffer, so a Resume never replays it. A bot session receives one Guild Create per available guild immediately after Ready, and one Guild Delete per unavailable guild. Together they resolve the entries of the `guilds` array. Those Dispatches are also sent outside the replay buffer. Shortly after Ready, every session receives one Call Create for each of its private channels that has an active call.",
+            "prose": "The session's initial state, sent once after a successful Identify. On a bot session every entry is `{\"id\": \"...\", \"unavailable\": true}`, and a Guild Create or Guild Delete for each one follows Ready Relationships in Ready have no `user`, and each guild member's `user` has only `id`. The full accounts are in `users`. A bot gets an empty `users`, its Guild Create burst after Ready has members with the same `{\"id\": \"...\"}` user, and it fetches the accounts with Request Guild Members. A later Guild Create and every Guild Sync have full members. Always empty for a bot session Shortly after Ready, the session gets a Call Create for each private channel with an active call.",
             "fields": [
                 { "name": "session_id", "optional": false, "type": "string", "shape": { "kind": "string" } },
                 { "name": "version", "optional": false, "type": "integer", "shape": { "kind": "integer" } },
@@ -885,7 +887,7 @@
         "RECENT_MENTION_DELETE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user removed a message from the recent mention feed.",
+            "prose": "The current user removed a message from their recent mentions.",
             "fields": [
                 { "name": "message_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } }
             ]
@@ -893,7 +895,7 @@
         "RELATIONSHIP_ADD": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user gained a relationship. The payload is the complete relationship object. Always `true` on this Dispatch, even for a friendship whose counterpart has sharing off A client that needs the real value MUST read it from List relationships.",
+            "prose": "The current user has a new relationship. Only accurate in a Relationship Update sent by Modify voice activity sharing. List relationships always has the real value.",
             "fields": [
                 { "name": "id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "type", "optional": false, "type": "integer", "shape": { "kind": "integer" } },
@@ -933,19 +935,19 @@
         "RELATIONSHIP_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "An existing relationship changed. The payload has the same structure as Relationship Add. `friend_shares_voice_activity` is the counterpart's real setting only on the pair of Dispatches that Modify voice activity sharing sends to both parties of each friendship. Every other Relationship Update sends `true`.",
+            "prose": "A relationship changed. The payload has the same fields as Relationship Add.",
             "fields": []
         },
         "RESUMED": {
             "file": "events.md",
             "scope": "Session lifecycle",
-            "prose": "Sent after a successful Resume has replayed every retained Dispatch above the supplied sequence. The payload is otherwise empty. Resumed has the session's current sequence in `s` without advancing it, and the next live Dispatch has that sequence plus one.",
+            "prose": "Sent after a successful Resume has replayed the missed Dispatches. Its `s` is the current sequence and the next live Dispatch adds one.",
             "fields": [{ "name": "_timings_gw", "optional": true, "type": "object", "shape": { "kind": "object" } }]
         },
         "SAVED_MESSAGE_CREATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user saved a message. The payload is the complete message object as that user sees it. A session without thread access receives no Saved Message Create for a message in a thread.",
+            "prose": "The current user saved a message. The payload is the message object.",
             "fields": []
         },
         "SAVED_MESSAGE_DELETE": {
@@ -959,13 +961,13 @@
         "SESSIONS_REPLACE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The account's set of live sessions changed. The payload is a bare JSON array of session presence objects and is always the complete set. A client that stores the sessions replaces them with this array. Ready sends the initial set as `sessions`.",
+            "prose": "The account's live sessions changed. The payload is an array of every session presence object, and it replaces the `sessions` list from Ready.",
             "fields": []
         },
         "THREAD_CREATE": {
             "file": "threads.md",
             "scope": "Thread visibility",
-            "prose": "A thread was created, or the session was added to one. The payload is the thread object with the fields below. Recipients are the sessions that can view the thread and are a bot session, a member, or a session that set `threads` through Lazy Request. A passive session in a guild with more than 250 members receives it only when its user is a member. A user added to an existing thread receives a Thread Create with `member` and no `newly_created`. It arrives before the matching Thread Members Update.",
+            "prose": "A thread is created or the session is added to one. The payload is the thread object with these fields. A passive session gets it only when its user is a member.",
             "fields": [
                 { "name": "newly_created", "optional": true, "type": "boolean", "shape": { "kind": "boolean" } },
                 {
@@ -983,7 +985,7 @@
         "THREAD_DELETE": {
             "file": "threads.md",
             "scope": "Thread visibility",
-            "prose": "A thread was deleted. Recipients are the sessions that can view the thread as it stood before the deletion and are a bot session, a member, or a session that set `threads`. A member is a user the guild holds as a member of the thread, or one of up to 1,000 thread members Fluxer reads at deletion. A passive session in a guild with more than 250 members receives it only when its user is a member.",
+            "prose": "A thread is deleted. A passive session gets it only when its user is a member.",
             "fields": [
                 { "name": "id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -994,7 +996,7 @@
         "THREAD_LIST_SYNC": {
             "file": "threads.md",
             "scope": "Guild connection",
-            "prose": "The session's active threads were replaced for a guild or for some of its channels. Absent when the event replaces every thread in the guild With `channel_ids`, every active thread in those channels. Without it, every active thread in the guild for a bot session and for a session that set `threads` Without `channel_ids`, a user session that did not set `threads` receives the active threads it joined. - Fluxer sends it when Lazy Request sets `threads` to true for a session that had not set it. The event follows after a random delay below 5,000 ms. - Fluxer sends it when the guild reloads its thread state. A bot session, a session that set `threads`, and a user session that joined an active thread each receive one. - Fluxer sends it when the session gains view access to channels that have active threads. `channel_ids` lists those channels. A guild sends a burst of up to 20 full syncs, then 20 more each second, and queues the rest. Thread List Sync is delivered live and never retained for Resume.",
+            "prose": "The session's active threads are replaced for a guild or for some of its channels. A user session that did not set `threads` gets only the threads it joined unless `channel_ids` is present. Fluxer sends it after Lazy Request sets `threads` to true and when the session gets view access to channels with active threads. Resume does not replay it.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 {
@@ -1030,7 +1032,7 @@
         "THREAD_MEMBERS_UPDATE": {
             "file": "threads.md",
             "scope": "Thread visibility",
-            "prose": "Users joined or left a thread. Each entry has no `muted` or `mute_config`, and adds `member` and `presence` `member` is the guild member, or null when the guild has none for the user. `presence` is the presence object with `user` reduced to `id`, or null when the user is not visibly online to the guild. Every session of an added or removed user receives it. Any other session receives it when it can view the thread and is a bot session, a member, or a session that set `threads`. A passive session in a guild with more than 250 members receives it only when its user was added or removed.",
+            "prose": "Users join or leave a thread. `member` is the guild member or null. `presence` is the presence object or null when the user is not visibly online. A passive session gets it only when its user was added or removed.",
             "fields": [
                 { "name": "id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -1059,7 +1061,7 @@
         "THREAD_MEMBER_LIST_UPDATE": {
             "file": "threads.md",
             "scope": "Member list subscription",
-            "prose": "A thread member list the session subscribed to through `thread_member_lists` resynced. Each item is `user_id`, `join_timestamp`, `flags`, `member`, and `presence` `member` is the guild member or null. `presence` is the guild's presence object when the user is visibly online to the guild, and otherwise the placeholder `{\"status\": \"offline\", \"mobile\": false, \"afk\": false}`. The event is delivered live and never retained for Resume.",
+            "prose": "The full member list of a thread the session subscribed to with `thread_member_lists`. Resume does not replay it. Each item has `user_id`, `join_timestamp`, `flags`, `member` and `presence`. `presence` is a presence object with status `offline` when the user is not visibly online.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "thread_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -1074,19 +1076,19 @@
         "THREAD_MEMBER_UPDATE": {
             "file": "threads.md",
             "scope": "Current user",
-            "prose": "The session's own membership in a thread changed. The payload is the thread member object with `guild_id`. It has `muted` and `mute_config`. Every session of the user that can view the thread receives it, passive or not.",
+            "prose": "The session's own membership in a thread changes. The payload is the thread member object plus `guild_id`. Every session of the user that can view the thread receives it.",
             "fields": []
         },
         "THREAD_UPDATE": {
             "file": "threads.md",
             "scope": "Thread visibility",
-            "prose": "A thread changed. The payload is the thread object. Recipients are the sessions that can view the thread and are a bot session, a member, or a session that set `threads`. Fluxer checks them before and after the change and sends to both sets. A passive session in a guild with more than 250 members receives it only for a thread it joined. A message sent to an archived thread unarchives it and emits Thread Update. A message sent to an active thread emits none. When a thread is unarchived, each session of a member that can view it also receives a Thread Member Update.",
+            "prose": "A thread changes, and the payload is the thread object. A message sent to an archived thread unarchives it and sends this event. A passive session gets it only for a thread it joined.",
             "fields": []
         },
         "TYPING_START": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "A visible user began typing in a channel. The `typing` override set through Lazy Request decides delivery in a guild. With no override, a session receives the event when it is active in the guild or when the guild has 250 members or fewer, so a passive session in a small guild still receives it. A guild that sets the `TYPING_EVENTS` bit in its disabled operations produces the event for nobody. Typing in a thread also needs one of the conditions in Dispatch events.",
+            "prose": "A user started typing. Typing is decided separately explains which sessions get it.",
             "fields": [
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "user_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -1107,7 +1109,7 @@
         "USER_CONNECTIONS_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user's external connection set changed. `connections` is always the complete set. A client that stores the connections replaces them with this array.",
+            "prose": "The current user's external connections changed.",
             "fields": [
                 {
                     "name": "connections",
@@ -1120,7 +1122,7 @@
         "USER_GUILD_SETTINGS_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "One guild's notification settings changed. The payload is that guild's complete user guild settings object. A session without thread access receives it without the channel overrides of forum and media channels and without `flags` on an override.",
+            "prose": "The notification settings for one guild changed. The payload is that guild's user guild settings object.",
             "fields": []
         },
         "USER_NOTE_UPDATE": {
@@ -1135,25 +1137,25 @@
         "USER_PINNED_DMS_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user's pinned private channel set changed. The payload is a bare JSON array of channel ID strings in pinned order and is always the complete set. A client that stores the pinned channels replaces them with this array. Ready sends the initial set as `pinned_dms`.",
+            "prose": "The pinned private channels changed. The payload is an array of every pinned channel ID in order, and it replaces `pinned_dms` from Ready.",
             "fields": []
         },
         "USER_SETTINGS_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user's account-wide settings changed. The payload is the complete user settings object. Fluxer republishes the account's presence on every settings update, whether or not `status` or `custom_status` changed. A `status` of `offline` in the payload is treated as `invisible`, and it forces every live session of the account to that status.",
+            "prose": "The current user's settings changed. The payload is the user settings object.",
             "fields": []
         },
         "USER_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user's account record changed. The payload is the complete user object in its private representation. Presence subscribers receive the updated `user` in a Presence Update, unless the user's published status is `offline`.",
+            "prose": "The current user's account changed. The payload is the user object in its private representation.",
             "fields": []
         },
         "VOICE_SERVER_UPDATE": {
             "file": "events.md",
             "scope": "Current session",
-            "prose": "The session received or replaced its own voice grant. Delivered to the requesting session alone. A grant has one of two structures. A LiveKit grant has `token` and `endpoint`. A peer-to-peer grant has `p2p: true` and `ice_servers`, and never has `token`, `endpoint`, or `e2ee_key`. Present on a LiveKit grant Present on a peer-to-peer grant, which only a session that sent `p2p: true` in its Voice State Update command receives Present for a guild voice channel and absent for a call, so a client reads the scope from this field Present only on a LiveKit grant for an end-to-end encrypted channel",
+            "prose": "The session got a voice grant, sent only to the session that asked. A LiveKit grant has `token` and `endpoint`. A peer-to-peer grant has `p2p: true` and `ice_servers`, and you follow Peer-to-peer voice. Voice has the rest. On a LiveKit grant On a peer-to-peer grant On a LiveKit grant for an end-to-end encrypted channel A new grant comes when the connection opens, moves to another channel or changes region. A LiveKit grant for a connection that had a peer-to-peer grant means the call switched to LiveKit. Close your peer connections and connect with the new grant.",
             "fields": [
                 { "name": "token", "optional": true, "type": "string", "shape": { "kind": "string" } },
                 { "name": "endpoint", "optional": true, "type": "string", "shape": { "kind": "string" } },
@@ -1173,7 +1175,7 @@
         "VOICE_SIGNAL": {
             "file": "events.md",
             "scope": "Current session",
-            "prose": "Another connection of a peer-to-peer voice channel or call sent this session a signalling message with the Voice Signal command. Delivered to the session that owns the target connection alone. Present for a guild voice channel and absent for a call ``` Fluxer authorises every signal against the current voice states, so `from` always names a connection with `p2p: true` in `channel_id`. A client discards a signal whose `from` it no longer has in its roster.",
+            "prose": "Another connection in a peer-to-peer call sent this session a signaling message with the Voice Signal command. Only the session that owns the target connection receives it. Ignore a signal whose `from` is no longer in your roster. ```",
             "fields": [
                 { "name": "guild_id", "optional": true, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
@@ -1185,19 +1187,19 @@
         "VOICE_STATE_UPDATE": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "A participant's voice state changed. The payload is a voice state object. Recipients are the sessions that can view the voice channel, passive sessions included. A passive session in a guild with more than 250 members also receives the changed voice states through Passive Updates. A `channel_id` of null means the participant left.",
+            "prose": "A participant's voice state changed. The payload is a voice state object, and a null `channel_id` means they left.",
             "fields": []
         },
         "WEBAUTHN_CREDENTIALS_UPDATE": {
             "file": "events.md",
             "scope": "Current user",
-            "prose": "The current user's WebAuthn credential set changed. The payload is a bare JSON array of WebAuthn credential objects and is always the complete set. A client that stores the credentials replaces them with this array. Ready sends the initial set as `webauthn_credentials`.",
+            "prose": "The current user's passkeys changed. The payload is an array of every WebAuthn credential object, and it replaces `webauthn_credentials` from Ready.",
             "fields": []
         },
         "WEBHOOKS_UPDATE": {
             "file": "events.md",
             "scope": "Channel visibility",
-            "prose": "The webhook set of a guild channel changed. The event has no webhook data, so a client that needs the new set reads it over the HTTP API. A follow and an unfollow each emit it for the target channel. Moving a webhook emits it for the previous channel and again for the new one. Removing the follows of a deleted or converted announcement channel emits it once for each target channel.",
+            "prose": "A guild channel's webhooks changed, including when a channel follow starts or ends. The event has no webhook data. Fetch the list with List channel webhooks.",
             "fields": [
                 { "name": "guild_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } },
                 { "name": "channel_id", "optional": false, "type": "snowflake", "shape": { "kind": "snowflake" } }
@@ -1348,6 +1350,7 @@
                     "shape": { "kind": "timestamp", "nullable": true }
                 },
                 { "name": "unavailable", "optional": true, "type": "boolean", "shape": { "kind": "boolean" } },
+                { "name": "visiting", "optional": true, "type": "boolean", "shape": { "kind": "boolean" } },
                 { "name": "unavailable_hidden", "optional": true, "type": "boolean", "shape": { "kind": "boolean" } },
                 {
                     "name": "threads",

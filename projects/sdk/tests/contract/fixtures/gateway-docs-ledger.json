@@ -87,6 +87,10 @@
         "category": "always empty, null or false here",
         "reason": "Only accepted GUILD_CREATE bodies have unavailable false or absent, and the document ties this field to unavailable true"
     },
+    "GUILD_CREATE visiting": {
+        "category": "always empty, null or false here",
+        "reason": "Visits start only through user-only routes (DefaultUserOnly in GuildVisitController.ts), so a bot never visits a guild"
+    },
     "GUILD_CREATE voice_states[].guild_id": {
         "category": "paired with another field",
         "reason": "The snapshot decoder requires it to equal the guild ID, so a replacement alone is rejected"
@@ -119,9 +123,17 @@
         "category": "unhandled user-account event",
         "reason": "Read state of the signed-in user's account"
     },
+    "MESSAGE_REACTION_ADD session_id": {
+        "category": "intentionally dropped",
+        "reason": "The requesting session's gateway identifier in a private channel, which is session bookkeeping rather than reaction data"
+    },
     "MESSAGE_REACTION_ADD_MANY reactions[].member": {
         "category": "always empty, null or false here",
         "reason": "Guild-channel additions are never batched, so a batch never carries a member"
+    },
+    "MESSAGE_REACTION_REMOVE session_id": {
+        "category": "intentionally dropped",
+        "reason": "The requesting session's gateway identifier in a private channel, which is session bookkeeping rather than reaction data"
     },
     "PASSIVE_UPDATES": {
         "category": "unhandled user-session event",
@@ -178,14 +190,6 @@
     "THREAD_MEMBER_LIST_UPDATE": {
         "category": "unhandled user-session event",
         "reason": "Thread member list subscription of a Lazy Request, which the SDK never sends"
-    },
-    "THREAD_MEMBER_UPDATE mute_config": {
-        "category": "always empty, null or false here",
-        "reason": "Bot accounts cannot change thread mute settings, so the bot's own thread member is never muted"
-    },
-    "THREAD_MEMBER_UPDATE muted": {
-        "category": "always empty, null or false here",
-        "reason": "Bot accounts cannot change thread mute settings, so the bot's own thread member is never muted"
     },
     "USER_CONNECTIONS_UPDATE": {
         "category": "unhandled user-account event",
