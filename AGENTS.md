@@ -34,6 +34,6 @@ This repository rule overrides generic document-relative link guidance and does 
 
 # Public prose
 
-Use impersonal wording in repository docs, website copy, public API comments and displayed example messages. Preserve exact code identifiers, protocol paths and third-party quotations
+Use impersonal wording in repository docs, website copy, public API comments and displayed example messages. Preserve exact code identifiers, protocol paths and third-party quotations. Taglines, such as the one in the [repository README](/docs/README.md), may address the reader directly
 
 Do not start prose sentences with lowercase identifiers or command flags. Rephrase around them rather than changing their spelling
