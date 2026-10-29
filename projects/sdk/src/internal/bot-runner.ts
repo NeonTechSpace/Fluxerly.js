@@ -26,12 +26,10 @@ import { EventBus } from "./events.js"
 import { botCommandDeliveryKeys, routerSubscriptionOptions } from "./commands.js"
 import { shutdownDrainMs } from "./client/drain.js"
 
-/** Default delivery for runBot event handlers. Overflow drops the oldest waiting event rather than stopping the bot,
- * and messageCreate handlers and partitioned handlers run up to eight at a time
+/** Default delivery for runBot event handlers. Overflow drops the oldest waiting event rather than stopping the bot.
+ * Concurrency keeps the client.on default, which is eight for messageCreate and partitioned handlers and one otherwise
  */
-function botHandlerDefaults(event: EventName, partitioned = false): { concurrency: number; overflow: "dropOldest" } {
-    return { concurrency: event === "messageCreate" || partitioned ? 8 : 1, overflow: "dropOldest" }
-}
+const botHandlerDefaults = { overflow: "dropOldest" } as const
 
 const handlerOptionKeys = [
     "handler",
@@ -81,7 +79,7 @@ export function snapshotBotEvents(
     for (const [event, entry] of Object.entries(events)) {
         if (entry === undefined) continue
         if (typeof entry === "function") {
-            const options = botHandlerDefaults(event as EventName)
+            const options = botHandlerDefaults
             validateBotEvent(event, options, bus)
             entries.push({ event: event as EventName, handler: entry, options })
             continue
@@ -102,7 +100,7 @@ export function snapshotBotEvents(
         if (typeof handler !== "function")
             throw new ConfigurationError("handler", `The ${JSON.stringify(event)} handler must be a function`)
         const settings = Object.freeze({
-            ...botHandlerDefaults(event as EventName, options.partition !== undefined),
+            ...botHandlerDefaults,
             ...Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined)),
         })
         validateBotEvent(event, settings, bus)

@@ -42,6 +42,7 @@ async function fixture() {
     })
     return {
         replies,
+        gateway,
         dispatch: (id = "10", content = "!ping", authorId = "30") =>
             gateway.dispatch("MESSAGE_CREATE", wire(id, content, authorId)),
     }
@@ -67,6 +68,7 @@ test("default callback receive-and-reply runs sequentially and reports handler f
                 await settle(client.messages.reply(message, { content: "Pong!" }, { signal }))
             },
             {
+                concurrency: 1,
                 onError: (report) => {
                     reports.push(report)
                 },
@@ -156,6 +158,7 @@ test.each(["messages", "bytes"] as const)(
         const client = defaultApi({ token })
         const blocked = await settle(
             client.on("messageCreate", () => new Promise<void>(() => {}), {
+                concurrency: 1,
                 maxPendingMessages: 1,
                 maxPendingBytes: limit === "bytes" ? 1 : 10000,
                 overflow: "stop",
@@ -445,6 +448,7 @@ test("an uncooperative default reporter cannot hold subscription or client shutd
     let reported = false
     const sub = await settle(
         client.on("messageCreate", () => new Promise<void>(() => {}), {
+            concurrency: 1,
             maxPendingMessages: 1,
             overflow: "stop",
             onError: () => {
@@ -515,7 +519,7 @@ test.each(["default", "native"] as const)(
             handled.push(id)
             if (id === "10") await held
         }
-        const options = { maxPendingMessages: 1 }
+        const options = { concurrency: 1, maxPendingMessages: 1 }
         const scope = Scope.makeUnsafe()
         onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
         let client: { connect(): unknown; shutdown(): unknown; diagnostics(): ClientDiagnostics }
@@ -544,6 +548,93 @@ test.each(["default", "native"] as const)(
         expect(handled).toEqual(["10", "12"])
         expect(client.diagnostics().events.subscriptions).toBe(1)
         await settle(client.shutdown())
+    },
+)
+
+const deleted = (id: string) => ({ id, channel_id: "20" })
+
+/**
+ * Registers a handler that holds its first event, in either API style, and dispatches two events of one kind.
+ * A witness subscription sees the same intake, so once it has both events the handler's queue has admitted them too.
+ * The result tells whether the second event started while the first was held, then releases the first
+ */
+async function startsSecondWhileFirstHeld(
+    mode: "default" | "native",
+    event: "messageCreate" | "messageDelete",
+    options?: { readonly concurrency: number },
+) {
+    const server = await fixture()
+    const handled: string[] = []
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+        release = resolve
+    })
+    const handle = async (id: string) => {
+        handled.push(id)
+        if (id === "10") await held
+    }
+    const dispatch = (id: string) =>
+        event === "messageCreate" ? server.dispatch(id) : server.gateway.dispatch("MESSAGE_DELETE", deleted(id))
+    const scope = Scope.makeUnsafe()
+    onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+    let client: { connect(): unknown; shutdown(): unknown; diagnostics(): ClientDiagnostics }
+    let witnessed: Promise<unknown>
+    if (mode === "default") {
+        const created = defaultApi({ token })
+        await settle(created.on(event, (message) => handle(message.id), options))
+        const witness = await settle(created.subscribe(event))
+        witnessed = (async () => {
+            await settle(witness.next())
+            await settle(witness.next())
+        })()
+        client = created
+    } else {
+        const created = await Effect.runPromise(createNative({ token }).pipe(Scope.provide(scope)))
+        await settle(
+            created
+                .on(event, (message) => Effect.promise(() => handle(message.id)), options)
+                .pipe(Scope.provide(scope)),
+        )
+        const witness = created.subscribe(event)
+        witnessed = Effect.runPromise(Stream.runCollect(Stream.take(witness, 2)).pipe(Scope.provide(scope)))
+        client = created
+    }
+    await settle(client.connect())
+    await waitUntil(() => client.diagnostics().events.subscriptions === 2)
+    dispatch("10")
+    dispatch("11")
+    await witnessed
+    await waitUntil(() => client.diagnostics().events.activeHandlers >= 1)
+    const whileHeld = [...handled]
+    release()
+    await waitUntil(() => handled.length === 2)
+    await settle(client.shutdown())
+    return { whileHeld, handled }
+}
+
+test.each(["default", "native"] as const)(
+    "%s messageCreate handlers run several messages at a time by default, as runBot does",
+    async (mode) => {
+        const result = await startsSecondWhileFirstHeld(mode, "messageCreate")
+        expect(result.whileHeld).toEqual(["10", "11"])
+    },
+)
+
+test.each(["default", "native"] as const)(
+    "%s messageCreate handlers with concurrency 1 keep strict order behind a slow message",
+    async (mode) => {
+        const result = await startsSecondWhileFirstHeld(mode, "messageCreate", { concurrency: 1 })
+        expect(result.whileHeld).toEqual(["10"])
+        expect(result.handled).toEqual(["10", "11"])
+    },
+)
+
+test.each(["default", "native"] as const)(
+    "%s handlers of other events still run one at a time by default",
+    async (mode) => {
+        const result = await startsSecondWhileFirstHeld(mode, "messageDelete")
+        expect(result.whileHeld).toEqual(["10"])
+        expect(result.handled).toEqual(["10", "11"])
     },
 )
 
@@ -584,10 +675,13 @@ test("a handler at its concurrency limit waits for the next free slot without sp
                 const release = yield* Deferred.make<void>()
                 const handled: string[] = []
                 yield* client
-                    .on("messageCreate", (message) =>
-                        Effect.sync(() => handled.push(message.id)).pipe(
-                            Effect.andThen(message.id === ids[0] ? Deferred.await(release) : Effect.void),
-                        ),
+                    .on(
+                        "messageCreate",
+                        (message) =>
+                            Effect.sync(() => handled.push(message.id)).pipe(
+                                Effect.andThen(message.id === ids[0] ? Deferred.await(release) : Effect.void),
+                            ),
+                        { concurrency: 1 },
                     )
                     .pipe(
                         Effect.provideService(References.Scheduler, scheduler),

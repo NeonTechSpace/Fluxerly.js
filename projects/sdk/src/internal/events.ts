@@ -125,8 +125,11 @@ const groupOf = (delivery: Delivery<unknown>): Group => (typeof delivery.key ===
 type Resume<A> = (value: Effect.Effect<Delivery<A> | null, EventOverflowError>) => void
 type Limits = Required<Omit<HandlerOptions, "partition">> & { readonly partition: HandlerOptions["partition"] }
 
-/** Default handler concurrency when a partition is set, so events of different keys can run side by side */
-const partitionedConcurrency = 8
+/** Default handler concurrency for a partitioned handler, so events of different keys can run side by side, and for a
+ * messageCreate handler without a partition, because messages arrive in bursts and one slow callback must not stall
+ * the next ones. Other handlers without a partition default to 1 and keep their receive order
+ */
+const parallelConcurrency = 8
 
 /** Events whose own ID is the community they describe */
 const guildSelfEvents: ReadonlySet<EventName> = new Set(["guildCreate", "guildUpdate", "guildDelete"])
@@ -345,7 +348,7 @@ function eventWaitSettings<K extends EventName, M extends MessageCore = Message>
     }
 }
 
-function limits(options: unknown, defaultOverflow: Limits["overflow"]): Limits | ConfigurationError {
+function limits(event: EventName, options: unknown, defaultOverflow: Limits["overflow"]): Limits | ConfigurationError {
     if (options === undefined) options = {}
     if (!record(options)) return new ConfigurationError("eventOptions", "Event options must be an object")
     const partition = options.partition
@@ -355,7 +358,7 @@ function limits(options: unknown, defaultOverflow: Limits["overflow"]): Limits |
             'The event option "partition" must be "guild", "channel" or a function',
         )
     const defaults = {
-        concurrency: partition === undefined ? 1 : partitionedConcurrency,
+        concurrency: partition === undefined && event !== "messageCreate" ? 1 : parallelConcurrency,
         maxPendingMessages: 256,
         maxPendingBytes: 4_194_304,
     }
@@ -1102,7 +1105,7 @@ export class EventBus<M extends MessageCore = Message> {
                 return Effect.fail(unknownEventError(event, Object.keys(this.#sources)))
             let settings: Limits | ConfigurationError
             try {
-                settings = limits(options, defaultOverflow)
+                settings = limits(event, options, defaultOverflow)
             } catch (error) {
                 return Effect.failCause(inputDefect(error))
             }

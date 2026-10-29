@@ -141,6 +141,7 @@ describe("default API drain", () => {
         const subscription = test.client.on(
             "messageCreate",
             (_message, signal) => new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve())),
+            { concurrency: 1 },
         )
         await test.ready()
         // The first event runs and blocks the only handler slot, so the other two wait in the queue
@@ -164,6 +165,7 @@ describe("default API drain", () => {
         const subscription = test.client.on(
             "messageCreate",
             (_message, signal) => new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve())),
+            { concurrency: 1 },
         )
         await test.ready()
         for (const content of ["first", "second", "third"])
@@ -361,7 +363,7 @@ describe("native API drain", () => {
     test("a shutdown records the waiting events it discards, once per subscription", async () => {
         const { test, scope } = await openNative()
         const subscription = await Effect.runPromise(
-            test.client.on("messageCreate", () => Effect.never).pipe(Scope.provide(scope)),
+            test.client.on("messageCreate", () => Effect.never, { concurrency: 1 }).pipe(Scope.provide(scope)),
         )
         await Effect.runPromise(test.ready())
         // The first event runs and blocks the only handler slot, so the other two wait in the queue
@@ -386,7 +388,7 @@ describe("native API drain", () => {
             createNativeTestClient({ logging: { categories: { events: "debug" } } }).pipe(Scope.provide(scope)),
         )
         const subscription = await Effect.runPromise(
-            test.client.on("messageCreate", () => Effect.never).pipe(Scope.provide(scope)),
+            test.client.on("messageCreate", () => Effect.never, { concurrency: 1 }).pipe(Scope.provide(scope)),
         )
         await Effect.runPromise(test.ready())
         for (const content of ["first", "second", "third"])

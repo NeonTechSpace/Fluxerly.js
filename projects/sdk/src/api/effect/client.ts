@@ -282,7 +282,9 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Bulk deletion events do not also call messageDelete handlers.
      * Enabled cache updates happen before handlers and do not depend on a subscription succeeding, including its overflow
      *
-     * Handlers run one at a time by default.
+     * Handlers run one at a time by default, except messageCreate handlers and partitioned handlers, which run up to eight at a time as runBot does.
+     * A slow messageCreate callback therefore does not stall later messages, but callbacks can finish out of order.
+     * Pass concurrency 1 or a partition such as "channel" to keep related messages in order.
      * Increasing concurrency keeps receive-order starts, but not completion order.
      * Each subscription has its own ordering and queue, with no ordering across event types and no exactly-once delivery.
      * Default pending limits are 256 payloads or 4 MiB of full source JSON, not total process memory.
