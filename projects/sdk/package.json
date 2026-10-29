@@ -76,8 +76,9 @@
     "scripts": {
         "format": "prettier --write .",
         "format:check": "prettier --check .",
-        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:mapping && pnpm run lint:tests && pnpm run lint:effect && pnpm run lint:unused && pnpm run lint:spelling",
+        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:mapping && pnpm run lint:dashes && pnpm run lint:tests && pnpm run lint:effect && pnpm run lint:unused && pnpm run lint:spelling",
         "lint:discards": "node scripts/silent-discards.js",
+        "lint:dashes": "node ../scripts/em-dashes.mjs .",
         "lint:mapping": "node scripts/failure-mapping.js",
         "lint:code": "oxlint -c ../.oxlintrc.json src scripts examples",
         "lint:unused": "knip --directory .. --workspace sdk --no-progress",

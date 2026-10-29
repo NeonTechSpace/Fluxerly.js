@@ -230,7 +230,7 @@ Other formatting options use Prettier's stable defaults, without plugins or expe
 The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation and linting.
 Oxlint lints SDK source, scripts, examples and tests, release tooling and website scripts with type-aware rules through oxlint-tsgolint.
 Knip reports unused SDK files and exports, and CSpell checks SDK source comments, website guides and repository documents against the [project word list](/projects/cspell-words.txt).
-A source scan completes the lint. The [failure-mapping check](/projects/sdk/scripts/failure-mapping.js) fails when SDK source maps failures with `Effect.mapError` or `Cause.map` instead of the helpers that also map failures Effect turned into defects.
+Two source scans complete the lint. The [em-dash check](/projects/scripts/em-dashes.mjs) fails on any em dash in a tracked or new SDK or website file, except fixtures that copy Fluxer's text exactly. The [failure-mapping check](/projects/sdk/scripts/failure-mapping.js) fails when SDK source maps failures with `Effect.mapError` or `Cause.map` instead of the helpers that also map failures Effect turned into defects.
 These tools are exact workspace development dependencies configured in [projects/](/projects/).
 In CI, actionlint lints the workflow files and zizmor audits them.
 Website formatting has not been selected.
