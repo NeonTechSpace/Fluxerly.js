@@ -71,27 +71,30 @@ bun add @neontechspace/fluxerly
 
 A bot needs a Fluxer application, its bot token and an invite to a community
 
-To start from a generated project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in the bot's folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. To set up the bot by hand instead:
+Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://preview.fluxerly.neontechspace.com/docs/latest/quick-start/) also sets up the same project by hand
 
-1. Create a folder for the bot containing a `package.json` file with `{ "type": "module" }`, then install the SDK in that folder as shown above
-2. Save the token in a file named `.env` as `FLUXER_BOT_TOKEN=paste-the-token-here`, and add `.env` to `.gitignore`
-3. Save this bot as `bot.js`. It replies **Pong!** to **!ping**
+The generated `bot.js` replies **Pong!** to **!ping**:
 
 ```js
-import { runBot } from "@neontechspace/fluxerly"
+import { defineBot, runBot } from "@neontechspace/fluxerly"
 
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return
-            return reply("Pong!")
+// The bot's options without its token, so its test can run them through createTestBot without a token or a network
+export const bot = defineBot({
+    commands: {
+        prefix: "!",
+        commands: {
+            // Returning the reply reports a failed send to the log
+            ping: { execute: ({ reply }) => reply("Pong!") },
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 ```
 
-4. Run `node --env-file=.env bot.js` and send **!ping** in a channel the bot can read
+Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel the bot can read
 
 ## Choosing an API
 

@@ -782,7 +782,7 @@ export type { Presence } from "./api/default/presence.js"
 export type { CurrentBotApplication } from "./api/default/application.js"
 export type { Users } from "./api/default/users.js"
 export type { DirectMessages } from "./api/default/direct-messages.js"
-export { runBot } from "./api/default/bot.js"
+export { defineBot, runBot } from "./api/default/bot.js"
 export type {
     BotCommandsOptions,
     BotEventContext,

@@ -24,6 +24,9 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Send an embed](/docs/{{version}}/messages/#build-an-embed)
 - [Attach or download a file](/docs/{{version}}/messages/#upload-a-small-generated-file)
 - [Send a direct message](/docs/{{version}}/messages/#send-a-requested-direct-message)
+- [Add a reaction to a message](/docs/{{version}}/emoji-and-stickers/#find-an-emoji-and-use-it-twice)
+- [Delete a message](/docs/{{version}}/api/interfaces/js-ts.Messages/#delete)
+- [Clear recent messages in a channel](/docs/{{version}}/examples/#moderation-commands)
 - [Use custom emoji and stickers](/docs/{{version}}/emoji-and-stickers/)
 - [Post through a webhook without a bot connection](/docs/{{version}}/webhooks-and-oauth/#send-through-a-configured-webhook)
 - [Look up every message method](/docs/{{version}}/api/interfaces/js-ts.Messages/)
@@ -52,6 +55,7 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Check permissions](/docs/{{version}}/guilds-and-permissions/#check-permissions-using-available-data)
 - [Check whether the bot or a moderator outranks a member](/docs/{{version}}/api/interfaces/js-ts.Members/#fetchcanmanage)
 - [Give a member a role](/docs/{{version}}/guilds-and-permissions/#grant-a-configured-opt-in-role)
+- [Kick, ban or time out a member](/docs/{{version}}/guilds-and-permissions/#moderate-members)
 - [Look up member and role methods](/docs/{{version}}/api/interfaces/js-ts.Members/)
 
 ## Data and cache
@@ -61,11 +65,14 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Read from the cache and fetch when data is missing](/docs/{{version}}/history-and-cache/#use-the-cache-then-fetch-if-needed)
 - [Call a Fluxer API route that has no SDK method](/docs/{{version}}/api/interfaces/js-ts.Client/#rest)
 - [Ask for a person's consent with OAuth](/docs/{{version}}/webhooks-and-oauth/#create-a-user-consent-url)
+- [Keep data across restarts](/docs/{{version}}/starter-lifetime/#keep-reminders-across-restarts)
 
 ## Production
 
 - [Choose client options](/docs/{{version}}/configuration/)
 - [Read and configure log output](/docs/{{version}}/logging/)
+- [Set the bot's status](/docs/{{version}}/api/interfaces/js-ts.Presence/#set)
+- [Schedule a task or reminder](/docs/{{version}}/starter-lifetime/#run-work-later-or-on-a-schedule)
 - [Handle failures that have no Result](/docs/{{version}}/reliability/#report-failures-that-have-no-result)
 - [Retry a failed request safely](/docs/{{version}}/reliability/#send-once-when-the-outcome-is-uncertain)
 - [Stop the bot cleanly](/docs/{{version}}/starter-lifetime/)

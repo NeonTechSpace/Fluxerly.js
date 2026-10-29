@@ -273,6 +273,45 @@ export interface BotOptions<
 }
 
 /**
+ * Define a bot's runBot options without its token, so a module can export them for both runBot and createTestBot from
+ * the testing entry point.
+ * Returns the same object unchanged, without copying, reading or validating it. runBot and createTestBot check the
+ * options when they are called, as they do for an inline object.
+ * The function exists for type inference: Command arguments keep their declared types, such as a text argument's value
+ * as a string, which an object annotated with BotOptions loses. TypeScript rejects a token here, so the program passes
+ * it to runBot, usually from an environment variable
+ *
+ * @example
+ * ```ts
+ * import { defineBot, runBot } from "@neontechspace/fluxerly"
+ *
+ * // A test imports bot and passes it to createTestBot from @neontechspace/fluxerly/testing
+ * export const bot = defineBot({
+ *     commands: {
+ *         prefix: "!",
+ *         commands: {
+ *             greet: {
+ *                 arguments: { name: { type: "text", rest: true } },
+ *                 execute: ({ reply, values }) => reply(`Hello, ${values.name}!`),
+ *             },
+ *         },
+ *     },
+ * })
+ *
+ * // Running this file starts the bot, while importing it from a test does not
+ * if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
+ * ```
+ *
+ * @category Client and lifecycle
+ */
+export function defineBot<
+    const F extends MessageFields | undefined = undefined,
+    const S extends Readonly<Record<string, unknown>> = Readonly<Record<string, CommandArgumentSchema | undefined>>,
+>(options: Omit<BotOptions<F, S>, "token">): Omit<BotOptions<F, S>, "token"> {
+    return options
+}
+
+/**
  * Start a bot from event handlers and prefix commands, and watch its connection and subscriptions.
  * The client is created and every handler and command is registered synchronously, before this function returns and
  * before the gateway connects, so no event is missed and no handler runs before registration and setup complete.

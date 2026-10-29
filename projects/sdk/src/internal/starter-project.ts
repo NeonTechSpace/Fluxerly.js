@@ -4,7 +4,7 @@
  * Invariant: Existing files are never replaced. A conflict writes nothing, and a failed write removes only the files
  * this run created. Two files are no conflict. An existing .env is kept, because it holds the bot's own token, and an
  * existing .gitignore is kept with only its missing starter lines appended, last, after every other file is written.
- * Each bot's handlers match its shipped starter in examples/starter
+ * Each bot file is the starter that the package ships in examples/starter
  */
 
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -26,61 +26,12 @@ export class StarterConflictError extends Error {
     }
 }
 
-const startComment = `// Running this file starts the bot, while importing it from a test does not.
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code`
-
-// Each bot exports its options without the token, so its test can run them through createTestBot without a token or a
-// network. The events blocks match the shipped starters
-const javaScriptBot = `import { runBot } from "@neontechspace/fluxerly"
-
-export const bot = {
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return
-            // Returning the reply reports a failed send to the log
-            return reply("Pong!")
-        },
-    },
-}
-
-${startComment}
-if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
-`
-
-const typeScriptBot = `import { runBot, type BotOptions } from "@neontechspace/fluxerly"
-
-export const bot: Omit<BotOptions, "token"> = {
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return
-            // Returning the reply reports a failed send to the log
-            return reply("Pong!")
-        },
-    },
-}
-
-${startComment}
-if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
-`
-
-// satisfies keeps the handlers' own error and service types, which runBot and createTestBot read
-const effectBot = `import { Effect } from "effect"
-import { runBot, type BotOptions } from "@neontechspace/fluxerly/effect"
-
-export const bot = {
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return Effect.void
-            // A failed reply is reported to the log without stopping the bot
-            return reply("Pong!")
-        },
-    },
-} satisfies Omit<BotOptions<unknown, unknown>, "token">
-
-${startComment}
-if (import.meta.main)
-    await Effect.runPromiseExit(runBot({ token: process.env.FLUXER_BOT_TOKEN, processSignals: true, ...bot }))
-`
+// The bot file is the shipped starter in examples/starter, read from the installed package, so init writes the bot that
+// the documentation shows. Each starter exports its options without the token, so its test can run them through
+// createTestBot without a token or a network
+const starterBots = { js: "bot.js", ts: "bot.ts", effect: "bot-effect.ts" } satisfies Record<StarterTemplate, string>
+const starterBot = (packageRoot: string, template: StarterTemplate) =>
+    readFileSync(join(packageRoot, "examples/starter", starterBots[template]), "utf8")
 
 const defaultTest = (botFile: string) => `import assert from "node:assert/strict"
 import { test } from "node:test"
@@ -170,14 +121,14 @@ function starterFiles(project: string, packageRoot: string, template: StarterTem
     if (template === "js")
         return new Map([
             ["package.json", packageJson("bot.js")],
-            ["bot.js", javaScriptBot],
+            ["bot.js", starterBot(packageRoot, template)],
             ["bot.test.js", defaultTest("bot.js")],
             ...shared(),
         ])
     return new Map([
         ["package.json", packageJson("bot.ts")],
         ["tsconfig.json", tsconfig],
-        ["bot.ts", template === "ts" ? typeScriptBot : effectBot],
+        ["bot.ts", starterBot(packageRoot, template)],
         ["bot.test.ts", template === "ts" ? defaultTest("bot.ts") : effectTest],
         ...shared(),
     ])
@@ -225,7 +176,8 @@ export function writeStarterProject(
             current = name
             let descriptor: number
             try {
-                descriptor = openSync(join(project, name), "wx")
+                // Only the bot's own account may read the token in .env
+                descriptor = openSync(join(project, name), "wx", name === ".env" ? 0o600 : 0o666)
             } catch (error) {
                 // An existing .env holds the bot's own token, so it is kept. An existing .gitignore is kept too, and
                 // gets its missing lines below

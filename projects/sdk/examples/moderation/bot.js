@@ -1,10 +1,8 @@
 // In a server that requires two-factor authentication for moderation, Fluxer refuses these commands with
 // HTTP 400 unless the account that owns the bot's application has two-factor authentication enabled
-import { describeError, format, guards, orThrow, runBot } from "@neontechspace/fluxerly"
+import { defineBot, describeError, format, guards, orThrow, runBot } from "@neontechspace/fluxerly"
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
+export const bot = defineBot({
     onError: (report) => console.error(report.describe()),
     commands: {
         prefix: "!",
@@ -115,3 +113,7 @@ await runBot({
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })

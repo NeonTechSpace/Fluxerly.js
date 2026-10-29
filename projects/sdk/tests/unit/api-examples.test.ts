@@ -23,7 +23,11 @@ const exampleFiles = ["commands.ts", "guards.ts", "bot.ts"]
  * Exported example functions that cannot run meaningfully, keyed like `default/bot.ts#pingBot`, with the reason.
  * Every other exported function must run, so a new example either runs or is listed here explicitly
  */
-const notExecutable: Readonly<Record<string, string>> = {}
+const notExecutable: Readonly<Record<string, string>> = {
+    // defineBot examples export the bot's options, which tests/client/define-bot.test.ts runs through createTestBot
+    "default/bot.ts#bot": "a bot options object, not a function",
+    "effect/bot.ts#bot": "a bot options object, not a function",
+}
 
 interface Example {
     readonly directory: (typeof directories)[number]
@@ -83,7 +87,9 @@ function evaluate(example: Example): Promise<Record<string, unknown>> {
             exported.push(name)
             return `${kind} ${name}`
         })
-    if (/^\s*(import|export)\b/m.test(body))
+    // An example that starts its bot only when run directly, as the starter does, is evaluated like an import
+    const imported = body.replaceAll("import.meta.main", "false")
+    if (/^\s*(import|export)\b/m.test(imported))
         throw new Error(`Unsupported import or export form in ${example.file} example ${example.index}`)
     const load = (specifier: string) => {
         if (!(specifier in packages)) throw new Error(`Unbound import ${JSON.stringify(specifier)}`)
@@ -92,7 +98,7 @@ function evaluate(example: Example): Promise<Record<string, unknown>> {
     const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (
         ...args: string[]
     ) => (load: (specifier: string) => unknown) => Promise<Record<string, unknown>>
-    return new AsyncFunction("__package", `${body}\nreturn { ${exported.join(", ")} }`)(load)
+    return new AsyncFunction("__package", `${imported}\nreturn { ${exported.join(", ")} }`)(load)
 }
 
 /** Arguments for an exported example function, chosen by its parameter names in the type-stripped source */

@@ -1,4 +1,4 @@
-import { hierarchy, orThrow, runBot, type Client } from "@neontechspace/fluxerly"
+import { defineBot, hierarchy, orThrow, runBot, type Client } from "@neontechspace/fluxerly"
 
 function requiredEnv(name: string) {
     const value = process.env[name]
@@ -6,9 +6,10 @@ function requiredEnv(name: string) {
     return value
 }
 
-const target = { channelId: requiredEnv("ROLE_CHANNEL_ID"), id: requiredEnv("ROLE_MESSAGE_ID") }
-const roleId = requiredEnv("ROLE_ID")
 const emoji = process.env.ROLE_EMOJI || "✅"
+// Setup reads the required settings, so a test can import this file without them
+let target = { channelId: "", id: "" }
+let roleId = ""
 let guildId = ""
 let botUserId = ""
 
@@ -18,12 +19,13 @@ async function setRole(client: Client, userId: string, granted: boolean) {
     orThrow(await (granted ? client.members.addRole(member, roleId) : client.members.removeRole(member, roleId)))
 }
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
+export const bot = defineBot({
     onError: (report) => console.error(report.describe()),
-    // Check the configuration once before connecting, so a role the bot cannot assign stops it at startup
+    // Check the configuration once before connecting, so a missing setting or a role the bot cannot assign stops it
+    // at startup
     setup: async (client) => {
+        target = { channelId: requiredEnv("ROLE_CHANNEL_ID"), id: requiredEnv("ROLE_MESSAGE_ID") }
+        roleId = requiredEnv("ROLE_ID")
         guildId = orThrow(await client.channels.fetch(target.channelId)).guildId
         const self = orThrow(await client.members.fetchSelf(guildId))
         botUserId = self.userId
@@ -44,3 +46,7 @@ await runBot({
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })

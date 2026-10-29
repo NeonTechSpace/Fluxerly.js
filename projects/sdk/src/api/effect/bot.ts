@@ -419,6 +419,71 @@ export function installNativeTestBot(
 }
 
 /**
+ * Define a bot's runBot options without its token, so a module can export them for both runBot and createTestBot from
+ * the Effect testing entry point.
+ * Returns the same object unchanged, without copying, reading or validating it. runBot and createTestBot check the
+ * options when their Effects run, as they do for an inline object.
+ * The function exists for type inference: Command arguments keep their declared types, such as a text argument's value
+ * as a string, and handlers keep their own error and service types, which runBot and createTestBot add to their
+ * requirements. An object annotated with BotOptions loses both. TypeScript rejects a token here, so the program passes
+ * it to runBot, usually from an environment variable
+ *
+ * @example
+ * ```ts
+ * import { Effect } from "effect"
+ * import { defineBot, runBot } from "@neontechspace/fluxerly/effect"
+ *
+ * // A test imports bot and passes it to createTestBot from @neontechspace/fluxerly/effect/testing
+ * export const bot = defineBot({
+ *     commands: {
+ *         prefix: "!",
+ *         commands: {
+ *             greet: {
+ *                 arguments: { name: { type: "text", rest: true } },
+ *                 execute: ({ reply, values }) => reply(`Hello, ${values.name}!`),
+ *             },
+ *         },
+ *     },
+ * })
+ *
+ * // Running this file starts the bot, while importing it from a test does not
+ * if (import.meta.main)
+ *     await Effect.runPromiseExit(runBot({ token: process.env.FLUXER_BOT_TOKEN, processSignals: true, ...bot }))
+ * ```
+ *
+ * @category Client and lifecycle
+ */
+export function defineBot<
+    const F extends MessageFields | undefined = undefined,
+    const Events extends BotEvents<unknown, unknown, SelectedMessage<F>> = BotEvents<
+        unknown,
+        unknown,
+        SelectedMessage<F>
+    >,
+    const S extends Readonly<Record<string, unknown>> = {},
+    const C extends BotCommandEntries<S> = BotCommandEntries<S>,
+    RouterServices = never,
+    OptionsError = never,
+    OptionsServices = never,
+    SetupServices = never,
+    ReadyServices = never,
+>(
+    options: Omit<
+        BotOptions<unknown, unknown, OptionsError, OptionsServices, F>,
+        "token" | "events" | "commands" | "setup"
+    > & {
+        /** Event handlers, as in runBot */
+        readonly events?: Events & Record<Exclude<keyof Events, EventName>, never>
+        /** Prefix commands, as in runBot */
+        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices>
+        /** Startup work before the gateway connects, as in runBot */
+        readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, SetupServices>
+    },
+): typeof options {
+    return options
+}
+
+/**
  * Run a bot from one configuration object in the application's Effect context and scope.
  * When the Effect runs, it creates the client and registers every event handler and command before the gateway
  * starts, so no event is missed and no handler runs before registration and setup complete.

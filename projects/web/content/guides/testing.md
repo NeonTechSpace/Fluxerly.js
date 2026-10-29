@@ -8,41 +8,26 @@ The `@neontechspace/fluxerly/testing` entry point creates a real client connecte
 
 ## Share the bot's options with its tests
 
-A bot started with [`runBot`](/docs/{{version}}/starter-lifetime/) is tested with `createTestBot`, which takes the same options object. Keep that object in a module of its own, such as `bot-options.ts`, so the bot and its tests run the same events, commands and setup
+A bot started with [`runBot`](/docs/{{version}}/starter-lifetime/) is tested with `createTestBot`, which takes the same options. The bot file that `fluxerly init` writes, shown in the [quick start](/docs/{{version}}/quick-start/), exports those options without the token as `bot` and starts the bot only when Node.js runs the file:
 
-```ts
-import type { BotOptions } from "@neontechspace/fluxerly"
-
-// The bot's runBot options, shared by bot.ts and the tests
-export const botOptions: BotOptions = {
-    token: process.env.FLUXER_BOT_TOKEN,
-    commands: {
-        prefix: "!",
-        commands: {
-            ping: {
-                description: "Check that the bot replies",
-                execute: ({ reply }) => reply("Pong!"),
-            },
-        },
-    },
-}
+```js
+{{starter:bot.js}}
 ```
 
-The bot's entry file, `bot.ts`, imports `botOptions` from this module and starts the bot with `await runBot(botOptions)`
+A test imports `bot` from this file, so the bot and its tests run the same events, commands and setup. The `defineBot` function returns the options unchanged and keeps the types of command arguments, which an object annotated with `BotOptions` loses. A larger bot can keep its options in a module of their own instead, such as `bot-options.ts`, which both the bot file and the tests import
 
 ## Write a first test
 
-This test uses `node:test`, the test runner built into Node.js, so nothing else needs installing. Save it as `bot.test.ts`, or `bot.test.js` for JavaScript
+This test uses `node:test`, the test runner built into Node.js, so nothing else needs installing. A project from `fluxerly init` already has a similar test as `bot.test.js`, or `bot.test.ts` for TypeScript, and runs it with `npm test`, `pnpm test` or `bun run test`
 
 ```ts
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import type { BotOptions } from "@neontechspace/fluxerly"
+import { defineBot } from "@neontechspace/fluxerly"
 import { createTestBot } from "@neontechspace/fluxerly/testing"
 
-// In a project, import botOptions from bot-options.ts. It is repeated here so the example runs on its own
-const botOptions: BotOptions = {
-    token: process.env.FLUXER_BOT_TOKEN,
+// In a project, import bot from ./bot.ts. It is repeated here so the example runs on its own
+const bot = defineBot({
     commands: {
         prefix: "!",
         commands: {
@@ -52,13 +37,13 @@ const botOptions: BotOptions = {
             },
         },
     },
-}
+})
 
 test("!ping replies Pong!", async () => {
-    await using bot = createTestBot(botOptions)
-    await bot.ready()
+    await using testBot = createTestBot(bot)
+    await testBot.ready()
 
-    const replies = await bot.say("!ping")
+    const replies = await testBot.say("!ping")
     assert.deepEqual(
         replies.map((message) => message.content),
         ["Pong!"],
@@ -66,14 +51,14 @@ test("!ping replies Pong!", async () => {
 })
 
 test("other messages get no reply", async () => {
-    await using bot = createTestBot(botOptions)
-    await bot.ready()
+    await using testBot = createTestBot(bot)
+    await testBot.ready()
 
-    assert.deepEqual(await bot.say("hello"), [])
+    assert.deepEqual(await testBot.say("hello"), [])
 })
 
 test("a command that throws is reported", async () => {
-    await using bot = createTestBot({
+    await using testBot = createTestBot({
         commands: {
             prefix: "!",
             commands: {
@@ -85,12 +70,12 @@ test("a command that throws is reported", async () => {
             },
         },
     })
-    await bot.ready()
-    bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "!broken" }))
+    await testBot.ready()
+    testBot.emit("MESSAGE_CREATE", testBot.fixtures.message({ content: "!broken" }))
 
-    await bot.idle()
+    await testBot.idle()
     assert.deepEqual(
-        bot.failures().map((record) => record.code),
+        testBot.failures().map((record) => record.code),
         ["commands.failed"],
     )
 })

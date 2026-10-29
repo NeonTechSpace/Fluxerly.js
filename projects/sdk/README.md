@@ -47,56 +47,35 @@ The installed package also contains the changelog as `CHANGELOG.md`
 
 ## Start a bot
 
-This bot replies **Pong!** to **!ping**
+This bot replies **Pong!** to **!ping**. A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs
 
-A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs
+Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://preview.fluxerly.neontechspace.com/docs/latest/quick-start/) also sets up the same project by hand
 
-To generate a starter project with a test, run `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init` in the bot's folder, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. To set up the bot by hand instead:
-
-1. Add `"type": "module"` to the bot project's `package.json`
-2. Install the SDK with `npm install @neontechspace/fluxerly`, `pnpm add @neontechspace/fluxerly` or `bun add @neontechspace/fluxerly`
-3. Save the token in a file named `.env` as `FLUXER_BOT_TOKEN=paste-the-token-here`, and add `.env` to `.gitignore`. Anyone holding the token can act as the bot
-4. Save the following as `bot.js`, or `bot.ts` for TypeScript
-
-The `runBot` function installs the event handler, connects the client and waits for SDK cleanup before finishing. No extra helper files are needed
+This is the generated `bot.js`:
 
 ```js
-import { runBot } from "@neontechspace/fluxerly"
+import { defineBot, runBot } from "@neontechspace/fluxerly"
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return
+// The bot's options without its token, so its test can run them through createTestBot without a token or a network
+export const bot = defineBot({
+    commands: {
+        prefix: "!",
+        commands: {
             // Returning the reply reports a failed send to the log
-            return reply("Pong!")
+            ping: { execute: ({ reply }) => reply("Pong!") },
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 ```
 
-The same code works in JavaScript and TypeScript.
-Run `node --env-file=.env bot.js`, or `node --env-file=.env bot.ts`, then send **!ping** in a channel where the bot can read and reply
+The same code works in JavaScript and TypeScript. The file exports the bot's options as `bot`, so the generated test can import them and run the bot without a token or a network. The `defineBot` function returns them unchanged and keeps the types of command arguments.
+Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel where the bot can read and reply
 
-To typecheck TypeScript, add `@types/node` and TypeScript 7 as development dependencies and save this `tsconfig.json` next to the bot. Node.js still runs `bot.ts` directly, and TypeScript only checks it. A generated TypeScript project has this setup and a `check` script that runs the compiler:
-
-```json
-{
-    "compilerOptions": {
-        "target": "ES2024",
-        "module": "NodeNext",
-        "types": ["node"],
-        "strict": true,
-        "noEmit": true,
-        "allowImportingTsExtensions": true,
-        "verbatimModuleSyntax": true,
-        "erasableSyntaxOnly": true
-    }
-}
-```
-
-By default, messages from bots, including the bot's own replies, skip the handler.
+By default, messages from bots, including the bot's own replies, skip the commands.
 Press Ctrl+C to stop the bot and wait for SDK cleanup.
 A permanent connection failure stops the bot, prints what went wrong with a suggested fix and reports failure to the operating system.
 The bot must still stop or finish work it starts outside the SDK, such as database writes
@@ -105,7 +84,7 @@ While it runs, the bot prints startup, readiness, lost connections, long rate-li
 Set `FLUXERLY_DEBUG=1` to add Debug records, or pass `logging` settings to change levels or send records to another logger.
 Records never contain the token. The SDK is ESM-only, so `require()` fails with an explanation instead of loading it
 
-The same configuration object accepts `commands` for prefix commands and `setup` for other startup work.
+The same configuration object accepts `events` for event handlers and `setup` for other startup work.
 For direct control over connection and shutdown, use `createClient`. Both are available in JavaScript and TypeScript without using Effect
 
 ## Start an Effect bot

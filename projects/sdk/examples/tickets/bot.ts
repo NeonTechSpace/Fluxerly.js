@@ -1,4 +1,4 @@
-import { ChannelType, Permissions, format, guards, orThrow, runBot } from "@neontechspace/fluxerly"
+import { ChannelType, Permissions, defineBot, format, guards, orThrow, runBot } from "@neontechspace/fluxerly"
 
 function requiredEnv(name: string) {
     const value = process.env[name]
@@ -6,14 +6,18 @@ function requiredEnv(name: string) {
     return value
 }
 
-const categoryId = requiredEnv("TICKET_CATEGORY_ID")
-const staffRoleId = requiredEnv("TICKET_STAFF_ROLE_ID")
 const access = Permissions.ViewChannel | Permissions.SendMessages | Permissions.ReadMessageHistory
+// Setup reads the required settings, so a test can import this file without them
+let categoryId = ""
+let staffRoleId = ""
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
+export const bot = defineBot({
     onError: (report) => console.error(report.describe()),
+    // Setup runs before the bot connects, so a missing setting stops the bot at startup
+    setup: () => {
+        categoryId = requiredEnv("TICKET_CATEGORY_ID")
+        staffRoleId = requiredEnv("TICKET_STAFF_ROLE_ID")
+    },
     commands: {
         prefix: "!",
         commands: {
@@ -70,3 +74,7 @@ await runBot({
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })

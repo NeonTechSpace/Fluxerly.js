@@ -221,7 +221,7 @@ The test does not open a gateway or replace SDK internals. It replaces the appli
 
 ## Test a runBot bot against an in-memory Fluxer
 
-To check the requests a bot really sends, pass its native `runBot` options to `createTestBot` from `@neontechspace/fluxerly/effect/testing`. It creates a real native client connected to an in-memory Fluxer, owned by the test's Scope, and registers the bot's events, commands and setup as `runBot` would. The unset token falls back to a test token
+To check the requests a bot really sends, pass its native `runBot` options to `createTestBot` from `@neontechspace/fluxerly/effect/testing`. It creates a real native client connected to an in-memory Fluxer, owned by the test's Scope, and registers the bot's events, commands and setup as `runBot` would. The unset token falls back to a test token. For a bot file that exports its options with `defineBot`, such as the one `fluxerly init --template effect` writes, pass the imported `bot`
 
 ```ts
 import { Effect } from "effect"

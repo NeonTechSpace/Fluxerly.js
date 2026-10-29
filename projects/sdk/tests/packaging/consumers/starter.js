@@ -33,10 +33,20 @@ const redirectedWebSocketUrl = `data:text/javascript,${encodeURIComponent(`
         }
     }
 `)}`
+// A starter starts the bot only when it is the program Node.js runs, so this check imports it with its start line
+// enabled, after making sure the file has exactly one
+const startLine = "if (import.meta.main)"
 const hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
         const resolved = nextResolve(specifier, context)
         return specifier === "ws" ? { ...resolved, url: redirectedWebSocketUrl } : resolved
+    },
+    load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context)
+        if (new URL(url).pathname !== new URL(`./${filename}`, import.meta.url).pathname) return loaded
+        const source = String(loaded.source)
+        assert.equal(source.split(startLine).length, 2, `${filename} must start the bot from one start line`)
+        return { ...loaded, source: source.replace(startLine, "if (true)") }
     },
 })
 
@@ -116,7 +126,7 @@ try {
     await identifies.reach(1)
     deliver("10", "!ping", true)
     deliver("11", "Hello")
-    deliver("12", "!ping extra")
+    deliver("12", "!pong")
     // Messages arrive in order, so a reply to the human ping follows the ignored messages
     const ping = deliver("13", "!ping")
     await requests.reach(1)
@@ -141,7 +151,7 @@ try {
     // A returned failed reply is logged with its Fluxer code, without Fluxer's message, and the bot keeps running
     rejectReply = true
     deliver("14", "!ping")
-    assert.match(await nextLine(/events\.handlerFailed/), /MISSING_PERMISSIONS/)
+    assert.match(await nextLine(/commands\.failed/), /MISSING_PERMISSIONS/)
     assert.deepEqual(linesMatching(/private fixture detail/), [])
     assert.equal(gateway.connections.size, 1, "An expected reply failure must not stop the bot")
 

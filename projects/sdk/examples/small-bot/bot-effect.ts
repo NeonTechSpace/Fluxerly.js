@@ -1,12 +1,10 @@
 import { Effect } from "effect"
-import { builders, describeError, format, guards, runBot } from "@neontechspace/fluxerly/effect"
+import { builders, defineBot, describeError, format, guards, runBot } from "@neontechspace/fluxerly/effect"
 
 // Optional channel that receives welcome messages
 const welcomeChannelId = process.env.WELCOME_CHANNEL_ID
 
-const program = runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
+export const bot = defineBot({
     // Handler and command failures arrive here instead of stopping the bot
     onError: (report) => {
         const source = report.command ? `Command ${report.command}` : `Handler ${report.event ?? report.kind}`
@@ -64,5 +62,7 @@ const program = runBot({
     },
 })
 
+// Running this file starts the bot, while importing it from a test does not.
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await Effect.runPromiseExit(program)
+if (import.meta.main)
+    await Effect.runPromiseExit(runBot({ token: process.env.FLUXER_BOT_TOKEN, processSignals: true, ...bot }))

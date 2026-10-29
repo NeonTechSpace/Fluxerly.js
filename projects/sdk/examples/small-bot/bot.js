@@ -1,15 +1,16 @@
-import { builders, describeError, format, guards, runBot } from "@neontechspace/fluxerly"
+import { builders, defineBot, describeError, format, guards, runBot } from "@neontechspace/fluxerly"
+
 // Optional channel that receives welcome messages
 const welcomeChannelId = process.env.WELCOME_CHANNEL_ID
-if (!welcomeChannelId) console.info("WELCOME_CHANNEL_ID is not set, so the bot sends no welcome messages")
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
+export const bot = defineBot({
     // Handler and command failures arrive here instead of stopping the bot
     onError: (report) => {
         const source = report.command ? `Command ${report.command}` : `Handler ${report.event ?? report.kind}`
         console.error(`${source} failed:\n${describeError(report.error)}`)
+    },
+    setup: () => {
+        if (!welcomeChannelId) console.info("WELCOME_CHANNEL_ID is not set, so the bot sends no welcome messages")
     },
     events: {
         guildMemberAdd: async ({ event: member, client, signal }) => {
@@ -63,3 +64,7 @@ await runBot({
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })

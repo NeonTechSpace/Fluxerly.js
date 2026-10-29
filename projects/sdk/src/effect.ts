@@ -725,7 +725,7 @@ export type { Presence } from "./api/effect/presence.js"
 export type { CurrentBotApplication } from "./api/effect/application.js"
 export type { Users } from "./api/effect/users.js"
 export type { DirectMessages } from "./api/effect/direct-messages.js"
-export { runBot } from "./api/effect/bot.js"
+export { defineBot, runBot } from "./api/effect/bot.js"
 export type {
     BotCommandEntries,
     BotCommandsOptions,

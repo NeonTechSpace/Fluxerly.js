@@ -8,7 +8,7 @@ This bot fits in one file and combines what most bots need: Commands with an arg
 
 ## The complete bot
 
-Save this as `bot.js`, or `bot.ts` for TypeScript, in the quick start's folder:
+Save this as `bot.js`, or `bot.ts` for TypeScript, in the quick start's folder. Like the quick start's bot, it exports its options as `bot`, so the test that `fluxerly init` writes still runs it:
 
 ```ts
 {{example:small-bot/bot.ts}}
@@ -16,7 +16,7 @@ Save this as `bot.js`, or `bot.ts` for TypeScript, in the quick start's folder:
 
 ## Run it
 
-Start the bot with the `.env` file from [Create a bot](/docs/{{version}}/create-a-bot/):
+Start the bot with the `.env` file from the [quick start](/docs/{{version}}/quick-start/), or with the project's start script:
 
 ```command
 {"kind":"run","command":"node --env-file=.env bot.js"}
@@ -42,7 +42,7 @@ Press Ctrl+C to stop the bot
 
 ## How it works
 
-The whole bot is one call to `runBot`, as in the quick start. Its options object holds the token, the handlers, the commands and the settings, and the call connects and runs until the bot stops
+As in the quick start, `defineBot` holds the bot's options: The handlers, the commands and the settings. The last line passes them to `runBot` together with the token, which connects and runs until the bot stops. That line runs only when Node.js runs the file, so a test can import `bot` and pass it to `createTestBot` instead, as [Testing a bot](/docs/{{version}}/testing/) shows
 
 ### Commands
 

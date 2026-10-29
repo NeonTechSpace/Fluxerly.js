@@ -1,17 +1,18 @@
 import { Effect } from "effect"
-import { runBot } from "@neontechspace/fluxerly/effect"
+import { defineBot, runBot } from "@neontechspace/fluxerly/effect"
 
-const program = runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
-    processSignals: true,
-    events: {
-        messageCreate: ({ message, reply }) => {
-            if (message.content !== "!ping") return Effect.void
+// The bot's options without its token, so its test can run them through createTestBot without a token or a network
+export const bot = defineBot({
+    commands: {
+        prefix: "!",
+        commands: {
             // A failed reply is reported to the log without stopping the bot
-            return reply("Pong!")
+            ping: { execute: ({ reply }) => reply("Pong!") },
         },
     },
 })
 
+// Running this file starts the bot, while importing it from a test does not.
 // A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await Effect.runPromiseExit(program)
+if (import.meta.main)
+    await Effect.runPromiseExit(runBot({ token: process.env.FLUXER_BOT_TOKEN, processSignals: true, ...bot }))

@@ -10,7 +10,7 @@ It supports sending messages, responding to events and building bots in JavaScri
 
 ## Start a bot
 
-1. [Create a bot](/docs/{{version}}/create-a-bot/): Create the Fluxer application, store its token and invite the bot to a server
+1. [Create a bot](/docs/{{version}}/create-a-bot/): Create the Fluxer application, copy its token and invite the bot to a server
 2. [Quick start](/docs/{{version}}/quick-start/): Install the SDK and make the bot answer !ping
 3. [Build a small bot](/docs/{{version}}/small-bot/) with commands, an embed and a welcome message, or copy a complete [example bot](/docs/{{version}}/examples/)
 

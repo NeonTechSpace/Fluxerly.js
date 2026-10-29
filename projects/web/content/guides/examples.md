@@ -4,13 +4,15 @@ navTitle: Examples
 description: Small, complete bots for moderation, reaction roles, welcomes and tickets, ready to copy and run
 ---
 
-Each example on this page is one complete file built on `runBot`. Copy it, set a few environment variables and run it. Every example logs failures in full and stops cleanly on Ctrl+C
+Each example on this page is one complete file shaped like the [quick start](/docs/{{version}}/quick-start/)'s bot: It exports its options as `bot` with `defineBot` and passes them to `runBot` when Node.js runs the file. Copy it, set a few environment variables and run it. Every example logs failures in full and stops cleanly on Ctrl+C
 
 Start with the [small bot](/docs/{{version}}/small-bot/) for a guided tour of commands, arguments, embeds, events, guards and cooldowns in one file. The examples below each solve one common task
 
 ## Run an example
 
 Set up a project as in the [quick start](/docs/{{version}}/quick-start/): A folder with `"type": "module"` in `package.json` and the SDK installed. Save the example as `bot.js`, or as `bot.ts` to keep the TypeScript version, which Node.js 24 runs directly
+
+A generated project's test imports `bot` from that file, so it runs the example without a token or a network. The test checks `!ping`, which most examples do not have, so change it to the example's own commands or events, as [Testing a bot](/docs/{{version}}/testing/) shows. Examples with required variables read them in `setup`, so a test that calls `ready()` sets them first
 
 Put the token and the example's other variables in a `.env` file, one `KEY=value` line each, and keep that file out of version control
 

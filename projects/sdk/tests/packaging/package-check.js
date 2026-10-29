@@ -184,8 +184,8 @@ function guideImportKind(example) {
     return entryPointKind(example.imports, `${example.guide}:${example.line}`)
 }
 
-function topLevelConstPrograms(source) {
-    return [...source.matchAll(/^const\s+program\s*=/gm)]
+function exportedBotDefinitions(source) {
+    return [...source.matchAll(/^export\s+const\s+bot\s*=\s*defineBot\(/gm)]
 }
 
 const websiteGuides = await authoredGuides()
@@ -278,10 +278,10 @@ function writeRepositoryExamples(consumer, kind) {
 function completeEffectStarter() {
     const starters = authoredGuideExamples.filter((example) => {
         if (example.guide !== "effect-first-bot" || example.language !== "ts" || example.kind !== "effect") return false
-        const programs = topLevelConstPrograms(example.source)
+        const definitions = exportedBotDefinitions(example.source)
         return (
             example.imports.has(`${manifest.name}/effect`) &&
-            programs.length === 1 &&
+            definitions.length === 1 &&
             (example.source.match(/process\.env\.FLUXER_BOT_TOKEN/g) ?? []).length === 1
         )
     })
@@ -932,6 +932,15 @@ try {
         }
         console.log(
             `${kind} repository example programs passed: ${repositoryExampleFixtures.javascript.length} JavaScript and ${repositoryExampleFixtures.typescript.length} TypeScript`,
+        )
+        // The default API's JavaScript and TypeScript files are the same program, so its JavaScript files run here
+        copyFileSync(join(fixtureDirectory, "repository-examples.js"), join(consumer, "repository-examples.js"))
+        const runnableExamples =
+            kind === "default" ? repositoryExampleFixtures.javascript : repositoryExampleFixtures.typescript
+        process.stdout.write(
+            withoutSdkOutput(
+                run(process.execPath, ["repository-examples.js", kind, ...runnableExamples], consumer, 15_000),
+            ),
         )
         if (kind === "default") {
             copyFileSync(join(fixtureDirectory, "javascript-tooling.js"), join(consumer, "javascript-tooling.js"))

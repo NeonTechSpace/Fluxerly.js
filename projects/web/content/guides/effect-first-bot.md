@@ -14,7 +14,7 @@ The examples introduce each Effect concept before combining them into a bot
 
 To start from a generated Effect project with a test, run the command from [Generate the project](/docs/{{version}}/quick-start/#generate-the-project) with `--template effect` in the bot's folder, which may already hold the token's `.env` and a `.gitignore`.
 
-First install the SDK with [the quick start](/docs/{{version}}/quick-start/). Fluxerly is tested against Node.js 24.15 or newer. Use such a version, an ESM project with `"type": "module"`, and TypeScript 7 for typechecking with the Node.js types from the [TypeScript setup](/docs/{{version}}/create-a-bot/#typescript-setup). Native examples use TypeScript
+First generate a project with [the quick start](/docs/{{version}}/quick-start/) and choose Effect, which installs the SDK, Effect, TypeScript 7 and the Node.js types for typechecking. Fluxerly is tested against Node.js 24.15 or newer. A project set up by hand needs `"type": "module"` in `package.json` and the TypeScript setup that the quick start's TypeScript section describes. Native examples use TypeScript
 
 Fluxerly is tested against Effect {{effect-version}} and accepts later Effect 4 releases. The installed SDK lists its accepted range under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. Effect 3 and Effect 4 prereleases are incompatible
 
@@ -82,7 +82,7 @@ export function installPing(client: Client) {
 
 ## Run the complete bot
 
-Save this as `bot.ts` and start it with `node --env-file=.env bot.ts`, using the `.env` file from [Create a bot](/docs/{{version}}/create-a-bot/). The runner registers the handlers in the `events` object before it connects
+This is the bot that `fluxerly init --template effect` writes. Save it as `bot.ts` and start it with `node --env-file=.env bot.ts`, using the `.env` file from the [quick start](/docs/{{version}}/quick-start/). The `defineBot` function holds the bot's options and returns them unchanged, keeping the types of command arguments and the services that handlers require. The runner registers the commands before it connects
 
 ```ts
 {{starter:bot-effect.ts}}
@@ -90,7 +90,7 @@ Save this as `bot.ts` and start it with `node --env-file=.env bot.ts`, using the
 
 Send `!ping` and expect `Pong!`. Press Ctrl+C to stop the bot. The SDK interrupts it and waits for its cleanup
 
-The last line runs the program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
+The last line passes the options and the token to `runBot` and runs that program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The line runs only when Node.js runs the file, so a test can import `bot` without starting it, as the [Effect application testing guide](/docs/{{version}}/effect-application-testing/#test-a-runbot-bot-against-an-in-memory-fluxer) shows. The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
 
 <details>
 <summary>What the runner watches while the bot runs</summary>

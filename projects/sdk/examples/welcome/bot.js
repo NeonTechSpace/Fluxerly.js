@@ -1,4 +1,4 @@
-import { builders, format, orThrow, runBot } from "@neontechspace/fluxerly"
+import { builders, defineBot, format, orThrow, runBot } from "@neontechspace/fluxerly"
 
 function requiredEnv(name) {
     const value = process.env[name]
@@ -6,17 +6,17 @@ function requiredEnv(name) {
     return value
 }
 
-const channelId = requiredEnv("WELCOME_CHANNEL_ID")
 // Optional role that every new member receives
 const roleId = process.env.WELCOME_ROLE_ID || undefined
+// Setup reads the channel, so a test can import this file without the setting
+let channelId = ""
 let guildId = ""
 
-// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
-await runBot({
-    token: process.env.FLUXER_BOT_TOKEN,
+export const bot = defineBot({
     onError: (report) => console.error(report.describe()),
-    // Setup runs before the bot connects, so a wrong channel ID stops the bot at startup
+    // Setup runs before the bot connects, so a missing or wrong channel ID stops the bot at startup
     setup: async (client) => {
+        channelId = requiredEnv("WELCOME_CHANNEL_ID")
         guildId = orThrow(await client.channels.fetch(channelId)).guildId
     },
     events: {
@@ -41,3 +41,7 @@ await runBot({
         },
     },
 })
+
+// Running this file starts the bot, while importing it from a test does not.
+// A failure that stops the bot, such as a rejected token, is logged and sets a failing exit code
+if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })

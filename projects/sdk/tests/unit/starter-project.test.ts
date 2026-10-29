@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -37,14 +37,11 @@ function temporary() {
 }
 
 const read = (project: string, name: string) => readFileSync(join(project, name), "utf8")
-/** The events object of a bot program, as written in its source */
-const eventsBlock = (source: string) =>
-    /^ {4}events: \{\n[\s\S]*?\n {4}\},\n/m.exec(source.replaceAll("\r\n", "\n"))?.[0]
 
 const starters = [
-    { template: "js", bot: "bot.js", test: "bot.test.js", testing: "testing", example: "bot.js" },
-    { template: "ts", bot: "bot.ts", test: "bot.test.ts", testing: "testing", example: "bot.ts" },
-    { template: "effect", bot: "bot.ts", test: "bot.test.ts", testing: "effect/testing", example: "bot-effect.ts" },
+    { template: "js", bot: "bot.js", test: "bot.test.js", testing: "testing" },
+    { template: "ts", bot: "bot.ts", test: "bot.test.ts", testing: "testing" },
+    { template: "effect", bot: "bot.ts", test: "bot.test.ts", testing: "effect/testing" },
 ] as const
 
 test.each(starters)(
@@ -93,16 +90,12 @@ test.each(starters.filter(({ template }) => template !== "js"))(
     },
 )
 
-test.each(starters)(
-    "the generated $template bot keeps the shipped $example starter's handlers",
-    ({ template, bot, example }) => {
+test.skipIf(process.platform === "win32")(
+    "the written .env is readable only by its owner, because it holds the token",
+    () => {
         const project = temporary()
-        writeStarterProject(project, sdk, template)
-        const starter = eventsBlock(readFileSync(join(sdk, "examples/starter", example), "utf8"))
-        expect(starter).toBeDefined()
-        expect(eventsBlock(read(project, bot))).toBe(starter)
-        expect(read(project, bot)).toContain("token: process.env.FLUXER_BOT_TOKEN")
-        expect(read(project, bot)).toContain("if (import.meta.main)")
+        writeStarterProject(project, sdk)
+        expect(statSync(join(project, ".env")).mode & 0o777).toBe(0o600)
     },
 )
 
@@ -134,10 +127,10 @@ test("an existing .env is kept and is no conflict, so init writes every other fi
     expect(readdirSync(project)).toContain("bot.js")
 })
 
-// The create-a-bot guide has the reader write a .gitignore with .env before running init
+// The quick start's manual setup has the reader write a .gitignore with .env, and init may run in that folder later
 test.each([
     ["lacks both lines", "dist\n", "dist\nnode_modules\n.env\n", ["node_modules", ".env"]],
-    ["has .env, as the create-a-bot guide writes it", ".env\n", ".env\nnode_modules\n", ["node_modules"]],
+    ["has .env, as the quick start's manual setup writes it", ".env\n", ".env\nnode_modules\n", ["node_modules"]],
     ["has node_modules", "node_modules\n", "node_modules\n.env\n", [".env"]],
     ["ends without a line break", ".env", ".env\nnode_modules\n", ["node_modules"]],
     ["is empty", "", "node_modules\n.env\n", ["node_modules", ".env"]],
