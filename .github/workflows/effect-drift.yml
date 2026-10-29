@@ -1,0 +1,75 @@
+name: Effect drift
+on:
+  # Fresh consumer installs resolve the newest Effect release in the SDK peer range, which Dependabot does not propose
+  schedule:
+    - cron: '41 8 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+# The temporary Effect upgrade is unreviewed, so the run must not save it into a shared cache
+cache-mode: read
+concurrency:
+  group: effect-drift
+  cancel-in-progress: false
+  queue: max
+jobs:
+  drift:
+    name: SDK checks with the newest Effect release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+        id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+      - name: Resolve the newest Effect release in the SDK peer range
+        id: resolve
+        working-directory: projects
+        shell: bash
+        # pnpm update re-resolves within the range under the default release-age policy, while pnpm add would keep the
+        # locked version because it already satisfies the range
+        run: |
+          pinned=$(node --print 'require("./sdk/package.json").devDependencies.effect')
+          range=$(node --print 'require("./sdk/package.json").peerDependencies.effect')
+          pnpm --filter @neontechspace/fluxerly update "effect@$range" --ignore-scripts
+          resolved=$(node --print 'require("./sdk/node_modules/effect/package.json").version')
+          if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The installed Effect package reports no stable version" >&2
+            exit 1
+          fi
+          changed=true
+          if [[ "$resolved" == "$pinned" ]]; then changed=false; fi
+          printf 'pinned=%s\nrange=%s\nresolved=%s\nchanged=%s\n' "$pinned" "$range" "$resolved" "$changed" >> "$GITHUB_OUTPUT"
+      - name: Build the SDK with the resolved Effect release
+        id: build
+        if: steps.resolve.outputs.changed == 'true'
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly run build
+      - name: Check SDK types with the resolved Effect release
+        id: types
+        if: steps.resolve.outputs.changed == 'true'
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly run test:types
+      - name: Run the SDK test suite with the resolved Effect release
+        id: test
+        if: steps.resolve.outputs.changed == 'true'
+        working-directory: projects
+        run: pnpm --filter @neontechspace/fluxerly run test
+      - name: Summarize Effect drift
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Effect drift
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Resolved Effect version": ${{ toJSON(steps.resolve.outputs.resolved) }}, "SDK development pin": ${{ toJSON(steps.resolve.outputs.pinned) }}, "SDK peer range": ${{ toJSON(steps.resolve.outputs.range) }}}
+          next: >-
+            ${{ steps.resolve.outputs.changed == 'false'
+            && 'The newest Effect release in the peer range is the development pin, which Check already covers, so the SDK checks did not run'
+            || 'The SDK passes its build, type checks and tests with the resolved Effect release' }}

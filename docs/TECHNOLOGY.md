@@ -98,7 +98,7 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 
 The SDK development dependency pins an exact stable Effect 4 version within the required peer range.
 Packed consumers separately test the range's minimum, such as `4.1.0` for `^4.1.0`.
-Updating the development dependency does not raise that minimum. Other releases within the range are accepted but are not individually tested. Effect 3 and Effect 4 prereleases are unsupported
+Updating the development dependency does not raise that minimum. Other releases within the range are accepted, and only the newest one is checked daily, as described under [shared development tooling](/docs/TECHNOLOGY.md#shared-development-tooling). Effect 3 and Effect 4 prereleases are unsupported
 
 Modern npm, pnpm and Bun install required peers automatically by default.
 Consumers that disable peer installation must install an Effect version within the declared range themselves
@@ -210,6 +210,10 @@ Dependabot proposes weekly GitHub Actions and npm updates for the workspace, con
 It ignores `effect`, whose development pin and public peer minimum are updated separately by decision, and major `typescript` and `@types/node` updates.
 The SDK runtime dependencies `neverthrow` and `ws` are grouped into their own pull request, so their update can carry a Changeset
 
+A fresh consumer install resolves the newest Effect release in the peer range, so the daily [Effect drift workflow](/.github/workflows/effect-drift.yml) watches new Effect releases instead of Dependabot.
+It installs that release within pnpm's default one-day release-age policy. When it differs from the development pin, the workflow builds, type-checks and tests the SDK with it and fails on any error, naming the release in its job summary.
+It changes nothing in the repository
+
 The repository's Actions settings allow only selected actions, each pinned to a full commit SHA (`allowed_actions: selected` and `sha_pinning_required: true`).
 A Dependabot GitHub Actions pull request therefore fails Check with a startup failure until its new SHAs are on the allowlist:
 
@@ -244,7 +248,7 @@ The SDK build and test tools are installed and configured.
 The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
-Check, version PR, candidate preparation, publication, Preview and daily upstream drift workflows are configured under [.github/workflows](/.github/workflows/).
+Check, version PR, candidate preparation, publication, Preview and daily upstream and Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
 Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a schedule every six hours prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
 [Releasing](/docs/RELEASING.md) describes each trigger and when a nightly is skipped.
 Preview releases are published to npm, and the Preview documentation website is live.

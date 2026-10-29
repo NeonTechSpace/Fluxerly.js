@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -427,6 +427,69 @@ test("Upstream comparison passes distinct baseline and record paths to the CLI w
         assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
             "release/upstream.js", "--baseline", `${directory}/upstream-previous/baseline.json`, "--record", record,
         ])
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
+test("Effect drift checks the SDK only with a newer release that pnpm resolves from the peer range", () => {
+    const workflow = workflows["effect-drift.yml"]
+    const [minute, hour, day, month, weekday] = workflow.on.schedule[0].cron.split(" ")
+    assert.deepEqual([day, month, weekday], ["*", "*", "*"])
+    assert.ok(Number(minute) > 0 && Number(minute) < 60 && Number(minute) !== 30)
+    assert.ok(Number(hour) >= 0 && Number(hour) < 24)
+    assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"))
+    assert.deepEqual(workflow.permissions, { contents: "read" })
+    assert.equal(workflow["cache-mode"], "read", "The unreviewed Effect upgrade must not reach a shared cache")
+    assertSerialized(workflow.concurrency, "effect-drift.yml")
+    const { steps } = workflow.jobs.drift
+    assert.equal(steps.find((step) => step.id === "setup").with["require-lockfile"], true)
+    for (const id of ["build", "types", "test"])
+        assert.equal(steps.find((step) => step.id === id).if, "steps.resolve.outputs.changed == 'true'", id)
+    const resolve = steps.find((step) => step.id === "resolve")
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-effect-drift-"))
+    // The fake pnpm records its arguments and installs the version the registry would resolve
+    const fakePnpm = `
+      pnpm() {
+        printf '%s\\n' "$@" > "$PNPM_ARGS"
+        mkdir -p sdk/node_modules/effect
+        printf '{"version": %s}\\n' "$RESOLVED" > sdk/node_modules/effect/package.json
+      }
+    `
+    try {
+        // [resolved package.json version, expected changed output or undefined for a refused version]
+        const cases = [['"4.1.0"', "false"], ['"4.2.0"', "true"], ['"4.2.0\\nchanged=false"', undefined], ['"5.0.0-beta.1"', undefined]]
+        for (const [index, [resolved, changed]] of cases.entries()) {
+            const workspace = join(directory, String(index))
+            mkdirSync(join(workspace, "sdk"), { recursive: true })
+            writeFileSync(
+                join(workspace, "sdk/package.json"),
+                JSON.stringify({ peerDependencies: { effect: "^4.1.0" }, devDependencies: { effect: "4.1.0" } }),
+            )
+            const output = join(workspace, "output")
+            writeFileSync(output, "")
+            const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakePnpm + resolve.run], {
+                cwd: workspace,
+                encoding: "utf8",
+                timeout: 10_000,
+                windowsHide: true,
+                env: { ...process.env, RESOLVED: resolved, PNPM_ARGS: join(workspace, "args"), GITHUB_OUTPUT: output },
+            })
+            assert.ifError(result.error)
+            assert.deepEqual(readFileSync(join(workspace, "args"), "utf8").trim().split(/\r?\n/), [
+                "--filter", "@neontechspace/fluxerly", "update", "effect@^4.1.0", "--ignore-scripts",
+            ])
+            if (changed === undefined) {
+                assert.notEqual(result.status, 0, `case ${index} accepts ${resolved}`)
+                assert.equal(readFileSync(output, "utf8"), "", `case ${index} writes no outputs`)
+            } else {
+                assert.equal(result.status, 0, `case ${index}: ${result.stderr}`)
+                assert.equal(
+                    readFileSync(output, "utf8"),
+                    `pinned=4.1.0\nrange=^4.1.0\nresolved=${JSON.parse(resolved)}\nchanged=${changed}\n`,
+                )
+            }
+        }
     } finally {
         rmSync(directory, { recursive: true, force: true })
     }

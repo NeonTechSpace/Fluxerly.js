@@ -161,6 +161,7 @@ A failed registry lookup, including a missing package, always stops the release
 | [Release prepare](/.github/workflows/release-prepare.yml) | Every six hours for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
 | [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the Preview |
 | [Docs preview](/.github/workflows/docs-preview.yml) | Called by Release publish, or manual | Always builds `main` and deploys only the Preview target |
+| [Effect drift](/.github/workflows/effect-drift.yml) | Daily, or manual | No inputs. Checks the SDK with the newest Effect release in its peer range and fails when the SDK breaks with it. It does not publish |
 
 Only Release publish writes to npm, and no push or tag publishes a package.
 Release publish checks out its own workflow commit, so its tooling never comes from the candidate source.
