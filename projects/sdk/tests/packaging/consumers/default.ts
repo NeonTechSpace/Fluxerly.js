@@ -72,7 +72,6 @@ import {
     type MessageCacheSettings,
     type Collector,
     type CollectorOptions,
-    type DefaultCollectorOptions,
     type CollectorResult,
     type MemberReference,
     type VoiceConnectionReference,
@@ -818,7 +817,7 @@ export async function collectReplies(client: Client) {
 }
 
 export function collectWithProgress(client: Client) {
-    const options: DefaultCollectorOptions = {
+    const options: CollectorOptions = {
         onMessage: async (message, signal) => {
             const reply = await client.messages.reply(message, { content: "Accepted" }, { signal })
             if (reply.isErr()) throw reply.error
@@ -896,7 +895,7 @@ export async function manageMessage(client: Client, target: MessageReference): P
 
 export function moderationOperations(client: Client, target: import("@neontechspace/fluxerly").MemberReference) {
     const ban: import("@neontechspace/fluxerly").BanInput = { durationMs: 60_000, reason: "Spam" }
-    const options: import("@neontechspace/fluxerly").DefaultModerationOptions = {
+    const options: import("@neontechspace/fluxerly").AuditedRequestOptions = {
         auditReason: "Spam",
     }
     const clear = client.members.clearTimeout(target, options).map((member) => member.communicationDisabledUntil)
@@ -1069,14 +1068,14 @@ export async function previewModerationCleanup(client: Client, guildId: string, 
 
 /** Packed default input extensions and ResultAsync shutdown composition */
 export function approvedRequestInputs(client: Client, webhook: import("@neontechspace/fluxerly").WebhookClient) {
-    const options: import("@neontechspace/fluxerly").DefaultTimeoutOptions = {
+    const options: import("@neontechspace/fluxerly").TimeoutOptions = {
         timeoutReason: "Timeout context",
         auditReason: "Moderator action",
     }
-    const guildAudit: import("@neontechspace/fluxerly").DefaultGuildAuditOperationOptions = {
+    const guildAudit: import("@neontechspace/fluxerly").AuditedRequestOptions = {
         auditReason: "Provision reviewed role",
     }
-    const channelAudit: import("@neontechspace/fluxerly").DefaultChannelAuditOperationOptions = {
+    const channelAudit: import("@neontechspace/fluxerly").AuditedRequestOptions = {
         auditReason: "Provision reviewed channel",
     }
     const mention: import("@neontechspace/fluxerly").CommandArgumentMention = "role"
@@ -1115,13 +1114,13 @@ export function announcementOperations(
     signal: import("@neontechspace/fluxerly").OperationSignal,
 ) {
     const input: ChannelFollowInput = { targetChannelId: "30" }
-    const audit: import("@neontechspace/fluxerly").DefaultChannelAuditOperationOptions = {
+    const audit: import("@neontechspace/fluxerly").AuditedRequestOptions = {
         auditReason: "Subscribe reviewed channel",
         timeoutMs: 5_000,
         signal,
     }
-    const read: import("@neontechspace/fluxerly").DefaultChannelOperationOptions = { timeoutMs: 5_000, signal }
-    const message: import("@neontechspace/fluxerly").DefaultMessageOperationOptions = { timeoutMs: 5_000, signal }
+    const read: import("@neontechspace/fluxerly").RequestOptions = { timeoutMs: 5_000, signal }
+    const message: import("@neontechspace/fluxerly").RequestOptions = { timeoutMs: 5_000, signal }
     const followed: import("@neontechspace/fluxerly").ResultAsync<
         FollowedChannel,
         | import("@neontechspace/fluxerly").ChannelOperationFailure

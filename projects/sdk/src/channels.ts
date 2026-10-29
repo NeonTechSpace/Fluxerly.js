@@ -1,4 +1,3 @@
-import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import type { GuildMember } from "./guilds.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
@@ -927,46 +926,6 @@ export interface ChannelFollowerStats {
     /** Number of distinct communities containing following channels */
     readonly guildCount: number
 }
-
-/**
- * Settings shared by remote community-channel operations
- *
- * @category Options
- */
-export interface ChannelOperationOptions {
-    /** Total milliseconds across local queueing, rate waits, retries and HTTP, integer 1–2,147,483,647, default the client's rest.defaultTimeoutMs, 30,000 unless configured.
-     * Owned cleanup is awaited afterward, so the call can finish later than this deadline
-     */
-    readonly timeoutMs?: number
-}
-
-/**
- * Default API calls start immediately, with abort cancelling only this call and awaiting owned cleanup
- *
- * @category Options
- */
-export interface DefaultChannelOperationOptions extends ChannelOperationOptions, OperationOptions {}
-
-/**
- * Settings for a channel mutation whose provider handler consumes an audit-log reason
- *
- * @category Options
- */
-export interface ChannelAuditOperationOptions extends ChannelOperationOptions {
-    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
-     * Sent as a raw header because Fluxer does not decode URL escapes. Non-ASCII and control characters fail before dispatch.
-     * Omission sends no header. Never included in SDK errors or diagnostics.
-     * Header delivery does not guarantee provider retention. Fluxer's channel-reorder path currently does not persist it in an audit entry
-     */
-    readonly auditReason?: string
-}
-
-/**
- * Default API audited channel mutations start immediately. Abort cannot roll back a dispatched mutation
- *
- * @category Options
- */
-export interface DefaultChannelAuditOperationOptions extends ChannelAuditOperationOptions, OperationOptions {}
 
 /**
  * The channel or thread action named in an expected failure or SdkDefect

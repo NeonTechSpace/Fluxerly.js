@@ -3,21 +3,18 @@ import type {
     MessageSearchIterationLimits,
     MessageSearchPage,
     MessageSearchQuery,
-    DefaultMessageSearchOptions,
 } from "#sdk/message-search"
 import type { PaginationError, HistoryIterationQuery, UserIterationQuery, PinIterationQuery } from "#sdk/pagination"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "#sdk/reactions"
 import type { ResultAsync, Result } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
 import type { MessagePinsQuery, MessagePinsPage } from "#sdk/pins"
-import type { DefaultReactionCollectorOptions, DefaultCollectorOptions } from "#sdk/collectors"
 import type { MessageOperationFailure, SendError } from "#sdk/message-errors"
 import type {
     MessageCleanupFailure,
     MessageCleanupPlan,
     MessageCleanupReport,
     MessageCleanupSelection,
-    DefaultMessageCleanupOptions,
 } from "#sdk/message-cleanup"
 import type {
     EditMessageInput,
@@ -29,13 +26,16 @@ import type {
     CrosspostSource,
     MessageInput,
     ReplyInput,
-    DefaultMessageOperationOptions,
-    DefaultMessageAuditOperationOptions,
-    DefaultOwnMessageDeletionOptions,
-    DefaultSendOptions,
 } from "#sdk/messages"
-import type { Collector, ReactionCollector } from "./collectors.js"
-import type { DefaultChannelPaginateOptions, PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
+import type { Collector, ReactionCollector, ReactionCollectorOptions, CollectorOptions } from "./collectors.js"
+import type { PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
+import type {
+    RequestOptions,
+    AuditedRequestOptions,
+    MessageCleanupOptions,
+    OwnMessageDeletionOptions,
+    ChannelPaginateOptions,
+} from "./options.js"
 
 /**
  * Read, send and change messages with client.messages, or collect future messages and reactions.
@@ -43,7 +43,7 @@ import type { DefaultChannelPaginateOptions, PageInput, PaginateFailure, Paginat
  * Received messages are frozen copies. They do not update when Fluxer changes.
  * Their fields follow this client's messageFields selection, which defaults to the full Message.
  * That selection also applies to nested messages, callbacks and cached snapshots.
- * The delete, deleteMany, pin and unpin methods accept DefaultMessageAuditOperationOptions.
+ * The delete, deleteMany, pin and unpin methods accept AuditedRequestOptions.
  * Other message operations reject auditReason
  *
  * @remarks
@@ -89,7 +89,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     publish(
         target: MessageReference,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch frozen public source-community metadata for a published copy or a ChannelFollowAdd notice.
@@ -103,7 +103,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     fetchCrosspostSource(
         target: MessageReference,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<CrosspostSource, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read older messages newest first, without connecting the gateway.
@@ -141,7 +141,7 @@ export interface Messages<M extends MessageCore = Message> {
     iterateHistory(
         channelId: string,
         query: HistoryIterationQuery,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<Result<M, MessageOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /**
      * Search messages in one explicit community or channel and return one page from Fluxer's search index.
@@ -172,7 +172,7 @@ export interface Messages<M extends MessageCore = Message> {
     search(
         context: MessageSearchContext,
         query?: MessageSearchQuery,
-        options?: DefaultMessageSearchOptions,
+        options?: RequestOptions,
     ): ResultAsync<MessageSearchPage<M>, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read indexed search hits from the supplied community or channel context, following numbered pages without polling, prefetching or cache population.
@@ -183,7 +183,8 @@ export interface Messages<M extends MessageCore = Message> {
      * An unexpected echoed page number or capacity fails with cursorStalled, and index changes can still skip or repeat observations.
      * An indexing response fails with PaginationError indexing rather than polling or claiming an empty result.
      * Search hits do not trigger full-message fetches.
-     * Delivered hits remain with the caller after a later failure
+     * Delivered hits remain with the caller after a later failure.
+     * The timeoutMs option applies separately to each page request, not to the whole traversal
      *
      * @remarks
      * Consume the iterable with a for await loop, which starts the first request.
@@ -205,7 +206,7 @@ export interface Messages<M extends MessageCore = Message> {
         context: MessageSearchContext,
         filters: Omit<MessageSearchQuery, "limit" | "page">,
         limits: MessageSearchIterationLimits,
-        options?: DefaultMessageSearchOptions,
+        options?: RequestOptions,
     ): AsyncIterable<Result<M, MessageOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /**
      * Read users who reacted with one selected emoji, in ascending user-ID order.
@@ -238,7 +239,7 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         query: UserIterationQuery,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<
         Result<
             import("#sdk/reactions").ReactionUser,
@@ -277,7 +278,7 @@ export interface Messages<M extends MessageCore = Message> {
     iteratePins(
         channelId: string,
         query: PinIterationQuery,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<
         Result<
             import("#sdk/pins").MessagePin<M>,
@@ -320,7 +321,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     pin(
         message: MessageReference,
-        options?: DefaultMessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove a pin without deleting the message or its pin-created system message.
@@ -335,7 +336,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     unpin(
         message: MessageReference,
-        options?: DefaultMessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one frozen page of pinned messages in descending pin-time order.
@@ -357,7 +358,7 @@ export interface Messages<M extends MessageCore = Message> {
     fetchPins(
         channelId: string,
         query?: MessagePinsQuery,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<MessagePinsPage<M>, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one user's reaction for one emoji, leaving other users and emoji groups unchanged.
@@ -390,7 +391,7 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         userId: string,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove all users' reactions for one emoji on the message.
@@ -404,7 +405,7 @@ export interface Messages<M extends MessageCore = Message> {
     clearReaction(
         message: MessageReference,
         emoji: ReactionEmojiInput,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove all users' reactions for all emoji on the message, without deleting the message.
@@ -417,7 +418,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     clearReactions(
         message: MessageReference,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of users who currently have a selected reaction on the message.
@@ -452,7 +453,7 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         query?: ReactionUsersQuery,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ReactionUsersPage, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add the bot's own reaction to a message.
@@ -480,7 +481,7 @@ export interface Messages<M extends MessageCore = Message> {
     addReaction(
         message: MessageReference,
         emoji: ReactionEmojiInput,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove only the bot's own reaction for the selected emoji.
@@ -492,7 +493,7 @@ export interface Messages<M extends MessageCore = Message> {
     removeReaction(
         message: MessageReference,
         emoji: ReactionEmojiInput,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Collect a bounded set of future messageCreate events from one channel.
@@ -567,7 +568,7 @@ export interface Messages<M extends MessageCore = Message> {
      * }
      * ```
      */
-    collect(channelId: string, options?: DefaultCollectorOptions<M>): Collector<M>
+    collect(channelId: string, options?: CollectorOptions<M>): Collector<M>
     /**
      * Collect future reaction additions for one message.
      * Use decimal id and channelId, and register before the expected reaction.
@@ -630,7 +631,7 @@ export interface Messages<M extends MessageCore = Message> {
      * }
      * ```
      */
-    collectReactions(message: MessageReference, options?: DefaultReactionCollectorOptions): ReactionCollector
+    collectReactions(message: MessageReference, options?: ReactionCollectorOptions): ReactionCollector
     /**
      * Show several pages in one message that people flip with ◀ and ▶ reactions, because Fluxer has no buttons.
      * Sends the first page, adds both arrows as the bot, then shows the previous or next page on each click, wrapping
@@ -667,7 +668,7 @@ export interface Messages<M extends MessageCore = Message> {
     paginate(
         channelId: string,
         pages: readonly PageInput[],
-        options: DefaultChannelPaginateOptions,
+        options: ChannelPaginateOptions,
     ): ResultAsync<PaginateResult<M>, PaginateFailure | CancelledError>
     /**
      * Look up a message in this client's cache, without an HTTP request.
@@ -705,6 +706,7 @@ export interface Messages<M extends MessageCore = Message> {
      * A full upload or request queue fails with busy before copying or reading.
      * Fluxer can impose lower limits.
      * Uploads use presigned planning or an inline multipart fallback.
+     * Upload-plan and completion responses have their own 1 MiB limit, and neither response limit caps total memory use.
      * Cleanup releases copied bytes and cancels and releases acquired readers on failure.
      * Failed uploads can leave temporary server data, without a guarantee of physical erasure.
      * Eligible created messages can enter an enabled cache, independently of send completion
@@ -720,12 +722,13 @@ export interface Messages<M extends MessageCore = Message> {
      * If omitted, the SDK creates one nonce per send execution, and the same nonce is reused for confirmed rate-limit retries.
      * Fluxer tries to suppress duplicate sends for five minutes after saving a message.
      * This does not guarantee that a repeated or concurrent send posts only one message.
-     * A lost response or cancellation after dispatch can leave a message posted, and the SDK neither retries nor rolls it back
+     * A lost response or cancellation after dispatch can leave a message posted, and the SDK neither retries nor rolls it back.
+     * Check MessageError.outcome before sending again
      */
     send(
         channelId: string,
         input: MessageInput | string,
-        options?: DefaultSendOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, SendError | CancelledError | ConfigurationError>
     /**
      * Copy an accessible source message into the destination channel and return the new message.
@@ -755,7 +758,7 @@ export interface Messages<M extends MessageCore = Message> {
     forward(
         channelId: string,
         input: ForwardMessageInput,
-        options?: DefaultSendOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, SendError | CancelledError | ConfigurationError>
     /**
      * Show this bot's temporary typing indicator in a channel.
@@ -771,7 +774,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     typing(
         channelId: string,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Keep the bot's typing indicator active while a task runs, returning the task's value.
@@ -802,7 +805,7 @@ export interface Messages<M extends MessageCore = Message> {
     keepTyping<A>(
         channelId: string,
         task: (signal: AbortSignal) => PromiseLike<A>,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<A, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Send a reply that references an existing message and return the new reply.
@@ -819,7 +822,7 @@ export interface Messages<M extends MessageCore = Message> {
     reply(
         message: MessageReference,
         input: ReplyInput | string,
-        options?: DefaultSendOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, SendError | CancelledError | ConfigurationError>
     /**
      * Fetch one message from Fluxer, rather than reading the cache.
@@ -842,7 +845,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     fetch(
         message: MessageReference,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of channel messages from Fluxer, newest first.
@@ -865,7 +868,7 @@ export interface Messages<M extends MessageCore = Message> {
     fetchHistory(
         channelId: string,
         query?: MessageHistoryQuery,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly M[], MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Preview a bounded message-deletion selection without deleting anything.
@@ -886,7 +889,7 @@ export interface Messages<M extends MessageCore = Message> {
     previewCleanup(
         channelId: string,
         selection: MessageCleanupSelection<M>,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<MessageCleanupPlan<M>, MessageCleanupFailure | CancelledError | ConfigurationError>
     /**
      * Delete the exact IDs in a plan returned by previewCleanup, in sequential batches of at most 100.
@@ -923,7 +926,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     cleanup(
         plan: MessageCleanupPlan<M>,
-        options?: DefaultMessageCleanupOptions,
+        options?: MessageCleanupOptions,
     ): ResultAsync<MessageCleanupReport, MessageCleanupFailure | CancelledError | ConfigurationError>
     /**
      * Change a message's supplied fields and return its frozen updated snapshot after HTTP, without waiting for a gateway event.
@@ -958,7 +961,7 @@ export interface Messages<M extends MessageCore = Message> {
     edit(
         message: MessageReference,
         input: EditMessageInput | string,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete one message, succeeding with no value after HTTP 204.
@@ -973,7 +976,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     delete(
         message: MessageReference,
-        options?: DefaultMessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete one attachment by its decimal ID from a message authored by this bot.
@@ -998,7 +1001,7 @@ export interface Messages<M extends MessageCore = Message> {
     deleteAttachment(
         message: MessageReference,
         attachmentId: string,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete 1–100 distinct decimal message IDs from one community channel.
@@ -1025,7 +1028,7 @@ export interface Messages<M extends MessageCore = Message> {
     deleteMany(
         channelId: string,
         messageIds: readonly string[],
-        options?: DefaultMessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Irreversibly delete this bot's entire authored message history in one channel and in every thread under it, active or archived.
@@ -1049,6 +1052,6 @@ export interface Messages<M extends MessageCore = Message> {
      */
     deleteOwnMessages(
         channelId: string,
-        options: DefaultOwnMessageDeletionOptions,
+        options: OwnMessageDeletionOptions,
     ): ResultAsync<void, MessageOperationFailure | CancelledError | ConfigurationError>
 }

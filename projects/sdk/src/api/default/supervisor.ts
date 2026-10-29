@@ -50,4 +50,4 @@ import { createClient } from "./client.js"
  *
  * @category Sharding and supervision
  */
-export const supervisor: import("#sdk/default-supervisor").DefaultSupervisorTools = makeDefaultSupervisor(createClient)
+export const supervisor: import("#sdk/default-supervisor").SupervisorTools = makeDefaultSupervisor(createClient)

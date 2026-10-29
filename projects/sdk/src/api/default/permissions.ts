@@ -1,13 +1,9 @@
-import type {
-    ChannelPermissions,
-    DefaultPermissionFetchOptions,
-    PermissionInput,
-    PermissionTarget,
-} from "#sdk/permissions"
+import type { ChannelPermissions, PermissionInput, PermissionTarget } from "#sdk/permissions"
 import type { ResultAsync } from "neverthrow"
 import type { ChannelOperationFailure } from "#sdk/channels"
-import type { DefaultGuildOperationOptions, GuildOperationFailure, MemberReference } from "#sdk/guilds"
+import type { GuildOperationFailure, MemberReference } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, PermissionFetchOptions } from "./options.js"
 
 /**
  * Calculate permission flags from supplied data or fresh reads.
@@ -62,7 +58,7 @@ export interface PermissionHelpers {
      */
     fetch(
         target: PermissionTarget,
-        options?: DefaultPermissionFetchOptions,
+        options?: PermissionFetchOptions,
     ): ResultAsync<bigint, GuildOperationFailure | ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one member's permission flags in every channel of a community, such as to see what the bot can do in each
@@ -103,7 +99,7 @@ export interface PermissionHelpers {
      */
     fetchChannels(
         target: MemberReference,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<
         readonly ChannelPermissions[],
         GuildOperationFailure | ChannelOperationFailure | CancelledError | ConfigurationError

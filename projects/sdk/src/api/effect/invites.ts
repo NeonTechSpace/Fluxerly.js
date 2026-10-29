@@ -1,6 +1,7 @@
 import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
 import type * as Effect from "effect/Effect"
-import type { GuildOperationFailure, GuildOperationOptions, ModerationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Inspect, create, list or revoke invite codes without joining their destinations.
  * Methods return Effects and do not connect the gateway or cache invites.
@@ -18,7 +19,7 @@ export interface Invites {
      * Expired, revoked or inaccessible codes fail remotely.
      * Fluxer may normalize the case of a vanity code
      */
-    fetch(code: string, options?: GuildOperationOptions): Effect.Effect<Invite, GuildOperationFailure>
+    fetch(code: string, options?: RequestOptions): Effect.Effect<Invite, GuildOperationFailure>
     /**
      * Create an invite for an accessible channel, including an existing group direct message.
      * Defaults are a new code, 86,400 seconds, unlimited uses and non-temporary membership.
@@ -30,7 +31,7 @@ export interface Invites {
     create(
         channelId: string,
         input?: InviteCreate,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<InviteMetadata, GuildOperationFailure>
     /**
      * List a channel's management-visible invites in Fluxer's order.
@@ -39,7 +40,7 @@ export interface Invites {
      */
     fetchForChannel(
         channelId: string,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly InviteMetadata[], GuildOperationFailure>
     /**
      * List a community's management-visible invites with ManageGuild permission.
@@ -47,7 +48,7 @@ export interface Invites {
      */
     fetchForGuild(
         guildId: string,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly InviteMetadata[], GuildOperationFailure>
     /**
      * Revoke an invite code, succeeding with no value after HTTP 204.
@@ -55,5 +56,5 @@ export interface Invites {
      * Existing members remain.
      * A missing code is an error, not proof a previous delete succeeded
      */
-    delete(code: string, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
+    delete(code: string, options?: AuditedRequestOptions): Effect.Effect<void, GuildOperationFailure>
 }

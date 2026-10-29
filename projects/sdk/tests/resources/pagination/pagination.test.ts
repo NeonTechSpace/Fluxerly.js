@@ -7,7 +7,7 @@ import {
     type HistoryIterationQuery,
     type UserIterationQuery,
     type PinIterationQuery,
-    type DefaultMessageOperationOptions,
+    type RequestOptions,
     type PaginationError,
 } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
@@ -89,7 +89,7 @@ async function fixture(mode: Mode, caching = false) {
     const iterate = (
         kind: Kind,
         query: HistoryIterationQuery | UserIterationQuery | PinIterationQuery = { maxItems: 5, pageSize: 2 },
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<unknown> => {
         if (defaultClient) {
             if (kind === "history") return unwrap(defaultClient.messages.iterateHistory("20", query, options))
@@ -210,7 +210,7 @@ test.each(modes)(
         expect(failure.hint).toContain("query.pageSize")
         for (const options of [{ timeoutMs: 0 }, { extra: true }, { signal: {} }])
             await expect(
-                gather(api.iterate("history", { maxItems: 2 }, options as DefaultMessageOperationOptions)),
+                gather(api.iterate("history", { maxItems: 2 }, options as RequestOptions)),
             ).rejects.toMatchObject(
                 api.defaultApi && "signal" in options
                     ? { _tag: "ConfigurationError", field: "signal" }

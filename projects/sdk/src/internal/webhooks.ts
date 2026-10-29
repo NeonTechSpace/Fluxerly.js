@@ -11,7 +11,7 @@ import * as Scope from "effect/Scope"
 import { ConfigurationError } from "#sdk/errors"
 import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { MessageError } from "#sdk/message-errors"
-import type { Message, MessageOperationOptions, MessageReference } from "#sdk/messages"
+import type { Message, MessageReference } from "#sdk/messages"
 import {
     WebhookType,
     type CreatedWebhook,
@@ -26,7 +26,6 @@ import {
     type WebhookTokenEdit,
     type WebhookOperation,
     type WebhookMessageOperationOptions,
-    type WebhookOperationOptions,
     type WebhookClientOptions,
     type WebhookCredentials,
 } from "#sdk/webhooks"
@@ -40,6 +39,7 @@ import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } f
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { normalizedText } from "./field-text.js"
 import { type LogicalScheduler, makeLogicalScheduler } from "./logical-scheduler.js"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 export type WebhookRequest<A> = {
     majorId: string
@@ -156,7 +156,7 @@ function settings(value: unknown, create: boolean, move: boolean) {
     }
 }
 
-function audit(options?: WebhookOperationOptions) {
+function audit(options?: AuditedRequestOptions) {
     const reason = options?.auditReason
     if (reason === undefined) return {}
     if (typeof reason !== "string" || !/^[\x20-\x7e]+$/.test(reason) || !reason.trim() || reason.trim().length > 512)
@@ -171,7 +171,7 @@ function audit(options?: WebhookOperationOptions) {
 export function webhookCreate(
     channelId: string,
     input: WebhookCreate,
-    options?: WebhookOperationOptions,
+    options?: AuditedRequestOptions,
 ): WebhookValidationResult<CreatedWebhook> {
     const body = settings(input, true, false),
         extra = audit(options)
@@ -250,7 +250,7 @@ export function webhookList(id: string, kind: "channels" | "guilds"): WebhookVal
 export function webhookEdit(
     id: string,
     input: WebhookEdit,
-    options?: WebhookOperationOptions,
+    options?: AuditedRequestOptions,
 ): WebhookValidationResult<Webhook> {
     const base = webhookFetch(id),
         body = settings(input, false, true),
@@ -261,7 +261,7 @@ export function webhookEdit(
     return { ...base, ...extra, method: "PATCH", body }
 }
 
-export function webhookDelete(id: string, options?: WebhookOperationOptions): WebhookValidationResult<void> {
+export function webhookDelete(id: string, options?: AuditedRequestOptions): WebhookValidationResult<void> {
     const base = webhookFetch(id),
         extra = audit(options)
     if (base instanceof InputValidationFailure) return base
@@ -583,7 +583,7 @@ class WebhookOwner {
     run<A>(
         operation: WebhookOperation,
         build: () => WebhookRequest<A> | InputValidationFailure,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ) {
         return Effect.suspend(() =>
             this.#token ? this.rest.webhook(this.#token, operation, build, options) : Effect.fail(closedBeforeSend()),

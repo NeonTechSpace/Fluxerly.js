@@ -5,7 +5,6 @@ import {
     type WebhookMessageEdit,
     type WebhookClientOptions,
     type WebhookOperationFailure,
-    type DefaultWebhookMessageOperationOptions,
 } from "#sdk/webhooks"
 import {
     makeWebhookClient,
@@ -20,9 +19,10 @@ import {
 import * as Effect from "effect/Effect"
 import { ResultAsync } from "neverthrow"
 import { CancelledError, ConfigurationError, SdkDefect } from "#sdk/errors"
-import type { Message, DefaultMessageOperationOptions } from "#sdk/messages"
-import { type Instance, type DefaultInstanceResolveOptions } from "./instance.js"
+import type { Message } from "#sdk/messages"
+import { type Instance } from "./instance.js"
 import { executeOperation, fromExit, runShutdown } from "#sdk/internal/binding/execute"
+import type { RequestOptions, WebhookMessageOperationOptions } from "./options.js"
 
 /**
  * Send and manage messages with one incoming webhook's token, without a bot token or gateway.
@@ -57,7 +57,7 @@ export interface WebhookClient extends AsyncDisposable {
      * Creator and private fields are not retained
      */
     fetch(
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<IncomingWebhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change this webhook's name or avatar using its token and return metadata without credentials.
@@ -67,7 +67,7 @@ export interface WebhookClient extends AsyncDisposable {
      */
     edit(
         input: WebhookTokenEdit,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<IncomingWebhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete this webhook remotely using its token, succeeding after HTTP 204.
@@ -75,9 +75,7 @@ export interface WebhookClient extends AsyncDisposable {
      * Later requests normally fail with notFound because the token was revoked.
      * Call shutdown separately to release the client's local resources
      */
-    delete(
-        options?: DefaultMessageOperationOptions,
-    ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
+    delete(options?: RequestOptions): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Send a webhook message and return the created message after Fluxer's HTTP response.
      * A plain string sends only that text, as shorthand for `{ content }`.
@@ -107,7 +105,7 @@ export interface WebhookClient extends AsyncDisposable {
      */
     send(
         input: WebhookMessageInput | string,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<Message, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a message authored by this webhook in its current channel, using a decimal message ID.
@@ -116,7 +114,7 @@ export interface WebhookClient extends AsyncDisposable {
      */
     fetchMessage(
         messageId: string,
-        options?: DefaultWebhookMessageOperationOptions,
+        options?: WebhookMessageOperationOptions,
     ): ResultAsync<Message, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change this webhook's message and return its updated snapshot.
@@ -132,7 +130,7 @@ export interface WebhookClient extends AsyncDisposable {
     editMessage(
         messageId: string,
         input: WebhookMessageEdit | string,
-        options?: DefaultWebhookMessageOperationOptions,
+        options?: WebhookMessageOperationOptions,
     ): ResultAsync<Message, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete this webhook's message, succeeding with no value after HTTP 204.
@@ -142,7 +140,7 @@ export interface WebhookClient extends AsyncDisposable {
      */
     deleteMessage(
         messageId: string,
-        options?: DefaultWebhookMessageOperationOptions,
+        options?: WebhookMessageOperationOptions,
     ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Permanently stop this local client, reject new work, cancel active work and await transport cleanup.
@@ -198,50 +196,46 @@ export function createWebhookClient(options: WebhookClientOptions): WebhookClien
     return Object.freeze({
         id: owner.id,
         instance: Object.freeze({
-            resolve: (options?: DefaultInstanceResolveOptions) =>
+            resolve: (options?: RequestOptions) =>
                 executeOperation(owner.instance.resolveInfo(options), "instance.resolve", options),
         }),
-        fetch: (options?: DefaultMessageOperationOptions) =>
+        fetch: (options?: RequestOptions) =>
             executeOperation(
                 owner.run("webhooks.fetchToken", () => webhookTokenFetch(owner.id), options),
                 "webhooks.fetchToken",
                 options,
             ),
-        edit: (input: WebhookTokenEdit, options?: DefaultMessageOperationOptions) =>
+        edit: (input: WebhookTokenEdit, options?: RequestOptions) =>
             executeOperation(
                 owner.run("webhooks.editToken", () => webhookTokenEdit(owner.id, input), options),
                 "webhooks.editToken",
                 options,
             ),
-        delete: (options?: DefaultMessageOperationOptions) =>
+        delete: (options?: RequestOptions) =>
             executeOperation(
                 owner.run("webhooks.deleteToken", () => webhookTokenDelete(owner.id), options),
                 "webhooks.deleteToken",
                 options,
             ),
-        send: (input: WebhookMessageInput | string, options?: DefaultMessageOperationOptions) =>
+        send: (input: WebhookMessageInput | string, options?: RequestOptions) =>
             executeOperation(
                 owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
                 "webhooks.send",
                 options,
             ),
-        fetchMessage: (id: string, options?: DefaultWebhookMessageOperationOptions) =>
+        fetchMessage: (id: string, options?: WebhookMessageOperationOptions) =>
             executeOperation(
                 owner.run("webhooks.fetchMessage", () => webhookMessageFetch(owner.id, id, options), options),
                 "webhooks.fetchMessage",
                 options,
             ),
-        editMessage: (
-            id: string,
-            input: WebhookMessageEdit | string,
-            options?: DefaultWebhookMessageOperationOptions,
-        ) =>
+        editMessage: (id: string, input: WebhookMessageEdit | string, options?: WebhookMessageOperationOptions) =>
             executeOperation(
                 owner.run("webhooks.editMessage", () => webhookMessageEdit(owner.id, id, input, options), options),
                 "webhooks.editMessage",
                 options,
             ),
-        deleteMessage: (id: string, options?: DefaultWebhookMessageOperationOptions) =>
+        deleteMessage: (id: string, options?: WebhookMessageOperationOptions) =>
             executeOperation(
                 owner.run("webhooks.deleteMessage", () => webhookMessageDelete(owner.id, id, options), options),
                 "webhooks.deleteMessage",

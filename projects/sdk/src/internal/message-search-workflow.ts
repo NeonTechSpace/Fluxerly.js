@@ -4,7 +4,7 @@
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Effect from "effect/Effect"
-import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
+import type { Message, MessageCore } from "#sdk/messages"
 import type { MessageSearchContext, MessageSearchIterationLimits, MessageSearchQuery } from "#sdk/message-search"
 import { PaginationError } from "#sdk/pagination"
 import type { ClientOwner } from "./client.js"
@@ -13,6 +13,7 @@ import { record } from "./decode/primitives.js"
 import { Pagination, defaultMaxPages } from "./pagination.js"
 import { suspendInput } from "./defects.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import type { RequestOptions } from "#sdk/client"
 
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
@@ -23,7 +24,7 @@ export function searchMessagePagination<M extends MessageCore = Message>(
     context: MessageSearchContext,
     filters: Omit<MessageSearchQuery, "limit" | "page">,
     limits: MessageSearchIterationLimits,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) {
     // Reading and validating the caller filters, limits and options is marked as application input
     return suspendInput(() => {

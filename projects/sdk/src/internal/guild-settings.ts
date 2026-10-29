@@ -3,13 +3,7 @@
  * Invariant: The edit is the bot-permitted settings patch, and REST owns dispatch, retry, audit headers and cache invalidation.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import {
-    GuildFeatureToggles,
-    type Guild,
-    type GuildEdit,
-    type GuildFeatureToggle,
-    type ModerationOptions,
-} from "#sdk/guilds"
+import { GuildFeatureToggles, type Guild, type GuildEdit, type GuildFeatureToggle } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
 import { identifier, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
@@ -31,6 +25,7 @@ import {
     textField,
     wireFields,
 } from "./field-rules.js"
+import type { AuditedRequestOptions } from "#sdk/client"
 
 const imageDataUri = (value: unknown): value is string =>
     typeof value === "string" &&
@@ -106,7 +101,7 @@ const wireNames: Readonly<Record<string, string>> = {
 export function guildEdit(
     guildId: string,
     input: GuildEdit,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<Guild> | InputValidationFailure {
     const audit = auditSettings(options)
     if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")

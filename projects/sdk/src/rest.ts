@@ -1,5 +1,4 @@
 import type { AttachmentInput } from "./attachments.js"
-import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
@@ -150,15 +149,6 @@ export interface TransportOptions {
  * limit with HTTP 429, so a write with an unknown outcome is never repeated automatically.
  * Message and resource caches are neither read nor updated, and Fluxer's rate limits and permissions still apply
  *
- * @example
- * ```ts
- * import type { Client } from "@neontechspace/fluxerly"
- * export async function currentUserName(client: Client): Promise<string | undefined> {
- *     const result = await client.rest.request<{ username: string }>({ method: "GET", path: "/users/@me" })
- *     return result.isOk() ? result.value.body.username : undefined
- * }
- * ```
- *
  * @category Client and lifecycle
  */
 export interface RestRequest {
@@ -196,14 +186,6 @@ export interface RestRequest {
      */
     readonly timeoutMs?: number
 }
-
-/**
- * A default-API REST request with optional cancellation.
- * Aborting stops waiting and cancels the HTTP exchange, but cannot undo a request Fluxer already received
- *
- * @category Client and lifecycle
- */
-export interface DefaultRestRequest extends RestRequest, OperationOptions {}
 
 /**
  * A successful response from client.rest.request, for any 2xx status

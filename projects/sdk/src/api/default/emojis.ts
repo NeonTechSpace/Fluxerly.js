@@ -6,11 +6,11 @@ import type {
     EmojiCreate,
     EmojiEdit,
     ExpressionBatch,
-    DefaultExpressionDeleteOptions,
 } from "#sdk/expressions"
 import type { ResultAsync } from "neverthrow"
-import type { GuildOperationFailure, DefaultGuildOperationOptions, DefaultModerationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AuditedRequestOptions, ExpressionDeleteOptions } from "./options.js"
 
 /**
  * Create, list, copy, rename and delete community emoji.
@@ -47,7 +47,7 @@ export interface Emojis {
      */
     fetchAll(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildEmoji[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch minimal emoji metadata by decimal ID, without requiring source-community membership.
@@ -55,7 +55,7 @@ export interface Emojis {
      */
     fetchMetadata(
         id: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the public presentation of the community that owns a custom emoji with this decimal ID: Its ID, name, icon hash and badges.
@@ -66,7 +66,7 @@ export interface Emojis {
      */
     fetchSource(
         id: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ExpressionSourceGuild, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Upload one community emoji and return its metadata.
@@ -78,7 +78,7 @@ export interface Emojis {
     create(
         guildId: string,
         input: EmojiCreate,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Upload 1–50 community emojis in one batch and return separate successes and failures.
@@ -91,7 +91,7 @@ export interface Emojis {
     createMany(
         guildId: string,
         input: readonly EmojiCreate[],
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<ExpressionBatch<GuildEmoji>, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Copy an emoji into a community by its source ID, using Fluxer's server-side copy.
@@ -101,7 +101,7 @@ export interface Emojis {
     clone(
         guildId: string,
         sourceId: string,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Rename a community emoji without changing its image or fetching its old metadata first
@@ -109,7 +109,7 @@ export interface Emojis {
     edit(
         target: ExpressionReference,
         input: EmojiEdit,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildEmoji, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove an emoji, succeeding with no value after HTTP 204.
@@ -120,6 +120,6 @@ export interface Emojis {
      */
     delete(
         target: ExpressionReference,
-        options?: DefaultExpressionDeleteOptions,
+        options?: ExpressionDeleteOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }

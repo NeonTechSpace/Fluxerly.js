@@ -14,7 +14,7 @@ import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
     type CollectorFailure,
-    type ReactionCollectorOptions,
+    type ReactionCollectorLimits,
     type CollectorRegistrationError,
     type ReactionCollectorResult,
 } from "#sdk/collectors"
@@ -32,8 +32,8 @@ import { collectorBudgetMessage, guildId } from "./collector.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
-type Settings = Required<Omit<ReactionCollectorOptions, "filter" | "emoji" | "guildId" | "idleMs">> &
-    Pick<ReactionCollectorOptions, "filter" | "guildId"> & {
+type Settings = Required<Omit<ReactionCollectorLimits, "filter" | "emoji" | "guildId" | "idleMs">> &
+    Pick<ReactionCollectorLimits, "filter" | "guildId"> & {
         readonly emoji?: Exclude<ReturnType<typeof resolveReactionEmoji>, undefined>
         readonly idleMs: number | undefined
     } & OperationOptions
@@ -455,7 +455,7 @@ export class ReactionCollector {
 export function collectReactions<E = never, R = never, M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     target: MessageReference,
-    options?: ReactionCollectorOptions,
+    options?: ReactionCollectorLimits,
     defaultApi = false,
     handler?: (reaction: MessageReaction) => Effect.Effect<unknown, E, R>,
     removals = false,

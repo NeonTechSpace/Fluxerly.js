@@ -77,9 +77,9 @@ import { defaultCommands } from "#sdk/default-commands"
  *
  * @example
  * ```ts
- * import { orThrow, type Client, type DefaultPrefixCommandRouter } from "@neontechspace/fluxerly"
+ * import { orThrow, type Client, type PrefixCommandRouter } from "@neontechspace/fluxerly"
  *
- * export async function commandHelpExample(client: Client, router: DefaultPrefixCommandRouter, channelId: string) {
+ * export async function commandHelpExample(client: Client, router: PrefixCommandRouter, channelId: string) {
  *     const pages = router.help({ prefix: "!", maxLength: 1_000, include: (command) => command.name !== "admin" })
  *     // Visibility is not authorization. Each command still needs its own policy
  *     for (const content of pages) orThrow(await client.messages.send(channelId, { content, allowedMentions: {} }))

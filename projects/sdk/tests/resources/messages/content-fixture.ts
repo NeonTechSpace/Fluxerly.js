@@ -4,11 +4,11 @@ import {
     type MessageInput,
     type MessageReference,
     type EditMessageInput,
-    type CollectorOptions,
     type Message,
     type CollectorResult,
     type EmbedInput,
 } from "../../../src/index.js"
+import type { CollectorLimits } from "../../../src/collectors.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi, fixtureToken, type Mode } from "../../support/both-apis.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
@@ -172,7 +172,7 @@ export async function driver(mode: Mode, maxBytes = 1_000_000) {
                         .pipe(Scope.provide(scope)),
                 )
         },
-        collect: async (options?: CollectorOptions) => {
+        collect: async (options?: CollectorLimits) => {
             if (regular) {
                 const collector = await settle(regular.messages.collect("20", options))
                 return (): Promise<CollectorResult> => settle(collector.result())

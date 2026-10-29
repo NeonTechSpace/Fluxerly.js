@@ -9,8 +9,8 @@ import * as Stream from "effect/Stream"
 import { ClientClosedError } from "#sdk/errors"
 import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { PaginationError, type PaginationOperation } from "#sdk/pagination"
-import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
-import type { OperationOptions } from "#sdk/client"
+import type { Message, MessageCore } from "#sdk/messages"
+import type { OperationOptions, RequestOptions } from "#sdk/client"
 import type { ClientOwner } from "./client.js"
 import { encodeHistory, snapshotReference } from "./message.js"
 import { fieldsOnce, record } from "./decode/primitives.js"
@@ -32,7 +32,7 @@ interface Settings {
     readonly maxPages: number
     readonly pageSize: number
     readonly cursor: string | undefined
-    readonly options: MessageOperationOptions
+    readonly options: RequestOptions
     /** The traversal's optional boolean query setting, such as withCounts, false when omitted */
     readonly flag?: boolean
 }
@@ -258,7 +258,7 @@ export const historyPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     channelId: string,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     prepare(owner, "iterateHistory", query, options, "before", 50, 100, (settings) => {
         const validated = encodeHistory(channelId, cursorQuery("before", settings.cursor, settings.pageSize))
@@ -275,7 +275,7 @@ export const memberPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     guildId: string,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     prepare(owner, "members.iterate", query, options, "after", 100, 1000, (settings) => {
         const validated = memberPage(guildId, cursorQuery("after", settings.cursor, settings.pageSize))
@@ -296,7 +296,7 @@ export const threadMemberPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     threadId: string,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     prepare(
         owner,
@@ -333,7 +333,7 @@ export const threadMemberPagination = <M extends MessageCore = Message>(
 export const guildPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     prepare(
         owner,
@@ -373,7 +373,7 @@ export const reactionUserPagination = <M extends MessageCore = Message>(
     target: unknown,
     emoji: unknown,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     prepare(owner, "iterateReactionUsers", query, options, "after", 25, 100, (settings) => {
         const message = snapshotReference(target)
@@ -400,7 +400,7 @@ export const pinPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     channelId: string,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     prepare(owner, "iteratePins", query, options, "before", 50, 50, (settings) => {
         const validated = encodePinsQuery(channelId, cursorQuery("before", settings.cursor, settings.pageSize))
@@ -418,7 +418,7 @@ export const auditLogPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     guildId: string,
     query: unknown,
-    options?: MessageOperationOptions,
+    options?: RequestOptions,
 ) =>
     suspendInput(() => {
         if (!record(query))

@@ -27,7 +27,7 @@ import {
 import {
     SupervisorChildError,
     type SupervisorAssignment,
-    type SupervisorChildOptions,
+    type SupervisorChildSharding,
     SupervisorError,
     type SupervisorOptions,
     type SupervisorStatus,
@@ -40,7 +40,7 @@ import type { Client } from "./index.js"
  *
  * @category Sharding and supervision
  */
-export interface DefaultSupervisorChildContext {
+export interface SupervisorChildContext {
     /** Client created and owned by child.run. Register application behavior here rather than starting or stopping this client */
     readonly client: Client
     /** Fixed assignment for this child process. It cannot be changed during this run */
@@ -57,14 +57,28 @@ export interface DefaultSupervisorChildContext {
  *
  * @category Sharding and supervision
  */
-export interface DefaultSupervisorChildOptions extends SupervisorChildOptions {
+export interface SupervisorChildOptions {
+    /** Bot token for the client created by child.run, such as `process.env.FLUXER_BOT_TOKEN`. The parent assignment does
+     * not supply this credential. A missing or blank value fails child.run with ConfigurationError once the assignment arrives,
+     * as createClient does, and the parent sees the child fail during configuration
+     */
+    readonly token: string | undefined
+    /** Every client setting except token is read by property name and copied before configure, including inherited and
+     * non-enumerable properties. The supervisor assigns the shards, so sharding accepts only sessions.
+     * Runtime validation rejects a token, a shard plan or identify coordinator in sharding, and any other own key that
+     * is not a client option, with ConfigurationError
+     */
+    readonly clientOptions?: Omit<ClientOptions, "token" | "sharding"> & {
+        /** Session storage for the assigned shards. The parent assigns the shards and paces Identify, so only sessions is accepted */
+        readonly sharding?: SupervisorChildSharding
+    }
     /** Register subscriptions and local application behavior before the helper calls client.run.
      * Return when setup is finished, not when the bot stops. Do not call client.run, connect or shutdown here.
      * A thrown error, rejected promise or returned Err rejects child.run with SdkDefect code application.defect, whose
      * cause is an ApplicationError with source "supervisor child configure" and the original value as its cause.
      * A parent stop can finish child.run without waiting for this promise. Setup must check context.signal to avoid continuing afterward
      */
-    readonly configure: (context: DefaultSupervisorChildContext) => unknown
+    readonly configure: (context: SupervisorChildContext) => unknown
 }
 
 /**
@@ -76,7 +90,7 @@ export interface DefaultSupervisorChildOptions extends SupervisorChildOptions {
  *
  * @category Sharding and supervision
  */
-export interface DefaultSupervisor {
+export interface Supervisor {
     /** Start the configured children and return Ok when each child accepts its shard assignment and finishes configure.
      * This is setup completion, not gateway readiness. Use waitForReady to observe connected gateway sessions.
      * Concurrent calls share startup. Calling again does not create extra children or await replacement startup.
@@ -117,14 +131,14 @@ export interface DefaultSupervisor {
  *
  * @category Sharding and supervision
  */
-export interface DefaultSupervisorTools {
+export interface SupervisorTools {
     /** Validate and copy options now and return an idle supervisor. Invalid options throw ConfigurationError.
      * Unknown keys in parent, assignment, restart and Identify options include a suggested name when one is close.
      * Each option is read once. A throwing option getter throws SdkDefect with code application.defect and the thrown
      * value as its cause, while another unexpected fault uses sdk.defect.
      * Does not start a process or check whether the entry module can execute. Launch failures are reported by start
      */
-    create(options: SupervisorOptions): DefaultSupervisor
+    create(options: SupervisorOptions): Supervisor
     /** Child-module helper. Call run inside the module selected by the parent's entry option */
     readonly child: {
         /** Receive the parent's assignment, create a client, finish configure, then run the client until stop or failure.
@@ -141,7 +155,7 @@ export interface DefaultSupervisorTools {
          * Defects reject with SdkDefect, retaining accompanying typed failures without private error text
          */
         run(
-            options: DefaultSupervisorChildOptions,
+            options: SupervisorChildOptions,
         ): ResultAsync<void, ConfigurationError | ConnectError | CancelledError | SupervisorChildError>
     }
 }
@@ -218,9 +232,9 @@ function readyResult(owner: SupervisorOwner, options?: SupervisorWaitOptions) {
 }
 
 /** Build default-API supervisor tools around this entry point's client creator */
-export function makeDefaultSupervisor(createClient: (options: ClientOptions) => Client): DefaultSupervisorTools {
+export function makeDefaultSupervisor(createClient: (options: ClientOptions) => Client): SupervisorTools {
     const child = Object.freeze({
-        run: (options: DefaultSupervisorChildOptions) =>
+        run: (options: SupervisorChildOptions) =>
             new ResultAsync<void, ConfigurationError | ConnectError | CancelledError | SupervisorChildError>(
                 (async () => {
                     let bridge: ChildBridge | undefined
@@ -251,12 +265,11 @@ export function makeDefaultSupervisor(createClient: (options: ClientOptions) => 
                     }
                     try {
                         main: {
-                            let settings: ChildSettings<ClientOptions, DefaultSupervisorChildOptions["configure"]>
+                            let settings: ChildSettings<ClientOptions, SupervisorChildOptions["configure"]>
                             try {
-                                const read = readChildOptions<
-                                    ClientOptions,
-                                    DefaultSupervisorChildOptions["configure"]
-                                >(options)
+                                const read = readChildOptions<ClientOptions, SupervisorChildOptions["configure"]>(
+                                    options,
+                                )
                                 if (read instanceof ConfigurationError) {
                                     outcome = err(read)
                                     break main

@@ -11,7 +11,6 @@ import {
     type ChannelMemberCount,
     type ChannelMemberCountsResult,
     type CountOperation,
-    type CountOperationOptions,
     type GuildCount,
     type GuildCountsResult,
 } from "#sdk/counts"
@@ -22,6 +21,7 @@ import { GatewayRequestBudget } from "./gateway-requests.js"
 import type { InternalSubmission } from "./gateway/commands.js"
 import { gatewayIdentifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
+import type { RequestOptions } from "#sdk/client"
 
 const defaultTimeoutMs = 30_000
 
@@ -221,13 +221,13 @@ export class CountOwner implements CountGatewayOwner {
         this.#failPending(() => true, new ClientClosedError())
     }
 
-    fetchGuilds(guildIds: readonly string[], options?: CountOperationOptions) {
+    fetchGuilds(guildIds: readonly string[], options?: RequestOptions) {
         return this.#request("guilds.fetchCounts", guildIds, undefined, options).pipe(
             Effect.map((result) => result as GuildCountsResult),
         )
     }
 
-    fetchChannels(guildId: string, channelIds: readonly string[], options?: CountOperationOptions) {
+    fetchChannels(guildId: string, channelIds: readonly string[], options?: RequestOptions) {
         return this.#request("channels.fetchMemberCounts", channelIds, guildId, options).pipe(
             Effect.map((result) => result as ChannelMemberCountsResult),
         )
@@ -265,12 +265,7 @@ export class CountOwner implements CountGatewayOwner {
         this.#complete(valueNonce, counts)
     }
 
-    #request(
-        operation: CountOperation,
-        ids: readonly string[],
-        guildId: string | undefined,
-        options?: CountOperationOptions,
-    ) {
+    #request(operation: CountOperation, ids: readonly string[], guildId: string | undefined, options?: RequestOptions) {
         // Only reading the caller IDs and options is marked, so a throw there is an application fault
         return suspendMarked(() => {
             if (this.#closed) return Effect.fail(new ClientClosedError())

@@ -24,6 +24,8 @@ import type {
     CacheKind,
     ClientDiagnostics,
     ConnectionState,
+    RequestOptions,
+    AuditedRequestOptions,
 } from "#sdk/client"
 import type { SessionSnapshot, ShardState } from "#sdk/sharding"
 import {
@@ -47,28 +49,18 @@ import { unsupportedKeyHint } from "./suggest.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
 import { ChannelCache } from "./channel-cache.js"
 import { CacheChangeHub } from "./cache-changes.js"
-import type { DefaultRestRequest, RestRequest, RestRequestFailure, RestResponse } from "#sdk/rest"
+import type { RestRequest, RestRequestFailure, RestResponse } from "#sdk/rest"
+import type { RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
 import { GatewaySendError, type GatewaySendFailure } from "#sdk/gateway"
 import { UserCache, type UserResources } from "./user-cache.js"
 import { PresenceOwner } from "./presence.js"
 import { PresenceError, type PresenceInput, type PresenceFailure } from "#sdk/presence"
-import {
-    UserOperationError,
-    type UserOperation,
-    type UserOperationOptions,
-    type User,
-    type DirectMessageChannel,
-} from "#sdk/users"
+import { UserOperationError, type UserOperation, type User, type DirectMessageChannel } from "#sdk/users"
 import { decodeUser, directMessageFetch, userFetch, type UserRequest } from "./users.js"
-import {
-    ChannelOperationError,
-    type ChannelOperation,
-    type ChannelOperationOptions,
-    type GuildChannel,
-} from "#sdk/channels"
+import { ChannelOperationError, type ChannelOperation, type GuildChannel } from "#sdk/channels"
 import { channelList, type ChannelRequest } from "./channels.js"
 import type { WebhookRequest } from "./webhooks.js"
-import type { WebhookOperation, WebhookOperationOptions } from "#sdk/webhooks"
+import type { WebhookOperation } from "#sdk/webhooks"
 import { FailureReporter, messageIds, primaryError, publicReport, throwIfErr, type InternalReport } from "./failures.js"
 import {
     AuthenticationError,
@@ -110,17 +102,11 @@ import { readCaller, suspendInput, suspendMarked } from "./defects.js"
 import { runShardLoop, type ShardLoopHost, type ShardRuntime } from "./client/shard-loop.js"
 import type { MessageCollector } from "./collector.js"
 import type { ReactionCollector } from "./reaction-collector.js"
-import {
-    GuildOperationError,
-    type GuildOperation,
-    type GuildOperationOptions,
-    type MemberReference,
-    type RoleReference,
-} from "#sdk/guilds"
+import { GuildOperationError, type GuildOperation, type MemberReference, type RoleReference } from "#sdk/guilds"
 import { guildFetch, memberSelf, roleList, type GuildRequest } from "./guilds.js"
 import { guildDeleteOwnMessages, guildLeave, ownDeletionOptions } from "./guild-lifecycle.js"
 import { RestOwner } from "./rest.js"
-import type { BotApplicationOperation, BotApplicationOperationOptions } from "#sdk/application"
+import type { BotApplicationOperation } from "#sdk/application"
 import type { BotApplicationRequest } from "./application.js"
 import type { ReactionEmojiInput, ReactionUsersQuery } from "#sdk/reactions"
 import type { MessagePinsQuery } from "#sdk/pins"
@@ -135,16 +121,13 @@ import type {
     ForwardMessageInput,
     MessageHistoryQuery,
     MessageInput,
-    MessageOperationOptions,
     MessageReference,
-    SendOptions,
 } from "#sdk/messages"
 import type {
     Attachment,
     AttachmentDownloadFailure,
     AttachmentDownloadOptions,
     AttachmentRefreshFailure,
-    AttachmentRefreshOptions,
     RefreshedAttachmentUrl,
 } from "#sdk/attachments"
 import type { AttachmentDownloadSource } from "./rest.js"
@@ -1097,11 +1080,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    user<A>(
-        operation: UserOperation,
-        build: () => UserRequest<A> | InputValidationFailure,
-        options?: UserOperationOptions,
-    ) {
+    user<A>(operation: UserOperation, build: () => UserRequest<A> | InputValidationFailure, options?: RequestOptions) {
         return suspendInput(() => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(closedBeforeSend())
@@ -1224,7 +1203,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     application<A>(
         operation: BotApplicationOperation,
         build: () => BotApplicationRequest<A>,
-        options?: BotApplicationOperationOptions,
+        options?: RequestOptions,
     ) {
         return this.#open((token) => this.rest.application(token, operation, build, options))
     }
@@ -1325,17 +1304,17 @@ export class ClientOwner<M extends MessageCore = Message> {
     webhook<A>(
         operation: WebhookOperation,
         build: () => WebhookRequest<A> | InputValidationFailure,
-        options?: WebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ) {
         return this.#open((token) => this.rest.webhook(token, operation, build, options))
     }
 
-    guild<A>(operation: GuildOperation, build: GuildBuild<A>, options?: GuildOperationOptions) {
+    guild<A>(operation: GuildOperation, build: GuildBuild<A>, options?: RequestOptions) {
         return this.#open((token) => this.rest.guild(token, operation, build, options))
     }
 
     /** Read the bot's own member of a community, keeping its account ID for members.getSelf */
-    fetchSelfMember(guildId: string, options?: GuildOperationOptions) {
+    fetchSelfMember(guildId: string, options?: RequestOptions) {
         return this.guild("members.fetchSelf", () => memberSelf(guildId), options).pipe(
             Effect.tap((member) =>
                 Effect.sync(() => {
@@ -1345,7 +1324,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    leaveGuild(guildId: string, options?: GuildOperationOptions) {
+    leaveGuild(guildId: string, options?: RequestOptions) {
         return this.guild("guilds.leave", () => guildLeave(guildId), options).pipe(
             Effect.tap(() => Effect.sync(() => this.presence.forgetMembers(guildId))),
         )
@@ -1353,7 +1332,7 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     deleteOwnGuildMessages(guildId: string, options: unknown) {
         return suspendInput(() => {
-            const checked = ownDeletionOptions<GuildOperationOptions>(options)
+            const checked = ownDeletionOptions<RequestOptions>(options)
             return checked instanceof InputValidationFailure
                 ? this.guild<void>("guilds.deleteOwnMessages", () => checked)
                 : this.guild("guilds.deleteOwnMessages", () => guildDeleteOwnMessages(guildId), checked)
@@ -1363,7 +1342,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     channel<A>(
         operation: ChannelOperation,
         build: () => ChannelRequest<A> | InputValidationFailure,
-        options?: ChannelOperationOptions,
+        options?: RequestOptions,
     ) {
         return this.#open((token) => this.rest.channel(token, operation, build, options))
     }
@@ -1457,7 +1436,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         })
     }
 
-    reply(target: MessageReference, input: MessageInput | string, options?: SendOptions) {
+    reply(target: MessageReference, input: MessageInput | string, options?: RequestOptions) {
         return suspendInput(() => {
             const request = replyInput(target, input)
             if (request instanceof MessageError) return Effect.fail(request)
@@ -1465,12 +1444,12 @@ export class ClientOwner<M extends MessageCore = Message> {
         })
     }
 
-    send(channelId: string, input: MessageInput | string, options?: SendOptions) {
+    send(channelId: string, input: MessageInput | string, options?: RequestOptions) {
         return this.#open((token) => this.rest.send(token, channelId, input, options))
     }
     refreshAttachmentUrls(
         urls: readonly string[],
-        options?: AttachmentRefreshOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure> {
         return this.#open((token) => this.rest.refreshAttachmentUrls(token, urls, options))
     }
@@ -1495,11 +1474,11 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions) {
+    forward(channelId: string, input: ForwardMessageInput, options?: RequestOptions) {
         return this.#open((token) => this.rest.forward(token, channelId, input, options))
     }
 
-    sendDirectMessage(userId: string, input: MessageInput | string, options?: SendOptions) {
+    sendDirectMessage(userId: string, input: MessageInput | string, options?: RequestOptions) {
         return suspendInput((): Effect.Effect<M, SendError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(closedBeforeSend())
@@ -1533,7 +1512,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         target: MessageReference,
         emoji: ReactionEmojiInput,
         query?: ReactionUsersQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ) {
         return this.#open((token) => this.rest.fetchReactionUsers(token, target, emoji, query, options))
     }
@@ -1542,32 +1521,32 @@ export class ClientOwner<M extends MessageCore = Message> {
         operation: "addReaction" | "removeReaction" | "removeUserReaction" | "clearReaction" | "clearReactions",
         target: MessageReference,
         emoji: ReactionEmojiInput | undefined,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
         userId?: string,
     ) {
         return this.#open((token) => this.rest.reaction(token, operation, target, emoji, options, userId))
     }
 
-    fetch(target: MessageReference, options?: MessageOperationOptions) {
+    fetch(target: MessageReference, options?: RequestOptions) {
         return this.#open((token) => this.rest.fetch(token, target, options))
     }
 
-    publish(target: MessageReference, options?: MessageOperationOptions) {
+    publish(target: MessageReference, options?: RequestOptions) {
         return this.#open((token) => this.rest.publish(token, target, options))
     }
 
-    fetchCrosspostSource(target: MessageReference, options?: MessageOperationOptions) {
+    fetchCrosspostSource(target: MessageReference, options?: RequestOptions) {
         return this.#open((token) => this.rest.fetchCrosspostSource(token, target, options))
     }
 
-    typing(channelId: string, options?: MessageOperationOptions) {
+    typing(channelId: string, options?: RequestOptions) {
         return this.#open((token) => this.rest.typing(token, channelId, options))
     }
 
     keepTyping<A, E, R>(
         channelId: string,
         task: Effect.Effect<A, E, R>,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<A, E | MessageOperationFailure, R> {
         const owner = this
         if (!Effect.isEffect(task))
@@ -1616,10 +1595,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    #refreshTyping(
-        channelId: string,
-        options?: MessageOperationOptions,
-    ): Effect.Effect<never, MessageOperationFailure> {
+    #refreshTyping(channelId: string, options?: RequestOptions): Effect.Effect<never, MessageOperationFailure> {
         const owner = this
         return Effect.forever(
             Effect.raceFirst(
@@ -1647,35 +1623,35 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    pin(operation: "pin" | "unpin", target: MessageReference, options?: MessageOperationOptions) {
+    pin(operation: "pin" | "unpin", target: MessageReference, options?: RequestOptions) {
         return this.#open((token) => this.rest.pin(token, operation, target, options))
     }
 
-    fetchPins(channel: string, query?: MessagePinsQuery, options?: MessageOperationOptions) {
+    fetchPins(channel: string, query?: MessagePinsQuery, options?: RequestOptions) {
         return this.#open((token) => this.rest.fetchPins(token, channel, query, options))
     }
 
-    fetchHistory(channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) {
+    fetchHistory(channelId: string, query?: MessageHistoryQuery, options?: RequestOptions) {
         return this.#open((token) => this.rest.fetchHistory(token, channelId, query, options))
     }
 
-    searchMessages(context: MessageSearchContext, query?: MessageSearchQuery, options?: MessageOperationOptions) {
+    searchMessages(context: MessageSearchContext, query?: MessageSearchQuery, options?: RequestOptions) {
         return this.#open((token) => this.rest.search(token, context, query, options))
     }
 
-    edit(target: MessageReference, input: EditMessageInput | string, options?: MessageOperationOptions) {
+    edit(target: MessageReference, input: EditMessageInput | string, options?: RequestOptions) {
         return this.#open((token) => this.rest.edit(token, target, input, options))
     }
 
-    delete(target: MessageReference, options?: MessageOperationOptions) {
+    delete(target: MessageReference, options?: RequestOptions) {
         return this.#open((token) => this.rest.delete(token, target, options))
     }
 
-    deleteAttachment(target: MessageReference, attachmentId: string, options?: MessageOperationOptions) {
+    deleteAttachment(target: MessageReference, attachmentId: string, options?: RequestOptions) {
         return this.#open((token) => this.rest.deleteAttachment(token, target, attachmentId, options))
     }
 
-    deleteMany(channelId: string, ids: readonly string[], options?: MessageOperationOptions) {
+    deleteMany(channelId: string, ids: readonly string[], options?: RequestOptions) {
         return this.#open((token) => this.rest.deleteMany(token, channelId, ids, options))
     }
 
@@ -1683,7 +1659,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         return suspendInput(() => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(closedBeforeSend())
-            const checked = ownDeletionOptions<MessageOperationOptions>(options)
+            const checked = ownDeletionOptions<RequestOptions>(options)
             if (checked instanceof InputValidationFailure)
                 return Effect.fail(
                     new MessageOperationError({

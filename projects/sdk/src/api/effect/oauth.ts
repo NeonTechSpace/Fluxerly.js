@@ -12,9 +12,9 @@ import {
     type OAuthIntrospection,
     type OAuthOperationFailure,
     type OAuthTokens,
-    type OAuthOperationOptions,
 } from "#sdk/oauth"
 import { makeOAuthOwner } from "#sdk/internal/oauth"
+import type { RequestOptions } from "#sdk/client"
 
 /**
  * Use OAuth to access a user's Fluxer account with their consent and a server-held client secret.
@@ -25,6 +25,8 @@ import { makeOAuthOwner } from "#sdk/internal/oauth"
  * The client keeps a copy of the secret until shutdown and runs at most eight operations at once.
  * While eight are running, another operation fails at once with OAuthOperationError reason busy instead of waiting.
  * Response bodies are capped at 1 MiB. Requests never retry automatically.
+ * The timeoutMs option defaults to 30,000 for discovery and the operation, with request cleanup awaited afterward.
+ * Malformed options fail with a local input error before discovery.
  * Discovery throttling fails with OAuthOperationError reason rateLimit, outcome notDispatched, status 429 and the server's retryAfterMs when available
  *
  * Expected failures use Effect's error channel. Interruption and cleanup defects remain in Cause.
@@ -45,7 +47,7 @@ export interface OAuthClient {
      */
     authorizationUrl(
         input: OAuthAuthorizationInput,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<string, OAuthOperationFailure>
     /**
      * Exchange the code from an authorization callback for access and refresh tokens.
@@ -57,7 +59,7 @@ export interface OAuthClient {
      */
     exchangeCode(
         input: OAuthCodeExchangeInput,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationFailure>
     /**
      * Exchange a refresh token for a new access and refresh token pair.
@@ -68,7 +70,7 @@ export interface OAuthClient {
      * A refresh with an unknown outcome must not be retried, because it may have rotated the token.
      * Network failures retain only sanitized transport facts in cause
      */
-    refresh(refreshToken: string, options?: OAuthOperationOptions): Effect.Effect<OAuthTokens, OAuthOperationFailure>
+    refresh(refreshToken: string, options?: RequestOptions): Effect.Effect<OAuthTokens, OAuthOperationFailure>
     /**
      * Revoke an access or refresh token, with an optional token-type hint.
      * The token and hint are captured once when execution starts, then validated and transmitted from that snapshot.
@@ -82,7 +84,7 @@ export interface OAuthClient {
             /** Identify the token as an access token or a refresh token. Omit when the kind is unknown */
             readonly tokenTypeHint?: "access_token" | "refresh_token"
         },
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, OAuthOperationFailure>
     /**
      * Fetch the delegated user's identity with an access token granted the identify scope.
@@ -91,10 +93,7 @@ export interface OAuthClient {
      * Failures identify a read in details.read, so errors.isRetryable can classify transient failures without implying a token change.
      * Requests are not retried automatically, and network causes retain only sanitized transport facts
      */
-    fetchIdentity(
-        accessToken: string,
-        options?: OAuthOperationOptions,
-    ): Effect.Effect<OAuthIdentity, OAuthOperationFailure>
+    fetchIdentity(accessToken: string, options?: RequestOptions): Effect.Effect<OAuthIdentity, OAuthOperationFailure>
     /**
      * Fetch one bounded page of the delegated user's community memberships.
      * Use an access token with Fluxer's guilds scope.
@@ -106,7 +105,7 @@ export interface OAuthClient {
     fetchGuilds(
         accessToken: string,
         query?: GuildListQuery,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationFailure>
     /**
      * Fetch the delegated user's full connections list with a connections-scoped access token.
@@ -116,7 +115,7 @@ export interface OAuthClient {
      */
     fetchConnections(
         accessToken: string,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly OAuthConnection[], OAuthOperationFailure>
     /**
      * Inspect an access or refresh token using this client's ID and secret through HTTP Basic authentication.
@@ -124,7 +123,7 @@ export interface OAuthClient {
      * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
      * and network causes retain only sanitized transport facts
      */
-    introspect(token: string, options?: OAuthOperationOptions): Effect.Effect<OAuthIntrospection, OAuthOperationFailure>
+    introspect(token: string, options?: RequestOptions): Effect.Effect<OAuthIntrospection, OAuthOperationFailure>
     /**
      * Permanently stop OAuth work, reject new work, release the client's copied secret and abort active requests.
      * Shutdown waits for fetch and response-reader cleanup.
@@ -184,23 +183,22 @@ export const oauth: Readonly<{
             const owner = yield* makeOAuthOwner(config, Scope.makeUnsafe(), true).pipe(Effect.orDie)
             yield* Effect.addFinalizer(() => owner.shutdown())
             return Object.freeze({
-                authorizationUrl: (input: OAuthAuthorizationInput, options?: OAuthOperationOptions) =>
+                authorizationUrl: (input: OAuthAuthorizationInput, options?: RequestOptions) =>
                     owner.authorizationUrl(input, options),
-                exchangeCode: (input: OAuthCodeExchangeInput, options?: OAuthOperationOptions) =>
+                exchangeCode: (input: OAuthCodeExchangeInput, options?: RequestOptions) =>
                     owner.exchangeCode(input, options),
-                refresh: (refreshToken: string, options?: OAuthOperationOptions) =>
-                    owner.refresh(refreshToken, options),
+                refresh: (refreshToken: string, options?: RequestOptions) => owner.refresh(refreshToken, options),
                 revoke: (
                     input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
-                    options?: OAuthOperationOptions,
+                    options?: RequestOptions,
                 ) => owner.revoke(input, options),
-                fetchIdentity: (accessToken: string, options?: OAuthOperationOptions) =>
+                fetchIdentity: (accessToken: string, options?: RequestOptions) =>
                     owner.fetchIdentity(accessToken, options),
-                fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: OAuthOperationOptions) =>
+                fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: RequestOptions) =>
                     owner.fetchGuilds(accessToken, query, options),
-                fetchConnections: (accessToken: string, options?: OAuthOperationOptions) =>
+                fetchConnections: (accessToken: string, options?: RequestOptions) =>
                     owner.fetchConnections(accessToken, options),
-                introspect: (token: string, options?: OAuthOperationOptions) => owner.introspect(token, options),
+                introspect: (token: string, options?: RequestOptions) => owner.introspect(token, options),
                 shutdown: () => owner.shutdown(),
             })
         }),

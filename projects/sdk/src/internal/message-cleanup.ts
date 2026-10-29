@@ -27,11 +27,12 @@ import {
     type MessageCleanupStopReason,
 } from "#sdk/message-cleanup"
 import { MessageOperationError } from "#sdk/message-errors"
-import type { Message, MessageCore, MessageOperationOptions } from "#sdk/messages"
+import type { Message, MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
 import { failures, mapFailureCause } from "./effect-failures.js"
 import { identifier, record } from "./decode/primitives.js"
 import { readCaller, suspendInput, suspendMarked } from "./defects.js"
+import type { RequestOptions } from "#sdk/client"
 
 const maximum = 10_000
 // The owner is the weak key, so an application-held plan cannot retain its producing client
@@ -238,11 +239,7 @@ function selection<M extends MessageCore>(value: unknown): ValidSelection<M> | I
     }
 }
 
-function remaining(
-    deadline: number,
-    signal: AbortSignal | undefined,
-    now: () => number,
-): MessageOperationOptions | undefined {
+function remaining(deadline: number, signal: AbortSignal | undefined, now: () => number): RequestOptions | undefined {
     const timeoutMs = Math.floor(deadline - now())
     return timeoutMs > 0 ? { timeoutMs, ...(signal === undefined ? {} : { signal }) } : undefined
 }
@@ -324,7 +321,7 @@ export function previewCleanup<M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     channelId: string,
     suppliedSelection: MessageCleanupSelection<M>,
-    suppliedOptions?: MessageOperationOptions,
+    suppliedOptions?: RequestOptions,
 ): Effect.Effect<MessageCleanupPlan<M>, MessageCleanupError> {
     // Reading and validating the caller selection and options is marked as application input
     return suspendInput(() => {

@@ -1,4 +1,4 @@
-import type { ModerationOptions, DefaultModerationOptions } from "./guilds.js"
+import type { AuditedRequestOptions } from "./client.js"
 
 /** Address a custom emoji or sticker by its owning community and resource ID.
  * A fetched emoji or sticker already contains these IDs and can be passed wherever this reference is accepted
@@ -150,25 +150,18 @@ export interface ExpressionBatch<A> {
 }
 
 /** Choose whether deleting a community emoji or sticker also requests removal of its image asset.
- * The inherited timeout and auditReason follow ModerationOptions.
+ * The inherited timeout and auditReason follow AuditedRequestOptions.
  * Removing the image is a separate queued job. Deleting the community entry does not wait for it to finish
  *
  * @category Options
  */
-export interface ExpressionDeleteOptions extends ModerationOptions {
+export interface ExpressionDeleteOptions extends AuditedRequestOptions {
     /** False/default removes the community entry without asking to purge its image.
      * True additionally requests irreversible queued asset/CDN removal and requires Fluxer's expression-purge feature.
      * HTTP success does not mean the purge job has finished. Failure after dispatch can leave either effect applied
      */
     readonly purge?: boolean
 }
-
-/**
- * Starts immediately. Cancellation awaits cleanup but cannot undo deletion or queued purging
- *
- * @category Options
- */
-export interface DefaultExpressionDeleteOptions extends ExpressionDeleteOptions, DefaultModerationOptions {}
 
 /** Public presentation of the community that owns a custom emoji or sticker, returned by fetchSource.
  * Fluxer returns it for a public source community, or for a private one the bot is a member of. It is a frozen snapshot with

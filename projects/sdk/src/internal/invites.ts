@@ -5,12 +5,12 @@
  */
 import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
 import type { InviteDeleteEvent } from "#sdk/events"
-import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, nonNegativeInteger as integer, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
+import type { AuditedRequestOptions } from "#sdk/client"
 
 const hostedInvite = "https://fluxer.gg"
 
@@ -177,7 +177,7 @@ export function inviteList(
 export function inviteCreate(
     channelId: string,
     input?: InviteCreate,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
     inviteBase = hostedInvite,
 ): GuildRequest<InviteMetadata> | InputValidationFailure {
     const value = input === undefined ? {} : input
@@ -223,7 +223,7 @@ export function inviteCreate(
 
 export function inviteDelete(
     code: string,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
     inviteBase = hostedInvite,
 ): GuildRequest<void> | InputValidationFailure {
     const base = inviteFetch(code, inviteBase)

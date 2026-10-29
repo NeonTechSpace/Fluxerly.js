@@ -1,9 +1,7 @@
-import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
-import type { MessageOperationOptions } from "./messages.js"
 
 /**
  * Application details returned by application.fetch for this client's bot token.
@@ -28,20 +26,6 @@ export interface BotApplication {
     /** Decimal user ID of the account that owns the application, the ID that guards.ownerOnly() allows when called without IDs */
     readonly ownerId: string
 }
-
-/**
- * Set the deadline for this application read without changing the gateway startup deadline
- *
- * @category Options
- */
-export interface BotApplicationOperationOptions extends MessageOperationOptions {}
-
-/**
- * Cancellation in the default API affects this read only and never changes the application
- *
- * @category Options
- */
-export interface DefaultBotApplicationOperationOptions extends BotApplicationOperationOptions, OperationOptions {}
 
 /**
  * Operation name included in application-read failures

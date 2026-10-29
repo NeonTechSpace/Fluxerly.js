@@ -1,5 +1,4 @@
 import { FluxerlyError, operationDetails } from "./errors.js"
-import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage, operationFailureHint } from "./api-errors.js"
 import type { PresenceUpdate } from "./events.js"
@@ -98,13 +97,6 @@ export interface MemberChunkOptions {
      */
     readonly maxPendingBytes?: number
 }
-
-/**
- * Stream options for the default API. Abort releases local intake even while consumption is paused, not remote provider work
- *
- * @category Guilds and members
- */
-export interface DefaultMemberChunkOptions extends MemberChunkOptions, OperationOptions {}
 
 /** A member stream stopped before it could return every batch.
  * The SDK releases local intake and does not automatically resend the request.

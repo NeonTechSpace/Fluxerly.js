@@ -1,6 +1,6 @@
 import type { GuildChannel } from "./channels.js"
-import type { OperationOptions } from "./client.js"
-import type { Guild, GuildMember, GuildOperationOptions, GuildRole, MemberReference } from "./guilds.js"
+import type { RequestOptions } from "./client.js"
+import type { Guild, GuildMember, GuildRole, MemberReference } from "./guilds.js"
 
 /**
  * Calculate a member's community or channel permission bits from supplied guild, member, role and channel data
@@ -80,7 +80,7 @@ export interface PermissionTarget extends MemberReference {
  *
  * @category Options
  */
-export interface PermissionFetchOptions extends GuildOperationOptions {
+export interface PermissionFetchOptions extends RequestOptions {
     /**
      * Read each observation from an enabled cache before fetching it, such as to decide for every command without a
      * request. Default false, which fetches every observation fresh.
@@ -95,13 +95,6 @@ export interface PermissionFetchOptions extends GuildOperationOptions {
      */
     readonly preferCache?: boolean
 }
-
-/**
- * Default API settings for permissions.fetch. Abort cancels only this call and awaits owned cleanup
- *
- * @category Options
- */
-export interface DefaultPermissionFetchOptions extends PermissionFetchOptions, OperationOptions {}
 
 /**
  * One entry of the permissions.fetchChannels result: A member's raw permission bits in one community channel.

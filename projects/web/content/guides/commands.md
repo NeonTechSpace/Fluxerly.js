@@ -328,7 +328,7 @@ The `paginate` function shows any list of pages the same way, as in `({ paginate
 
 To keep a command out of help and out of unknown-command suggestions, for example an owner-only tool, register it with `hidden: true`. Hidden commands still run when someone types their name, so hiding does not restrict access. Protect each command that needs it with a guard
 
-For a larger bot, split command definitions by feature and attach one combined router. [Groups](/docs/{{version}}/api/interfaces/js-ts.DefaultPrefixCommandRouter/) such as `admin` in `!admin inspect` add structure when needed. The `group` option of `help`, such as `help({ group: ["admin"] })`, describes one group. A group registered with `hidden: true` hides everything inside it, and selecting a hidden group throws `ConfigurationError` as for a missing one
+For a larger bot, split command definitions by feature and attach one combined router. [Groups](/docs/{{version}}/api/interfaces/js-ts.PrefixCommandRouter/) such as `admin` in `!admin inspect` add structure when needed. The `group` option of `help`, such as `help({ group: ["admin"] })`, describes one group. A group registered with `hidden: true` hides everything inside it, and selecting a hidden group throws `ConfigurationError` as for a missing one
 
 ## Wire it up
 

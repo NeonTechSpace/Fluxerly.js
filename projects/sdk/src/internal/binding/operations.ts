@@ -14,12 +14,9 @@ import type {
     MessageCore,
     MessageHistoryQuery,
     MessageInput,
-    MessageAuditOperationOptions,
-    MessageOperationOptions,
     MessageReference,
     OwnMessageDeletionOptions,
     ReplyInput,
-    SendOptions,
 } from "#sdk/messages"
 import type { MessageSearchContext, MessageSearchIterationLimits, MessageSearchQuery } from "#sdk/message-search"
 import type { MessagePinsQuery } from "#sdk/pins"
@@ -33,16 +30,13 @@ import type { ChannelPaginateOptions, PageInput } from "#sdk/reaction-pages"
 import { searchMessagePagination } from "#sdk/internal/message-search-workflow"
 import type {
     BanInput,
-    GuildAuditOperationOptions,
     GuildEdit,
     GuildListQuery,
-    GuildOperationOptions,
     CanManageOptions,
     GuildMember,
     MemberProfileEdit,
     MemberQuery,
     MemberReference,
-    ModerationOptions,
     RoleCreate,
     RoleEdit,
     RoleHoistPosition,
@@ -56,9 +50,8 @@ import type {
 } from "#sdk/guilds"
 import type { DiscoveryApplicationEdit, DiscoveryApplicationInput, DiscoverySearchQuery } from "#sdk/discovery"
 import type { PresenceInput } from "#sdk/presence"
-import type { BotApplicationOperationOptions } from "#sdk/application"
-import type { DirectMessageGroupEdit, UserOperationOptions, UserProfileQuery } from "#sdk/users"
-import type { WebhookCreate, WebhookEdit, WebhookOperationOptions } from "#sdk/webhooks"
+import type { DirectMessageGroupEdit, UserProfileQuery } from "#sdk/users"
+import type { WebhookCreate, WebhookEdit } from "#sdk/webhooks"
 import type {
     EmojiCreate,
     EmojiEdit,
@@ -69,7 +62,6 @@ import type {
 } from "#sdk/expressions"
 import type { AuditLogIterationQuery, AuditLogQuery } from "#sdk/audit-logs"
 import type { InviteCreate } from "#sdk/invites"
-import type { CountOperationOptions } from "#sdk/counts"
 import type {
     GuildIterationQuery,
     HistoryIterationQuery,
@@ -78,11 +70,9 @@ import type {
     UserIterationQuery,
 } from "#sdk/pagination"
 import type {
-    ChannelAuditOperationOptions,
     ChannelCreate,
     ChannelEdit,
     ChannelFollowInput,
-    ChannelOperationOptions,
     ChannelPosition,
     ForumTagInput,
     PermissionOverwrite,
@@ -100,7 +90,7 @@ import type {
 } from "#sdk/threads"
 import type { MemberSearchIterationLimits, MemberSearchQuery } from "#sdk/member-search"
 import type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
-import type { Attachment, AttachmentDownloadOptions, AttachmentRefreshOptions } from "#sdk/attachments"
+import type { Attachment, AttachmentDownloadOptions } from "#sdk/attachments"
 import type { ClientOwner } from "#sdk/internal/client"
 import { defaultCacheOnChange, nativeCacheOnChange } from "#sdk/internal/cache-changes"
 import {
@@ -228,6 +218,7 @@ import {
     nativeMemberChunks,
     nativeRestRequest,
 } from "./native-adapters.js"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** An asynchronous remote operation. The default API executes it with the options argument at optionsAt */
 export interface OperationEntry<M extends MessageCore, Args extends readonly unknown[], A, E> {
@@ -354,100 +345,100 @@ function defineOperations<M extends MessageCore>() {
             ),
         },
         application: {
-            fetch: op(0, (owner: Owner, options?: BotApplicationOperationOptions) =>
+            fetch: op(0, (owner: Owner, options?: RequestOptions) =>
                 owner.application("application.fetch", () => applicationCurrent(), options),
             ),
         },
         users: {
             get: get((owner: Owner, id: string) => owner.getUserResource("users", id)),
             getSelf: get((owner: Owner) => owner.getSelf()),
-            fetch: op(1, (owner: Owner, id: string, options?: UserOperationOptions) =>
+            fetch: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.user("users.fetch", () => userFetch(id), options),
             ),
-            fetchSelf: op(0, (owner: Owner, options?: UserOperationOptions) =>
+            fetchSelf: op(0, (owner: Owner, options?: RequestOptions) =>
                 owner.user("users.fetchSelf", () => userFetch("@me"), options),
             ),
-            fetchProfile: op(2, (owner: Owner, id: string, query?: UserProfileQuery, options?: UserOperationOptions) =>
+            fetchProfile: op(2, (owner: Owner, id: string, query?: UserProfileQuery, options?: RequestOptions) =>
                 owner.user("users.fetchProfile", () => userProfile(id, query), options),
             ),
         },
         directMessages: {
-            send: op(2, (owner: Owner, userId: string, input: ReplyInput | string, options?: SendOptions) =>
+            send: op(2, (owner: Owner, userId: string, input: ReplyInput | string, options?: RequestOptions) =>
                 owner.sendDirectMessage(userId, input, options),
             ),
             get: get((owner: Owner, id: string) => owner.getUserResource("directMessages", id)),
-            open: op(1, (owner: Owner, userId: string, options?: UserOperationOptions) =>
+            open: op(1, (owner: Owner, userId: string, options?: RequestOptions) =>
                 owner.user("directMessages.open", () => directMessageOpen(userId), options),
             ),
-            fetch: op(1, (owner: Owner, id: string, options?: UserOperationOptions) =>
+            fetch: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.user("directMessages.fetch", () => directMessageFetch(id), options),
             ),
-            fetchAll: op(0, (owner: Owner, options?: UserOperationOptions) =>
+            fetchAll: op(0, (owner: Owner, options?: RequestOptions) =>
                 owner.user("directMessages.fetchAll", () => directMessageList(), options),
             ),
-            fetchLatestMessages: op(1, (owner: Owner, channelIds: readonly string[], options?: UserOperationOptions) =>
+            fetchLatestMessages: op(1, (owner: Owner, channelIds: readonly string[], options?: RequestOptions) =>
                 owner.user(
                     "directMessages.fetchLatestMessages",
                     () => directMessageLatestMessages(channelIds, owner.decodeMessage),
                     options,
                 ),
             ),
-            editGroup: op(
-                2,
-                (owner: Owner, id: string, input: DirectMessageGroupEdit, options?: UserOperationOptions) =>
-                    owner.user("directMessages.editGroup", () => directMessageEdit(id, input), options),
+            editGroup: op(2, (owner: Owner, id: string, input: DirectMessageGroupEdit, options?: RequestOptions) =>
+                owner.user("directMessages.editGroup", () => directMessageEdit(id, input), options),
             ),
-            close: op(1, (owner: Owner, id: string, options?: UserOperationOptions) =>
+            close: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.user("directMessages.close", () => directMessageClose(id), options),
             ),
-            removeRecipient: op(2, (owner: Owner, id: string, userId: string, options?: UserOperationOptions) =>
+            removeRecipient: op(2, (owner: Owner, id: string, userId: string, options?: RequestOptions) =>
                 owner.user("directMessages.removeRecipient", () => directMessageClose(id, userId), options),
             ),
         },
         webhooks: {
-            create: op(2, (owner: Owner, channelId: string, input: WebhookCreate, options?: WebhookOperationOptions) =>
+            create: op(2, (owner: Owner, channelId: string, input: WebhookCreate, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.create", () => webhookCreate(channelId, input, options), options),
             ),
-            fetch: op(1, (owner: Owner, id: string, options?: WebhookOperationOptions) =>
+            fetch: op(1, (owner: Owner, id: string, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.fetch", () => webhookFetch(id), options),
             ),
-            fetchForChannel: op(1, (owner: Owner, channelId: string, options?: WebhookOperationOptions) =>
+            fetchForChannel: op(1, (owner: Owner, channelId: string, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.fetchForChannel", () => webhookList(channelId, "channels"), options),
             ),
-            fetchForGuild: op(1, (owner: Owner, guildId: string, options?: WebhookOperationOptions) =>
+            fetchForGuild: op(1, (owner: Owner, guildId: string, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.fetchForGuild", () => webhookList(guildId, "guilds"), options),
             ),
-            edit: op(2, (owner: Owner, id: string, input: WebhookEdit, options?: WebhookOperationOptions) =>
+            edit: op(2, (owner: Owner, id: string, input: WebhookEdit, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.edit", () => webhookEdit(id, input, options), options),
             ),
-            delete: op(1, (owner: Owner, id: string, options?: WebhookOperationOptions) =>
+            delete: op(1, (owner: Owner, id: string, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.delete", () => webhookDelete(id, options), options),
             ),
         },
         emojis: {
             get: get((owner: Owner, target: ExpressionReference) => owner.getResource("emojis", target)),
-            fetchAll: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchAll: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("emojis.fetchAll", () => expressionList("emojis", guildId), options),
             ),
-            fetchMetadata: op(1, (owner: Owner, id: string, options?: GuildOperationOptions) =>
+            fetchMetadata: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.guild("emojis.fetchMetadata", () => expressionMetadata("emojis", id), options),
             ),
-            fetchSource: op(1, (owner: Owner, id: string, options?: GuildOperationOptions) =>
+            fetchSource: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.guild("emojis.fetchSource", () => expressionSource("emojis", id), options),
             ),
-            create: op(2, (owner: Owner, guildId: string, input: EmojiCreate, options?: ModerationOptions) =>
+            create: op(2, (owner: Owner, guildId: string, input: EmojiCreate, options?: AuditedRequestOptions) =>
                 owner.guild("emojis.create", () => expressionCreate("emojis", guildId, input, options), options),
             ),
             createMany: op(
                 2,
-                (owner: Owner, guildId: string, input: readonly EmojiCreate[], options?: ModerationOptions) =>
+                (owner: Owner, guildId: string, input: readonly EmojiCreate[], options?: AuditedRequestOptions) =>
                     owner.guild("emojis.createMany", () => expressionBatch("emojis", guildId, input, options), options),
             ),
-            clone: op(2, (owner: Owner, guildId: string, sourceId: string, options?: ModerationOptions) =>
+            clone: op(2, (owner: Owner, guildId: string, sourceId: string, options?: AuditedRequestOptions) =>
                 owner.guild("emojis.clone", () => expressionClone("emojis", guildId, sourceId, options), options),
             ),
-            edit: op(2, (owner: Owner, target: ExpressionReference, input: EmojiEdit, options?: ModerationOptions) =>
-                owner.guild("emojis.edit", () => expressionEdit("emojis", target, input, options), options),
+            edit: op(
+                2,
+                (owner: Owner, target: ExpressionReference, input: EmojiEdit, options?: AuditedRequestOptions) =>
+                    owner.guild("emojis.edit", () => expressionEdit("emojis", target, input, options), options),
             ),
             delete: op(1, (owner: Owner, target: ExpressionReference, options?: ExpressionDeleteOptions) =>
                 owner.guild("emojis.delete", () => expressionDelete("emojis", target, options), options),
@@ -455,148 +446,144 @@ function defineOperations<M extends MessageCore>() {
         },
         stickers: {
             get: get((owner: Owner, target: ExpressionReference) => owner.getResource("stickers", target)),
-            fetchAll: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchAll: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("stickers.fetchAll", () => expressionList("stickers", guildId), options),
             ),
-            fetchMetadata: op(1, (owner: Owner, id: string, options?: GuildOperationOptions) =>
+            fetchMetadata: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.guild("stickers.fetchMetadata", () => expressionMetadata("stickers", id), options),
             ),
-            fetchSource: op(1, (owner: Owner, id: string, options?: GuildOperationOptions) =>
+            fetchSource: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.guild("stickers.fetchSource", () => expressionSource("stickers", id), options),
             ),
-            create: op(2, (owner: Owner, guildId: string, input: StickerCreate, options?: ModerationOptions) =>
+            create: op(2, (owner: Owner, guildId: string, input: StickerCreate, options?: AuditedRequestOptions) =>
                 owner.guild("stickers.create", () => expressionCreate("stickers", guildId, input, options), options),
             ),
             createMany: op(
                 2,
-                (owner: Owner, guildId: string, input: readonly StickerCreate[], options?: ModerationOptions) =>
+                (owner: Owner, guildId: string, input: readonly StickerCreate[], options?: AuditedRequestOptions) =>
                     owner.guild(
                         "stickers.createMany",
                         () => expressionBatch("stickers", guildId, input, options),
                         options,
                     ),
             ),
-            clone: op(2, (owner: Owner, guildId: string, sourceId: string, options?: ModerationOptions) =>
+            clone: op(2, (owner: Owner, guildId: string, sourceId: string, options?: AuditedRequestOptions) =>
                 owner.guild("stickers.clone", () => expressionClone("stickers", guildId, sourceId, options), options),
             ),
-            edit: op(2, (owner: Owner, target: ExpressionReference, input: StickerEdit, options?: ModerationOptions) =>
-                owner.guild("stickers.edit", () => expressionEdit("stickers", target, input, options), options),
+            edit: op(
+                2,
+                (owner: Owner, target: ExpressionReference, input: StickerEdit, options?: AuditedRequestOptions) =>
+                    owner.guild("stickers.edit", () => expressionEdit("stickers", target, input, options), options),
             ),
             delete: op(1, (owner: Owner, target: ExpressionReference, options?: ExpressionDeleteOptions) =>
                 owner.guild("stickers.delete", () => expressionDelete("stickers", target, options), options),
             ),
         },
         auditLogs: {
-            fetchPage: op(2, (owner: Owner, guildId: string, query: AuditLogQuery, options?: GuildOperationOptions) =>
+            fetchPage: op(2, (owner: Owner, guildId: string, query: AuditLogQuery, options?: RequestOptions) =>
                 owner.guild("auditLogs.fetchPage", () => auditLogPage(guildId, query), options),
             ),
-            iterate: page(
-                2,
-                (owner: Owner, guildId: string, query: AuditLogIterationQuery, options?: GuildOperationOptions) =>
-                    auditLogPagination(owner, guildId, query, options),
+            iterate: page(2, (owner: Owner, guildId: string, query: AuditLogIterationQuery, options?: RequestOptions) =>
+                auditLogPagination(owner, guildId, query, options),
             ),
         },
         invites: {
-            fetch: op(1, (owner: Owner, code: string, options?: GuildOperationOptions) =>
+            fetch: op(1, (owner: Owner, code: string, options?: RequestOptions) =>
                 owner.guild("invites.fetch", () => inviteFetch(code), options),
             ),
-            create: op(2, (owner: Owner, channelId: string, input?: InviteCreate, options?: ModerationOptions) =>
+            create: op(2, (owner: Owner, channelId: string, input?: InviteCreate, options?: AuditedRequestOptions) =>
                 owner.guild("invites.create", () => inviteCreate(channelId, input, options), options),
             ),
-            fetchForChannel: op(1, (owner: Owner, channelId: string, options?: GuildOperationOptions) =>
+            fetchForChannel: op(1, (owner: Owner, channelId: string, options?: RequestOptions) =>
                 owner.guild("invites.fetchForChannel", () => inviteList("channels", channelId), options),
             ),
-            fetchForGuild: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchForGuild: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("invites.fetchForGuild", () => inviteList("guilds", guildId), options),
             ),
-            delete: op(1, (owner: Owner, code: string, options?: ModerationOptions) =>
+            delete: op(1, (owner: Owner, code: string, options?: AuditedRequestOptions) =>
                 owner.guild("invites.delete", () => inviteDelete(code, options), options),
             ),
         },
         discovery: {
-            search: op(1, (owner: Owner, query?: DiscoverySearchQuery, options?: GuildOperationOptions) =>
+            search: op(1, (owner: Owner, query?: DiscoverySearchQuery, options?: RequestOptions) =>
                 owner.guild("discovery.search", () => discoverySearch(query), options),
             ),
-            fetchStatus: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchStatus: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("discovery.fetchStatus", () => discoveryStatus(guildId), options),
             ),
-            fetchCategories: op(0, (owner: Owner, options?: GuildOperationOptions) =>
+            fetchCategories: op(0, (owner: Owner, options?: RequestOptions) =>
                 owner.guild("discovery.fetchCategories", discoveryCategories, options),
             ),
-            apply: op(
-                2,
-                (owner: Owner, guildId: string, input: DiscoveryApplicationInput, options?: GuildOperationOptions) =>
-                    owner.guild("discovery.apply", () => discoveryWrite(guildId, input), options),
+            apply: op(2, (owner: Owner, guildId: string, input: DiscoveryApplicationInput, options?: RequestOptions) =>
+                owner.guild("discovery.apply", () => discoveryWrite(guildId, input), options),
             ),
-            edit: op(
-                2,
-                (owner: Owner, guildId: string, input: DiscoveryApplicationEdit, options?: GuildOperationOptions) =>
-                    owner.guild("discovery.edit", () => discoveryWrite(guildId, input, true), options),
+            edit: op(2, (owner: Owner, guildId: string, input: DiscoveryApplicationEdit, options?: RequestOptions) =>
+                owner.guild("discovery.edit", () => discoveryWrite(guildId, input, true), options),
             ),
-            withdraw: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            withdraw: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("discovery.withdraw", () => discoveryWithdraw(guildId), options),
             ),
         },
         guilds: {
-            fetchCounts: op(1, (owner: Owner, guildIds: readonly string[], options?: CountOperationOptions) =>
+            fetchCounts: op(1, (owner: Owner, guildIds: readonly string[], options?: RequestOptions) =>
                 owner.counts.fetchGuilds(guildIds, options),
             ),
-            fetchPage: op(1, (owner: Owner, query?: GuildListQuery, options?: GuildOperationOptions) =>
+            fetchPage: op(1, (owner: Owner, query?: GuildListQuery, options?: RequestOptions) =>
                 owner.guild("guilds.fetchPage", () => guildList(query), options),
             ),
-            iterate: page(1, (owner: Owner, query: GuildIterationQuery, options?: GuildOperationOptions) =>
+            iterate: page(1, (owner: Owner, query: GuildIterationQuery, options?: RequestOptions) =>
                 guildPagination(owner, query, options),
             ),
-            leave: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            leave: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.leaveGuild(guildId, options),
             ),
             deleteOwnMessages: op(1, (owner: Owner, guildId: string, options: OwnMessageDeletionOptions) =>
                 owner.deleteOwnGuildMessages(guildId, options),
             ),
-            fetchVanityUrl: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchVanityUrl: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("guilds.fetchVanityUrl", () => vanityUrlFetch(guildId), options),
             ),
-            editVanityUrl: op(2, (owner: Owner, guildId: string, code: string | null, options?: ModerationOptions) =>
-                owner.guild("guilds.editVanityUrl", () => vanityUrlEdit(guildId, code, options), options),
+            editVanityUrl: op(
+                2,
+                (owner: Owner, guildId: string, code: string | null, options?: AuditedRequestOptions) =>
+                    owner.guild("guilds.editVanityUrl", () => vanityUrlEdit(guildId, code, options), options),
             ),
-            edit: op(2, (owner: Owner, guildId: string, input: GuildEdit, options?: ModerationOptions) =>
+            edit: op(2, (owner: Owner, guildId: string, input: GuildEdit, options?: AuditedRequestOptions) =>
                 owner.guild("guilds.edit", () => guildEdit(guildId, input, options), options),
             ),
             get: get((owner: Owner, guildId: string) => owner.getResource("guilds", guildId)),
-            fetch: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetch: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("guilds.fetch", () => guildFetch(guildId), options),
             ),
         },
         channels: {
             follow: op(
                 2,
-                (owner: Owner, channelId: string, input: ChannelFollowInput, options?: ChannelAuditOperationOptions) =>
+                (owner: Owner, channelId: string, input: ChannelFollowInput, options?: AuditedRequestOptions) =>
                     owner.channel("channels.follow", () => channelFollow(channelId, input), options),
             ),
-            fetchFollowerStats: op(1, (owner: Owner, channelId: string, options?: ChannelOperationOptions) =>
+            fetchFollowerStats: op(1, (owner: Owner, channelId: string, options?: RequestOptions) =>
                 owner.channel("channels.fetchFollowerStats", () => channelFollowerStats(channelId), options),
             ),
             fetchMemberCounts: op(
                 2,
-                (owner: Owner, guildId: string, channelIds: readonly string[], options?: CountOperationOptions) =>
+                (owner: Owner, guildId: string, channelIds: readonly string[], options?: RequestOptions) =>
                     owner.counts.fetchChannels(guildId, channelIds, options),
             ),
             get: get((owner: Owner, channelId: string) => owner.getChannel(channelId)),
-            fetch: op(1, (owner: Owner, channelId: string, options?: ChannelOperationOptions) =>
+            fetch: op(1, (owner: Owner, channelId: string, options?: RequestOptions) =>
                 owner.channel("channels.fetch", () => channelFetch(channelId), options),
             ),
-            fetchAll: op(1, (owner: Owner, guildId: string, options?: ChannelOperationOptions) =>
+            fetchAll: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.channel("channels.fetchAll", () => channelList(guildId), options),
             ),
-            create: op(
-                2,
-                (owner: Owner, guildId: string, input: ChannelCreate, options?: ChannelAuditOperationOptions) =>
-                    owner.channel("channels.create", () => channelCreate(guildId, input), options),
+            create: op(2, (owner: Owner, guildId: string, input: ChannelCreate, options?: AuditedRequestOptions) =>
+                owner.channel("channels.create", () => channelCreate(guildId, input), options),
             ),
-            edit: op(2, (owner: Owner, channelId: string, input: ChannelEdit, options?: ChannelAuditOperationOptions) =>
+            edit: op(2, (owner: Owner, channelId: string, input: ChannelEdit, options?: AuditedRequestOptions) =>
                 owner.channel("channels.edit", () => channelEdit(channelId, input), options),
             ),
-            delete: op(1, (owner: Owner, channelId: string, options?: ChannelAuditOperationOptions) =>
+            delete: op(1, (owner: Owner, channelId: string, options?: AuditedRequestOptions) =>
                 owner.channel("channels.delete", () => channelDelete(channelId), options),
             ),
             reorder: op(
@@ -605,17 +592,17 @@ function defineOperations<M extends MessageCore>() {
                     owner: Owner,
                     guildId: string,
                     positions: readonly ChannelPosition[],
-                    options?: ChannelAuditOperationOptions,
+                    options?: AuditedRequestOptions,
                 ) => owner.channel("channels.reorder", () => channelReorder(guildId, positions), options),
             ),
             setPermissionOverwrite: op(
                 2,
-                (owner: Owner, channelId: string, input: PermissionOverwrite, options?: ChannelAuditOperationOptions) =>
+                (owner: Owner, channelId: string, input: PermissionOverwrite, options?: AuditedRequestOptions) =>
                     owner.channel("channels.setPermissionOverwrite", () => permissionSet(channelId, input), options),
             ),
             removePermissionOverwrite: op(
                 2,
-                (owner: Owner, channelId: string, targetId: string, options?: ChannelAuditOperationOptions) =>
+                (owner: Owner, channelId: string, targetId: string, options?: AuditedRequestOptions) =>
                     owner.channel(
                         "channels.removePermissionOverwrite",
                         () => permissionRemove(channelId, targetId),
@@ -624,7 +611,7 @@ function defineOperations<M extends MessageCore>() {
             ),
             createForumTag: op(
                 2,
-                (owner: Owner, channelId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions) =>
+                (owner: Owner, channelId: string, input: ForumTagInput, options?: AuditedRequestOptions) =>
                     owner.channel("channels.createForumTag", () => forumTagCreate(channelId, input), options),
             ),
             editForumTag: op(
@@ -634,30 +621,22 @@ function defineOperations<M extends MessageCore>() {
                     channelId: string,
                     tagId: string,
                     input: ForumTagInput,
-                    options?: ChannelAuditOperationOptions,
+                    options?: AuditedRequestOptions,
                 ) => owner.channel("channels.editForumTag", () => forumTagEdit(channelId, tagId, input), options),
             ),
-            deleteForumTag: op(
-                2,
-                (owner: Owner, channelId: string, tagId: string, options?: ChannelAuditOperationOptions) =>
-                    owner.channel("channels.deleteForumTag", () => forumTagDelete(channelId, tagId), options),
+            deleteForumTag: op(2, (owner: Owner, channelId: string, tagId: string, options?: AuditedRequestOptions) =>
+                owner.channel("channels.deleteForumTag", () => forumTagDelete(channelId, tagId), options),
             ),
         },
         members: {
             iterateChunks: custom(defaultMemberChunks<M>, nativeMemberChunks<M>),
             setRoles: op(
                 2,
-                (
-                    owner: Owner,
-                    member: MemberReference,
-                    roleIds: readonly string[],
-                    options?: GuildAuditOperationOptions,
-                ) => owner.guild("members.setRoles", () => memberRolesSet(member, roleIds), options),
+                (owner: Owner, member: MemberReference, roleIds: readonly string[], options?: AuditedRequestOptions) =>
+                    owner.guild("members.setRoles", () => memberRolesSet(member, roleIds), options),
             ),
-            search: op(
-                2,
-                (owner: Owner, guildId: string, filters?: MemberSearchQuery, options?: GuildOperationOptions) =>
-                    searchMembers(owner, guildId, filters, options),
+            search: op(2, (owner: Owner, guildId: string, filters?: MemberSearchQuery, options?: RequestOptions) =>
+                searchMembers(owner, guildId, filters, options),
             ),
             iterateSearch: page(
                 3,
@@ -666,39 +645,35 @@ function defineOperations<M extends MessageCore>() {
                     guildId: string,
                     filters: Omit<MemberSearchQuery, "limit">,
                     limits: MemberSearchIterationLimits,
-                    options?: GuildOperationOptions,
+                    options?: RequestOptions,
                 ) => searchMemberPagination(owner, guildId, filters, limits, options),
             ),
             editSelf: op(
                 2,
-                (owner: Owner, guildId: string, input: MemberProfileEdit, options?: GuildAuditOperationOptions) =>
+                (owner: Owner, guildId: string, input: MemberProfileEdit, options?: AuditedRequestOptions) =>
                     owner.guild("members.editSelf", () => memberEditSelf(guildId, input), options),
             ),
             setNickname: op(
                 2,
-                (
-                    owner: Owner,
-                    member: MemberReference,
-                    nickname: string | null,
-                    options?: GuildAuditOperationOptions,
-                ) => owner.guild("members.setNickname", () => memberNicknameEdit(member, nickname), options),
+                (owner: Owner, member: MemberReference, nickname: string | null, options?: AuditedRequestOptions) =>
+                    owner.guild("members.setNickname", () => memberNicknameEdit(member, nickname), options),
             ),
             move: op(
                 2,
-                (owner: Owner, target: VoiceConnectionReference, channelId: string, options?: ModerationOptions) =>
+                (owner: Owner, target: VoiceConnectionReference, channelId: string, options?: AuditedRequestOptions) =>
                     owner.guild("members.move", () => memberVoiceMove(target, channelId, options), options),
             ),
-            disconnect: op(1, (owner: Owner, target: VoiceConnectionReference, options?: ModerationOptions) =>
+            disconnect: op(1, (owner: Owner, target: VoiceConnectionReference, options?: AuditedRequestOptions) =>
                 owner.guild("members.disconnect", () => memberVoiceMove(target, null, options), options),
             ),
             setMute: op(
                 2,
-                (owner: Owner, target: MemberReference, input: VoiceMuteInput, options?: ModerationOptions) =>
+                (owner: Owner, target: MemberReference, input: VoiceMuteInput, options?: AuditedRequestOptions) =>
                     owner.guild("members.setMute", () => memberVoiceFlag(target, "mute", input, options), options),
             ),
             setDeaf: op(
                 2,
-                (owner: Owner, target: MemberReference, input: VoiceDeafenInput, options?: ModerationOptions) =>
+                (owner: Owner, target: MemberReference, input: VoiceDeafenInput, options?: AuditedRequestOptions) =>
                     owner.guild("members.setDeaf", () => memberVoiceFlag(target, "deaf", input, options), options),
             ),
             timeout: op(2, (owner: Owner, target: MemberReference, durationMs: number, options?: TimeoutOptions) =>
@@ -714,45 +689,41 @@ function defineOperations<M extends MessageCore>() {
                     options?: TimeoutStateOptions,
                 ) => memberTimeoutState(member, options, () => owner.logical.clock.currentTimeMillisUnsafe()),
             ),
-            kick: op(1, (owner: Owner, target: MemberReference, options?: ModerationOptions) =>
+            kick: op(1, (owner: Owner, target: MemberReference, options?: AuditedRequestOptions) =>
                 owner.guild("members.kick", () => memberKick(target, options), options),
             ),
-            ban: op(2, (owner: Owner, target: MemberReference, input?: BanInput, options?: ModerationOptions) =>
+            ban: op(2, (owner: Owner, target: MemberReference, input?: BanInput, options?: AuditedRequestOptions) =>
                 owner.guild("members.ban", () => guildBan(target, input, options), options),
             ),
-            unban: op(1, (owner: Owner, target: MemberReference, options?: ModerationOptions) =>
+            unban: op(1, (owner: Owner, target: MemberReference, options?: AuditedRequestOptions) =>
                 owner.guild("members.unban", () => guildUnban(target, options), options),
             ),
-            fetchBans: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchBans: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("members.fetchBans", () => guildBans(guildId), options),
             ),
-            iterate: page(
-                2,
-                (owner: Owner, guildId: string, query: UserIterationQuery, options?: GuildOperationOptions) =>
-                    memberPagination(owner, guildId, query, options),
+            iterate: page(2, (owner: Owner, guildId: string, query: UserIterationQuery, options?: RequestOptions) =>
+                memberPagination(owner, guildId, query, options),
             ),
             get: get((owner: Owner, member: MemberReference) => owner.getResource("members", member)),
             getSelf: get((owner: Owner, guildId: string) => owner.getSelfMember(guildId)),
-            fetch: op(1, (owner: Owner, member: MemberReference, options?: GuildOperationOptions) =>
+            fetch: op(1, (owner: Owner, member: MemberReference, options?: RequestOptions) =>
                 owner.guild("members.fetch", () => memberFetch(member), options),
             ),
-            fetchSelf: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchSelf: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.fetchSelfMember(guildId, options),
             ),
             fetchCanManage: op(1, (owner: Owner, target: MemberReference, options?: CanManageOptions) =>
                 fetchCanManage(owner, target, options),
             ),
-            fetchPage: op(2, (owner: Owner, guildId: string, query?: MemberQuery, options?: GuildOperationOptions) =>
+            fetchPage: op(2, (owner: Owner, guildId: string, query?: MemberQuery, options?: RequestOptions) =>
                 owner.guild("members.fetchPage", () => memberPage(guildId, query), options),
             ),
-            addRole: op(
-                2,
-                (owner: Owner, member: MemberReference, roleId: string, options?: GuildAuditOperationOptions) =>
-                    owner.guild("members.addRole", () => memberRole(member, roleId, true), options),
+            addRole: op(2, (owner: Owner, member: MemberReference, roleId: string, options?: AuditedRequestOptions) =>
+                owner.guild("members.addRole", () => memberRole(member, roleId, true), options),
             ),
             removeRole: op(
                 2,
-                (owner: Owner, member: MemberReference, roleId: string, options?: GuildAuditOperationOptions) =>
+                (owner: Owner, member: MemberReference, roleId: string, options?: AuditedRequestOptions) =>
                     owner.guild("members.removeRole", () => memberRole(member, roleId, false), options),
             ),
         },
@@ -761,7 +732,7 @@ function defineOperations<M extends MessageCore>() {
             fetch: op(1, (owner: Owner, target: PermissionTarget, options?: PermissionFetchOptions) =>
                 fetchPermissions(owner, target, options),
             ),
-            fetchChannels: op(1, (owner: Owner, target: MemberReference, options?: GuildOperationOptions) =>
+            fetchChannels: op(1, (owner: Owner, target: MemberReference, options?: RequestOptions) =>
                 fetchChannelPermissions(owner, target, options),
             ),
         },
@@ -772,41 +743,35 @@ function defineOperations<M extends MessageCore>() {
                     owner: Owner,
                     guildId: string,
                     positions: readonly RoleHoistPosition[],
-                    options?: GuildAuditOperationOptions,
+                    options?: AuditedRequestOptions,
                 ) => owner.guild("roles.setHoistPositions", () => roleSetHoistPositions(guildId, positions), options),
             ),
-            resetHoistPositions: op(1, (owner: Owner, guildId: string, options?: GuildAuditOperationOptions) =>
+            resetHoistPositions: op(1, (owner: Owner, guildId: string, options?: AuditedRequestOptions) =>
                 owner.guild("roles.resetHoistPositions", () => roleResetHoistPositions(guildId), options),
             ),
             get: get((owner: Owner, role: RoleReference) => owner.getResource("roles", role)),
             getAll: get((owner: Owner, guildId: string) => owner.getRoleList(guildId)),
-            fetchAll: op(1, (owner: Owner, guildId: string, options?: GuildOperationOptions) =>
+            fetchAll: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("roles.fetchAll", () => roleList(guildId), options),
             ),
-            create: op(2, (owner: Owner, guildId: string, input: RoleCreate, options?: GuildAuditOperationOptions) =>
+            create: op(2, (owner: Owner, guildId: string, input: RoleCreate, options?: AuditedRequestOptions) =>
                 owner.guild("roles.create", () => roleCreate(guildId, input), options),
             ),
-            edit: op(2, (owner: Owner, role: RoleReference, input: RoleEdit, options?: GuildAuditOperationOptions) =>
+            edit: op(2, (owner: Owner, role: RoleReference, input: RoleEdit, options?: AuditedRequestOptions) =>
                 owner.guild("roles.edit", () => roleEdit(role, input), options),
             ),
-            delete: op(1, (owner: Owner, role: RoleReference, options?: GuildAuditOperationOptions) =>
+            delete: op(1, (owner: Owner, role: RoleReference, options?: AuditedRequestOptions) =>
                 owner.guild("roles.delete", () => roleDelete(role), options),
             ),
             reorder: op(
                 2,
-                (
-                    owner: Owner,
-                    guildId: string,
-                    positions: readonly RolePosition[],
-                    options?: GuildAuditOperationOptions,
-                ) => owner.guild("roles.reorder", () => roleReorder(guildId, positions), options),
+                (owner: Owner, guildId: string, positions: readonly RolePosition[], options?: AuditedRequestOptions) =>
+                    owner.guild("roles.reorder", () => roleReorder(guildId, positions), options),
             ),
         },
         threads: {
-            create: op(
-                2,
-                (owner: Owner, channelId: string, input: ThreadCreate, options?: ChannelAuditOperationOptions) =>
-                    owner.channel("threads.create", () => threadCreate(channelId, input), options),
+            create: op(2, (owner: Owner, channelId: string, input: ThreadCreate, options?: AuditedRequestOptions) =>
+                owner.channel("threads.create", () => threadCreate(channelId, input), options),
             ),
             createFromMessage: op(
                 2,
@@ -814,73 +779,62 @@ function defineOperations<M extends MessageCore>() {
                     owner: Owner,
                     message: MessageReference,
                     input: ThreadFromMessageCreate,
-                    options?: ChannelAuditOperationOptions,
+                    options?: AuditedRequestOptions,
                 ) => owner.channel("threads.createFromMessage", () => threadCreateFromMessage(message, input), options),
             ),
             createPost: op(
                 2,
-                (owner: Owner, channelId: string, input: ForumPostCreate, options?: ChannelAuditOperationOptions) =>
+                (owner: Owner, channelId: string, input: ForumPostCreate, options?: AuditedRequestOptions) =>
                     owner.channel(
                         "threads.createPost",
                         () => threadPost(channelId, input, owner.decodeMessage),
                         options,
                     ),
             ),
-            edit: op(2, (owner: Owner, threadId: string, input: ThreadEdit, options?: ChannelAuditOperationOptions) =>
+            edit: op(2, (owner: Owner, threadId: string, input: ThreadEdit, options?: AuditedRequestOptions) =>
                 owner.channel("threads.edit", () => threadEdit(threadId, input), options),
             ),
-            fetchActive: op(1, (owner: Owner, guildId: string, options?: ChannelOperationOptions) =>
+            fetchActive: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.channel("threads.fetchActive", () => threadActive(guildId), options),
             ),
             fetchArchived: op(
                 2,
-                (owner: Owner, channelId: string, query?: ArchivedThreadQuery, options?: ChannelOperationOptions) =>
+                (owner: Owner, channelId: string, query?: ArchivedThreadQuery, options?: RequestOptions) =>
                     owner.channel("threads.fetchArchived", () => threadArchived(channelId, query), options),
             ),
-            search: op(
-                2,
-                (owner: Owner, channelId: string, query?: ThreadSearchQuery, options?: ChannelOperationOptions) =>
-                    owner.channel("threads.search", () => threadSearch(channelId, query, owner.decodeMessage), options),
+            search: op(2, (owner: Owner, channelId: string, query?: ThreadSearchQuery, options?: RequestOptions) =>
+                owner.channel("threads.search", () => threadSearch(channelId, query, owner.decodeMessage), options),
             ),
-            join: op(1, (owner: Owner, threadId: string, options?: ChannelOperationOptions) =>
+            join: op(1, (owner: Owner, threadId: string, options?: RequestOptions) =>
                 owner.channel("threads.join", () => threadMembership(threadId, undefined, "PUT"), options),
             ),
-            leave: op(1, (owner: Owner, threadId: string, options?: ChannelOperationOptions) =>
+            leave: op(1, (owner: Owner, threadId: string, options?: RequestOptions) =>
                 owner.channel("threads.leave", () => threadMembership(threadId, undefined, "DELETE"), options),
             ),
-            addMember: op(2, (owner: Owner, threadId: string, userId: string, options?: ChannelOperationOptions) =>
+            addMember: op(2, (owner: Owner, threadId: string, userId: string, options?: RequestOptions) =>
                 owner.channel("threads.addMember", () => threadMembership(threadId, userId, "PUT"), options),
             ),
-            removeMember: op(2, (owner: Owner, threadId: string, userId: string, options?: ChannelOperationOptions) =>
+            removeMember: op(2, (owner: Owner, threadId: string, userId: string, options?: RequestOptions) =>
                 owner.channel("threads.removeMember", () => threadMembership(threadId, userId, "DELETE"), options),
             ),
             fetchMember: op(
                 3,
-                (
-                    owner: Owner,
-                    threadId: string,
-                    userId: string,
-                    query?: ThreadMemberQuery,
-                    options?: ChannelOperationOptions,
-                ) => fetchThreadMember(owner, threadId, userId, query, options),
+                (owner: Owner, threadId: string, userId: string, query?: ThreadMemberQuery, options?: RequestOptions) =>
+                    fetchThreadMember(owner, threadId, userId, query, options),
             ),
             fetchMembers: op(
                 2,
-                (owner: Owner, threadId: string, query?: ThreadMemberPageQuery, options?: ChannelOperationOptions) =>
+                (owner: Owner, threadId: string, query?: ThreadMemberPageQuery, options?: RequestOptions) =>
                     fetchThreadMembers(owner, threadId, query, options),
             ),
             iterateMembers: page(
                 2,
-                (
-                    owner: Owner,
-                    threadId: string,
-                    query: ThreadMemberIterationQuery,
-                    options?: ChannelOperationOptions,
-                ) => threadMemberPagination(owner, threadId, query, options),
+                (owner: Owner, threadId: string, query: ThreadMemberIterationQuery, options?: RequestOptions) =>
+                    threadMemberPagination(owner, threadId, query, options),
             ),
         },
         attachments: {
-            refreshUrls: op(1, (owner: Owner, urls: readonly string[], options?: AttachmentRefreshOptions) =>
+            refreshUrls: op(1, (owner: Owner, urls: readonly string[], options?: RequestOptions) =>
                 owner.refreshAttachmentUrls(urls, options),
             ),
             download: op(1, (owner: Owner, attachment: Attachment, options: AttachmentDownloadOptions) =>
@@ -891,26 +845,20 @@ function defineOperations<M extends MessageCore>() {
         messages: {
             publish: named(
                 "publish",
-                op(1, (owner: Owner, target: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, target: MessageReference, options?: RequestOptions) =>
                     owner.publish(target, options),
                 ),
             ),
             fetchCrosspostSource: named(
                 "fetchCrosspostSource",
-                op(1, (owner: Owner, target: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, target: MessageReference, options?: RequestOptions) =>
                     owner.fetchCrosspostSource(target, options),
                 ),
             ),
             iterateHistory: named(
                 "iterateHistory",
-                page(
-                    2,
-                    (
-                        owner: Owner,
-                        channelId: string,
-                        query: HistoryIterationQuery,
-                        options?: MessageOperationOptions,
-                    ) => historyPagination(owner, channelId, query, options),
+                page(2, (owner: Owner, channelId: string, query: HistoryIterationQuery, options?: RequestOptions) =>
+                    historyPagination(owner, channelId, query, options),
                 ),
             ),
             search: named(
@@ -921,7 +869,7 @@ function defineOperations<M extends MessageCore>() {
                         owner: Owner,
                         context: MessageSearchContext,
                         query?: MessageSearchQuery,
-                        options?: MessageOperationOptions,
+                        options?: RequestOptions,
                     ) => owner.searchMessages(context, query, options),
                 ),
             ),
@@ -932,7 +880,7 @@ function defineOperations<M extends MessageCore>() {
                     context: MessageSearchContext,
                     filters: Omit<MessageSearchQuery, "limit" | "page">,
                     limits: MessageSearchIterationLimits,
-                    options?: MessageOperationOptions,
+                    options?: RequestOptions,
                 ) => searchMessagePagination(owner, context, filters, limits, options),
             ),
             iterateReactionUsers: named(
@@ -944,16 +892,14 @@ function defineOperations<M extends MessageCore>() {
                         message: MessageReference,
                         emoji: ReactionEmojiInput,
                         query: UserIterationQuery,
-                        options?: MessageOperationOptions,
+                        options?: RequestOptions,
                     ) => reactionUserPagination(owner, message, emoji, query, options),
                 ),
             ),
             iteratePins: named(
                 "iteratePins",
-                page(
-                    2,
-                    (owner: Owner, channelId: string, query: PinIterationQuery, options?: MessageOperationOptions) =>
-                        pinPagination(owner, channelId, query, options),
+                page(2, (owner: Owner, channelId: string, query: PinIterationQuery, options?: RequestOptions) =>
+                    pinPagination(owner, channelId, query, options),
                 ),
             ),
             removeUserReaction: named(
@@ -965,43 +911,37 @@ function defineOperations<M extends MessageCore>() {
                         message: MessageReference,
                         emoji: ReactionEmojiInput,
                         userId: string,
-                        options?: MessageOperationOptions,
+                        options?: RequestOptions,
                     ) => owner.reaction("removeUserReaction", message, emoji, options, userId),
                 ),
             ),
             clearReaction: named(
                 "clearReaction",
-                op(
-                    2,
-                    (
-                        owner: Owner,
-                        message: MessageReference,
-                        emoji: ReactionEmojiInput,
-                        options?: MessageOperationOptions,
-                    ) => owner.reaction("clearReaction", message, emoji, options),
+                op(2, (owner: Owner, message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions) =>
+                    owner.reaction("clearReaction", message, emoji, options),
                 ),
             ),
             clearReactions: named(
                 "clearReactions",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: RequestOptions) =>
                     owner.reaction("clearReactions", message, undefined, options),
                 ),
             ),
             pin: named(
                 "pin",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageAuditOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: AuditedRequestOptions) =>
                     owner.pin("pin", message, options),
                 ),
             ),
             unpin: named(
                 "unpin",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageAuditOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: AuditedRequestOptions) =>
                     owner.pin("unpin", message, options),
                 ),
             ),
             fetchPins: named(
                 "fetchPins",
-                op(2, (owner: Owner, channelId: string, query?: MessagePinsQuery, options?: MessageOperationOptions) =>
+                op(2, (owner: Owner, channelId: string, query?: MessagePinsQuery, options?: RequestOptions) =>
                     owner.fetchPins(channelId, query, options),
                 ),
             ),
@@ -1014,32 +954,20 @@ function defineOperations<M extends MessageCore>() {
                         message: MessageReference,
                         emoji: ReactionEmojiInput,
                         query?: ReactionUsersQuery,
-                        options?: MessageOperationOptions,
+                        options?: RequestOptions,
                     ) => owner.fetchReactionUsers(message, emoji, query, options),
                 ),
             ),
             addReaction: named(
                 "addReaction",
-                op(
-                    2,
-                    (
-                        owner: Owner,
-                        message: MessageReference,
-                        emoji: ReactionEmojiInput,
-                        options?: MessageOperationOptions,
-                    ) => owner.reaction("addReaction", message, emoji, options),
+                op(2, (owner: Owner, message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions) =>
+                    owner.reaction("addReaction", message, emoji, options),
                 ),
             ),
             removeReaction: named(
                 "removeReaction",
-                op(
-                    2,
-                    (
-                        owner: Owner,
-                        message: MessageReference,
-                        emoji: ReactionEmojiInput,
-                        options?: MessageOperationOptions,
-                    ) => owner.reaction("removeReaction", message, emoji, options),
+                op(2, (owner: Owner, message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions) =>
+                    owner.reaction("removeReaction", message, emoji, options),
                 ),
             ),
             collect: custom(defaultCollect<M>, nativeCollect<M>),
@@ -1053,41 +981,37 @@ function defineOperations<M extends MessageCore>() {
             get: get((owner: Owner, message: MessageReference) => owner.get(message)),
             send: named(
                 "send",
-                op(2, (owner: Owner, channelId: string, input: MessageInput | string, options?: SendOptions) =>
+                op(2, (owner: Owner, channelId: string, input: MessageInput | string, options?: RequestOptions) =>
                     owner.send(channelId, input, options),
                 ),
             ),
             forward: named(
                 "forward",
-                op(2, (owner: Owner, channelId: string, input: ForwardMessageInput, options?: SendOptions) =>
+                op(2, (owner: Owner, channelId: string, input: ForwardMessageInput, options?: RequestOptions) =>
                     owner.forward(channelId, input, options),
                 ),
             ),
             typing: named(
                 "typing",
-                op(1, (owner: Owner, channelId: string, options?: MessageOperationOptions) =>
-                    owner.typing(channelId, options),
-                ),
+                op(1, (owner: Owner, channelId: string, options?: RequestOptions) => owner.typing(channelId, options)),
             ),
             keepTyping: custom(defaultKeepTyping<M>, nativeKeepTyping<M>),
             reply: named(
                 "reply",
-                op(2, (owner: Owner, message: MessageReference, input: ReplyInput | string, options?: SendOptions) =>
+                op(2, (owner: Owner, message: MessageReference, input: ReplyInput | string, options?: RequestOptions) =>
                     owner.reply(message, input, options),
                 ),
             ),
             fetch: named(
                 "fetch",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: RequestOptions) =>
                     owner.fetch(message, options),
                 ),
             ),
             fetchHistory: named(
                 "fetchHistory",
-                op(
-                    2,
-                    (owner: Owner, channelId: string, query?: MessageHistoryQuery, options?: MessageOperationOptions) =>
-                        owner.fetchHistory(channelId, query, options),
+                op(2, (owner: Owner, channelId: string, query?: MessageHistoryQuery, options?: RequestOptions) =>
+                    owner.fetchHistory(channelId, query, options),
                 ),
             ),
             previewCleanup: named(
@@ -1098,7 +1022,7 @@ function defineOperations<M extends MessageCore>() {
                         owner: Owner,
                         channelId: string,
                         selection: MessageCleanupSelection<M>,
-                        options?: MessageOperationOptions,
+                        options?: RequestOptions,
                     ) => previewCleanup(owner, channelId, selection, options),
                 ),
             ),
@@ -1116,38 +1040,28 @@ function defineOperations<M extends MessageCore>() {
                         owner: Owner,
                         message: MessageReference,
                         input: EditMessageInput | string,
-                        options?: MessageOperationOptions,
+                        options?: RequestOptions,
                     ) => owner.edit(message, input, options),
                 ),
             ),
             delete: named(
                 "delete",
-                op(1, (owner: Owner, message: MessageReference, options?: MessageAuditOperationOptions) =>
+                op(1, (owner: Owner, message: MessageReference, options?: AuditedRequestOptions) =>
                     owner.delete(message, options),
                 ),
             ),
             deleteAttachment: named(
                 "deleteAttachment",
-                op(
-                    2,
-                    (
-                        owner: Owner,
-                        message: MessageReference,
-                        attachmentId: string,
-                        options?: MessageOperationOptions,
-                    ) => owner.deleteAttachment(message, attachmentId, options),
+                op(2, (owner: Owner, message: MessageReference, attachmentId: string, options?: RequestOptions) =>
+                    owner.deleteAttachment(message, attachmentId, options),
                 ),
             ),
             deleteMany: named(
                 "deleteMany",
                 op(
                     2,
-                    (
-                        owner: Owner,
-                        channelId: string,
-                        messageIds: readonly string[],
-                        options?: MessageAuditOperationOptions,
-                    ) => owner.deleteMany(channelId, messageIds, options),
+                    (owner: Owner, channelId: string, messageIds: readonly string[], options?: AuditedRequestOptions) =>
+                        owner.deleteMany(channelId, messageIds, options),
                 ),
             ),
             deleteOwnMessages: named(

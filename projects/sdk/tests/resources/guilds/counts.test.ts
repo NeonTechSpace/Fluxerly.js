@@ -120,17 +120,14 @@ async function driver(
             getChannel: async (id) => client.channels.get(id),
             guild: (ids, options) =>
                 defaultOutcome(
-                    client.guilds.fetchCounts(
-                        ids,
-                        options as import("../../../src/counts.js").DefaultCountOperationOptions,
-                    ),
+                    client.guilds.fetchCounts(ids, options as import("../../../src/index.js").RequestOptions),
                 ),
             channels: (guildId, ids, options) =>
                 defaultOutcome(
                     client.channels.fetchMemberCounts(
                         guildId,
                         ids,
-                        options as import("../../../src/counts.js").DefaultCountOperationOptions,
+                        options as import("../../../src/index.js").RequestOptions,
                     ),
                 ),
             startChannels: (guildId, ids) => {
@@ -157,15 +154,13 @@ async function driver(
         getGuild: (id) => Effect.runPromise(client.guilds.get(id)),
         getChannel: (id) => Effect.runPromise(client.channels.get(id)),
         guild: (ids, options) =>
-            nativeOutcome(
-                client.guilds.fetchCounts(ids, options as import("../../../src/counts.js").CountOperationOptions),
-            ),
+            nativeOutcome(client.guilds.fetchCounts(ids, options as import("../../../src/effect.js").RequestOptions)),
         channels: (guildId, ids, options) =>
             nativeOutcome(
                 client.channels.fetchMemberCounts(
                     guildId,
                     ids,
-                    options as import("../../../src/counts.js").CountOperationOptions,
+                    options as import("../../../src/effect.js").RequestOptions,
                 ),
             ),
         startChannels: (guildId, ids) => {

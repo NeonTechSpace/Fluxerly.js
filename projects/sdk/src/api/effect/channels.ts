@@ -1,4 +1,4 @@
-import type { CountOperationFailure, CountOperationOptions, ChannelMemberCountsResult } from "#sdk/counts"
+import type { CountOperationFailure, ChannelMemberCountsResult } from "#sdk/counts"
 import type * as Effect from "effect/Effect"
 import type {
     PermissionOverwrite,
@@ -10,12 +10,11 @@ import type {
     FollowedChannel,
     ChannelFollowerStats,
     ChannelOperationFailure,
-    ChannelOperationOptions,
-    ChannelAuditOperationOptions,
     ForumTagInput,
     GuildForumChannel,
     GuildMediaChannel,
 } from "#sdk/channels"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Read or change community channels and permission overrides, or request gateway member counts.
  * HTTP methods return Effects and do not connect the gateway.
@@ -34,7 +33,7 @@ import type {
  * and with the forum posts that apply a tag it removes, as deleteForumTag and an edit with availableTags can, because Fluxer drops removed tags from posts without a thread update.
  * A write to a category, or one that names a community, such as create or reorder, removes that community's cached channels. A write to a channel the cache does not hold removes every cached channel, because its community is unknown.
  * Input failures before dispatch leave the cache unchanged, and a write rejected after dispatch removes the same entries. The SDK does not fetch channels automatically after a write.
- * The follow, create, edit, delete, reorder, permission-overwrite and forum-tag mutations accept ChannelAuditOperationOptions. Read operations reject auditReason
+ * The follow, create, edit, delete, reorder, permission-overwrite and forum-tag mutations accept AuditedRequestOptions. Read operations reject auditReason
  *
  * Operation inputs are copied when the Effect executes and later caller mutations are not observed. Permission bits are bigint values encoded as decimal JSON strings.
  * Fluxer enforces channel permissions and grant restrictions. Targeted overwrite operations require ManageRoles for role and member targets
@@ -64,7 +63,7 @@ export interface Channels {
     follow(
         channelId: string,
         input: ChannelFollowInput,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<FollowedChannel, ChannelOperationFailure>
     /**
      * Fetch frozen channel and distinct community follower counts for a viewable announcement channel.
@@ -73,7 +72,7 @@ export interface Channels {
      */
     fetchFollowerStats(
         channelId: string,
-        options?: ChannelOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<ChannelFollowerStats, ChannelOperationFailure>
     /**
      * Request fresh member counts for 1–25 channels in one community over the connected gateway.
@@ -97,7 +96,7 @@ export interface Channels {
     fetchMemberCounts(
         guildId: string,
         channelIds: readonly string[],
-        options?: CountOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<ChannelMemberCountsResult, CountOperationFailure>
     /**
      * Look up a community channel in the enabled cache, without an HTTP request or a connection.
@@ -118,17 +117,14 @@ export interface Channels {
      * Permission overwrites describe explicit settings, not inherited or effective permissions.
      * This neither connects the gateway nor populates a complete community-channel list
      */
-    fetch(channelId: string, options?: ChannelOperationOptions): Effect.Effect<GuildChannel, ChannelOperationFailure>
+    fetch(channelId: string, options?: RequestOptions): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /**
      * Fetch the community channels currently visible to the bot, without pagination.
      * The returned list is a point-in-time snapshot, not a subscription or completeness guarantee.
      * It never includes threads, which Fluxer lists separately: Use threads.fetchActive for the active ones.
      * No members, roles, private channels or missing overwrite targets are fetched
      */
-    fetchAll(
-        guildId: string,
-        options?: ChannelOperationOptions,
-    ): Effect.Effect<readonly GuildChannel[], ChannelOperationFailure>
+    fetchAll(guildId: string, options?: RequestOptions): Effect.Effect<readonly GuildChannel[], ChannelOperationFailure>
     /**
      * Create a supported community channel and return its frozen server snapshot.
      * Fluxer chooses the initial position.
@@ -170,7 +166,7 @@ export interface Channels {
     create(
         guildId: string,
         input: ChannelCreate,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /**
      * Change only the supplied channel settings and return the frozen server snapshot.
@@ -198,7 +194,7 @@ export interface Channels {
     edit(
         channelId: string,
         input: ChannelEdit,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildChannel, ChannelOperationFailure>
     /**
      * Delete a community channel, succeeding with no value after HTTP 204.
@@ -208,7 +204,7 @@ export interface Channels {
      * A channel that still exists after a failure may already have lost any of these.
      * A lost response or timeout after dispatch can leave it deleted
      */
-    delete(channelId: string, options?: ChannelAuditOperationOptions): Effect.Effect<void, ChannelOperationFailure>
+    delete(channelId: string, options?: AuditedRequestOptions): Effect.Effect<void, ChannelOperationFailure>
     /**
      * Submit community-channel moves, succeeding with no value after HTTP 204.
      * Fluxer applies moves sequentially and may normalize positions.
@@ -227,7 +223,7 @@ export interface Channels {
     reorder(
         guildId: string,
         positions: readonly ChannelPosition[],
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
     /**
      * Replace one explicit role or member permission overwrite.
@@ -248,7 +244,7 @@ export interface Channels {
     setPermissionOverwrite(
         channelId: string,
         input: PermissionOverwrite,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
     /**
      * Remove one explicit permission overwrite by decimal role or member target ID.
@@ -266,7 +262,7 @@ export interface Channels {
     removePermissionOverwrite(
         channelId: string,
         targetId: string,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, ChannelOperationFailure>
     /**
      * Add one tag to a forum or media channel and return the frozen updated channel.
@@ -281,7 +277,7 @@ export interface Channels {
     createForumTag(
         channelId: string,
         input: ForumTagInput,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure>
     /**
      * Replace one tag of a forum or media channel and return the frozen updated channel.
@@ -296,7 +292,7 @@ export interface Channels {
         channelId: string,
         tagId: string,
         input: ForumTagInput,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure>
     /**
      * Delete one tag from a forum or media channel and return the frozen updated channel.
@@ -309,6 +305,6 @@ export interface Channels {
     deleteForumTag(
         channelId: string,
         tagId: string,
-        options?: ChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure>
 }

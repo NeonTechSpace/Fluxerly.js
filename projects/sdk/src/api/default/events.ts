@@ -3,7 +3,7 @@ import type { OperationOptions } from "#sdk/client"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
 import type { EventOverflowError, EventReadError } from "#sdk/message-errors"
 import type { Message, MessageCore } from "#sdk/messages"
-import type { EventInvocation, EventWaitOptions, HandlerOptions, EventMap, EventName } from "#sdk/events"
+import type { EventBufferOptions, EventInvocation, HandlerOptions, EventMap, EventName } from "#sdk/events"
 import type { FailureReport } from "#sdk/failures"
 
 /**
@@ -132,14 +132,28 @@ export interface EventHandlerOptions<T = unknown> extends HandlerOptions<T> {
     readonly partitionReady?: (key: string, signal: AbortSignal) => unknown
 }
 
-/**
- * Configure a single client.waitFor call with a filter, limits and optional AbortSignal.
- * The signal cancels this event wait, not the client
+/** Settings for waitFor to receive one future event that passes an optional filter.
+ * Waiting does not connect the gateway, read cached history or reconstruct missed events.
+ * The queue budgets apply to events received before the wait can take them.
+ * Completion, timeout, cancellation and shutdown release the wait's subscription
+ *
+ * The signal option cancels this event wait, not the client
  *
  * @category Events and collectors
  */
-export interface DefaultEventWaitOptions<K extends EventName, M extends MessageCore = Message>
-    extends EventWaitOptions<K, M>, OperationOptions {}
+export interface EventWaitOptions<K extends EventName, M extends MessageCore = Message>
+    extends EventBufferOptions, OperationOptions {
+    /** Return true to complete with this event, false to keep waiting. Omit to accept the first event.
+     * Runs synchronously and can run while the gateway receives events. Keep it short, since deadlines cannot preempt blocking JavaScript.
+     * A throw or non-boolean return fails with EventWaitError reason filter. A thrown value is the error's cause.
+     * Do not return a Promise. Mistaken asynchronous work is neither awaited nor cancelled, and its rejection is discarded
+     */
+    readonly filter?: (event: EventMap<M>[K]) => boolean
+    /** Total milliseconds to wait from registration, an integer from 1 through 2,147,483,647, default 30,000.
+     * Expiry fails with EventWaitError reason timeout, rather than returning an empty event
+     */
+    readonly timeoutMs?: number
+}
 
 /**
  * Event middleware for the default API, run around each client.on handler invocation that starts after registration.

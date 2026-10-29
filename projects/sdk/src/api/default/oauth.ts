@@ -14,13 +14,13 @@ import {
     type OAuthIntrospection,
     type OAuthOperationFailure,
     type OAuthTokens,
-    type DefaultOAuthOperationOptions,
 } from "#sdk/oauth"
 import { makeOAuthOwner } from "#sdk/internal/oauth"
 import { CancelledError, ConfigurationError } from "#sdk/errors"
 import { executeOperation, fromExit, runShutdown } from "#sdk/internal/binding/execute"
+import type { RequestOptions } from "./options.js"
 
-function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
+function oauthOwnerOptions(options: RequestOptions | undefined) {
     if (Array.isArray(options)) return options
     if (typeof options !== "object" || options === null || !("signal" in options)) return options
     const { signal: _signal, ...ownerOptions } = options
@@ -39,6 +39,7 @@ function oauthOwnerOptions(options: DefaultOAuthOperationOptions | undefined) {
  * At most eight operations run at once.
  * While eight are running, another operation fails at once with OAuthOperationError reason busy instead of waiting.
  * The timeoutMs option defaults to 30,000 for discovery and the operation, with request cleanup awaited afterward.
+ * Malformed options fail with a local input error before discovery.
  * Responses are capped at 1 MiB and requests are never retried automatically.
  * Discovery throttling returns OAuthOperationError with reason rateLimit, outcome notDispatched, status 429 and the server's retryAfterMs when available
  *
@@ -60,7 +61,7 @@ export interface OAuthClient extends AsyncDisposable {
      */
     authorizationUrl(
         input: OAuthAuthorizationInput,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<string, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Exchange the code from an authorization callback for access and refresh tokens.
@@ -72,7 +73,7 @@ export interface OAuthClient extends AsyncDisposable {
      */
     exchangeCode(
         input: OAuthCodeExchangeInput,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Exchange a refresh token for a new access and refresh token pair.
@@ -85,7 +86,7 @@ export interface OAuthClient extends AsyncDisposable {
      */
     refresh(
         refreshToken: string,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Revoke an access or refresh token, with an optional token-type hint.
@@ -100,7 +101,7 @@ export interface OAuthClient extends AsyncDisposable {
             /** Identify the token as an access token or a refresh token. Omit when the kind is unknown */
             readonly tokenTypeHint?: "access_token" | "refresh_token"
         },
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the delegated user's identity with an access token granted the identify scope.
@@ -111,7 +112,7 @@ export interface OAuthClient extends AsyncDisposable {
      */
     fetchIdentity(
         accessToken: string,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<OAuthIdentity, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one bounded page of the delegated user's community memberships.
@@ -124,7 +125,7 @@ export interface OAuthClient extends AsyncDisposable {
     fetchGuilds(
         accessToken: string,
         query?: GuildListQuery,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildListSummary[], OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the delegated user's full connections list with a connections-scoped access token.
@@ -134,7 +135,7 @@ export interface OAuthClient extends AsyncDisposable {
      */
     fetchConnections(
         accessToken: string,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly OAuthConnection[], OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Inspect an access or refresh token using this client's ID and secret through HTTP Basic authentication.
@@ -144,7 +145,7 @@ export interface OAuthClient extends AsyncDisposable {
      */
     introspect(
         token: string,
-        options?: DefaultOAuthOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<OAuthIntrospection, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Permanently stop OAuth work, reject new work, release the client's copied secret and abort active requests.
@@ -223,19 +224,19 @@ export const oauth: Readonly<{
         const owner = created.value
         const shutdown = () => runShutdown(owner.shutdown())
         return Object.freeze({
-            authorizationUrl: (input: OAuthAuthorizationInput, options?: DefaultOAuthOperationOptions) =>
+            authorizationUrl: (input: OAuthAuthorizationInput, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.authorizationUrl(input, oauthOwnerOptions(options))),
                     "oauth.authorizationUrl",
                     options,
                 ),
-            exchangeCode: (input: OAuthCodeExchangeInput, options?: DefaultOAuthOperationOptions) =>
+            exchangeCode: (input: OAuthCodeExchangeInput, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.exchangeCode(input, oauthOwnerOptions(options))),
                     "oauth.exchangeCode",
                     options,
                 ),
-            refresh: (refreshToken: string, options?: DefaultOAuthOperationOptions) =>
+            refresh: (refreshToken: string, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.refresh(refreshToken, oauthOwnerOptions(options))),
                     "oauth.refresh",
@@ -243,32 +244,32 @@ export const oauth: Readonly<{
                 ),
             revoke: (
                 input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
-                options?: DefaultOAuthOperationOptions,
+                options?: RequestOptions,
             ) =>
                 executeOperation(
                     suspendInput(() => owner.revoke(input, oauthOwnerOptions(options))),
                     "oauth.revoke",
                     options,
                 ),
-            fetchIdentity: (accessToken: string, options?: DefaultOAuthOperationOptions) =>
+            fetchIdentity: (accessToken: string, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.fetchIdentity(accessToken, oauthOwnerOptions(options))),
                     "oauth.fetchIdentity",
                     options,
                 ),
-            fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: DefaultOAuthOperationOptions) =>
+            fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.fetchGuilds(accessToken, query, oauthOwnerOptions(options))),
                     "oauth.fetchGuilds",
                     options,
                 ),
-            fetchConnections: (accessToken: string, options?: DefaultOAuthOperationOptions) =>
+            fetchConnections: (accessToken: string, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.fetchConnections(accessToken, oauthOwnerOptions(options))),
                     "oauth.fetchConnections",
                     options,
                 ),
-            introspect: (token: string, options?: DefaultOAuthOperationOptions) =>
+            introspect: (token: string, options?: RequestOptions) =>
                 executeOperation(
                     suspendInput(() => owner.introspect(token, oauthOwnerOptions(options))),
                     "oauth.introspect",

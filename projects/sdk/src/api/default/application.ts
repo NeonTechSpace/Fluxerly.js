@@ -1,10 +1,7 @@
-import type {
-    BotApplication,
-    BotApplicationOperationFailure,
-    DefaultBotApplicationOperationOptions,
-} from "#sdk/application"
+import type { BotApplication, BotApplicationOperationFailure } from "#sdk/application"
 import type { ResultAsync } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions } from "./options.js"
 
 /**
  * Read the authenticated bot's application identity, its owner's user ID and selected public settings.
@@ -32,9 +29,11 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
 export interface CurrentBotApplication {
     /**
      * Fetch this bot token's application data from /oauth2/applications/@me.
-     * Only the documented fields are returned, frozen, without cache storage, gateway events, owner profile lookup or follow-up requests
+     * Only the documented fields are returned, frozen, without cache storage, gateway events, owner profile lookup or follow-up requests.
+     * The timeoutMs option bounds this read only and does not change the gateway startup deadline.
+     * Cancelling it affects only this read and never changes the application
      */
     fetch(
-        options?: DefaultBotApplicationOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<BotApplication, BotApplicationOperationFailure | CancelledError | ConfigurationError>
 }

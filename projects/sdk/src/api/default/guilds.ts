@@ -1,4 +1,4 @@
-import type { CountOperationFailure, DefaultCountOperationOptions, GuildCountsResult } from "#sdk/counts"
+import type { CountOperationFailure, GuildCountsResult } from "#sdk/counts"
 import type {
     GuildListQuery,
     GuildListSummary,
@@ -7,13 +7,11 @@ import type {
     GuildVanityUrlUsage,
     Guild,
     GuildOperationFailure,
-    DefaultGuildOperationOptions,
-    DefaultModerationOptions,
 } from "#sdk/guilds"
 import type { GuildIterationQuery, PaginationError } from "#sdk/pagination"
-import type { DefaultOwnMessageDeletionOptions } from "#sdk/messages"
 import type { ResultAsync, Result } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AuditedRequestOptions, OwnMessageDeletionOptions } from "./options.js"
 
 /**
  * Read community settings and bot memberships, or use the optional guild cache.
@@ -79,7 +77,7 @@ export interface Guilds {
      */
     fetchCounts(
         guildIds: readonly string[],
-        options?: DefaultCountOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<GuildCountsResult, CountOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of communities this bot belongs to, ordered by ascending guild ID.
@@ -105,7 +103,7 @@ export interface Guilds {
      */
     fetchPage(
         query?: GuildListQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildListSummary[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read the bot's community memberships in ascending ID order, retaining one page and never prefetching.
@@ -136,7 +134,7 @@ export interface Guilds {
      */
     iterate(
         query: GuildIterationQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<
         Result<GuildListSummary, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>
     >
@@ -159,7 +157,7 @@ export interface Guilds {
      */
     leave(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Irreversibly delete this bot's entire authored message history across one community.
@@ -195,7 +193,7 @@ export interface Guilds {
      */
     deleteOwnMessages(
         guildId: string,
-        options: DefaultOwnMessageDeletionOptions,
+        options: OwnMessageDeletionOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a community's custom invite code, URL and use count with ManageGuild permission.
@@ -205,7 +203,7 @@ export interface Guilds {
      */
     fetchVanityUrl(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<GuildVanityUrlUsage, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set a community's custom invite code, replace it, or pass null to remove it.
@@ -226,7 +224,7 @@ export interface Guilds {
     editVanityUrl(
         guildId: string,
         code: string | null,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildVanityUrl, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change only supplied community settings that a bot may edit.
@@ -243,7 +241,7 @@ export interface Guilds {
     edit(
         guildId: string,
         input: GuildEdit,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<Guild, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Look up a community in the enabled guild cache, without a request or gateway connection.
@@ -266,6 +264,6 @@ export interface Guilds {
      */
     fetch(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<Guild, GuildOperationFailure | CancelledError | ConfigurationError>
 }

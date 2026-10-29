@@ -1,5 +1,6 @@
-import type { BotApplication, BotApplicationOperationFailure, BotApplicationOperationOptions } from "#sdk/application"
+import type { BotApplication, BotApplicationOperationFailure } from "#sdk/application"
 import type * as Effect from "effect/Effect"
+import type { RequestOptions } from "#sdk/client"
 
 /** Read the application associated with this bot token through GET `/oauth2/applications/@me`.
  * No gateway connection is required.
@@ -23,7 +24,9 @@ import type * as Effect from "effect/Effect"
 export interface CurrentBotApplication {
     /**
      * Fetch this bot token's application data from /oauth2/applications/@me.
-     * Only the documented fields are returned, frozen, without cache storage, gateway events, owner profile lookup or follow-up requests
+     * Only the documented fields are returned, frozen, without cache storage, gateway events, owner profile lookup or follow-up requests.
+     * The timeoutMs option bounds this read only and does not change the gateway startup deadline.
+     * Cancelling it affects only this read and never changes the application
      */
-    fetch(options?: BotApplicationOperationOptions): Effect.Effect<BotApplication, BotApplicationOperationFailure>
+    fetch(options?: RequestOptions): Effect.Effect<BotApplication, BotApplicationOperationFailure>
 }

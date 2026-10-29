@@ -1,4 +1,4 @@
-import type { MemberChunk, MemberChunkQuery, MemberChunkFailure, DefaultMemberChunkOptions } from "#sdk/member-chunks"
+import type { MemberChunk, MemberChunkQuery, MemberChunkFailure } from "#sdk/member-chunks"
 import type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -16,17 +16,19 @@ import type {
     GuildBan,
     MemberQuery,
     GuildOperationFailure,
-    DefaultGuildOperationOptions,
-    DefaultCanManageOptions,
-    DefaultGuildAuditOperationOptions,
-    DefaultModerationOptions,
-    DefaultTimeoutOptions,
     TimeoutStateOptions,
     MemberTimeoutState,
 } from "#sdk/guilds"
 import type { PaginationError, UserIterationQuery } from "#sdk/pagination"
 import type { ResultAsync, Result } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type {
+    RequestOptions,
+    AuditedRequestOptions,
+    MemberChunkOptions,
+    CanManageOptions,
+    TimeoutOptions,
+} from "./options.js"
 
 /**
  * Read community members, search indexed members, moderate or ban them and change role assignments.
@@ -38,7 +40,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  *
  * Writes retry only confirmed HTTP 429 rejection.
  * Cancellation cannot undo a dispatched change.
- * The setRoles, editSelf, setNickname, addRole and removeRole methods accept DefaultGuildAuditOperationOptions.
+ * The setRoles, editSelf, setNickname, addRole and removeRole methods accept AuditedRequestOptions.
  * Member reads and searches reject auditReason. Moderation methods keep their more specific audited option types
  *
  * @category Guilds and members
@@ -105,7 +107,7 @@ export interface Members {
     iterateChunks(
         guildId: string,
         query: MemberChunkQuery,
-        options?: DefaultMemberChunkOptions,
+        options?: MemberChunkOptions,
     ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError | ConfigurationError>>
     /**
      * Replace one member's entire assigned role list in a single PATCH request.
@@ -133,7 +135,7 @@ export interface Members {
     setRoles(
         member: MemberReference,
         roleIds: readonly string[],
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Search Fluxer's member index for a community, without using or populating the member cache.
@@ -161,7 +163,7 @@ export interface Members {
     search(
         guildId: string,
         filters?: MemberSearchQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<MemberSearchPage, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read unique indexed member-search hits with a bounded scan.
@@ -190,7 +192,7 @@ export interface Members {
         guildId: string,
         filters: Omit<MemberSearchQuery, "limit">,
         limits: MemberSearchIterationLimits,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<
         Result<MemberSearchHit, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>
     >
@@ -207,7 +209,7 @@ export interface Members {
     editSelf(
         guildId: string,
         input: MemberProfileEdit,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set one member's nickname, or pass null to clear it.
@@ -234,7 +236,7 @@ export interface Members {
     setNickname(
         member: MemberReference,
         nickname: string | null,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Move a member who is already in voice to a positive decimal voice-channel ID.
@@ -261,7 +263,7 @@ export interface Members {
     move(
         target: VoiceConnectionReference,
         channelId: string,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Disconnect one observed voice connection, or all active connections if target.connectionId is omitted.
@@ -273,7 +275,7 @@ export interface Members {
      */
     disconnect(
         target: VoiceConnectionReference,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set or clear the community mute flag for a member currently connected to voice.
@@ -286,7 +288,7 @@ export interface Members {
     setMute(
         target: MemberReference,
         input: VoiceMuteInput,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set or clear the community deafen flag for a member currently connected to voice.
@@ -299,7 +301,7 @@ export interface Members {
     setDeaf(
         target: MemberReference,
         input: VoiceDeafenInput,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Temporarily restrict a community member for durationMs milliseconds.
@@ -327,7 +329,7 @@ export interface Members {
     timeout(
         target: MemberReference,
         durationMs: number,
-        options?: DefaultTimeoutOptions,
+        options?: TimeoutOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Clear a member's timeout and return the HTTP member snapshot.
@@ -337,7 +339,7 @@ export interface Members {
      */
     clearTimeout(
         target: MemberReference,
-        options?: DefaultTimeoutOptions,
+        options?: TimeoutOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Report whether a member is timed out, from the member's communicationDisabledUntil and a moment in time.
@@ -380,7 +382,7 @@ export interface Members {
      */
     kick(
         target: MemberReference,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Ban a user from a community, including a user who is not currently a member.
@@ -403,7 +405,7 @@ export interface Members {
     ban(
         target: MemberReference,
         input?: BanInput,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove a user's community ban, succeeding with no value after HTTP 204.
@@ -414,7 +416,7 @@ export interface Members {
      */
     unban(
         target: MemberReference,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a community's current full ban list with BanMembers permission.
@@ -426,7 +428,7 @@ export interface Members {
      */
     fetchBans(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildBan[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read community members by ascending user ID, without connecting the gateway or downloading the community eagerly.
@@ -462,7 +464,7 @@ export interface Members {
     iterate(
         guildId: string,
         query: UserIterationQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<Result<GuildMember, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>>
     /**
      * Look up a community member by decimal guildId and userId in the enabled cache, without a request.
@@ -510,7 +512,7 @@ export interface Members {
      */
     fetch(
         member: MemberReference,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch this bot's membership in a community without knowing its user ID.
@@ -518,7 +520,7 @@ export interface Members {
      */
     fetchSelf(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Check whether the bot, or the member named by options.actorUserId, is above a target member in the community's role hierarchy.
@@ -539,7 +541,7 @@ export interface Members {
      */
     fetchCanManage(
         target: MemberReference,
-        options?: DefaultCanManageOptions,
+        options?: CanManageOptions,
     ): ResultAsync<boolean, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of members ordered by ascending user ID.
@@ -553,7 +555,7 @@ export interface Members {
     fetchPage(
         guildId: string,
         query?: MemberQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildMember[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Grant one role to a member without replacing their other roles.
@@ -582,7 +584,7 @@ export interface Members {
     addRole(
         member: MemberReference,
         roleId: string,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one role from a member while leaving other roles unchanged.
@@ -593,6 +595,6 @@ export interface Members {
     removeRole(
         member: MemberReference,
         roleId: string,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }

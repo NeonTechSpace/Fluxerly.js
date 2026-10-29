@@ -20,7 +20,7 @@ import type { ConnectionState, OperationOptions } from "#sdk/client"
 import {
     CollectorError,
     type CollectorFailure,
-    type CollectorOptions,
+    type CollectorLimits,
     type CollectorRegistrationError,
     type CollectorResult,
 } from "#sdk/collectors"
@@ -33,8 +33,8 @@ import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
-type Settings<M extends MessageCore> = Required<Omit<CollectorOptions<M>, "filter" | "guildId" | "idleMs">> &
-    Pick<CollectorOptions<M>, "filter" | "guildId"> & { readonly idleMs: number | undefined } & OperationOptions
+type Settings<M extends MessageCore> = Required<Omit<CollectorLimits<M>, "filter" | "guildId" | "idleMs">> &
+    Pick<CollectorLimits<M>, "filter" | "guildId"> & { readonly idleMs: number | undefined } & OperationOptions
 
 const maximumGuildId = "18446744073709551615"
 
@@ -424,7 +424,7 @@ export class MessageCollector<M extends MessageCore = Message> {
 export function collect<E = never, R = never, M extends MessageCore = Message>(
     owner: ClientOwner<M>,
     channelId: string,
-    options?: CollectorOptions<M>,
+    options?: CollectorLimits<M>,
     defaultApi = false,
     handler?: (message: M) => Effect.Effect<unknown, E, R>,
 ): Effect.Effect<MessageCollector<M>, CollectorRegistrationError, R> {

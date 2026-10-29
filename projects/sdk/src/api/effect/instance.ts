@@ -1,5 +1,6 @@
 import type * as Effect from "effect/Effect"
-import type { InstanceResolveError, InstanceResolveOptions, ResolvedInstance } from "#sdk/instance"
+import type { InstanceResolveError, ResolvedInstance } from "#sdk/instance"
+import type { RequestOptions } from "#sdk/client"
 
 export type { ResolvedInstance }
 
@@ -47,5 +48,5 @@ export interface Instance {
      * Cleanup defects remain in the Cause alongside any failure or interruption. Effect reports a failure that occurs
      * together with a cleanup defect as a defect that keeps the failure's value
      */
-    resolve(options?: InstanceResolveOptions): Effect.Effect<ResolvedInstance, InstanceResolveError>
+    resolve(options?: RequestOptions): Effect.Effect<ResolvedInstance, InstanceResolveError>
 }

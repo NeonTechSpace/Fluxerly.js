@@ -28,7 +28,7 @@ import type { Client, ClientOptions } from "./effect.js"
  *
  * @category Sharding and supervision
  */
-export interface NativeSupervisorChildContext {
+export interface SupervisorChildContext {
     /** Native client created and owned by child.run. Register application behavior rather than starting or stopping this client */
     readonly client: Client
     /** Fixed assignment for this child process. It cannot be changed during this run */
@@ -43,7 +43,7 @@ export interface NativeSupervisorChildContext {
  *
  * @category Sharding and supervision
  */
-export interface NativeSupervisorChildOptions<E = never, R = never> {
+export interface SupervisorChildOptions<E = never, R = never> {
     /** Bot token for the client created by child.run, such as `process.env.FLUXER_BOT_TOKEN`. The parent assignment does
      * not supply this credential. A missing or blank value fails child.run with ConfigurationError once the assignment arrives,
      * as createClient does, and the parent sees the child fail during configuration
@@ -64,7 +64,7 @@ export interface NativeSupervisorChildOptions<E = never, R = never> {
      * Parent stop interrupts unfinished configuration and awaits its cleanup without starting the client afterward.
      * Application failures remain typed as E. Defects and cleanup failures remain in the Effect cause
      */
-    readonly configure: (context: NativeSupervisorChildContext) => Effect.Effect<void, E, R | Scope.Scope>
+    readonly configure: (context: SupervisorChildContext) => Effect.Effect<void, E, R | Scope.Scope>
 }
 
 /**
@@ -75,7 +75,7 @@ export interface NativeSupervisorChildOptions<E = never, R = never> {
  *
  * @category Sharding and supervision
  */
-export interface NativeSupervisor {
+export interface Supervisor {
     /** Start the configured children and succeed when each child acknowledges its assignment and finishes configure.
      * This means setup finished. It does not mean any gateway connection is ready. Execute waitForReady to observe connected gateway sessions.
      * Concurrent executions share startup. Executing again does not launch extra children or await replacement startup.
@@ -114,14 +114,14 @@ export interface NativeSupervisor {
  *
  * @category Sharding and supervision
  */
-export interface NativeSupervisorTools {
+export interface SupervisorTools {
     /** Return a lazy Effect that validates and copies options, then succeeds with an idle supervisor.
      * Invalid options are misuse and die with ConfigurationError.
      * Unknown keys in parent, assignment, restart and Identify options include a suggested name when one is close.
      * Does not start a process or check whether the entry module can execute. Launch failures are reported by start.
      * The parent has no automatic Scope finalizer. Arrange to execute its shutdown Effect when the application stops
      */
-    create(options: SupervisorOptions): Effect.Effect<NativeSupervisor>
+    create(options: SupervisorOptions): Effect.Effect<Supervisor>
     /** Child-module helper. Execute run inside the module selected by the parent's entry option */
     readonly child: {
         /** Receive the parent's assignment, create a client, finish configure, then run the client until stop or failure
@@ -142,7 +142,7 @@ export interface NativeSupervisorTools {
          * with a defect as a defect that keeps the failure's value
          */
         run<E = never, R = never>(
-            options: NativeSupervisorChildOptions<E, R>,
+            options: SupervisorChildOptions<E, R>,
         ): Effect.Effect<void, ConfigurationError | ConnectError | SupervisorChildError | E, Exclude<R, Scope.Scope>>
     }
 }
@@ -150,14 +150,14 @@ export interface NativeSupervisorTools {
 /** Build native supervisor tools around this entry point's scoped client creator */
 export function makeNativeSupervisor(
     createClient: <E, R>(options: ClientOptions<E, R>) => Effect.Effect<Client, ConfigurationError, Scope.Scope | R>,
-): NativeSupervisorTools {
+): SupervisorTools {
     const child = Object.freeze({
         run: <E, R>(
-            options: NativeSupervisorChildOptions<E, R>,
+            options: SupervisorChildOptions<E, R>,
         ): Effect.Effect<void, ConfigurationError | ConnectError | SupervisorChildError | E, Exclude<R, Scope.Scope>> =>
             // Reading the caller options is marked as application input
             readInput(() =>
-                readChildOptions<ClientOptions<E, R>, NativeSupervisorChildOptions<E, R>["configure"]>(options),
+                readChildOptions<ClientOptions<E, R>, SupervisorChildOptions<E, R>["configure"]>(options),
             ).pipe(
                 Effect.flatMap((settings) => {
                     if (settings instanceof ConfigurationError) return Effect.fail(settings)

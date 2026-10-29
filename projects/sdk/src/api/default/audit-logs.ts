@@ -1,8 +1,9 @@
 import type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "#sdk/audit-logs"
 import type { PaginationError } from "#sdk/pagination"
 import type { ResultAsync, Result } from "neverthrow"
-import type { GuildOperationFailure, DefaultGuildOperationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions } from "./options.js"
 
 /**
  * Read a community's audit log with ViewAuditLog permission, without connecting the gateway.
@@ -28,7 +29,7 @@ export interface AuditLogs {
     fetchPage(
         guildId: string,
         query: AuditLogQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<AuditLogPage, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read filtered audit entries newest first, buffering one page and never prefetching.
@@ -51,7 +52,7 @@ export interface AuditLogs {
     iterate(
         guildId: string,
         query: AuditLogIterationQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<
         Result<AuditLogEntry, GuildOperationFailure | PaginationError | CancelledError | ConfigurationError>
     >

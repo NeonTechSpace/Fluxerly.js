@@ -9,42 +9,30 @@ import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import { err, ok, type Result } from "neverthrow"
-import {
-    AttachmentDownloadError,
-    type Attachment,
-    type AttachmentDownloadFailure,
-    type DefaultAttachmentStreamOptions,
-} from "#sdk/attachments"
+import { AttachmentDownloadError, type Attachment, type AttachmentDownloadFailure } from "#sdk/attachments"
 import type { CacheEntriesOptions, CachedResources, CacheKind, OperationOptions } from "#sdk/client"
-import type {
-    CollectorFailure,
-    CollectorResult,
-    DefaultCollectorOptions,
-    DefaultReactionCollectorOptions,
-    ReactionCollectorResult,
-} from "#sdk/collectors"
+import type { CollectorFailure, CollectorResult, ReactionCollectorResult } from "#sdk/collectors"
 import { ApplicationError, CancelledError, ConfigurationError, SdkDefect } from "#sdk/errors"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import {
-    MemberChunkError,
-    type DefaultMemberChunkOptions,
-    type MemberChunk,
-    type MemberChunkFailure,
-    type MemberChunkQuery,
-} from "#sdk/member-chunks"
+import { MemberChunkError, type MemberChunk, type MemberChunkFailure, type MemberChunkQuery } from "#sdk/member-chunks"
 import { MessageOperationError } from "#sdk/message-errors"
-import type { DefaultMessageOperationOptions, MessageCore, MessageReference } from "#sdk/messages"
-import type { Collector, ReactionCollector } from "#sdk/api/default/collectors"
-import type { DefaultInstanceResolveOptions } from "#sdk/api/default/instance"
+import type { MessageCore, MessageReference } from "#sdk/messages"
+import type {
+    Collector,
+    ReactionCollector,
+    CollectorOptions,
+    ReactionCollectorOptions,
+} from "#sdk/api/default/collectors"
 import { collect } from "#sdk/internal/collector"
 import { defectReason, readCaller, readInput, suspendMarked } from "#sdk/internal/defects"
 import { memberChunkIterationOptions } from "#sdk/internal/member-chunks"
 import { operationSignalError } from "#sdk/internal/operation-signal"
 import { collectReactions } from "#sdk/internal/reaction-collector"
 import type { AttachmentDownloadSource } from "#sdk/internal/rest"
-import type { DefaultRestRequest } from "#sdk/rest"
+import type { RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
 import { throwIfErr } from "#sdk/internal/failures"
 import { executeOperation, fromExit, localValue, type DefaultContext } from "./execute.js"
+import type { RequestOptions, AttachmentStreamOptions, MemberChunkOptions } from "#sdk/api/default/options"
 
 /**
  * Open a default collector handle. Misuse, meaning invalid options, throws, while a runtime condition such as a gateway
@@ -158,7 +146,7 @@ export const defaultMemberChunks =
     (
         guildId: string,
         query: MemberChunkQuery,
-        options?: DefaultMemberChunkOptions,
+        options?: MemberChunkOptions,
     ): AsyncIterable<Result<MemberChunk, MemberChunkFailure | CancelledError | ConfigurationError>> =>
         Object.freeze({
             async *[Symbol.asyncIterator]() {
@@ -207,7 +195,7 @@ export const defaultAttachmentStream =
     <M extends MessageCore>({ owner }: DefaultContext<M>) =>
     (
         attachment: Attachment,
-        options: DefaultAttachmentStreamOptions,
+        options: AttachmentStreamOptions,
     ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>> => {
         let consumed = false
         return Object.freeze({
@@ -378,7 +366,7 @@ export const defaultAttachmentStream =
     }
 export const defaultInstanceResolve =
     <M extends MessageCore>({ owner, execute }: DefaultContext<M>) =>
-    (options?: DefaultInstanceResolveOptions) =>
+    (options?: RequestOptions) =>
         execute(owner.instance.resolveInfo(options), "instance.resolve", options)
 
 export const defaultRestRequest =
@@ -403,7 +391,7 @@ export const defaultCacheDelete =
 
 export const defaultCollect =
     <M extends MessageCore>({ owner }: DefaultContext<M>) =>
-    (channelId: string, options?: DefaultCollectorOptions<M>): Collector<M> =>
+    (channelId: string, options?: CollectorOptions<M>): Collector<M> =>
         openCollector(
             Effect.runSyncExit(
                 readInput(() => options?.onMessage).pipe(
@@ -425,8 +413,8 @@ export const defaultCollect =
 
 export const defaultCollectReactions =
     <M extends MessageCore>({ owner }: DefaultContext<M>) =>
-    (target: MessageReference, options?: DefaultReactionCollectorOptions): ReactionCollector => {
-        let callback: DefaultReactionCollectorOptions["onReaction"]
+    (target: MessageReference, options?: ReactionCollectorOptions): ReactionCollector => {
+        let callback: ReactionCollectorOptions["onReaction"]
         try {
             callback = options?.onReaction
         } catch (error) {
@@ -451,7 +439,7 @@ export const defaultCollectReactions =
 
 export const defaultKeepTyping =
     <M extends MessageCore>({ owner, execute }: DefaultContext<M>) =>
-    <A>(channelId: string, task: (signal: AbortSignal) => PromiseLike<A>, options?: DefaultMessageOperationOptions) =>
+    <A>(channelId: string, task: (signal: AbortSignal) => PromiseLike<A>, options?: RequestOptions) =>
         execute(
             typeof task === "function"
                 ? owner.keepTyping(channelId, defaultTypingTask(task), options)

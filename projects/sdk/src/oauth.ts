@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto"
-import type { OperationOptions } from "./client.js"
 import type { InstanceOptions } from "./instance.js"
 import type { LoggingOptions } from "./logging.js"
 import type { ClientClosedError } from "./errors.js"
@@ -222,25 +221,6 @@ export interface OAuthActiveIntrospection {
  * @category OAuth
  */
 export type OAuthIntrospection = OAuthInactiveIntrospection | OAuthActiveIntrospection
-
-/** Set the deadline for one OAuth call without scheduling retries or changing another call's lifetime.
- * Malformed options return a local input error before discovery
- *
- * @category OAuth
- */
-export interface OAuthOperationOptions {
-    /** Total milliseconds across discovery and the operation, integer 1–2,147,483,647, default 30,000.
-     * Required cleanup can outlast this deadline
-     */
-    readonly timeoutMs?: number
-}
-
-/**
- * Default-API OAuth cancellation affects only that operation and awaits request cleanup
- *
- * @category OAuth
- */
-export interface DefaultOAuthOperationOptions extends OAuthOperationOptions, OperationOptions {}
 
 /**
  * Public OAuth call identified by operation-error metadata

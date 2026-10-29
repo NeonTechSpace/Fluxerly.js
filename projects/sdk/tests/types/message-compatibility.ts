@@ -1,12 +1,7 @@
-import type {
-    Client,
-    DefaultMessageAuditOperationOptions,
-    MessageSearchChannel,
-    WebhookClient,
-} from "../../src/index.js"
+import type { Client, AuditedRequestOptions, MessageSearchChannel, WebhookClient } from "../../src/index.js"
 import type {
     Client as NativeClient,
-    MessageAuditOperationOptions,
+    AuditedRequestOptions as NativeAuditedRequestOptions,
     MessageSearchChannel as NativeMessageSearchChannel,
     WebhookClient as NativeWebhookClient,
 } from "../../src/effect.js"
@@ -16,7 +11,7 @@ export const nativeUnnamedGroup: NativeMessageSearchChannel = { id: "20", type: 
 
 export function auditedMessageMutations(client: Client, native: NativeClient) {
     const target = { id: "10", channelId: "20" }
-    const options: DefaultMessageAuditOperationOptions = {
+    const options: AuditedRequestOptions = {
         auditReason: "Moderation fixture",
         signal: new AbortController().signal,
     }
@@ -24,13 +19,13 @@ export function auditedMessageMutations(client: Client, native: NativeClient) {
     void client.messages.deleteMany("20", ["10"], options)
     void client.messages.pin(target, options)
     void client.messages.unpin(target, options)
-    const nativeOptions: MessageAuditOperationOptions = { auditReason: "Moderation fixture" }
+    const nativeOptions: NativeAuditedRequestOptions = { auditReason: "Moderation fixture" }
     void native.messages.delete(target, nativeOptions)
     void native.messages.deleteMany("20", ["10"], nativeOptions)
     void native.messages.pin(target, nativeOptions)
     void native.messages.unpin(target, nativeOptions)
     // @ts-expect-error Native audited options use interruption, not an AbortSignal
-    const signal: MessageAuditOperationOptions = { signal: new AbortController().signal }
+    const signal: NativeAuditedRequestOptions = { signal: new AbortController().signal }
     void signal
     // @ts-expect-error Fetch is not an audited message mutation
     void client.messages.fetch(target, { auditReason: "Not accepted" })

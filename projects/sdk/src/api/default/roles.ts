@@ -7,10 +7,9 @@ import type {
     RoleCreate,
     RoleEdit,
     GuildOperationFailure,
-    DefaultGuildOperationOptions,
-    DefaultGuildAuditOperationOptions,
 } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AuditedRequestOptions } from "./options.js"
 
 /**
  * Create, edit, order and delete community roles, or read their current or cached data.
@@ -26,7 +25,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * Inputs are copied when called.
  * Results are snapshots, not gateway acknowledgement.
  * Role permissions use bigint, which requires explicit conversion before JSON serialization.
- * Every remote role mutation accepts DefaultGuildAuditOperationOptions. The fetchAll method rejects auditReason
+ * Every remote role mutation accepts AuditedRequestOptions. The fetchAll method rejects auditReason
  *
  * @category Roles and permissions
  */
@@ -81,7 +80,7 @@ export interface Roles {
      */
     fetchAll(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildRole[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Create a role with a name, optional color and permission flags.
@@ -109,7 +108,7 @@ export interface Roles {
     create(
         guildId: string,
         input: RoleCreate,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change only supplied role fields and return the server's snapshot.
@@ -122,7 +121,7 @@ export interface Roles {
     edit(
         role: RoleReference,
         input: RoleEdit,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildRole, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete a role and remove its member assignments in Fluxer.
@@ -134,7 +133,7 @@ export interface Roles {
      */
     delete(
         role: RoleReference,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change role hierarchy positions using distinct role IDs and nonnegative safe-integer positions.
@@ -147,7 +146,7 @@ export interface Roles {
     reorder(
         guildId: string,
         positions: readonly RolePosition[],
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set roles' display positions without changing their permission hierarchy or enabling hoist.
@@ -170,7 +169,7 @@ export interface Roles {
     setHoistPositions(
         guildId: string,
         positions: readonly RoleHoistPosition[],
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Clear display-position assignments across the community, including roles above the bot.
@@ -183,6 +182,6 @@ export interface Roles {
      */
     resetHoistPositions(
         guildId: string,
-        options?: DefaultGuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }

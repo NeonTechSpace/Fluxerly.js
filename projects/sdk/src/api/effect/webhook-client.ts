@@ -19,9 +19,9 @@ import {
 } from "#sdk/internal/webhooks"
 import * as Effect from "effect/Effect"
 import * as Scope from "effect/Scope"
-import type { InstanceResolveOptions } from "#sdk/instance"
-import type { Message, MessageOperationOptions } from "#sdk/messages"
+import type { Message } from "#sdk/messages"
 import { type ResolvedInstance, effectInstance, type Instance } from "./instance.js"
+import type { RequestOptions } from "#sdk/client"
 
 /** Send and manage one incoming webhook's messages using its webhook token.
  * Follower webhooks have no exposed token and Fluxer rejects their token-authenticated operations with UNKNOWN_WEBHOOK.
@@ -56,24 +56,21 @@ export interface WebhookClient {
      * Fetch this incoming webhook's current metadata using its token, not bot authentication.
      * Creator and private fields are not retained
      */
-    fetch(options?: MessageOperationOptions): Effect.Effect<IncomingWebhook, WebhookOperationFailure>
+    fetch(options?: RequestOptions): Effect.Effect<IncomingWebhook, WebhookOperationFailure>
     /**
      * Change this webhook's name or avatar using its token and return metadata without credentials.
      * To move it to another channel, use a bot client's webhooks.edit.
      * A failed or cancelled write can still have applied.
      * This method does not close the client
      */
-    edit(
-        input: WebhookTokenEdit,
-        options?: MessageOperationOptions,
-    ): Effect.Effect<IncomingWebhook, WebhookOperationFailure>
+    edit(input: WebhookTokenEdit, options?: RequestOptions): Effect.Effect<IncomingWebhook, WebhookOperationFailure>
     /**
      * Delete this webhook remotely using its token, succeeding after HTTP 204.
      * This does not close the client or release its local credential reference.
      * Later requests normally fail with notFound because the token was revoked.
      * Call shutdown separately to release the client's local resources
      */
-    delete(options?: MessageOperationOptions): Effect.Effect<void, WebhookOperationFailure>
+    delete(options?: RequestOptions): Effect.Effect<void, WebhookOperationFailure>
     /**
      * Send a webhook message and return the created message after Fluxer's HTTP response.
      * A plain string sends only that text, as shorthand for `{ content }`.
@@ -101,10 +98,7 @@ export interface WebhookClient {
      * A failure with an unknown outcome can leave the message posted and is never replayed automatically.
      * A confirmed inline HTTP 429 can replay copied data bytes, but file and stream inputs fail with rateLimit without being reopened or reread
      */
-    send(
-        input: WebhookMessageInput | string,
-        options?: MessageOperationOptions,
-    ): Effect.Effect<Message, WebhookOperationFailure>
+    send(input: WebhookMessageInput | string, options?: RequestOptions): Effect.Effect<Message, WebhookOperationFailure>
     /**
      * Fetch a message authored by this webhook in its current channel, using a decimal message ID.
      * For a message in a thread, including a forum post, set options.threadId to the thread's ID.
@@ -181,18 +175,18 @@ export function createWebhookClient(options: WebhookClientOptions): Effect.Effec
         return Object.freeze({
             id: owner.id,
             instance: Object.freeze({
-                resolve: (options?: InstanceResolveOptions) =>
+                resolve: (options?: RequestOptions) =>
                     owner.instance
                         .resolveInfo(options)
                         .pipe(Effect.map((value) => (instance ??= effectInstance(value)))),
             }),
-            fetch: (options?: MessageOperationOptions) =>
+            fetch: (options?: RequestOptions) =>
                 owner.run("webhooks.fetchToken", () => webhookTokenFetch(owner.id), options),
-            edit: (input: WebhookTokenEdit, options?: MessageOperationOptions) =>
+            edit: (input: WebhookTokenEdit, options?: RequestOptions) =>
                 owner.run("webhooks.editToken", () => webhookTokenEdit(owner.id, input), options),
-            delete: (options?: MessageOperationOptions) =>
+            delete: (options?: RequestOptions) =>
                 owner.run("webhooks.deleteToken", () => webhookTokenDelete(owner.id), options),
-            send: (input: WebhookMessageInput | string, options?: MessageOperationOptions) =>
+            send: (input: WebhookMessageInput | string, options?: RequestOptions) =>
                 owner.run("webhooks.send", () => webhookSend(owner.id, input), options),
             fetchMessage: (id: string, options?: WebhookMessageOperationOptions) =>
                 owner.run("webhooks.fetchMessage", () => webhookMessageFetch(owner.id, id, options), options),

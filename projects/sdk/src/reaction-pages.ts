@@ -1,4 +1,3 @@
-import type { OperationOptions } from "./client.js"
 import type { CollectorFailure } from "./collectors.js"
 import type { EmbedBuilder } from "./builders.js"
 import type { EmbedInput } from "./embeds.js"
@@ -57,14 +56,6 @@ export interface PaginateOptions {
     readonly removeClicks?: boolean
 }
 
-/** Reaction page settings for the Promise and Result API.
- * Aborting the signal stops listening, removes the bot's arrows and returns CancelledError, leaving the current page shown.
- * The Effect entry point uses interruption instead
- *
- * @category Messages
- */
-export interface DefaultPaginateOptions extends PaginateOptions, OperationOptions {}
-
 /** Reaction page settings for messages.paginate, where no message identifies an asker, so users is required
  *
  * @category Messages
@@ -73,12 +64,6 @@ export interface ChannelPaginateOptions extends PaginateOptions {
     /** Who may turn pages, such as `[userId]`, or `() => true` for anyone */
     readonly users: PageTurners
 }
-
-/** Settings for messages.paginate in the Promise and Result API, with the signal described on DefaultPaginateOptions
- *
- * @category Messages
- */
-export interface DefaultChannelPaginateOptions extends ChannelPaginateOptions, OperationOptions {}
 
 /** How reaction pages ended after listening normally.
  * Failures, cancellation and interruption are returned in the failure channel instead

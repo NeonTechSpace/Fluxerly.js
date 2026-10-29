@@ -3,12 +3,12 @@ import type {
     DirectMessageGroupEdit,
     DirectMessageLatestMessages,
     UserOperationFailure,
-    DefaultUserOperationOptions,
 } from "#sdk/users"
 import type { ResultAsync } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
 import type { SendError } from "#sdk/message-errors"
-import type { Message, MessageCore, ReplyInput, DefaultSendOptions } from "#sdk/messages"
+import type { Message, MessageCore, ReplyInput } from "#sdk/messages"
+import type { RequestOptions } from "./options.js"
 
 /**
  * Open and manage private one-to-one or group conversations with the bot's credentials.
@@ -48,7 +48,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
     send(
         userId: string,
         input: ReplyInput | string,
-        options?: DefaultSendOptions,
+        options?: RequestOptions,
     ): ResultAsync<M, SendError | CancelledError | ConfigurationError>
     /**
      * Look up a private channel in the optional cache using its decimal ID, without a request.
@@ -74,7 +74,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      */
     open(
         userId: string,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a private channel by decimal ID.
@@ -83,7 +83,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      */
     fetch(
         id: string,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch this bot's currently open one-to-one and group conversations.
@@ -92,7 +92,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * Enabled cache replacement is skipped when a later targeted request or channel observation conflicts
      */
     fetchAll(
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly DirectMessageChannel[], UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the latest messages for 1–100 selected, distinct private channel IDs through Fluxer's batch endpoint.
@@ -105,7 +105,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      */
     fetchLatestMessages(
         channelIds: readonly string[],
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DirectMessageLatestMessages<M>, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change supplied settings of an existing group conversation.
@@ -118,7 +118,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
     editGroup(
         id: string,
         input: DirectMessageGroupEdit,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DirectMessageChannel, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Close a one-to-one conversation for this bot, or leave a group conversation.
@@ -129,7 +129,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      */
     close(
         id: string,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove a group recipient as owner, or remove the bot itself.
@@ -141,6 +141,6 @@ export interface DirectMessages<M extends MessageCore = Message> {
     removeRecipient(
         id: string,
         userId: string,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, UserOperationFailure | CancelledError | ConfigurationError>
 }

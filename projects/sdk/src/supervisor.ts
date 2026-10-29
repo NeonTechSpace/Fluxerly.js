@@ -1,5 +1,5 @@
 import { FluxerlyError, operationDetails } from "./errors.js"
-import type { ClientDiagnostics, ClientOptions, ConnectionState, OperationSignal } from "./client.js"
+import type { ClientDiagnostics, ConnectionState, OperationSignal } from "./client.js"
 import type { InstanceOptions } from "./instance.js"
 import type { TransportOptions } from "./rest.js"
 import type { IdentifyCoordinator, SessionStore } from "./sharding.js"
@@ -228,29 +228,6 @@ export interface SupervisorOptions {
      * The native supervisor sends them to the Effect logger of the context that creates it unless a sink or format is set
      */
     readonly logging?: import("./logging.js").LoggingOptions
-}
-
-/**
- * Credentials and client settings for the default API's child helper. Native child options use native client settings.
- * Unknown child option keys fail with ConfigurationError before waiting for the parent, with a suggested name when one is close
- *
- * @category Sharding and supervision
- */
-export interface SupervisorChildOptions {
-    /** Bot token for the client created by child.run, such as `process.env.FLUXER_BOT_TOKEN`. The parent assignment does
-     * not supply this credential. A missing or blank value fails child.run with ConfigurationError once the assignment arrives,
-     * as createClient does, and the parent sees the child fail during configuration
-     */
-    readonly token: string | undefined
-    /** Every client setting except token is read by property name and copied before configure, including inherited and
-     * non-enumerable properties. The supervisor assigns the shards, so sharding accepts only sessions.
-     * Runtime validation rejects a token, a shard plan or identify coordinator in sharding, and any other own key that
-     * is not a client option, with ConfigurationError
-     */
-    readonly clientOptions?: Omit<ClientOptions, "token" | "sharding"> & {
-        /** Session storage for the assigned shards. The parent assigns the shards and paces Identify, so only sessions is accepted */
-        readonly sharding?: SupervisorChildSharding
-    }
 }
 
 /**

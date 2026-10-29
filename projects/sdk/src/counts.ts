@@ -1,5 +1,4 @@
 import { FluxerlyError, operationDetails } from "./errors.js"
-import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorMessage, operationFailureHint } from "./api-errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
@@ -69,26 +68,6 @@ export interface ChannelMemberCountsResult {
     /** Frozen requested channel IDs without a returned entry, in caller input order */
     readonly omittedChannelIds: readonly string[]
 }
-
-/** Set how long one fresh gateway-count call can wait for its complete response.
- * One deadline covers local registration, every routed shard command and all reply fragments.
- * These calls require ready routed shards and do not fetch counts over REST as a fallback
- *
- * @category Options
- */
-export interface CountOperationOptions {
-    /** Total reply deadline in milliseconds, integer 1–2,147,483,647, default 30,000.
-     * Includes local registration and gateway waiting
-     */
-    readonly timeoutMs?: number
-}
-
-/**
- * Fresh-count settings for the default API, with the same deadline plus cancellation of this local wait only
- *
- * @category Options
- */
-export interface DefaultCountOperationOptions extends CountOperationOptions, OperationOptions {}
 
 /**
  * A fresh gateway-count call could not return its complete result.

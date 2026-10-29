@@ -9,8 +9,8 @@ import {
     GuildOperationError,
     Permissions,
     type ClientOptions,
-    type DefaultGuildOperationOptions,
-    type DefaultPermissionFetchOptions,
+    type RequestOptions,
+    type PermissionFetchOptions,
     type GuildPublicThreadChannel,
     type PermissionInput,
     type PermissionTarget,
@@ -95,11 +95,11 @@ async function setup(mode: Mode) {
         native,
         calculate: (value: PermissionInput): bigint =>
             defaultApi ? defaultApi.permissions.calculate(value) : native!.permissions.calculate(value),
-        fetch: async (value: PermissionTarget, options?: DefaultPermissionFetchOptions) =>
+        fetch: async (value: PermissionTarget, options?: PermissionFetchOptions) =>
             defaultApi
                 ? unwrap(await defaultApi.permissions.fetch(value, options))
                 : run(native!.permissions.fetch(value, options)),
-        fetchChannels: async (value: MemberReference, options?: DefaultGuildOperationOptions) =>
+        fetchChannels: async (value: MemberReference, options?: RequestOptions) =>
             defaultApi
                 ? unwrap(await defaultApi.permissions.fetchChannels(value, options))
                 : run(native!.permissions.fetchChannels(value, options)),

@@ -15,7 +15,8 @@ import type {
     PrefixCommandRejection,
     PrefixCommandRegistrationOptions,
     PrefixCommandUnmatched,
-    PrefixCommandsOptions,
+    PrefixCommandParsing,
+    PrefixCommandPrefix,
 } from "#sdk/commands"
 import type {
     CommandArgumentCustom,
@@ -53,7 +54,7 @@ import {
 import { convertCommandArguments, parseCommandArgument } from "#sdk/internal/command-arguments"
 import { suggestName } from "#sdk/internal/suggest"
 import type { SendError } from "#sdk/message-errors"
-import type { DefaultSendOptions, Message, MessageCore, ReplyInput, SendOptions } from "#sdk/messages"
+import type { Message, MessageCore, ReplyInput } from "#sdk/messages"
 import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
@@ -69,8 +70,9 @@ import type { ClientLogger } from "#sdk/internal/logging"
 import { recordCommandFailure } from "#sdk/internal/events"
 import { errAsync, type ResultAsync } from "neverthrow"
 import { askerPageOptions } from "#sdk/internal/reaction-pages"
-import type { DefaultPaginateOptions, PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
+import type { PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
 import type { Client, EventHandlerOptions, FailureReport, Subscription } from "./index.js"
+import type { RequestOptions, PaginateOptions } from "./api/default/options.js"
 
 /**
  * Frozen command information copied for a matched message and passed to its guards, middleware and rejection callback.
@@ -79,7 +81,7 @@ import type { Client, EventHandlerOptions, FailureReport, Subscription } from ".
  *
  * @category Commands
  */
-export interface DefaultPrefixCommandContext<M extends MessageCore = Message> {
+export interface PrefixCommandContext<M extends MessageCore = Message> {
     /** Client supplied to `attach`, available for explicit operations. The application remains responsible for connecting and shutting it down */
     readonly client: Client<M>
     /** Incoming frozen message with this client's selected fields. The router does not fetch excluded fields */
@@ -105,7 +107,7 @@ export interface DefaultPrefixCommandContext<M extends MessageCore = Message> {
      */
     readonly reply: (
         input: ReplyInput | string,
-        options?: SendOptions,
+        options?: Omit<RequestOptions, "signal">,
     ) => ResultAsync<M, SendError | CancelledError | ConfigurationError>
     /**
      * Build help pages from the router that matched this command, for example `({ help, reply }) => reply(help()[0] ?? "No commands")`.
@@ -121,7 +123,7 @@ export interface DefaultPrefixCommandContext<M extends MessageCore = Message> {
      */
     readonly paginate: (
         pages: readonly PageInput[],
-        options?: DefaultPaginateOptions,
+        options?: PaginateOptions,
     ) => ResultAsync<PaginateResult<M>, PaginateFailure | CancelledError>
     /**
      * Send this router's help in this message's channel, such as `({ sendHelp }) => sendHelp()`.
@@ -139,10 +141,10 @@ export interface DefaultPrefixCommandContext<M extends MessageCore = Message> {
  *
  * @category Commands
  */
-export interface DefaultPrefixCommandExecutionContext<
+export interface PrefixCommandExecutionContext<
     S extends CommandArgumentSchema = {},
     M extends MessageCore = Message,
-> extends DefaultPrefixCommandContext<M> {
+> extends PrefixCommandContext<M> {
     /** Frozen values keyed by schema names, such as `values.count`. Empty when no schema is supplied. Guards and rejection callbacks never receive partial values */
     readonly values: CommandArgumentValues<S>
 }
@@ -152,7 +154,7 @@ export interface DefaultPrefixCommandExecutionContext<
  *
  * @category Commands
  */
-export interface DefaultPrefixCommandUnmatchedContext<M extends MessageCore = Message> {
+export interface PrefixCommandUnmatchedContext<M extends MessageCore = Message> {
     /** Attached client available for explicit feedback. The router does not take ownership of its lifetime */
     readonly client: Client<M>
     /** Incoming frozen message with the attached client's selected fields only */
@@ -170,7 +172,7 @@ export interface DefaultPrefixCommandUnmatchedContext<M extends MessageCore = Me
      */
     readonly reply: (
         input: ReplyInput | string,
-        options?: SendOptions,
+        options?: Omit<RequestOptions, "signal">,
     ) => ResultAsync<M, SendError | CancelledError | ConfigurationError>
 }
 
@@ -183,8 +185,8 @@ export interface DefaultPrefixCommandUnmatchedContext<M extends MessageCore = Me
  *
  * @category Commands
  */
-export type DefaultPrefixCommandGuard<M extends MessageCore = Message> = (
-    context: DefaultPrefixCommandContext<M>,
+export type PrefixCommandGuard<M extends MessageCore = Message> = (
+    context: PrefixCommandContext<M>,
 ) => PrefixCommandGuardResult | PromiseLike<PrefixCommandGuardResult>
 
 /**
@@ -202,8 +204,8 @@ export type DefaultPrefixCommandGuard<M extends MessageCore = Message> = (
  *
  * @category Commands
  */
-export type DefaultPrefixCommandMiddleware<M extends MessageCore = Message> = (
-    context: DefaultPrefixCommandContext<M>,
+export type PrefixCommandMiddleware<M extends MessageCore = Message> = (
+    context: PrefixCommandContext<M>,
     next: () => Promise<void>,
 ) => unknown
 
@@ -220,16 +222,19 @@ export type DefaultPrefixCommandMiddleware<M extends MessageCore = Message> = (
  *
  * @category Commands
  */
-export type DefaultPrefixCommandRejectionFeedback<M extends MessageCore = Message> =
-    "reply" | "silent" | ((context: DefaultPrefixCommandContext<M>, rejection: PrefixCommandRejection) => unknown)
+export type PrefixCommandRejectionFeedback<M extends MessageCore = Message> =
+    "reply" | "silent" | ((context: PrefixCommandContext<M>, rejection: PrefixCommandRejection) => unknown)
 
 /**
+ * Configure how an attached router recognizes command messages, without connecting or subscribing during construction.
  * Prefix and parsing options, plus router-wide middleware, rejection feedback and optional feedback when a
  * command-like message has no executable match
  *
  * @category Commands
  */
-export interface DefaultPrefixCommandsOptions<M extends MessageCore = Message> extends PrefixCommandsOptions<M> {
+export interface PrefixCommandsOptions<M extends MessageCore = Message> extends PrefixCommandParsing<M> {
+    /** Prefix text, accepted-prefix list or per-message resolver, which may return a promise. If several prefixes match, the longest wins */
+    readonly prefix: PrefixCommandPrefix<M>
     /**
      * Handle parser declines, unknown names and groups without a subcommand, optionally sending feedback.
      * An unknown name carries a `suggestion` when a registered name is close, and a parser decline carries a `reason` and the command `name` when the parser explained a syntax mistake, such as an unclosed quote from `commands.parseQuoted`.
@@ -238,17 +243,14 @@ export interface DefaultPrefixCommandsOptions<M extends MessageCore = Message> e
      * Throws, rejected promises and returned Err results use the attachment's `onError` reporting, without retry.
      * Not called for ignored bots or messages without a matching prefix
      */
-    readonly onUnmatched?: (
-        context: DefaultPrefixCommandUnmatchedContext<M>,
-        unmatched: PrefixCommandUnmatched,
-    ) => unknown
+    readonly onUnmatched?: (context: PrefixCommandUnmatchedContext<M>, unmatched: PrefixCommandUnmatched) => unknown
     /**
      * Rejection feedback for commands that do not set their own `onReject`. Omit it to give no feedback, except in
      * runBot, which replies by default. Guards returning false never send an automatic reply
      */
-    readonly onReject?: DefaultPrefixCommandRejectionFeedback<M>
-    /** Middleware run around every matched command, in order. See DefaultPrefixCommandMiddleware */
-    readonly use?: readonly DefaultPrefixCommandMiddleware<M>[]
+    readonly onReject?: PrefixCommandRejectionFeedback<M>
+    /** Middleware run around every matched command, in order. See PrefixCommandMiddleware */
+    readonly use?: readonly PrefixCommandMiddleware<M>[]
 }
 
 /**
@@ -258,7 +260,7 @@ export interface DefaultPrefixCommandsOptions<M extends MessageCore = Message> e
  *
  * @category Commands
  */
-export interface DefaultCooldownStore {
+export interface CooldownStore {
     /**
      * Reserve `input.key` for `input.durationMs` and return a claim immediately or through a promise.
      * Only `CooldownAcquired` permits the handler to run. Other claims give optional rejection feedback, without waiting or retrying.
@@ -274,7 +276,7 @@ export interface DefaultCooldownStore {
  *
  * @category Commands
  */
-export interface DefaultPrefixCommandCooldown<S extends CommandArgumentSchema = {}, M extends MessageCore = Message> {
+export interface PrefixCommandCooldown<S extends CommandArgumentSchema = {}, M extends MessageCore = Message> {
     /** Whole milliseconds per reservation, from 1 through 2,147,483,647 */
     readonly durationMs: number
     /** Whose invocations share the cooldown: `user` (default), `channel` or `guild` */
@@ -283,12 +285,12 @@ export interface DefaultPrefixCommandCooldown<S extends CommandArgumentSchema = 
      * Store whose `claim` performs the reservation. Omit it to use the router's own memory store in this process, sized by
      * the router's `cooldowns` option and shared by every router derived from the same create
      */
-    readonly store?: DefaultCooldownStore
+    readonly store?: CooldownStore
     /**
      * Return a nonempty key suffix from the converted execution context, replacing the one selected by `per`.
      * The router adds the command's canonical name or full group path, so aliases share a reservation and different groups remain separate
      */
-    readonly key?: (context: DefaultPrefixCommandExecutionContext<S, M>) => string
+    readonly key?: (context: PrefixCommandExecutionContext<S, M>) => string
 }
 
 /**
@@ -299,7 +301,7 @@ export interface DefaultPrefixCommandCooldown<S extends CommandArgumentSchema = 
  *
  * @category Commands
  */
-export interface DefaultPrefixCommand<
+export interface PrefixCommand<
     S extends CommandArgumentSchema = {},
     M extends MessageCore = Message,
 > extends PrefixCommandDefinition {
@@ -309,15 +311,15 @@ export interface DefaultPrefixCommand<
      * One guard or a list of guards, run in order before argument conversion. The first that denies stops the command.
      * Each command owns its policy, with no inherited group guard or permission from help visibility
      */
-    readonly guard?: DefaultPrefixCommandGuard<M> | readonly DefaultPrefixCommandGuard<M>[]
+    readonly guard?: PrefixCommandGuard<M> | readonly PrefixCommandGuard<M>[]
     /**
      * Feedback after a denied guard, rejected arguments or a denied cooldown claim, overriding the router's `onReject`.
      * A function receives raw context and a safe rejection classification, not partially converted values.
      * Throws, rejected promises and returned Err results use attachment error reporting, without retry
      */
-    readonly onReject?: DefaultPrefixCommandRejectionFeedback<M>
+    readonly onReject?: PrefixCommandRejectionFeedback<M>
     /** Optional reservation required after the guards and arguments succeed. A denied claim skips execution */
-    readonly cooldown?: DefaultPrefixCommandCooldown<S, M>
+    readonly cooldown?: PrefixCommandCooldown<S, M>
     /**
      * Perform application work after the command is allowed and all arguments convert.
      * Return normally or a promise completing that work. A returned or resolved Err result is reported like a throw,
@@ -325,7 +327,7 @@ export interface DefaultPrefixCommand<
      * Throws, rejected promises and Err results use attachment `onError` reporting, with no automatic retry or cooldown rollback.
      * Pass `context.signal` to cancellable operations when application work should stop with the subscription
      */
-    readonly execute: (context: DefaultPrefixCommandExecutionContext<S, M>) => unknown
+    readonly execute: (context: PrefixCommandExecutionContext<S, M>) => unknown
 }
 
 /**
@@ -334,9 +336,9 @@ export interface DefaultPrefixCommand<
  *
  * @category Commands
  */
-export type DefaultPrefixCommandBatch<M extends MessageCore, S extends Readonly<Record<string, unknown>>> = {
+export type PrefixCommandBatch<M extends MessageCore, S extends Readonly<Record<string, unknown>>> = {
     readonly [K in keyof S]: Omit<
-        DefaultPrefixCommand<S[K] extends CommandArgumentSchema ? S[K] : {}, M>,
+        PrefixCommand<S[K] extends CommandArgumentSchema ? S[K] : {}, M>,
         "name" | "arguments"
     > & {
         /** Argument schema for the command under this key. Omit it to leave positional arguments unrestricted.
@@ -380,7 +382,7 @@ export interface MemoryCooldownStore {
  *
  * @category Commands
  */
-export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
+export interface PrefixCommandRouter<M extends MessageCore = Message> {
     /** Frozen command descriptions in registration order across groups, without callbacks or resource candidates. Grouped entries include paths of registered names */
     readonly commands: readonly PrefixCommandMetadata[]
     /** Frozen groups in registration order, including empty groups. These names organize lookup and help, not permission checks */
@@ -414,9 +416,9 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      * A throwing getter throws SdkDefect for `commands` with code `application.defect`, while another unexpected fault uses `sdk.defect`. The original router and its attachments are unchanged
      */
     register<const S extends CommandArgumentSchema = {}>(
-        command: DefaultPrefixCommand<S, M>,
+        command: PrefixCommand<S, M>,
         options?: PrefixCommandRegistrationOptions,
-    ): DefaultPrefixCommandRouter<M>
+    ): PrefixCommandRouter<M>
     /**
      * Validate and add a nonempty object of commands to one new router, in the order of its own enumerable string keys and under the same optional parent group.
      * Each object key supplies its command name. Omit `arguments` to leave raw args unrestricted, or set `arguments: {}` to reject positional arguments.
@@ -428,9 +430,9 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
      * Each entry retains its own inferred argument-value type
      */
     registerMany<const S extends Readonly<Record<string, unknown>>>(
-        commands: DefaultPrefixCommandBatch<M, S>,
+        commands: PrefixCommandBatch<M, S>,
         options?: PrefixCommandRegistrationOptions,
-    ): DefaultPrefixCommandRouter<M>
+    ): PrefixCommandRouter<M>
     /**
      * Add a named group to a new router, at root or beneath an existing `options.group` path of registered names.
      * Register parents before children. Groups accept identity and description only, with no handler, schema, guard or cooldown.
@@ -441,7 +443,7 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
     registerGroup(
         group: PrefixCommandGroupDefinition,
         options?: PrefixCommandRegistrationOptions,
-    ): DefaultPrefixCommandRouter<M>
+    ): PrefixCommandRouter<M>
     /**
      * Subscribe this router to `messageCreate` through the client's existing bounded event system.
      * Returns a Subscription immediately, without connecting the client or creating another queue.
@@ -479,7 +481,7 @@ export interface DefaultPrefixCommandRouter<M extends MessageCore = Message> {
  *
  * @category Commands
  */
-export interface DefaultCommands {
+export interface Commands {
     /**
      * Create an empty router, for example `commands.create({ prefix: "!", parse: commands.parseQuoted })`.
      * Defaults to full Message typing. Supply the client's MessageCore or SelectedMessage type as `M` when it selects fewer fields.
@@ -487,7 +489,7 @@ export interface DefaultCommands {
      * Invalid options throw ConfigurationError, without including rejected prefix or parser values.
      * A throwing getter throws SdkDefect for `commands` with code `application.defect`, while another unexpected fault uses `sdk.defect`. No client connects and no feedback callback runs during creation
      */
-    create<M extends MessageCore = Message>(options: DefaultPrefixCommandsOptions<M>): DefaultPrefixCommandRouter<M>
+    create<M extends MessageCore = Message>(options: PrefixCommandsOptions<M>): PrefixCommandRouter<M>
     /**
      * Split a suffix using single or double quotes and backslash escapes, retaining original argument text in `rawArgs`.
      * Use as `create({ prefix: "!", parse: commands.parseQuoted })` to opt in instead of the whitespace-only default.
@@ -537,8 +539,8 @@ export interface DefaultCommands {
 }
 
 /** Default-API command tools exposed through the public `commands` namespace, with immediate creation and registration */
-export const defaultCommands: DefaultCommands = Object.freeze({
-    create: <M extends MessageCore = Message>(options: DefaultPrefixCommandsOptions<M>) =>
+export const defaultCommands: Commands = Object.freeze({
+    create: <M extends MessageCore = Message>(options: PrefixCommandsOptions<M>) =>
         localSetup(() => {
             const registry = new PrefixCommandRegistry<StoredDefaultCommand<M>, M>(options, routerAdapterKeys)
             return freezeRouter(
@@ -560,24 +562,24 @@ export const defaultCommands: DefaultCommands = Object.freeze({
 })
 
 interface StoredDefaultCommand<M extends MessageCore> extends PrefixCommandDefinition {
-    readonly guards: readonly DefaultPrefixCommandGuard<M>[]
-    readonly onReject?: DefaultPrefixCommandRejectionFeedback<M>
+    readonly guards: readonly PrefixCommandGuard<M>[]
+    readonly onReject?: PrefixCommandRejectionFeedback<M>
     readonly cooldown?: {
-        readonly store?: DefaultCooldownStore
+        readonly store?: CooldownStore
         readonly durationMs: number
         readonly per: CommandCooldownPer
-        readonly key?: (context: DefaultPrefixCommandExecutionContext<CommandArgumentSchema, M>) => string
+        readonly key?: (context: PrefixCommandExecutionContext<CommandArgumentSchema, M>) => string
     }
-    readonly execute: (context: DefaultPrefixCommandExecutionContext<CommandArgumentSchema, M>) => unknown
+    readonly execute: (context: PrefixCommandExecutionContext<CommandArgumentSchema, M>) => unknown
 }
 
 interface RouterSettings<M extends MessageCore> {
-    readonly onUnmatched?: DefaultPrefixCommandsOptions<M>["onUnmatched"]
-    readonly onReject?: DefaultPrefixCommandRejectionFeedback<M>
-    readonly use: readonly DefaultPrefixCommandMiddleware<M>[]
+    readonly onUnmatched?: PrefixCommandsOptions<M>["onUnmatched"]
+    readonly onReject?: PrefixCommandRejectionFeedback<M>
+    readonly use: readonly PrefixCommandMiddleware<M>[]
 }
 
-class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultPrefixCommandRouter<M> {
+class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements PrefixCommandRouter<M> {
     readonly #registry: PrefixCommandRegistry<StoredDefaultCommand<M>, M>
     readonly #settings: RouterSettings<M>
 
@@ -599,9 +601,9 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
     }
 
     register<const S extends CommandArgumentSchema = {}>(
-        command: DefaultPrefixCommand<S, M>,
+        command: PrefixCommand<S, M>,
         options?: PrefixCommandRegistrationOptions,
-    ): DefaultPrefixCommandRouter<M> {
+    ): PrefixCommandRouter<M> {
         return localSetup(() =>
             freezeRouter(
                 new DefaultPrefixCommandRouterOwner(
@@ -616,9 +618,9 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
     }
 
     registerMany<const S extends Readonly<Record<string, unknown>>>(
-        commands: DefaultPrefixCommandBatch<M, S>,
+        commands: PrefixCommandBatch<M, S>,
         options?: PrefixCommandRegistrationOptions,
-    ): DefaultPrefixCommandRouter<M> {
+    ): PrefixCommandRouter<M> {
         return localSetup(() => {
             const stored = readCaller(() => snapshotDefaultCommandBatch<M>(commands))
             return freezeRouter(
@@ -630,7 +632,7 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
     registerGroup(
         group: PrefixCommandGroupDefinition,
         options?: PrefixCommandRegistrationOptions,
-    ): DefaultPrefixCommandRouter<M> {
+    ): PrefixCommandRouter<M> {
         return localSetup(() =>
             freezeRouter(
                 new DefaultPrefixCommandRouterOwner(this.#registry.registerGroup(group, options), this.#settings),
@@ -703,8 +705,8 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
         const logger: ClientLogger | undefined = services?.logging
         const operation = dispatchCommand<
             StoredDefaultCommand<M>,
-            DefaultPrefixCommandContext<M>,
-            DefaultPrefixCommandExecutionContext<CommandArgumentSchema, M>,
+            PrefixCommandContext<M>,
+            PrefixCommandExecutionContext<CommandArgumentSchema, M>,
             ConfigurationError,
             never,
             M
@@ -738,14 +740,11 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
                         }
                         return boundDefaultPaginate(client, message, signal)(pages)
                     },
-                }) as DefaultPrefixCommandContext<M>,
+                }) as PrefixCommandContext<M>,
             ...(settings.use.length === 0
                 ? {}
                 : {
-                      around: (
-                          context: DefaultPrefixCommandContext<M>,
-                          rest: Effect.Effect<void, ConfigurationError>,
-                      ) =>
+                      around: (context: PrefixCommandContext<M>, rest: Effect.Effect<void, ConfigurationError>) =>
                           aroundCommand(
                               settings.use,
                               context,
@@ -833,8 +832,8 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements DefaultP
  * replaces it. A different middleware failure is reported after it, and interruption keeps an earlier command failure
  */
 function aroundCommand<M extends MessageCore, E>(
-    middleware: readonly DefaultPrefixCommandMiddleware<M>[],
-    context: DefaultPrefixCommandContext<M>,
+    middleware: readonly PrefixCommandMiddleware<M>[],
+    context: PrefixCommandContext<M>,
     rest: Effect.Effect<void, E>,
     report: ((cause: Cause.Cause<unknown>) => Effect.Effect<void>) | undefined,
 ): Effect.Effect<void, E> {
@@ -934,7 +933,7 @@ function settleAround(
     return { finish, saved }
 }
 
-function snapshotRouterSettings<M extends MessageCore>(options: DefaultPrefixCommandsOptions<M>): RouterSettings<M> {
+function snapshotRouterSettings<M extends MessageCore>(options: PrefixCommandsOptions<M>): RouterSettings<M> {
     const { onUnmatched, onReject, use } = options
     if (onUnmatched !== undefined && typeof onUnmatched !== "function")
         throw new ConfigurationError("commands", 'The option "onUnmatched" must be a function')
@@ -943,7 +942,7 @@ function snapshotRouterSettings<M extends MessageCore>(options: DefaultPrefixCom
     return Object.freeze({
         ...(onUnmatched === undefined ? {} : { onUnmatched }),
         ...(onReject === undefined ? {} : { onReject }),
-        use: snapshotFunctions<DefaultPrefixCommandMiddleware<M>>(
+        use: snapshotFunctions<PrefixCommandMiddleware<M>>(
             use,
             'The option "use" must be an array of middleware functions',
         ),
@@ -951,7 +950,7 @@ function snapshotRouterSettings<M extends MessageCore>(options: DefaultPrefixCom
 }
 
 function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends MessageCore>(
-    command: DefaultPrefixCommand<S, M>,
+    command: PrefixCommand<S, M>,
     keyedName?: string,
 ): StoredDefaultCommand<M> {
     validateCommandShape(command, [
@@ -974,7 +973,7 @@ function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends Messa
             ? Object.freeze([])
             : typeof guard === "function"
               ? Object.freeze([guard])
-              : snapshotFunctions<DefaultPrefixCommandGuard<M>>(
+              : snapshotFunctions<PrefixCommandGuard<M>>(
                     guard,
                     'The option "guard" must be a function or an array of functions',
                 )
@@ -985,7 +984,7 @@ function snapshotDefaultCommand<S extends CommandArgumentSchema, M extends Messa
     return Object.freeze({
         ...definition,
         execute: execute as StoredDefaultCommand<M>["execute"],
-        guards: guards as readonly DefaultPrefixCommandGuard<M>[],
+        guards: guards as readonly PrefixCommandGuard<M>[],
         ...(onReject === undefined ? {} : { onReject }),
         ...(cooldown === undefined ? {} : { cooldown: cooldown as NonNullable<StoredDefaultCommand<M>["cooldown"]> }),
     }) as StoredDefaultCommand<M>
@@ -1009,7 +1008,7 @@ function snapshotDefaultCommandBatch<M extends MessageCore>(commands: unknown): 
                 "command",
                 `The command batch entry ${JSON.stringify(name)} must not set "name", because its object key is the name`,
             )
-        stored.push(snapshotDefaultCommand(value as DefaultPrefixCommand<CommandArgumentSchema, M>, name))
+        stored.push(snapshotDefaultCommand(value as PrefixCommand<CommandArgumentSchema, M>, name))
     }
     return Object.freeze(stored)
 }
@@ -1021,11 +1020,11 @@ function snapshotDefaultCommandBatch<M extends MessageCore>(commands: unknown): 
  * Misuse throws ConfigurationError. A register callback's own throw becomes ApplicationError naming `runBot commands`
  */
 export function botRouter<M extends MessageCore>(
-    options: DefaultPrefixCommandsOptions<M> & {
+    options: PrefixCommandsOptions<M> & {
         readonly commands: unknown
     },
     ignoreBots: boolean,
-): DefaultPrefixCommandRouter<M> {
+): PrefixCommandRouter<M> {
     if (typeof options !== "object" || options === null || Array.isArray(options))
         throw new ConfigurationError("commands", "The commands option must be an object")
     checkBotCommandKeys(options, routerAdapterKeys)
@@ -1054,9 +1053,9 @@ export function botRouter<M extends MessageCore>(
             !(registered instanceof DefaultPrefixCommandRouterOwner)
         )
             throw new ConfigurationError("commands", "A commands register callback must return the registered router")
-        return registered as DefaultPrefixCommandRouter<M>
+        return registered as PrefixCommandRouter<M>
     }
-    return router.registerMany(definitions as DefaultPrefixCommandBatch<M, Readonly<Record<string, undefined>>>)
+    return router.registerMany(definitions as PrefixCommandBatch<M, Readonly<Record<string, undefined>>>)
 }
 
 /** Reply to one message with a string or message input, applying the handler's cancellation signal */
@@ -1064,7 +1063,7 @@ export function boundDefaultReply<M extends MessageCore>(
     client: Client<M>,
     message: M,
     signal: AbortSignal,
-): DefaultPrefixCommandContext<M>["reply"] {
+): PrefixCommandContext<M>["reply"] {
     return (input, options) => client.messages.reply(message, input, bindDefaultReplyOptions(options, signal))
 }
 
@@ -1072,16 +1071,19 @@ function boundDefaultPaginate<M extends MessageCore>(
     client: Client<M>,
     message: M,
     signal: AbortSignal,
-): DefaultPrefixCommandContext<M>["paginate"] {
+): PrefixCommandContext<M>["paginate"] {
     return (pages, options) =>
         client.messages.paginate(message.channelId, pages, askerPageOptions(options, message.author.id, signal))
 }
 
-function bindDefaultReplyOptions(options: SendOptions | undefined, signal: AbortSignal): DefaultSendOptions {
+function bindDefaultReplyOptions(
+    options: Omit<RequestOptions, "signal"> | undefined,
+    signal: AbortSignal,
+): RequestOptions {
     if (options === undefined) return { signal }
-    if (typeof options !== "object" || options === null || Array.isArray(options)) return options as DefaultSendOptions
+    if (typeof options !== "object" || options === null || Array.isArray(options)) return options as RequestOptions
     // Bind cancellation without reading getters before the operation's async validation and defect boundary
-    return new Proxy(Object.create(null) as DefaultSendOptions, {
+    return new Proxy(Object.create(null) as RequestOptions, {
         get: (_target, property) => (property === "signal" ? signal : Reflect.get(options, property, options)),
         ownKeys: () => Reflect.ownKeys(options),
         getOwnPropertyDescriptor: (_target, property) => {
@@ -1093,7 +1095,7 @@ function bindDefaultReplyOptions(options: SendOptions | undefined, signal: Abort
 
 function defaultCooldown<M extends MessageCore>(
     definition: StoredDefaultCommand<M>,
-    context: DefaultPrefixCommandExecutionContext<CommandArgumentSchema, M>,
+    context: PrefixCommandExecutionContext<CommandArgumentSchema, M>,
     routerStore: LocalMemoryCooldownStore,
 ): Effect.Effect<{ readonly key: string; readonly claim: unknown } | undefined, ConfigurationError> {
     const cooldown = definition.cooldown
@@ -1133,9 +1135,7 @@ function defaultMemoryCooldownStore(owner: LocalMemoryCooldownStore): MemoryCool
     })
 }
 
-function freezeRouter<M extends MessageCore>(
-    router: DefaultPrefixCommandRouterOwner<M>,
-): DefaultPrefixCommandRouter<M> {
+function freezeRouter<M extends MessageCore>(router: DefaultPrefixCommandRouterOwner<M>): PrefixCommandRouter<M> {
     return Object.freeze(router)
 }
 

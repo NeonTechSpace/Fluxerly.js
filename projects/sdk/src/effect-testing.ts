@@ -57,7 +57,7 @@ import { FluxerClient } from "./api/effect/service.js"
 import type { ClientCounters, LogRecord } from "./logging.js"
 import { ConfigurationError, type ApplicationError, type ConnectError } from "./errors.js"
 import type { EventName } from "./events.js"
-import type { NativeBatchRequirements } from "./native-commands.js"
+import type { BatchRequirements } from "./native-commands.js"
 import {
     installNativeTestBot,
     type BotCommandEntries,
@@ -556,7 +556,7 @@ export function createTestBot<
     | Scope.Scope
     | Exclude<
           | BotEventServices<Events>
-          | NativeBatchRequirements<C>
+          | BatchRequirements<C>
           | RouterServices
           | OptionsServices
           | SetupServices

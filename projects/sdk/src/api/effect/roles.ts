@@ -6,10 +6,9 @@ import type {
     RoleCreate,
     RoleEdit,
     GuildOperationFailure,
-    GuildOperationOptions,
-    GuildAuditOperationOptions,
 } from "#sdk/guilds"
 import type * as Effect from "effect/Effect"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Read or change community roles, their permission bits and their ordering.
  * Methods return Effects and share Guilds' HTTP concurrency limits, deadlines and read retries.
@@ -18,7 +17,7 @@ import type * as Effect from "effect/Effect"
  * Interruption waits for owned cleanup but cannot undo write requests already sent. Success is not a gateway acknowledgement.
  * Expected failures use GuildOperationError or ClientClosedError. Defects and interruption retain Cause.
  * Inputs are copied on execution, not Effect construction. Returned roles contain bigint permissions and require explicit JSON conversion.
- * Every remote role mutation accepts GuildAuditOperationOptions. The fetchAll method rejects auditReason
+ * Every remote role mutation accepts AuditedRequestOptions. The fetchAll method rejects auditReason
  *
  * @category Roles and permissions
  */
@@ -62,10 +61,7 @@ export interface Roles {
      * Fetch the community's current role list, including everyone, in server order.
      * This always reads remotely, without pagination or background refresh
      */
-    fetchAll(
-        guildId: string,
-        options?: GuildOperationOptions,
-    ): Effect.Effect<readonly GuildRole[], GuildOperationFailure>
+    fetchAll(guildId: string, options?: RequestOptions): Effect.Effect<readonly GuildRole[], GuildOperationFailure>
     /**
      * Create a role with a name, optional color and permission flags.
      * The permissions input defaults to 0n, rather than copying the everyone role's grants.
@@ -89,7 +85,7 @@ export interface Roles {
     create(
         guildId: string,
         input: RoleCreate,
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildRole, GuildOperationFailure>
     /**
      * Change only supplied role fields and return the server's snapshot.
@@ -102,7 +98,7 @@ export interface Roles {
     edit(
         role: RoleReference,
         input: RoleEdit,
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildRole, GuildOperationFailure>
     /**
      * Delete a role and remove its member assignments in Fluxer.
@@ -112,7 +108,7 @@ export interface Roles {
      * HTTP 204 succeeds with no value, without proving member-event delivery.
      * Snapshots already returned to the caller remain unchanged
      */
-    delete(role: RoleReference, options?: GuildAuditOperationOptions): Effect.Effect<void, GuildOperationFailure>
+    delete(role: RoleReference, options?: AuditedRequestOptions): Effect.Effect<void, GuildOperationFailure>
     /**
      * Change role hierarchy positions using distinct role IDs and nonnegative safe-integer positions.
      * The everyone role cannot move.
@@ -124,7 +120,7 @@ export interface Roles {
     reorder(
         guildId: string,
         positions: readonly RolePosition[],
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, GuildOperationFailure>
     /**
      * Set roles' display positions without changing their permission hierarchy or enabling hoist.
@@ -147,7 +143,7 @@ export interface Roles {
     setHoistPositions(
         guildId: string,
         positions: readonly RoleHoistPosition[],
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, GuildOperationFailure>
     /**
      * Clear display-position assignments across the community, including roles above the bot.
@@ -158,8 +154,5 @@ export interface Roles {
      * Successful writes and writes with unknown outcomes invalidate cached guild roles.
      * Refetch to resolve an unknown outcome
      */
-    resetHoistPositions(
-        guildId: string,
-        options?: GuildAuditOperationOptions,
-    ): Effect.Effect<void, GuildOperationFailure>
+    resetHoistPositions(guildId: string, options?: AuditedRequestOptions): Effect.Effect<void, GuildOperationFailure>
 }

@@ -70,9 +70,9 @@ import { nativeCommands } from "#sdk/native-commands"
  * @example
  * ```ts
  * import { Effect } from "effect"
- * import { type Client, type NativePrefixCommandRouter } from "@neontechspace/fluxerly/effect"
+ * import { type Client, type PrefixCommandRouter } from "@neontechspace/fluxerly/effect"
  *
- * export function commandHelpExample(client: Client, router: NativePrefixCommandRouter, channelId: string) {
+ * export function commandHelpExample(client: Client, router: PrefixCommandRouter, channelId: string) {
  *     const pages = router.help({ prefix: "!", maxLength: 1_000, include: (command) => command.name !== "admin" })
  *     // Visibility is not authorization. Each command still needs its own policy
  *     return Effect.forEach(pages, (content) => client.messages.send(channelId, { content, allowedMentions: {} }), {

@@ -1,4 +1,4 @@
-import type { OperationOptions } from "./client.js"
+import type { RequestOptions } from "./client.js"
 import type { MessageOperationError } from "./message-errors.js"
 import {
     operationErrorMessage,
@@ -9,7 +9,7 @@ import {
 } from "./api-errors.js"
 import { FluxerlyError, operationDetails } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
-import type { Message, MessageCore, MessageOperationOptions } from "./messages.js"
+import type { Message, MessageCore } from "./messages.js"
 
 /** Choose messages for previewCleanup without deleting them.
  * Set explicit scan and selection limits, and supply authorId, filter, or both.
@@ -144,7 +144,7 @@ export interface MessageCleanupFailureMetadata {
  *
  * @category Messages
  */
-export interface MessageCleanupOptions extends MessageOperationOptions {
+export interface MessageCleanupOptions extends RequestOptions {
     /** Observe submitting, submitted and failed batches synchronously.
      * Return values are not awaited, and the callback does not schedule retries or recovery.
      * A throw, a rejected asynchronous return or a returned or resolved Err result goes to the client-level onError as a
@@ -154,14 +154,6 @@ export interface MessageCleanupOptions extends MessageOperationOptions {
      */
     readonly onProgress?: (progress: MessageCleanupProgress) => unknown
 }
-
-/** Cleanup settings for the Promise and Result API, with AbortSignal cancellation.
- * Cancellation returns CancelledError rather than a partial report. Earlier requests may already have been submitted.
- * Use progress observations for application-owned reconciliation. The Effect entry point retains interruption in Cause
- *
- * @category Messages
- */
-export interface DefaultMessageCleanupOptions extends MessageCleanupOptions, OperationOptions {}
 
 /** Expected preview or cleanup failure classification.
  * The reason filter denotes a bad selection callback, closed denotes client closure, which keeps the outcome of the step it ended, and input denotes invalid settings or plan ownership.

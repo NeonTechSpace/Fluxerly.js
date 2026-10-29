@@ -1,4 +1,4 @@
-import type { CountOperationFailure, CountOperationOptions, GuildCountsResult } from "#sdk/counts"
+import type { CountOperationFailure, GuildCountsResult } from "#sdk/counts"
 import type {
     GuildListQuery,
     GuildListSummary,
@@ -7,13 +7,12 @@ import type {
     GuildVanityUrlUsage,
     Guild,
     GuildOperationFailure,
-    GuildOperationOptions,
-    ModerationOptions,
 } from "#sdk/guilds"
 import type { GuildIterationQuery, PaginationError } from "#sdk/pagination"
 import type { OwnMessageDeletionOptions } from "#sdk/messages"
 import type * as Effect from "effect/Effect"
 import type * as Stream from "effect/Stream"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Read or change guilds and obtain gateway counts.
  * A guild is a Fluxer community. HTTP methods return Effects and do not require a gateway connection.
@@ -77,7 +76,7 @@ export interface Guilds {
      */
     fetchCounts(
         guildIds: readonly string[],
-        options?: CountOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<GuildCountsResult, CountOperationFailure>
     /**
      * Fetch one page of communities this bot belongs to, ordered by ascending guild ID.
@@ -103,7 +102,7 @@ export interface Guilds {
      */
     fetchPage(
         query?: GuildListQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly GuildListSummary[], GuildOperationFailure>
     /**
      * Read the bot's community memberships in ascending ID order, retaining one page and never prefetching.
@@ -133,7 +132,7 @@ export interface Guilds {
      */
     iterate(
         query: GuildIterationQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<GuildListSummary, GuildOperationFailure | PaginationError>
     /**
      * Remove this bot from one community while preserving its authored messages.
@@ -152,7 +151,7 @@ export interface Guilds {
      * Objects already returned to the caller stay unchanged.
      * This neither deletes the community nor shuts down the client
      */
-    leave(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
+    leave(guildId: string, options?: RequestOptions): Effect.Effect<void, GuildOperationFailure>
     /**
      * Irreversibly delete this bot's entire authored message history across one community.
      * Use a decimal guild ID.
@@ -190,10 +189,7 @@ export interface Guilds {
      * The read is remote, without a vanity cache or gateway connection.
      * Shared guild read retries, deadline, cancellation and failure rules apply
      */
-    fetchVanityUrl(
-        guildId: string,
-        options?: GuildOperationOptions,
-    ): Effect.Effect<GuildVanityUrlUsage, GuildOperationFailure>
+    fetchVanityUrl(guildId: string, options?: RequestOptions): Effect.Effect<GuildVanityUrlUsage, GuildOperationFailure>
     /**
      * Set a community's custom invite code, replace it, or pass null to remove it.
      * The code must already be lowercase, 2–32 ASCII letters or digits with single internal hyphens.
@@ -213,7 +209,7 @@ export interface Guilds {
     editVanityUrl(
         guildId: string,
         code: string | null,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildVanityUrl, GuildOperationFailure>
     /**
      * Change only supplied community settings that a bot may edit.
@@ -227,7 +223,11 @@ export interface Guilds {
      * After a lost response, fetch before deciding to retry.
      * No rollback is guaranteed
      */
-    edit(guildId: string, input: GuildEdit, options?: ModerationOptions): Effect.Effect<Guild, GuildOperationFailure>
+    edit(
+        guildId: string,
+        input: GuildEdit,
+        options?: AuditedRequestOptions,
+    ): Effect.Effect<Guild, GuildOperationFailure>
     /**
      * Look up a community in the enabled guild cache, without a request or gateway connection.
      * The result is undefined when caching is disabled or the entry is absent, expired or evicted.
@@ -243,5 +243,5 @@ export interface Guilds {
      * The result is a frozen snapshot.
      * This does not fetch or keep nested members, roles or channels, or infer counts or completeness
      */
-    fetch(guildId: string, options?: GuildOperationOptions): Effect.Effect<Guild, GuildOperationFailure>
+    fetch(guildId: string, options?: RequestOptions): Effect.Effect<Guild, GuildOperationFailure>
 }

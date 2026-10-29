@@ -926,7 +926,7 @@ export function watchMessageChanges(client: Client) {
 }
 export function moderationOperations(client: Client, target: import("@neontechspace/fluxerly/effect").MemberReference) {
     const ban: import("@neontechspace/fluxerly/effect").BanInput = { durationMs: 60_000, reason: "Spam" }
-    const options: import("@neontechspace/fluxerly/effect").ModerationOptions = { auditReason: "Spam" }
+    const options: import("@neontechspace/fluxerly/effect").AuditedRequestOptions = { auditReason: "Spam" }
     return Effect.gen(function* () {
         const cleared = yield* client.members.clearTimeout(target, options)
         const expiry: string | null | undefined = cleared.communicationDisabledUntil
@@ -1104,10 +1104,10 @@ export function approvedRequestInputs(client: Client) {
         timeoutReason: "Timeout context",
         auditReason: "Moderator action",
     }
-    const guildAudit: import("@neontechspace/fluxerly/effect").GuildAuditOperationOptions = {
+    const guildAudit: import("@neontechspace/fluxerly/effect").AuditedRequestOptions = {
         auditReason: "Provision reviewed role",
     }
-    const channelAudit: import("@neontechspace/fluxerly/effect").ChannelAuditOperationOptions = {
+    const channelAudit: import("@neontechspace/fluxerly/effect").AuditedRequestOptions = {
         auditReason: "Provision reviewed channel",
     }
     const mention: import("@neontechspace/fluxerly/effect").CommandArgumentMention = "role"
@@ -1132,12 +1132,12 @@ export function announcementOperations(
     target: MessageReference,
 ) {
     const input: ChannelFollowInput = { targetChannelId: "30" }
-    const audit: import("@neontechspace/fluxerly/effect").ChannelAuditOperationOptions = {
+    const audit: import("@neontechspace/fluxerly/effect").AuditedRequestOptions = {
         auditReason: "Subscribe reviewed channel",
         timeoutMs: 5_000,
     }
-    const read: import("@neontechspace/fluxerly/effect").ChannelOperationOptions = { timeoutMs: 5_000 }
-    const message: import("@neontechspace/fluxerly/effect").MessageOperationOptions = { timeoutMs: 5_000 }
+    const read: import("@neontechspace/fluxerly/effect").RequestOptions = { timeoutMs: 5_000 }
+    const message: import("@neontechspace/fluxerly/effect").RequestOptions = { timeoutMs: 5_000 }
     const followed: Effect.Effect<FollowedChannel, import("@neontechspace/fluxerly/effect").ChannelOperationFailure> =
         client.channels.follow("20", input, audit)
     const stats: Effect.Effect<ChannelFollowerStats, import("@neontechspace/fluxerly/effect").ChannelOperationFailure> =

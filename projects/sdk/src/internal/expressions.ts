@@ -12,12 +12,12 @@ import type {
     ExpressionDeleteOptions,
     ExpressionSourceGuild,
 } from "#sdk/expressions"
-import type { ModerationOptions } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record, snapshotArray } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { normalizedText as text } from "./field-text.js"
+import type { AuditedRequestOptions } from "#sdk/client"
 
 export type ExpressionKind = "emojis" | "stickers"
 export type ExpressionResources = { emojis: GuildEmoji; stickers: GuildSticker }
@@ -195,7 +195,7 @@ export function expressionCreate<K extends ExpressionKind>(
     kind: K,
     guildId: string,
     input: unknown,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<ExpressionResources[K]> | InputValidationFailure {
     const base = expressionList(kind, guildId)
     const body = encode(kind, input, true)
@@ -217,7 +217,7 @@ export function expressionClone<K extends ExpressionKind>(
     kind: K,
     guildId: string,
     sourceId: string,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<ExpressionResources[K]> | InputValidationFailure {
     const base = expressionList(kind, guildId)
     const audit = auditSettings(options)
@@ -240,7 +240,7 @@ export function expressionBatch<K extends ExpressionKind>(
     kind: K,
     guildId: string,
     inputs: unknown,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<ExpressionBatch<ExpressionResources[K]>> | InputValidationFailure {
     const base = expressionList(kind, guildId)
     const audit = auditSettings(options)
@@ -285,7 +285,7 @@ export function expressionEdit<K extends ExpressionKind>(
     kind: K,
     target: ExpressionReference,
     input: unknown,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<ExpressionResources[K]> | InputValidationFailure {
     if (!record(target)) return inputValidationFailure("target", "type", "Expression targets must be objects")
     if (!identifier(target.id))

@@ -9,8 +9,7 @@ import * as Effect from "effect/Effect"
 import type * as Scope from "effect/Scope"
 import * as Stream from "effect/Stream"
 import { AttachmentDownloadError, type Attachment, type AttachmentDownloadOptions } from "#sdk/attachments"
-import type { CacheEntriesOptions, CacheKind } from "#sdk/client"
-import type { InstanceResolveOptions } from "#sdk/instance"
+import type { CacheEntriesOptions, CacheKind, RequestOptions } from "#sdk/client"
 import type { MemberChunkOptions, MemberChunkQuery } from "#sdk/member-chunks"
 import { ClientClosedError, type ConfigurationError } from "#sdk/errors"
 import {
@@ -19,7 +18,7 @@ import {
     type CollectorResult,
     type ReactionCollectorResult,
 } from "#sdk/collectors"
-import type { MessageCore, MessageOperationOptions, MessageReference } from "#sdk/messages"
+import type { MessageCore, MessageReference } from "#sdk/messages"
 import type {
     Collector,
     CollectorOptions,
@@ -37,7 +36,7 @@ import type { RestRequest } from "#sdk/rest"
 export const nativeInstanceResolve = <M extends MessageCore>(owner: ClientOwner<M>) => {
     // Resolution repeats discovery when needed, but the client keeps returning its first native instance view
     let instance: ResolvedInstance | undefined
-    return (options?: InstanceResolveOptions) =>
+    return (options?: RequestOptions) =>
         owner.instance.resolveInfo(options).pipe(Effect.map((value) => (instance ??= effectInstance(value))))
 }
 
@@ -193,5 +192,5 @@ export const nativeCollectReactions =
 
 export const nativeKeepTyping =
     <M extends MessageCore>(owner: ClientOwner<M>) =>
-    <A, E, R>(channelId: string, task: Effect.Effect<A, E, R>, options?: MessageOperationOptions) =>
+    <A, E, R>(channelId: string, task: Effect.Effect<A, E, R>, options?: RequestOptions) =>
         owner.keepTyping(channelId, task, options)

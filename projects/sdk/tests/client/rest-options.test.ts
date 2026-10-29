@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
-import type { ClientOptions, DefaultRestRequest, RestOptions } from "../../src/index.js"
+import type { ClientOptions, RestRequest, RestOptions } from "../../src/index.js"
 import { captureLogs } from "../support/log-capture.js"
 import { describeBothApis, modes, setup, type Mode } from "../support/both-apis.js"
 import { creationField } from "../support/client-creation.js"
@@ -65,7 +65,7 @@ async function scheduled(
                 url === discoveryUrl ? Promise.resolve(Response.json(hostedDiscoveryDocument)) : handler(url, init),
         },
     })
-    const request = (input: DefaultRestRequest) =>
+    const request = (input: RestRequest) =>
         mode === "default"
             ? (client as import("../../src/index.js").Client).rest.request(input)
             : (client as import("../../src/effect.js").Client).rest.request(input)

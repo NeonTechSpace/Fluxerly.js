@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
-import { createClient, SdkDefect, type Attachment, type DefaultAttachmentStreamOptions } from "../../src/index.js"
+import { createClient, SdkDefect, type Attachment, type AttachmentStreamOptions } from "../../src/index.js"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -105,7 +105,7 @@ test.each([false, true])(
         const client = createClient({ token: "fixture-only" })
         try {
             const iterator = client.attachments
-                .stream(input, { maxBytes: 2, signal } satisfies DefaultAttachmentStreamOptions)
+                .stream(input, { maxBytes: 2, signal } satisfies AttachmentStreamOptions)
                 [Symbol.asyncIterator]()
             const chunk = await iterator.next()
             expect(chunk.done).toBe(false)

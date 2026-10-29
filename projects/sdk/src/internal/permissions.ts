@@ -6,7 +6,7 @@
 import * as Effect from "effect/Effect"
 import { ChannelOperationError, isThreadChannel } from "#sdk/channels"
 import type { ChannelOperationFailure, GuildChannel, PermissionOverwrite } from "#sdk/channels"
-import type { GuildOperationFailure, GuildOperationOptions, GuildRole, MemberReference } from "#sdk/guilds"
+import type { GuildOperationFailure, GuildRole, MemberReference } from "#sdk/guilds"
 import { ClientClosedError } from "#sdk/errors"
 import { GuildOperationError, Permissions } from "#sdk/guilds"
 import { closedBeforeSend } from "#sdk/internal/rest/closed"
@@ -19,6 +19,7 @@ import { identifier, record } from "./decode/primitives.js"
 import { failures, mapFailureCause } from "./effect-failures.js"
 import { readCaller, suspendInput, suspendMarked } from "./defects.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import type { RequestOptions } from "#sdk/client"
 
 const allPermissions = (1n << 64n) - 1n
 const administrator = 1n << 3n
@@ -343,7 +344,7 @@ function validateOptions(
     return { ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(preferCache === undefined ? {} : { preferCache }) }
 }
 
-function remainingOptions(deadline: number, now: () => number): GuildOperationOptions | undefined {
+function remainingOptions(deadline: number, now: () => number): RequestOptions | undefined {
     const remaining = Math.floor(deadline - now())
     return remaining > 0 ? { timeoutMs: remaining } : undefined
 }
@@ -446,7 +447,7 @@ export function fetchPermissions(
             const now = () => owner.logical.now()
             const deadline = now() + (validatedOptions.timeoutMs ?? owner.defaultTimeoutMs ?? 30_000)
             // Each remote read gets the time left, and none starts once the deadline has passed. Cache reads need no time
-            const remote = <A, E>(run: (budget: GuildOperationOptions) => Effect.Effect<A, E>) => {
+            const remote = <A, E>(run: (budget: RequestOptions) => Effect.Effect<A, E>) => {
                 const remaining = remainingOptions(deadline, now)
                 return remaining ? run(remaining) : Effect.fail(timeoutFailure("permissions.fetch"))
             }
@@ -512,7 +513,7 @@ export function fetchPermissions(
 export function fetchChannelPermissions(
     owner: Pick<ClientOwner, "guild" | "channel" | "logical"> & { readonly defaultTimeoutMs?: number },
     target: MemberReference,
-    options?: GuildOperationOptions,
+    options?: RequestOptions,
 ): Effect.Effect<readonly ChannelPermissions[], GuildOperationFailure | ChannelOperationFailure> {
     const operation = "permissions.fetchChannels"
     // Reading and validating the caller target and options is marked as application input
@@ -528,7 +529,7 @@ export function fetchChannelPermissions(
             const now = () => owner.logical.now()
             const deadline = now() + (validatedOptions.timeoutMs ?? owner.defaultTimeoutMs ?? 30_000)
             // Each remote read gets the time left, and none starts once the deadline has passed
-            const remote = <A, E>(run: (budget: GuildOperationOptions) => Effect.Effect<A, E>) => {
+            const remote = <A, E>(run: (budget: RequestOptions) => Effect.Effect<A, E>) => {
                 const remaining = remainingOptions(deadline, now)
                 return remaining ? run(remaining) : Effect.fail(timeoutFailure(operation))
             }

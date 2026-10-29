@@ -5,9 +5,9 @@ import type {
     AttachmentDownloadFailure,
     AttachmentDownloadOptions,
     AttachmentRefreshFailure,
-    AttachmentRefreshOptions,
     RefreshedAttachmentUrl,
 } from "#sdk/attachments"
+import type { RequestOptions } from "#sdk/client"
 
 /** Refresh signed attachment URL strings explicitly, or download attachment bytes in one result or as chunks.
  * Methods return Effects or Streams, do not need a gateway connection and use no cached bytes
@@ -37,7 +37,7 @@ export interface Attachments {
      */
     refreshUrls(
         urls: readonly string[],
-        options?: AttachmentRefreshOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure>
     /**
      * Download attachment.url into one Uint8Array.

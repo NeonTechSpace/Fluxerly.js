@@ -1,11 +1,5 @@
 import type { ResultAsync, Result } from "neverthrow"
-import type {
-    GuildThreadChannel,
-    ThreadMember,
-    ChannelOperationFailure,
-    DefaultChannelOperationOptions,
-    DefaultChannelAuditOperationOptions,
-} from "#sdk/channels"
+import type { GuildThreadChannel, ThreadMember, ChannelOperationFailure } from "#sdk/channels"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { PaginationError } from "#sdk/pagination"
@@ -23,6 +17,7 @@ import type {
     ThreadSearchPage,
     ThreadSearchQuery,
 } from "#sdk/threads"
+import type { RequestOptions, AuditedRequestOptions } from "./options.js"
 
 /**
  * Create threads and forum posts, change, list and search threads, and manage thread members.
@@ -38,7 +33,7 @@ import type {
  * Manage Threads is an elevated permission.
  * In a community whose mfaLevel is GuildMfaLevels.Elevated, an action that needs it fails with apiError.code twoFactorRequired, unless the bot owns the community or its application owner has two-factor authentication enabled.
  * The create, createFromMessage, createPost and edit methods accept a raw audit reason through
- * DefaultChannelAuditOperationOptions, and the other methods reject auditReason.
+ * AuditedRequestOptions, and the other methods reject auditReason.
  * The fetchActive list enters the enabled channel cache, while archived pages, search results, forum posts and member
  * reads do not.
  * The edit, join, leave, addMember and removeMember methods remove their thread from the enabled channel cache.
@@ -75,7 +70,7 @@ export interface Threads<M extends MessageCore = Message> {
     create(
         channelId: string,
         input: ThreadCreate,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildThreadChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Start a public thread on an existing message and return its frozen snapshot.
@@ -90,7 +85,7 @@ export interface Threads<M extends MessageCore = Message> {
     createFromMessage(
         message: MessageReference,
         input: ThreadFromMessageCreate,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildThreadChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Create a post in a forum or media channel, a public thread with its first message, and return both frozen.
@@ -103,7 +98,7 @@ export interface Threads<M extends MessageCore = Message> {
     createPost(
         channelId: string,
         input: ForumPostCreate,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<ForumPost<M>, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change only the supplied thread settings and return the frozen thread.
@@ -113,7 +108,7 @@ export interface Threads<M extends MessageCore = Message> {
     edit(
         threadId: string,
         input: ThreadEdit,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildThreadChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch every active thread the bot can view in a community, newest first, as one frozen list.
@@ -122,7 +117,7 @@ export interface Threads<M extends MessageCore = Message> {
      */
     fetchActive(
         guildId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildThreadChannel[], ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one frozen page of archived threads of a text, announcement, forum or media channel, as ArchivedThreadQuery
@@ -133,7 +128,7 @@ export interface Threads<M extends MessageCore = Message> {
     fetchArchived(
         channelId: string,
         query?: ArchivedThreadQuery,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ArchivedThreadPage, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Search the threads of a text, announcement, forum or media channel by name, tags and state, and return one frozen
@@ -146,7 +141,7 @@ export interface Threads<M extends MessageCore = Message> {
     search(
         channelId: string,
         query?: ThreadSearchQuery,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ThreadSearchPage<M>, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add the bot to a thread, succeeding with no value after HTTP 204. Joining a thread the bot already belongs to also
@@ -154,7 +149,7 @@ export interface Threads<M extends MessageCore = Message> {
      */
     join(
         threadId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove the bot from a thread, succeeding with no value after HTTP 204.
@@ -162,7 +157,7 @@ export interface Threads<M extends MessageCore = Message> {
      */
     leave(
         threadId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add a community member who can view the parent channel to a thread, succeeding with no value after HTTP 204.
@@ -173,7 +168,7 @@ export interface Threads<M extends MessageCore = Message> {
     addMember(
         threadId: string,
         userId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove a member from a thread, succeeding with no value after HTTP 204, and Fluxer posts a RecipientRemove notice
@@ -184,7 +179,7 @@ export interface Threads<M extends MessageCore = Message> {
     removeMember(
         threadId: string,
         userId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one thread member as a frozen ThreadMember. A user who is not a member fails with UNKNOWN_THREAD_MEMBER.
@@ -196,7 +191,7 @@ export interface Threads<M extends MessageCore = Message> {
         threadId: string,
         userId: string,
         query?: ThreadMemberQuery,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ThreadMember, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one page of thread members in ascending user ID order, as frozen ThreadMember values.
@@ -206,7 +201,7 @@ export interface Threads<M extends MessageCore = Message> {
     fetchMembers(
         threadId: string,
         query?: ThreadMemberPageQuery,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly ThreadMember[], ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Read thread members in ascending user ID order, buffering one page and never prefetching.
@@ -226,7 +221,7 @@ export interface Threads<M extends MessageCore = Message> {
     iterateMembers(
         threadId: string,
         query: ThreadMemberIterationQuery,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<
         Result<ThreadMember, ChannelOperationFailure | PaginationError | CancelledError | ConfigurationError>
     >

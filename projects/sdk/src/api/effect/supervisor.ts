@@ -55,4 +55,4 @@ import { openClient } from "./client.js"
  *
  * @category Sharding and supervision
  */
-export const supervisor: import("#sdk/native-supervisor").NativeSupervisorTools = makeNativeSupervisor(openClient)
+export const supervisor: import("#sdk/native-supervisor").SupervisorTools = makeNativeSupervisor(openClient)

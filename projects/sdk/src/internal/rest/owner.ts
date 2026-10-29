@@ -27,32 +27,24 @@ import type {
     MessageCore,
     MessageInput,
     MessageHistoryQuery,
-    MessageOperationOptions,
-    MessageAuditOperationOptions,
     MessageReference,
-    SendOptions,
 } from "#sdk/messages"
 import type {
     Attachment,
     AttachmentDownloadFailure,
     AttachmentDownloadOptions,
     AttachmentRefreshFailure,
-    AttachmentRefreshOptions,
     RefreshedAttachmentUrl,
 } from "#sdk/attachments"
 import { AttachmentRefreshError } from "#sdk/attachments"
 import type { ReactionEmojiInput, ReactionUsersQuery, ReactionUsersPage } from "#sdk/reactions"
 import type { MessagePinsPage, MessagePinsQuery } from "#sdk/pins"
 import type { MessageSearchContext, MessageSearchPage, MessageSearchQuery } from "#sdk/message-search"
-import { GuildOperationError, type GuildOperation, type GuildOperationOptions } from "#sdk/guilds"
-import { ChannelOperationError, type ChannelOperation, type ChannelOperationOptions } from "#sdk/channels"
-import { WebhookOperationError, type WebhookOperation, type WebhookOperationOptions } from "#sdk/webhooks"
-import { UserOperationError, type UserOperation, type UserOperationOptions } from "#sdk/users"
-import {
-    BotApplicationOperationError,
-    type BotApplicationOperation,
-    type BotApplicationOperationOptions,
-} from "#sdk/application"
+import { GuildOperationError, type GuildOperation } from "#sdk/guilds"
+import { ChannelOperationError, type ChannelOperation } from "#sdk/channels"
+import { WebhookOperationError, type WebhookOperation } from "#sdk/webhooks"
+import { UserOperationError, type UserOperation } from "#sdk/users"
+import { BotApplicationOperationError, type BotApplicationOperation } from "#sdk/application"
 import { identifier, record, snapshotArray } from "../decode/primitives.js"
 import { failingFieldPath } from "../decode/trace.js"
 import { inputDefect, suspendInput } from "../defects.js"
@@ -96,13 +88,8 @@ import { rateRoute, routeTemplate } from "../rate-limits.js"
 import { defaultHttpTransport, type HttpTransport } from "../transport/index.js"
 import { RestAdmission } from "./admission.js"
 import { defaultRestConfiguration, type RestConfiguration } from "./options.js"
-import {
-    RestRequestError,
-    type DefaultRestRequest,
-    type RestRequest,
-    type RestRequestFailure,
-    type RestResponse,
-} from "#sdk/rest"
+import { RestRequestError, type RestRequest, type RestRequestFailure, type RestResponse } from "#sdk/rest"
+import type { RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
 import { isReadRequest, runAttempt, type Request } from "./attempt.js"
 import { encodeRestRequest, readRestResponse } from "./request.js"
 import {
@@ -121,6 +108,7 @@ import {
     openAttachmentStream,
     type AttachmentDownloadSource,
 } from "./download.js"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Longest single timer delay, and the largest accepted timeoutMs */
 const maximumTimerMs = 2_147_483_647
@@ -376,7 +364,7 @@ export class RestOwner<M extends MessageCore = Message> {
     refreshAttachmentUrls(
         token: Redacted.Redacted<string>,
         urls: readonly string[],
-        options?: AttachmentRefreshOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure> {
         return suspendInput((): Effect.Effect<readonly RefreshedAttachmentUrl[], RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -424,7 +412,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         target: MessageReference,
         input: MessageInput | string,
-        options?: SendOptions,
+        options?: RequestOptions,
     ) {
         return this.#send(
             token,
@@ -438,7 +426,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         channel: string,
         input: MessageInput | string,
-        options?: SendOptions,
+        options?: RequestOptions,
         directMessageUser?: string,
     ): Effect.Effect<M, SendError> {
         return this.#send(
@@ -457,7 +445,7 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
-    forward(token: Redacted.Redacted<string>, channel: string, input: ForwardMessageInput, options?: SendOptions) {
+    forward(token: Redacted.Redacted<string>, channel: string, input: ForwardMessageInput, options?: RequestOptions) {
         return this.#send(
             token,
             channel,
@@ -470,7 +458,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         channel: string,
         encode: () => EncodedBody | MessageError,
-        options?: SendOptions,
+        options?: RequestOptions,
         directMessageUser?: string,
     ): Effect.Effect<M, SendError> {
         return suspendInput((): Effect.Effect<M, SendError> => {
@@ -516,7 +504,7 @@ export class RestOwner<M extends MessageCore = Message> {
         })
     }
 
-    fetch(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageOperationOptions) {
+    fetch(token: Redacted.Redacted<string>, target: MessageReference, options?: RequestOptions) {
         return this.#manage(
             token,
             "fetch",
@@ -528,7 +516,7 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
-    publish(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageOperationOptions) {
+    publish(token: Redacted.Redacted<string>, target: MessageReference, options?: RequestOptions) {
         return this.#manage(
             token,
             "publish",
@@ -540,11 +528,7 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
-    fetchCrosspostSource(
-        token: Redacted.Redacted<string>,
-        target: MessageReference,
-        options?: MessageOperationOptions,
-    ) {
+    fetchCrosspostSource(token: Redacted.Redacted<string>, target: MessageReference, options?: RequestOptions) {
         return this.#manage(token, "fetchCrosspostSource", target, undefined, options, (response, _ref, signal) =>
             readDecoded(response, signal, decodeCrosspostSource),
         )
@@ -553,7 +537,7 @@ export class RestOwner<M extends MessageCore = Message> {
     typing(
         token: Redacted.Redacted<string>,
         channel: string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -580,7 +564,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         channel: string,
         query?: MessageHistoryQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly M[], MessageOperationFailure> {
         return suspendInput((): Effect.Effect<readonly M[], RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -610,7 +594,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         context: MessageSearchContext,
         query?: MessageSearchQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<MessageSearchPage<M>, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -642,7 +626,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         target: MessageReference,
         input: EditMessageInput | string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ) {
         return this.#manage(
             token,
@@ -655,7 +639,7 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
-    delete(token: Redacted.Redacted<string>, target: MessageReference, options?: MessageAuditOperationOptions) {
+    delete(token: Redacted.Redacted<string>, target: MessageReference, options?: AuditedRequestOptions) {
         return this.#manage(token, "delete", target, undefined, options, async () => {})
     }
 
@@ -663,7 +647,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         target: MessageReference,
         attachmentId: string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -700,7 +684,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         channelId: string,
         ids: readonly string[],
-        options?: MessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -743,7 +727,7 @@ export class RestOwner<M extends MessageCore = Message> {
     deleteOwnMessages(
         token: Redacted.Redacted<string>,
         channelId: string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -776,7 +760,7 @@ export class RestOwner<M extends MessageCore = Message> {
         target: MessageReference,
         emoji: ReactionEmojiInput,
         query?: ReactionUsersQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<ReactionUsersPage, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -822,7 +806,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         channel: string,
         query?: MessagePinsQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<MessagePinsPage<M>, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -852,7 +836,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: "pin" | "unpin",
         target: MessageReference,
-        options?: MessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -887,7 +871,7 @@ export class RestOwner<M extends MessageCore = Message> {
         operation: "addReaction" | "removeReaction" | "removeUserReaction" | "clearReaction" | "clearReactions",
         target: MessageReference,
         emoji: ReactionEmojiInput | undefined,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
         userId?: string,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
@@ -935,7 +919,7 @@ export class RestOwner<M extends MessageCore = Message> {
         operation: "fetch" | "edit" | "delete" | "publish" | "fetchCrosspostSource",
         target: MessageReference,
         input: EditMessageInput | string | undefined,
-        options: MessageOperationOptions | undefined,
+        options: RequestOptions | undefined,
         decode: (response: Response, ref: MessageReference, signal: AbortSignal) => Promise<A>,
         observe?: (value: A, guard: CacheRequest) => void,
     ): Effect.Effect<A, MessageOperationFailure> {
@@ -1364,7 +1348,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: GuildOperation,
         build: () => GuildRequest<A> | InputValidationFailure,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -1416,7 +1400,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: ChannelOperation,
         build: () => ChannelRequest<A> | InputValidationFailure,
-        options?: ChannelOperationOptions,
+        options?: RequestOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -1460,7 +1444,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: UserOperation,
         build: () => UserRequest<A> | InputValidationFailure,
-        options?: UserOperationOptions,
+        options?: RequestOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -1490,7 +1474,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: BotApplicationOperation,
         build: () => BotApplicationRequest<A>,
-        options?: BotApplicationOperationOptions,
+        options?: RequestOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -1520,7 +1504,7 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         operation: WebhookOperation,
         build: () => WebhookRequest<A> | InputValidationFailure,
-        options?: WebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ) {
         return suspendInput((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -1562,7 +1546,7 @@ export class RestOwner<M extends MessageCore = Message> {
     #execute<A>(
         token: Redacted.Redacted<string>,
         request: Request<A>,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
         optionKeys: readonly string[] = operationOptionKeys,
     ): Effect.Effect<A, RestFailure | ClientClosedError> {
         const owner = this

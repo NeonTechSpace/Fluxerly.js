@@ -7,7 +7,7 @@ import {
     type ClientOptions,
     type GuildMember,
     type MemberReference,
-    type DefaultModerationOptions,
+    type AuditedRequestOptions,
     type VoiceConnectionReference,
 } from "../../../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
@@ -63,23 +63,23 @@ async function setup(mode: Mode) {
         move: async (
             selected: VoiceConnectionReference,
             channelId: string,
-            operationOptions?: DefaultModerationOptions,
+            operationOptions?: AuditedRequestOptions,
         ): Promise<GuildMember> =>
             defaultApi
                 ? unwrap(await defaultApi.members.move(selected, channelId, operationOptions))
                 : await Effect.runPromise(native!.members.move(selected, channelId, operationOptions)),
         disconnect: async (
             selected: VoiceConnectionReference,
-            operationOptions?: DefaultModerationOptions,
+            operationOptions?: AuditedRequestOptions,
         ): Promise<GuildMember> =>
             defaultApi
                 ? unwrap(await defaultApi.members.disconnect(selected, operationOptions))
                 : await Effect.runPromise(native!.members.disconnect(selected, operationOptions)),
-        setMute: async (enabled: boolean, operationOptions?: DefaultModerationOptions): Promise<GuildMember> =>
+        setMute: async (enabled: boolean, operationOptions?: AuditedRequestOptions): Promise<GuildMember> =>
             defaultApi
                 ? unwrap(await defaultApi.members.setMute(target, { muted: enabled }, operationOptions))
                 : await Effect.runPromise(native!.members.setMute(target, { muted: enabled }, operationOptions)),
-        setDeaf: async (enabled: boolean, operationOptions?: DefaultModerationOptions): Promise<GuildMember> =>
+        setDeaf: async (enabled: boolean, operationOptions?: AuditedRequestOptions): Promise<GuildMember> =>
             defaultApi
                 ? unwrap(await defaultApi.members.setDeaf(target, { deafened: enabled }, operationOptions))
                 : await Effect.runPromise(native!.members.setDeaf(target, { deafened: enabled }, operationOptions)),

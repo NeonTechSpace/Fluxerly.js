@@ -8,7 +8,8 @@ import type {
     DiscoveryStatus,
 } from "#sdk/discovery"
 import type * as Effect from "effect/Effect"
-import type { GuildOperationFailure, GuildOperationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
+import type { RequestOptions } from "#sdk/client"
 
 /** Search Fluxer's public community directory or manage a community's listing application.
  * This is separate from instance endpoint discovery. HTTP requests share guild limits and directory data is not cached.
@@ -32,7 +33,7 @@ export interface Discovery {
      */
     search(
         query?: DiscoverySearchQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<DiscoverySearchPage, GuildOperationFailure>
     /**
      * Fetch a community's current directory eligibility and application state.
@@ -42,13 +43,13 @@ export interface Discovery {
      * Eligibility can change before application.
      * Reviewed or removed applications include their available reasons
      */
-    fetchStatus(guildId: string, options?: GuildOperationOptions): Effect.Effect<DiscoveryStatus, GuildOperationFailure>
+    fetchStatus(guildId: string, options?: RequestOptions): Effect.Effect<DiscoveryStatus, GuildOperationFailure>
     /**
      * Fetch directory category IDs and Fluxer's category labels in provider order.
      * This requires an authenticated client, not membership of a particular community or ManageGuild.
      * No category copy is kept
      */
-    fetchCategories(options?: GuildOperationOptions): Effect.Effect<readonly DiscoveryCategory[], GuildOperationFailure>
+    fetchCategories(options?: RequestOptions): Effect.Effect<readonly DiscoveryCategory[], GuildOperationFailure>
     /**
      * Submit a community's application to the public directory.
      * ManageGuild, enabled discovery and current Fluxer eligibility are required.
@@ -61,7 +62,7 @@ export interface Discovery {
     apply(
         guildId: string,
         input: DiscoveryApplicationInput,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<DiscoveryApplication, GuildOperationFailure>
     /**
      * Change supplied fields of a pending or approved directory application.
@@ -74,7 +75,7 @@ export interface Discovery {
     edit(
         guildId: string,
         input: DiscoveryApplicationEdit,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<DiscoveryApplication, GuildOperationFailure>
     /**
      * Withdraw a pending application or remove an approved directory listing.
@@ -85,5 +86,5 @@ export interface Discovery {
      * The community and its members remain, and the prior application is not restored.
      * An unknown or partial outcome needs remote inspection and may require operator recovery, not blind replay
      */
-    withdraw(guildId: string, options?: GuildOperationOptions): Effect.Effect<void, GuildOperationFailure>
+    withdraw(guildId: string, options?: RequestOptions): Effect.Effect<void, GuildOperationFailure>
 }

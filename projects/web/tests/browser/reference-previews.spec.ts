@@ -358,7 +358,7 @@ test("Inline code in guides previews functions, variables and namespace members 
         { href: "/docs/preview/api/modules/js-ts/#runbot", kind: "Function", name: "runBot" },
         { href: "/docs/preview/api/modules/js-ts/#channeltype", kind: "Variable", name: "ChannelType" },
         { href: "/docs/preview/api/interfaces/js-ts.ErrorTools/#apicode", kind: "Property", name: "ErrorTools.apiCode" },
-        { href: "/docs/preview/api/interfaces/js-ts.DefaultGuards/#requirepermissions", kind: "Method", name: "DefaultGuards.requirePermissions" },
+        { href: "/docs/preview/api/interfaces/js-ts.Guards/#requirepermissions", kind: "Method", name: "Guards.requirePermissions" },
     ]
     for (const expected of cases) {
         const { preview, kind, name } = await hoverPreview(page, inlineLink(page, expected.href))
@@ -382,8 +382,8 @@ test("Code block identifiers preview their public API in both APIs without links
     await page.goto("/docs/preview/small-bot/")
     const block = page.locator(".docs-content pre").filter({ has: page.locator(".reference-token") }).filter({ visible: true }).first()
     const before = await block.evaluate((node) => node.textContent)
-    const reply = await hoverPreview(page, codeToken(page, "/docs/preview/api/interfaces/js-ts.DefaultPrefixCommandContext/#reply", "reply"))
-    expect(reply).toMatchObject({ kind: "Property", name: "DefaultPrefixCommandContext.reply" })
+    const reply = await hoverPreview(page, codeToken(page, "/docs/preview/api/interfaces/js-ts.PrefixCommandContext/#reply", "reply"))
+    expect(reply).toMatchObject({ kind: "Property", name: "PrefixCommandContext.reply" })
     await expect(reply.preview.locator(".reference-preview-signature")).toContainText("reply")
     await page.screenshot({ path: info.outputPath("code-token-preview-default.png"), animations: "disabled" })
     const send = await hoverPreview(page, codeToken(page, "/docs/preview/api/interfaces/js-ts.Messages/#send", "send"))

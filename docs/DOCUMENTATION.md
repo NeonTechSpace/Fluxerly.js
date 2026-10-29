@@ -15,7 +15,7 @@ Apply [documentation placement](/docs/DOCUMENTATION.md#documentation-placement) 
 
 Introduce the SDK with a bot that responds to a message. Show client creation, one handler and connection before configuration, error handling and shutdown. Put advanced overview notes in JSDoc `@remarks`, not in place of precise member behavior
 
-Use JavaScript & TypeScript for the default API section, `js-ts` in its generated URLs and `Default` in SDK identifiers.
+Use JavaScript & TypeScript for the default API section and `js-ts` in its generated URLs.
 The testing entry points are titled Testing and Effect testing, with `testing` and `Effect-testing` in their generated URLs.
 Published Stable URLs remain tied to their original release. Nightly and RC URLs show the newest published snapshot in their respective channels
 
@@ -51,7 +51,7 @@ Each page sends the browser only its version's navigation tree, reduced to what 
 
 Search uses one index per served version. Guides keep their full text and their sidebar `navTitle`, which search results show above the page title. Reference symbols contribute names, member, option and parameter names, error tags and first summary sentences.
 Results are ordered by match strength in [search options](/projects/web/src/lib/search-options.ts): An exact page title or sidebar label first, then every query word in a guide title or label, an exact member heading, every query word in an identifier title such as `RateLimitError`, and headings before plain text. For a query of several words, such as "edit message", a guide heading containing every word ranks with an exact member heading, and guides come before reference pages of equal strength.
-Hub pages, such as the landing page, task index, changelog, glossary, FAQ, examples and error and log codes, rise only by an exact title and follow dedicated pages of equal strength. Effect guides follow other guides of equal strength unless the query names Effect, and a default API symbol takes the place of its Effect twin, including `Default<Name>` command types in place of `Native<Name>`. Results from the testing entry points follow other matches unless their title matches the query exactly.
+Hub pages, such as the landing page, task index, changelog, glossary, FAQ, examples and error and log codes, rise only by an exact title and follow dedicated pages of equal strength. Effect guides follow other guides of equal strength unless the query names Effect, and a default API symbol takes the place of its same-named Effect twin. In snapshots generated before the shared type names, a `Default<Name>` type takes the place of its `Native<Name>` twin. Results from the testing entry points follow other matches unless their title matches the query exactly.
 Index filenames carry a content hash, so they are cached as immutable like the `_astro/` assets.
 The [search precision check](/projects/web/tests/search-precision.js) records realistic queries, the pages that answer them and the rank each must keep. Targets name dedicated pages, not hubs that only route to them. Search changes must not make any recorded query rank worse
 

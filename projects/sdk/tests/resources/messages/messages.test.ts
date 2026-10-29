@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
-import { SdkDefect, type DefaultMessageOperationOptions, type ReplyInput } from "../../../src/index.js"
+import { SdkDefect, type RequestOptions, type ReplyInput } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { defaultApi } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
@@ -219,7 +219,7 @@ test("default async operations reject an application SdkDefect that keeps the th
                 get() {
                     throw getterFailure
                 },
-            }) as DefaultMessageOperationOptions,
+            }) as RequestOptions,
         ),
     )
     expect(error).toBeInstanceOf(SdkDefect)

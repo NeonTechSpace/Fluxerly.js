@@ -1,7 +1,8 @@
 import type { ChannelPermissions, PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
-import type { GuildOperationFailure, GuildOperationOptions, MemberReference } from "#sdk/guilds"
+import type { GuildOperationFailure, MemberReference } from "#sdk/guilds"
 import type * as Effect from "effect/Effect"
 import type { ChannelOperationFailure } from "#sdk/channels"
+import type { RequestOptions } from "#sdk/client"
 
 /** Calculate permission bits from supplied snapshots or freshly fetched resources.
  * These results do not account for timeouts or role hierarchy and do not prove an action will succeed
@@ -96,6 +97,6 @@ export interface PermissionHelpers {
      */
     fetchChannels(
         target: MemberReference,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly ChannelPermissions[], GuildOperationFailure | ChannelOperationFailure>
 }

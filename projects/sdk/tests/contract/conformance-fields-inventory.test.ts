@@ -53,20 +53,30 @@ describe("source-derived public operation field inventory", () => {
 
     test("keeps default operation options to the native fields plus an optional signal", () => {
         const [[, defaultInventory], [, nativeInventory]] = inventories
-        const pairs = Object.keys(defaultInventory.objects)
-            .filter((name) => name.startsWith("Default") && nativeInventory.objects[name.slice(7)] !== undefined)
-            .map((name) => [name, name.slice(7)] as const)
-        expect(pairs.length).toBeGreaterThan(0)
-        for (const [defaultName, nativeName] of pairs) {
-            const fields = (inventory: PublicFieldInventory, name: string) =>
+        const hasSignal = (inventory: PublicFieldInventory, name: string) =>
+            inventory.objects[name]!.fields.some((field) => field.name === "signal")
+        // Each entry point exports an operation's options under one name with its own shape, so the default
+        // options are the same-named native options that the default API extends with an AbortSignal
+        const names = Object.keys(defaultInventory.objects).filter(
+            (name) =>
+                /(Options|Request)$/.test(name) &&
+                nativeInventory.objects[name] !== undefined &&
+                hasSignal(defaultInventory, name) &&
+                !hasSignal(nativeInventory, name),
+        )
+        expect(names).toEqual(expect.arrayContaining(["RequestOptions", "AuditedRequestOptions", "RestRequest"]))
+        for (const name of names) {
+            const fields = (inventory: PublicFieldInventory) =>
                 inventory.objects[name]!.fields.map(({ name, optional, nullable }) => ({ name, optional, nullable }))
-            const defaultFields = fields(defaultInventory, defaultName)
+            const defaultFields = fields(defaultInventory)
             expect(
                 defaultFields.filter(({ name }) => name !== "signal"),
-                defaultName,
-            ).toEqual(fields(nativeInventory, nativeName))
-            const signal = defaultFields.find(({ name }) => name === "signal")
-            if (signal !== undefined) expect(signal, `${defaultName}.signal`).toMatchObject({ optional: true })
+                name,
+            ).toEqual(fields(nativeInventory))
+            expect(
+                defaultFields.find(({ name }) => name === "signal"),
+                `${name}.signal`,
+            ).toMatchObject({ optional: true })
         }
     })
 })

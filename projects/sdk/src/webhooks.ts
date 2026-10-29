@@ -1,4 +1,4 @@
-import type { OperationOptions } from "./client.js"
+import type { RequestOptions } from "./client.js"
 import type { InstanceOptions } from "./instance.js"
 import type { ClientClosedError } from "./errors.js"
 import type { LoggingOptions } from "./logging.js"
@@ -11,14 +11,7 @@ import {
 } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
-import type {
-    AllowedMentions,
-    ForwardMessageInput,
-    MessageBody,
-    MessageNonce,
-    MessageOperationOptions,
-    MessageReference,
-} from "./messages.js"
+import type { AllowedMentions, ForwardMessageInput, MessageBody, MessageNonce, MessageReference } from "./messages.js"
 import type { EmbedInput } from "./embeds.js"
 import type { EmbedBuilder } from "./builders.js"
 
@@ -349,38 +342,13 @@ export interface WebhookMessageEdit {
  *
  * @category Options
  */
-export interface WebhookMessageOperationOptions extends MessageOperationOptions {
+export interface WebhookMessageOperationOptions extends RequestOptions {
     /** Decimal ID of the thread that holds the message, sent as the thread_id query parameter. Set it for a message in
      * a thread, because Fluxer looks in the webhook's channel otherwise and answers that the message is unknown.
      * Fluxer rejects a thread that belongs to another channel
      */
     readonly threadId?: string
 }
-
-/**
- * Request settings for fetching, editing or deleting a webhook message in the default API. An AbortSignal cancels this
- * request, not the webhook client
- *
- * @category Options
- */
-export interface DefaultWebhookMessageOperationOptions extends WebhookMessageOperationOptions, OperationOptions {}
-
-/**
- * Request settings for a bot client's webhook management, including an optional audit-log explanation
- *
- * @category Options
- */
-export interface WebhookOperationOptions extends MessageOperationOptions {
-    /** Explain a create, edit or delete in the community audit log. Use printable ASCII, 1–512 characters after trimming, sent without URL escaping */
-    readonly auditReason?: string
-}
-
-/**
- * Request settings for webhook management in the default API. An AbortSignal cancels this request, not the bot client
- *
- * @category Options
- */
-export interface DefaultWebhookOperationOptions extends WebhookOperationOptions, OperationOptions {}
 
 /**
  * Credentials and limits for createWebhookClient.

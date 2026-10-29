@@ -2,7 +2,8 @@ import type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery
 import type * as Effect from "effect/Effect"
 import type * as Stream from "effect/Stream"
 import type { PaginationError } from "#sdk/pagination"
-import type { GuildOperationFailure, GuildOperationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
+import type { RequestOptions } from "#sdk/client"
 
 /** Read a community's audit log as a page or a bounded sequence of entries.
  * Fluxer requires ViewAuditLog. The SDK does not cache audit entries or connect the gateway.
@@ -23,7 +24,7 @@ export interface AuditLogs {
     fetchPage(
         guildId: string,
         query: AuditLogQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<AuditLogPage, GuildOperationFailure>
     /**
      * Read filtered audit entries newest first, buffering one page and never prefetching.
@@ -45,6 +46,6 @@ export interface AuditLogs {
     iterate(
         guildId: string,
         query: AuditLogIterationQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<AuditLogEntry, GuildOperationFailure | PaginationError>
 }

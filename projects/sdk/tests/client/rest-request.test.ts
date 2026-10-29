@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
-import { RestRequestError, type DefaultRestRequest, type RestRequestFailure } from "../../src/index.js"
+import { RestRequestError, type RestRequest, type RestRequestFailure } from "../../src/index.js"
 import { describeBothApis, setup, type FixtureClientOptions, type Mode } from "../support/both-apis.js"
 import { driveSdkTime, sdkClock } from "../support/client-clock.js"
 import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
@@ -48,7 +48,7 @@ async function restClient(
             },
         },
     })
-    const request = <T = unknown>(input: DefaultRestRequest) =>
+    const request = <T = unknown>(input: RestRequest) =>
         mode === "default"
             ? (client as import("../../src/index.js").Client).rest.request<T>(input)
             : (client as import("../../src/effect.js").Client).rest.request<T>(input)
@@ -171,10 +171,10 @@ describeBothApis("rest.request", (mode) => {
         const { calls, request } = await restClient(mode, () => Response.json({}))
         if (path === undefined) {
             // An empty file list means no files, so an array body stays a valid JSON body
-            await settle(request(input as DefaultRestRequest))
+            await settle(request(input as RestRequest))
             return
         }
-        const error = await rejection(request(input as DefaultRestRequest))
+        const error = await rejection(request(input as RestRequest))
         expect(error).toBeInstanceOf(RestRequestError)
         expect(error).toMatchObject({ operation: "rest.request", reason: "input", outcome: "notDispatched" })
         expect((error as RestRequestError).inputValidation?.path).toBe(path)

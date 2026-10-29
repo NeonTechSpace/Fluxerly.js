@@ -1,4 +1,4 @@
-import type { DefaultPrefixCommandGuard } from "#sdk/default-commands"
+import type { PrefixCommandGuard } from "#sdk/default-commands"
 import type { PermissionName } from "#sdk/helpers"
 import type { Message, MessageCore } from "#sdk/messages"
 import {
@@ -40,13 +40,13 @@ import { orThrow } from "./results.js"
  *
  * @category Commands
  */
-export interface DefaultGuards {
+export interface Guards {
     /**
      * Allow the command only for a message that carries its community's guildId, and deny every other message without a
      * request. Fluxer's gateway supplies the guildId with every community message, so a message without one is denied even
      * when its channel belongs to a community
      */
-    guildOnly<M extends MessageCore = Message>(): DefaultPrefixCommandGuard<M>
+    guildOnly<M extends MessageCore = Message>(): PrefixCommandGuard<M>
     /**
      * Allow the command only in a confirmed one-to-one or group conversation, and deny every other message.
      * A message with a guildId is denied without a request. For a message without one, the guard checks the
@@ -57,7 +57,7 @@ export interface DefaultGuards {
      * other than a private conversation, denies it. Any other read failure, such as a network failure, timeout or
      * rejection, leaves the channel unconfirmed and fails the command, which is reported with the command name
      */
-    dmOnly<M extends MessageCore = Message>(): DefaultPrefixCommandGuard<M>
+    dmOnly<M extends MessageCore = Message>(): PrefixCommandGuard<M>
     /**
      * Allow the command only for the owner of the bot's application, as Fluxer reports it.
      * The first invocation reads the owner's user ID with application.fetch, and the guard keeps it for the rest of the
@@ -66,13 +66,13 @@ export interface DefaultGuards {
      * A failed read, such as a network failure, timeout or rejection, keeps nothing and fails the command, which is
      * reported with the command name, and the next invocation reads again
      */
-    ownerOnly<M extends MessageCore = Message>(): DefaultPrefixCommandGuard<M>
+    ownerOnly<M extends MessageCore = Message>(): PrefixCommandGuard<M>
     /**
      * Allow the command only for the given decimal user IDs, such as the bot owner's.
      * An undefined argument, such as an unset environment variable, throws ConfigurationError rather than falling back
      * to the application owner
      */
-    ownerOnly<M extends MessageCore = Message>(ownerIds: string | readonly string[]): DefaultPrefixCommandGuard<M>
+    ownerOnly<M extends MessageCore = Message>(ownerIds: string | readonly string[]): PrefixCommandGuard<M>
     /**
      * Allow the command only when the invoking member has every named permission in the message's channel, and deny it in
      * direct messages. The guard decides with permissions.fetch and preferCache: It reads the community, member, roles and
@@ -93,7 +93,7 @@ export interface DefaultGuards {
      * nickname, writing in threads and joining voice, so check members.timeoutState as well.
      * The denial names each missing permission by Fluxer's label, such as Manage community
      */
-    requirePermissions<M extends MessageCore = Message>(names: readonly PermissionName[]): DefaultPrefixCommandGuard<M>
+    requirePermissions<M extends MessageCore = Message>(names: readonly PermissionName[]): PrefixCommandGuard<M>
 }
 
 /**
@@ -101,13 +101,13 @@ export interface DefaultGuards {
  *
  * @category Commands
  */
-export const guards: DefaultGuards = Object.freeze({
+export const guards: Guards = Object.freeze({
     guildOnly:
-        <M extends MessageCore>(): DefaultPrefixCommandGuard<M> =>
+        <M extends MessageCore>(): PrefixCommandGuard<M> =>
         ({ message }) =>
             inGuild(message) || { deny: guardDenials.guildOnly },
     dmOnly:
-        <M extends MessageCore>(): DefaultPrefixCommandGuard<M> =>
+        <M extends MessageCore>(): PrefixCommandGuard<M> =>
         async ({ client, message, signal }) => {
             const denied = { deny: guardDenials.dmOnly }
             if (inGuild(message)) return denied
@@ -119,9 +119,7 @@ export const guards: DefaultGuards = Object.freeze({
             if (notPrivateChannel(read.error)) return denied
             throw read.error
         },
-    ownerOnly: <M extends MessageCore>(
-        ...ownerIds: [] | [string | readonly string[]]
-    ): DefaultPrefixCommandGuard<M> => {
+    ownerOnly: <M extends MessageCore>(...ownerIds: [] | [string | readonly string[]]): PrefixCommandGuard<M> => {
         const denied = { deny: guardDenials.ownerOnly }
         if (ownerIds.length === 0)
             return async ({ client, message, signal }) => {
@@ -135,7 +133,7 @@ export const guards: DefaultGuards = Object.freeze({
         const owners = validOwnerIds(ownerIds[0])
         return ({ message }) => owners.has(message.author.id) || denied
     },
-    requirePermissions: <M extends MessageCore>(names: readonly PermissionName[]): DefaultPrefixCommandGuard<M> => {
+    requirePermissions: <M extends MessageCore>(names: readonly PermissionName[]): PrefixCommandGuard<M> => {
         const required = permissionNames(names)
         return async ({ client, message, signal }) => {
             if (!inGuild(message)) return { deny: guardDenials.guildOnly }

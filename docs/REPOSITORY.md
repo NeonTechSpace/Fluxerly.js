@@ -139,7 +139,7 @@ The [binder check](/projects/sdk/tests/types/binding-parity.ts) uses the same co
 It does not establish behavioral parity, assess comment accuracy, or cover every standalone client or type-only export
 
 The [semantic baseline](/projects/sdk/tests/contract/conformance-fields-shapes.snapshot.txt) records, for both public entry points, every Client, OAuthClient and WebhookClient member and namespace operation read from source, with operation signatures, union variants, field types, optionality and nullability.
-The [baseline test](/projects/sdk/tests/contract/conformance-fields-inventory.test.ts) also requires each `Default*Options` type to match its native options type apart from an optional `signal`.
+The [baseline test](/projects/sdk/tests/contract/conformance-fields-inventory.test.ts) also requires each options type that both entry points export under one name to match apart from the default API's optional `signal`.
 After reviewing an intentional public shape change, update the baseline from the SDK directory with `pnpm exec vitest run tests/contract/conformance-fields-inventory.test.ts -u` and review the generated diff.
 The [runtime export inventory](/projects/sdk/tests/contract/module-conformance-registry.js) checks the exact value exports of each public entry point, from source and from the packed package
 

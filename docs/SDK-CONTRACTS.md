@@ -9,6 +9,7 @@ See [technology choices](/docs/TECHNOLOGY.md) for tooling and [the repository gu
 
 The [default](/projects/sdk/src/index.ts) and [Effect](/projects/sdk/src/effect.ts) entry points are barrels over one Effect implementation.
 Public signatures and member documentation live in the hand-written interfaces under [src/api/default/](/projects/sdk/src/api/default/) and [src/api/effect/](/projects/sdk/src/api/effect/), with paired members documented identically.
+A type that differs between the APIs keeps one name in both entry points, such as `Client` and `RequestOptions`, with no `Default` or `Native` prefix. Declare the default shape in a default API module without extending a type that only the Effect entry point exports, so its reference page does not link into the Effect API.
 The [operation table](/projects/sdk/src/internal/binding/operations.ts) defines every client namespace member once, and the [default](/projects/sdk/src/internal/binding/default.ts) and [native](/projects/sdk/src/internal/binding/native.ts) binders adapt it by kind. A rename or signature change goes through the table and both interface sets.
 The default API converts results to neverthrow, so consumers do not manage an Effect runtime.
 The Effect API runs in the caller's context and scope and preserves interruption without starting a detached SDK runtime.

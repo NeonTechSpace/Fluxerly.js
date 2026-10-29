@@ -1,4 +1,4 @@
-import type { OperationOptions } from "./client.js"
+import type { RequestOptions, AuditedRequestOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
@@ -633,30 +633,11 @@ export interface GuildListQuery {
 }
 
 /**
- * Settings shared by remote guild, member and role operations
- *
- * @category Options
- */
-export interface GuildOperationOptions {
-    /** Total milliseconds across local queueing, rate waits, retries and HTTP. Integer 1–2,147,483,647, default the client's rest.defaultTimeoutMs, 30,000 unless configured.
-     * Owned cleanup is awaited afterward, so completion can take longer
-     */
-    readonly timeoutMs?: number
-}
-
-/**
- * Default API calls start immediately. Abort cancels only this call and awaits owned cleanup
- *
- * @category Options
- */
-export interface DefaultGuildOperationOptions extends GuildOperationOptions, OperationOptions {}
-
-/**
  * Settings for members.fetchCanManage: Whose rank to check, and the shared deadline of its reads
  *
  * @category Options
  */
-export interface CanManageOptions extends GuildOperationOptions {
+export interface CanManageOptions extends RequestOptions {
     /** User ID of the member whose rank is checked against the target, such as the moderator who ran a command.
      * Omit to check the bot itself. The actor must be a member of the target's community, or the read fails with notFound
      */
@@ -664,65 +645,16 @@ export interface CanManageOptions extends GuildOperationOptions {
 }
 
 /**
- * Default API settings for members.fetchCanManage. Abort cancels only this call and awaits owned cleanup
- *
- * @category Options
- */
-export interface DefaultCanManageOptions extends CanManageOptions, OperationOptions {}
-
-/**
- * Settings for a guild mutation whose provider handler consumes an audit-log reason
- *
- * @category Options
- */
-export interface GuildAuditOperationOptions extends GuildOperationOptions {
-    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
-     * Sent as a raw header because Fluxer does not decode URL escapes. Non-ASCII and control characters fail before dispatch.
-     * Omission sends no header. Never included in SDK errors or diagnostics.
-     * Header delivery does not guarantee provider retention. Fluxer's member-role add/remove path currently does not persist it in an audit entry
-     */
-    readonly auditReason?: string
-}
-
-/**
- * Default API audited guild mutations start immediately. Abort cannot roll back a dispatched mutation
- *
- * @category Options
- */
-export interface DefaultGuildAuditOperationOptions extends GuildAuditOperationOptions, OperationOptions {}
-
-/**
- * Moderation-only request settings, with the same deadline, audit and cleanup ownership as guild mutations
- *
- * @category Options
- */
-export interface ModerationOptions extends GuildAuditOperationOptions {}
-
-/**
- * Default API moderation starts immediately. Aborting waits for owned cleanup but cannot roll back a dispatched action
- *
- * @category Options
- */
-export interface DefaultModerationOptions extends ModerationOptions, OperationOptions {}
-
-/**
  * Timeout-only request settings. A timeoutReason is provider audit metadata, not a stored GuildMember field
  *
  * @category Options
  */
-export interface TimeoutOptions extends ModerationOptions {
+export interface TimeoutOptions extends AuditedRequestOptions {
     /** Optional timeout audit metadata. Null or omission sends no meaningful reason. A string must contain 1–512
      * UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming. The original string is sent unchanged
      */
     readonly timeoutReason?: string | null
 }
-
-/**
- * Default API timeout operations begin immediately. Aborting waits for owned cleanup but cannot roll back a dispatched timeout change
- *
- * @category Options
- */
-export interface DefaultTimeoutOptions extends TimeoutOptions, OperationOptions {}
 
 /**
  * Whether a member is timed out: `"active"` while the expiry is in the future, `"none"` when the member has no timeout or

@@ -1,23 +1,23 @@
-operation|default|Attachments.download|(attachment: Attachment, options: DefaultAttachmentDownloadOptions) => ResultAsync<Uint8Array<ArrayBufferLike>, CancelledError | ConfigurationError | AttachmentDownloadFailure>
-operation|default|Attachments.refreshUrls|(urls: readonly string[], options?: DefaultAttachmentRefreshOptions | undefined) => ResultAsync<readonly RefreshedAttachmentUrl[], CancelledError | ConfigurationError | AttachmentRefreshFailure>
-operation|default|Attachments.stream|(attachment: Attachment, options: DefaultAttachmentStreamOptions) => AsyncIterable<Result<Uint8Array<ArrayBufferLike>, CancelledError | ConfigurationError | AttachmentDownloadFailure>>
-operation|default|AuditLogs.fetchPage|(guildId: string, query: AuditLogQuery, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<AuditLogPage, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|AuditLogs.iterate|(guildId: string, query: AuditLogIterationQuery, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<AuditLogEntry, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
-operation|default|Channels.create|(guildId: string, input: ChannelCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.createForumTag|(channelId: string, input: ForumTagInput, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.delete|(channelId: string, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.deleteForumTag|(channelId: string, tagId: string, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.edit|(channelId: string, input: ChannelEdit, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.editForumTag|(channelId: string, tagId: string, input: ForumTagInput, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.fetch|(channelId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.fetchAll|(guildId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly GuildChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.fetchFollowerStats|(channelId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ChannelFollowerStats, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.fetchMemberCounts|(guildId: string, channelIds: readonly string[], options?: DefaultCountOperationOptions | undefined) => ResultAsync<ChannelMemberCountsResult, CancelledError | ConfigurationError | CountOperationFailure>
-operation|default|Channels.follow|(channelId: string, input: ChannelFollowInput, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<FollowedChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Attachments.download|(attachment: Attachment, options: AttachmentDownloadOptions) => ResultAsync<Uint8Array<ArrayBufferLike>, CancelledError | ConfigurationError | AttachmentDownloadFailure>
+operation|default|Attachments.refreshUrls|(urls: readonly string[], options?: RequestOptions | undefined) => ResultAsync<readonly RefreshedAttachmentUrl[], CancelledError | ConfigurationError | AttachmentRefreshFailure>
+operation|default|Attachments.stream|(attachment: Attachment, options: AttachmentStreamOptions) => AsyncIterable<Result<Uint8Array<ArrayBufferLike>, CancelledError | ConfigurationError | AttachmentDownloadFailure>>
+operation|default|AuditLogs.fetchPage|(guildId: string, query: AuditLogQuery, options?: RequestOptions | undefined) => ResultAsync<AuditLogPage, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|AuditLogs.iterate|(guildId: string, query: AuditLogIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<AuditLogEntry, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
+operation|default|Channels.create|(guildId: string, input: ChannelCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.createForumTag|(channelId: string, input: ForumTagInput, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.delete|(channelId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.deleteForumTag|(channelId: string, tagId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.edit|(channelId: string, input: ChannelEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.editForumTag|(channelId: string, tagId: string, input: ForumTagInput, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildForumChannel | GuildMediaChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.fetch|(channelId: string, options?: RequestOptions | undefined) => ResultAsync<GuildChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.fetchAll|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.fetchFollowerStats|(channelId: string, options?: RequestOptions | undefined) => ResultAsync<ChannelFollowerStats, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.fetchMemberCounts|(guildId: string, channelIds: readonly string[], options?: RequestOptions | undefined) => ResultAsync<ChannelMemberCountsResult, CancelledError | ConfigurationError | CountOperationFailure>
+operation|default|Channels.follow|(channelId: string, input: ChannelFollowInput, options?: AuditedRequestOptions | undefined) => ResultAsync<FollowedChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Channels.get|(channelId: string) => GuildChannel | undefined
-operation|default|Channels.removePermissionOverwrite|(channelId: string, targetId: string, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.reorder|(guildId: string, positions: readonly ChannelPosition[], options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Channels.setPermissionOverwrite|(channelId: string, input: PermissionOverwrite, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.removePermissionOverwrite|(channelId: string, targetId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.reorder|(guildId: string, positions: readonly ChannelPosition[], options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Channels.setPermissionOverwrite|(channelId: string, input: PermissionOverwrite, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
 operation|default|Client.connect|(options?: OperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ConnectError>
 operation|default|Client.diagnostics|() => ClientDiagnostics
 operation|default|Client.observeState|(listener: (state: ConnectionState) => unknown) => StateObserver
@@ -28,201 +28,201 @@ operation|default|Client.shardIdForGuild|(guildId: string) => number | undefined
 operation|default|Client.shutdown|(options?: ShutdownOptions | undefined) => ResultAsync<void, never>
 operation|default|Client.subscribe|<K extends EventName>(event: K, options?: EventBufferOptions | undefined) => EventSubscription<K, M>
 operation|default|Client.use|(middleware: EventMiddleware<M>) => MiddlewareRegistration
-operation|default|Client.waitFor|<K extends EventName>(event: K, options?: DefaultEventWaitOptions<K, M> | undefined) => ResultAsync<EventMap<M>[K], CancelledError | EventWaitFailure>
+operation|default|Client.waitFor|<K extends EventName>(event: K, options?: EventWaitOptions<K, M> | undefined) => ResultAsync<EventMap<M>[K], CancelledError | EventWaitFailure>
 operation|default|Client.waitForClose|(options?: OperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ConnectionFailure>
 operation|default|ClientCache.clear|(kind?: CacheKind | undefined) => void
 operation|default|ClientCache.delete|(kind: CacheKind, key: string) => void
 operation|default|ClientCache.entries|<K extends CacheKind>(kind: K, options?: CacheEntriesOptions | undefined) => readonly CachedResources<M>[K][]
 operation|default|ClientCache.onChange|(listener: (change: CacheChange) => unknown, options?: CacheObserverOptions | undefined) => CacheObserver
 operation|default|ClientLogging.configure|(settings: LogLevelSettings) => void
-operation|default|CurrentBotApplication.fetch|(options?: DefaultBotApplicationOperationOptions | undefined) => ResultAsync<BotApplication, CancelledError | ConfigurationError | BotApplicationOperationFailure>
-operation|default|DirectMessages.close|(id: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|DirectMessages.editGroup|(id: string, input: DirectMessageGroupEdit, options?: DefaultUserOperationOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|DirectMessages.fetch|(id: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|DirectMessages.fetchAll|(options?: DefaultUserOperationOptions | undefined) => ResultAsync<readonly DirectMessageChannel[], CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|DirectMessages.fetchLatestMessages|(channelIds: readonly string[], options?: DefaultUserOperationOptions | undefined) => ResultAsync<DirectMessageLatestMessages<M>, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|CurrentBotApplication.fetch|(options?: RequestOptions | undefined) => ResultAsync<BotApplication, CancelledError | ConfigurationError | BotApplicationOperationFailure>
+operation|default|DirectMessages.close|(id: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|DirectMessages.editGroup|(id: string, input: DirectMessageGroupEdit, options?: RequestOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|DirectMessages.fetch|(id: string, options?: RequestOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|DirectMessages.fetchAll|(options?: RequestOptions | undefined) => ResultAsync<readonly DirectMessageChannel[], CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|DirectMessages.fetchLatestMessages|(channelIds: readonly string[], options?: RequestOptions | undefined) => ResultAsync<DirectMessageLatestMessages<M>, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|DirectMessages.get|(id: string) => DirectMessageChannel | undefined
-operation|default|DirectMessages.open|(userId: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|DirectMessages.removeRecipient|(id: string, userId: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|DirectMessages.send|(userId: string, input: string | ReplyInput, options?: DefaultSendOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
-operation|default|Discovery.apply|(guildId: string, input: DiscoveryApplicationInput, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<DiscoveryApplication, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Discovery.edit|(guildId: string, input: Partial<DiscoveryApplicationInput>, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<DiscoveryApplication, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Discovery.fetchCategories|(options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly DiscoveryCategory[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Discovery.fetchStatus|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<DiscoveryStatus, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Discovery.search|(query?: DiscoverySearchQuery | undefined, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<DiscoverySearchPage, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Discovery.withdraw|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.clone|(guildId: string, sourceId: string, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildEmoji, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.create|(guildId: string, input: EmojiCreate, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildEmoji, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.createMany|(guildId: string, input: readonly EmojiCreate[], options?: DefaultModerationOptions | undefined) => ResultAsync<ExpressionBatch<GuildEmoji>, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.delete|(target: ExpressionReference, options?: DefaultExpressionDeleteOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.edit|(target: ExpressionReference, input: EmojiEdit, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildEmoji, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.fetchAll|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildEmoji[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.fetchMetadata|(id: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<ExpressionMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Emojis.fetchSource|(id: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<ExpressionSourceGuild, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|DirectMessages.open|(userId: string, options?: RequestOptions | undefined) => ResultAsync<DirectMessageChannel, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|DirectMessages.removeRecipient|(id: string, userId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|DirectMessages.send|(userId: string, input: string | ReplyInput, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
+operation|default|Discovery.apply|(guildId: string, input: DiscoveryApplicationInput, options?: RequestOptions | undefined) => ResultAsync<DiscoveryApplication, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Discovery.edit|(guildId: string, input: Partial<DiscoveryApplicationInput>, options?: RequestOptions | undefined) => ResultAsync<DiscoveryApplication, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Discovery.fetchCategories|(options?: RequestOptions | undefined) => ResultAsync<readonly DiscoveryCategory[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Discovery.fetchStatus|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<DiscoveryStatus, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Discovery.search|(query?: DiscoverySearchQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<DiscoverySearchPage, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Discovery.withdraw|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.clone|(guildId: string, sourceId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildEmoji, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.create|(guildId: string, input: EmojiCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildEmoji, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.createMany|(guildId: string, input: readonly EmojiCreate[], options?: AuditedRequestOptions | undefined) => ResultAsync<ExpressionBatch<GuildEmoji>, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.delete|(target: ExpressionReference, options?: ExpressionDeleteOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.edit|(target: ExpressionReference, input: EmojiEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildEmoji, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.fetchAll|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildEmoji[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.fetchMetadata|(id: string, options?: RequestOptions | undefined) => ResultAsync<ExpressionMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Emojis.fetchSource|(id: string, options?: RequestOptions | undefined) => ResultAsync<ExpressionSourceGuild, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Emojis.get|(target: ExpressionReference) => GuildEmoji | undefined
 operation|default|GatewayCommands.send|(shardId: number, op: number, d: unknown, options?: OperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GatewaySendFailure>
-operation|default|Guilds.deleteOwnMessages|(guildId: string, options: DefaultOwnMessageDeletionOptions) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Guilds.edit|(guildId: string, input: GuildEdit, options?: DefaultModerationOptions | undefined) => ResultAsync<Guild, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Guilds.editVanityUrl|(guildId: string, code: string | null, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildVanityUrl, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Guilds.fetch|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<Guild, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Guilds.fetchCounts|(guildIds: readonly string[], options?: DefaultCountOperationOptions | undefined) => ResultAsync<GuildCountsResult, CancelledError | ConfigurationError | CountOperationFailure>
-operation|default|Guilds.fetchPage|(query?: GuildListQuery | undefined, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildListSummary[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Guilds.fetchVanityUrl|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<GuildVanityUrlUsage, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.deleteOwnMessages|(guildId: string, options: OwnMessageDeletionOptions) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.edit|(guildId: string, input: GuildEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<Guild, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.editVanityUrl|(guildId: string, code: string | null, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildVanityUrl, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.fetch|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<Guild, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.fetchCounts|(guildIds: readonly string[], options?: RequestOptions | undefined) => ResultAsync<GuildCountsResult, CancelledError | ConfigurationError | CountOperationFailure>
+operation|default|Guilds.fetchPage|(query?: GuildListQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly GuildListSummary[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.fetchVanityUrl|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<GuildVanityUrlUsage, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Guilds.get|(guildId: string) => Guild | undefined
-operation|default|Guilds.iterate|(query: GuildIterationQuery, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<GuildListSummary, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
-operation|default|Guilds.leave|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Instance.resolve|(options?: DefaultInstanceResolveOptions | undefined) => ResultAsync<ResolvedInstance, CancelledError | InstanceResolveError>
-operation|default|Invites.create|(channelId: string, input?: InviteCreate | undefined, options?: DefaultModerationOptions | undefined) => ResultAsync<InviteMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Invites.delete|(code: string, options?: DefaultModerationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Invites.fetch|(code: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<Invite, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Invites.fetchForChannel|(channelId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly InviteMetadata[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Invites.fetchForGuild|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly InviteMetadata[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.addRole|(member: MemberReference, roleId: string, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.ban|(target: MemberReference, input?: BanInput | undefined, options?: DefaultModerationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.clearTimeout|(target: MemberReference, options?: DefaultTimeoutOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.disconnect|(target: VoiceConnectionReference, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.editSelf|(guildId: string, input: MemberProfileEdit, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.fetch|(member: MemberReference, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.fetchBans|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildBan[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.fetchCanManage|(target: MemberReference, options?: DefaultCanManageOptions | undefined) => ResultAsync<boolean, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildMember[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.fetchSelf|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Guilds.iterate|(query: GuildIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<GuildListSummary, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
+operation|default|Guilds.leave|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Instance.resolve|(options?: RequestOptions | undefined) => ResultAsync<ResolvedInstance, CancelledError | InstanceResolveError>
+operation|default|Invites.create|(channelId: string, input?: InviteCreate | undefined, options?: AuditedRequestOptions | undefined) => ResultAsync<InviteMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Invites.delete|(code: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Invites.fetch|(code: string, options?: RequestOptions | undefined) => ResultAsync<Invite, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Invites.fetchForChannel|(channelId: string, options?: RequestOptions | undefined) => ResultAsync<readonly InviteMetadata[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Invites.fetchForGuild|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly InviteMetadata[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.addRole|(member: MemberReference, roleId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.ban|(target: MemberReference, input?: BanInput | undefined, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.clearTimeout|(target: MemberReference, options?: TimeoutOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.disconnect|(target: VoiceConnectionReference, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.editSelf|(guildId: string, input: MemberProfileEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.fetch|(member: MemberReference, options?: RequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.fetchBans|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildBan[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.fetchCanManage|(target: MemberReference, options?: CanManageOptions | undefined) => ResultAsync<boolean, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly GuildMember[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.fetchSelf|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.get|(member: MemberReference) => GuildMember | undefined
 operation|default|Members.getSelf|(guildId: string) => GuildMember | undefined
-operation|default|Members.iterate|(guildId: string, query: UserIterationQuery, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<GuildMember, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
-operation|default|Members.iterateChunks|(guildId: string, query: MemberChunkQuery, options?: DefaultMemberChunkOptions | undefined) => AsyncIterable<Result<MemberChunk, CancelledError | ConfigurationError | MemberChunkFailure>>
-operation|default|Members.iterateSearch|(guildId: string, filters: Omit<MemberSearchQuery, "limit">, limits: MemberSearchIterationLimits, options?: DefaultGuildOperationOptions | undefined) => AsyncIterable<Result<MemberSearchHit, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
-operation|default|Members.kick|(target: MemberReference, options?: DefaultModerationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.move|(target: VoiceConnectionReference, channelId: string, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.removeRole|(member: MemberReference, roleId: string, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.search|(guildId: string, filters?: MemberSearchQuery | undefined, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<MemberSearchPage, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.setDeaf|(target: MemberReference, input: VoiceDeafenInput, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.setMute|(target: MemberReference, input: VoiceMuteInput, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.setNickname|(member: MemberReference, nickname: string | null, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.setRoles|(member: MemberReference, roleIds: readonly string[], options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Members.timeout|(target: MemberReference, durationMs: number, options?: DefaultTimeoutOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.iterate|(guildId: string, query: UserIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<GuildMember, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
+operation|default|Members.iterateChunks|(guildId: string, query: MemberChunkQuery, options?: MemberChunkOptions | undefined) => AsyncIterable<Result<MemberChunk, CancelledError | ConfigurationError | MemberChunkFailure>>
+operation|default|Members.iterateSearch|(guildId: string, filters: Omit<MemberSearchQuery, "limit">, limits: MemberSearchIterationLimits, options?: RequestOptions | undefined) => AsyncIterable<Result<MemberSearchHit, CancelledError | ConfigurationError | PaginationError | GuildOperationFailure>>
+operation|default|Members.kick|(target: MemberReference, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.move|(target: VoiceConnectionReference, channelId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.removeRole|(member: MemberReference, roleId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.search|(guildId: string, filters?: MemberSearchQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<MemberSearchPage, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.setDeaf|(target: MemberReference, input: VoiceDeafenInput, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.setMute|(target: MemberReference, input: VoiceMuteInput, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.setNickname|(member: MemberReference, nickname: string | null, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.setRoles|(member: MemberReference, roleIds: readonly string[], options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.timeout|(target: MemberReference, durationMs: number, options?: TimeoutOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.timeoutState|(member: Pick<GuildMember, "communicationDisabledUntil">, options?: TimeoutStateOptions | undefined) => MemberTimeoutState
-operation|default|Members.unban|(target: MemberReference, options?: DefaultModerationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Messages.addReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.cleanup|(plan: MessageCleanupPlan<M>, options?: DefaultMessageCleanupOptions | undefined) => ResultAsync<MessageCleanupReport, CancelledError | ConfigurationError | MessageCleanupError>
-operation|default|Messages.clearReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.clearReactions|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.collect|(channelId: string, options?: DefaultCollectorOptions<M> | undefined) => Collector<M>
-operation|default|Messages.collectReactions|(message: MessageReference, options?: DefaultReactionCollectorOptions | undefined) => ReactionCollector
-operation|default|Messages.delete|(message: MessageReference, options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.deleteAttachment|(message: MessageReference, attachmentId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.deleteOwnMessages|(channelId: string, options: DefaultOwnMessageDeletionOptions) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.fetch|(message: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.fetchCrosspostSource|(target: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<CrosspostSource, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<readonly M[], CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<MessagePinsPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<ReactionUsersPage, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.forward|(channelId: string, input: ForwardMessageInput, options?: DefaultSendOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
+operation|default|Members.unban|(target: MemberReference, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Messages.addReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.cleanup|(plan: MessageCleanupPlan<M>, options?: MessageCleanupOptions | undefined) => ResultAsync<MessageCleanupReport, CancelledError | ConfigurationError | MessageCleanupError>
+operation|default|Messages.clearReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.clearReactions|(message: MessageReference, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.collect|(channelId: string, options?: CollectorOptions<M> | undefined) => Collector<M>
+operation|default|Messages.collectReactions|(message: MessageReference, options?: ReactionCollectorOptions | undefined) => ReactionCollector
+operation|default|Messages.delete|(message: MessageReference, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.deleteAttachment|(message: MessageReference, attachmentId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.deleteOwnMessages|(channelId: string, options: OwnMessageDeletionOptions) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetch|(message: MessageReference, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetchCrosspostSource|(target: MessageReference, options?: RequestOptions | undefined) => ResultAsync<CrosspostSource, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly M[], CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<MessagePinsPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<ReactionUsersPage, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.forward|(channelId: string, input: ForwardMessageInput, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
 operation|default|Messages.get|(message: MessageReference) => M | undefined
-operation|default|Messages.iterateHistory|(channelId: string, query: HistoryIterationQuery, options?: DefaultMessageOperationOptions | undefined) => AsyncIterable<Result<M, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
-operation|default|Messages.iteratePins|(channelId: string, query: PinIterationQuery, options?: DefaultMessageOperationOptions | undefined) => AsyncIterable<Result<MessagePin<M>, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
-operation|default|Messages.iterateReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query: UserIterationQuery, options?: DefaultMessageOperationOptions | undefined) => AsyncIterable<Result<ReactionUser, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
-operation|default|Messages.iterateSearch|(context: MessageSearchContext, filters: Omit<MessageSearchQuery, "limit" | "page">, limits: MessageSearchIterationLimits, options?: DefaultMessageSearchOptions | undefined) => AsyncIterable<Result<M, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
-operation|default|Messages.keepTyping|<A>(channelId: string, task: (signal: AbortSignal) => PromiseLike<A>, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<A, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.paginate|(channelId: string, pages: readonly PageInput[], options: DefaultChannelPaginateOptions) => ResultAsync<PaginateResult<M>, CancelledError | PaginateFailure>
-operation|default|Messages.pin|(message: MessageReference, options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.previewCleanup|(channelId: string, selection: MessageCleanupSelection<M>, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<MessageCleanupPlan<M>, CancelledError | ConfigurationError | MessageCleanupError>
-operation|default|Messages.publish|(target: MessageReference, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.removeReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.removeUserReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.reply|(message: MessageReference, input: string | ReplyInput, options?: DefaultSendOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
-operation|default|Messages.search|(context: MessageSearchContext, query?: MessageSearchQuery | undefined, options?: DefaultMessageSearchOptions | undefined) => ResultAsync<MessageSearchPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.send|(channelId: string, input: string | MessageInput, options?: DefaultSendOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
-operation|default|Messages.typing|(channelId: string, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|Messages.unpin|(message: MessageReference, options?: DefaultMessageAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
-operation|default|OAuthClient.authorizationUrl|(input: OAuthAuthorizationInput, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<string, CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.exchangeCode|(input: OAuthCodeExchangeInput, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<OAuthTokens, CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.fetchConnections|(accessToken: string, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<readonly OAuthConnection[], CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.fetchGuilds|(accessToken: string, query?: GuildListQuery | undefined, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<readonly GuildListSummary[], CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.fetchIdentity|(accessToken: string, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<OAuthIdentity, CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.introspect|(token: string, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<OAuthIntrospection, CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.refresh|(refreshToken: string, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<OAuthTokens, CancelledError | ConfigurationError | OAuthOperationFailure>
-operation|default|OAuthClient.revoke|(input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token"; }, options?: DefaultOAuthOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|Messages.iterateHistory|(channelId: string, query: HistoryIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<M, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
+operation|default|Messages.iteratePins|(channelId: string, query: PinIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<MessagePin<M>, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
+operation|default|Messages.iterateReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query: UserIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<ReactionUser, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
+operation|default|Messages.iterateSearch|(context: MessageSearchContext, filters: Omit<MessageSearchQuery, "limit" | "page">, limits: MessageSearchIterationLimits, options?: RequestOptions | undefined) => AsyncIterable<Result<M, CancelledError | ConfigurationError | PaginationError | MessageOperationFailure>>
+operation|default|Messages.keepTyping|<A>(channelId: string, task: (signal: AbortSignal) => PromiseLike<A>, options?: RequestOptions | undefined) => ResultAsync<A, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.paginate|(channelId: string, pages: readonly PageInput[], options: ChannelPaginateOptions) => ResultAsync<PaginateResult<M>, CancelledError | PaginateFailure>
+operation|default|Messages.pin|(message: MessageReference, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.previewCleanup|(channelId: string, selection: MessageCleanupSelection<M>, options?: RequestOptions | undefined) => ResultAsync<MessageCleanupPlan<M>, CancelledError | ConfigurationError | MessageCleanupError>
+operation|default|Messages.publish|(target: MessageReference, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.removeReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.removeUserReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.reply|(message: MessageReference, input: string | ReplyInput, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
+operation|default|Messages.search|(context: MessageSearchContext, query?: MessageSearchQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<MessageSearchPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.send|(channelId: string, input: string | MessageInput, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | SendError>
+operation|default|Messages.typing|(channelId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.unpin|(message: MessageReference, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|OAuthClient.authorizationUrl|(input: OAuthAuthorizationInput, options?: RequestOptions | undefined) => ResultAsync<string, CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.exchangeCode|(input: OAuthCodeExchangeInput, options?: RequestOptions | undefined) => ResultAsync<OAuthTokens, CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.fetchConnections|(accessToken: string, options?: RequestOptions | undefined) => ResultAsync<readonly OAuthConnection[], CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.fetchGuilds|(accessToken: string, query?: GuildListQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly GuildListSummary[], CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.fetchIdentity|(accessToken: string, options?: RequestOptions | undefined) => ResultAsync<OAuthIdentity, CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.introspect|(token: string, options?: RequestOptions | undefined) => ResultAsync<OAuthIntrospection, CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.refresh|(refreshToken: string, options?: RequestOptions | undefined) => ResultAsync<OAuthTokens, CancelledError | ConfigurationError | OAuthOperationFailure>
+operation|default|OAuthClient.revoke|(input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token"; }, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | OAuthOperationFailure>
 operation|default|OAuthClient.shutdown|() => ResultAsync<void, never>
 operation|default|PermissionHelpers.calculate|(input: PermissionInput) => bigint
-operation|default|PermissionHelpers.fetch|(target: PermissionTarget, options?: DefaultPermissionFetchOptions | undefined) => ResultAsync<bigint, CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
-operation|default|PermissionHelpers.fetchChannels|(target: MemberReference, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly ChannelPermissions[], CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
+operation|default|PermissionHelpers.fetch|(target: PermissionTarget, options?: PermissionFetchOptions | undefined) => ResultAsync<bigint, CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
+operation|default|PermissionHelpers.fetchChannels|(target: MemberReference, options?: RequestOptions | undefined) => ResultAsync<readonly ChannelPermissions[], CancelledError | ChannelOperationError | ClientClosedError | ConfigurationError | GuildOperationError>
 operation|default|Presence.set|(input: PresenceInput) => Result<void, PresenceFailure>
 operation|default|Presence.setMembers|(guildId: string, memberIds: readonly string[]) => Result<void, PresenceFailure>
-operation|default|RestRequests.request|<T = unknown>(input: DefaultRestRequest) => ResultAsync<RestResponse<T>, CancelledError | ConfigurationError | RestRequestFailure>
-operation|default|Roles.create|(guildId: string, input: RoleCreate, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildRole, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Roles.delete|(role: RoleReference, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Roles.edit|(role: RoleReference, input: RoleEdit, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<GuildRole, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Roles.fetchAll|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildRole[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|RestRequests.request|<T = unknown>(input: RestRequest) => ResultAsync<RestResponse<T>, CancelledError | ConfigurationError | RestRequestFailure>
+operation|default|Roles.create|(guildId: string, input: RoleCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildRole, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Roles.delete|(role: RoleReference, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Roles.edit|(role: RoleReference, input: RoleEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildRole, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Roles.fetchAll|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildRole[], CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Roles.get|(role: RoleReference) => GuildRole | undefined
 operation|default|Roles.getAll|(guildId: string) => readonly GuildRole[] | undefined
-operation|default|Roles.reorder|(guildId: string, positions: readonly RolePosition[], options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Roles.resetHoistPositions|(guildId: string, options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Roles.setHoistPositions|(guildId: string, positions: readonly RoleHoistPosition[], options?: DefaultGuildAuditOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.clone|(guildId: string, sourceId: string, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildSticker, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.create|(guildId: string, input: StickerCreate, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildSticker, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.createMany|(guildId: string, input: readonly StickerCreate[], options?: DefaultModerationOptions | undefined) => ResultAsync<ExpressionBatch<GuildSticker>, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.delete|(target: ExpressionReference, options?: DefaultExpressionDeleteOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.edit|(target: ExpressionReference, input: StickerEdit, options?: DefaultModerationOptions | undefined) => ResultAsync<GuildSticker, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.fetchAll|(guildId: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<readonly GuildSticker[], CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.fetchMetadata|(id: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<ExpressionMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
-operation|default|Stickers.fetchSource|(id: string, options?: DefaultGuildOperationOptions | undefined) => ResultAsync<ExpressionSourceGuild, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Roles.reorder|(guildId: string, positions: readonly RolePosition[], options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Roles.resetHoistPositions|(guildId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Roles.setHoistPositions|(guildId: string, positions: readonly RoleHoistPosition[], options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.clone|(guildId: string, sourceId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildSticker, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.create|(guildId: string, input: StickerCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildSticker, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.createMany|(guildId: string, input: readonly StickerCreate[], options?: AuditedRequestOptions | undefined) => ResultAsync<ExpressionBatch<GuildSticker>, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.delete|(target: ExpressionReference, options?: ExpressionDeleteOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.edit|(target: ExpressionReference, input: StickerEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildSticker, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.fetchAll|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildSticker[], CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.fetchMetadata|(id: string, options?: RequestOptions | undefined) => ResultAsync<ExpressionMetadata, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Stickers.fetchSource|(id: string, options?: RequestOptions | undefined) => ResultAsync<ExpressionSourceGuild, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Stickers.get|(target: ExpressionReference) => GuildSticker | undefined
-operation|default|Threads.addMember|(threadId: string, userId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.create|(channelId: string, input: ThreadCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.createFromMessage|(message: MessageReference, input: ThreadFromMessageCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.createPost|(channelId: string, input: ForumPostCreate, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<ForumPost<M>, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.edit|(threadId: string, input: ThreadEdit, options?: DefaultChannelAuditOperationOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.fetchActive|(guildId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly GuildThreadChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.fetchArchived|(channelId: string, query?: ArchivedThreadQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ArchivedThreadPage, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.fetchMember|(threadId: string, userId: string, query?: ThreadMemberQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ThreadMember, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.fetchMembers|(threadId: string, query?: ThreadMemberPageQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<readonly ThreadMember[], CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.iterateMembers|(threadId: string, query: ThreadMemberIterationQuery, options?: DefaultChannelOperationOptions | undefined) => AsyncIterable<Result<ThreadMember, CancelledError | ConfigurationError | PaginationError | ChannelOperationFailure>>
-operation|default|Threads.join|(threadId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.leave|(threadId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.removeMember|(threadId: string, userId: string, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Threads.search|(channelId: string, query?: ThreadSearchQuery | undefined, options?: DefaultChannelOperationOptions | undefined) => ResultAsync<ThreadSearchPage<M>, CancelledError | ConfigurationError | ChannelOperationFailure>
-operation|default|Users.fetch|(id: string, options?: DefaultUserOperationOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: DefaultUserOperationOptions | undefined) => ResultAsync<UserProfile, CancelledError | ConfigurationError | UserOperationFailure>
-operation|default|Users.fetchSelf|(options?: DefaultUserOperationOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|Threads.addMember|(threadId: string, userId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.create|(channelId: string, input: ThreadCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.createFromMessage|(message: MessageReference, input: ThreadFromMessageCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.createPost|(channelId: string, input: ForumPostCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<ForumPost<M>, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.edit|(threadId: string, input: ThreadEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildThreadChannel, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchActive|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildThreadChannel[], CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchArchived|(channelId: string, query?: ArchivedThreadQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<ArchivedThreadPage, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchMember|(threadId: string, userId: string, query?: ThreadMemberQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<ThreadMember, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.fetchMembers|(threadId: string, query?: ThreadMemberPageQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly ThreadMember[], CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.iterateMembers|(threadId: string, query: ThreadMemberIterationQuery, options?: RequestOptions | undefined) => AsyncIterable<Result<ThreadMember, CancelledError | ConfigurationError | PaginationError | ChannelOperationFailure>>
+operation|default|Threads.join|(threadId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.leave|(threadId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.removeMember|(threadId: string, userId: string, options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Threads.search|(channelId: string, query?: ThreadSearchQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<ThreadSearchPage<M>, CancelledError | ConfigurationError | ChannelOperationFailure>
+operation|default|Users.fetch|(id: string, options?: RequestOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<UserProfile, CancelledError | ConfigurationError | UserOperationFailure>
+operation|default|Users.fetchSelf|(options?: RequestOptions | undefined) => ResultAsync<User, CancelledError | ConfigurationError | UserOperationFailure>
 operation|default|Users.get|(id: string) => User | undefined
 operation|default|Users.getSelf|() => User | undefined
-operation|default|WebhookClient.delete|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.deleteMessage|(messageId: string, options?: DefaultWebhookMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.edit|(input: WebhookTokenEdit, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: DefaultWebhookMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.fetch|(options?: DefaultMessageOperationOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.fetchMessage|(messageId: string, options?: DefaultWebhookMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|WebhookClient.send|(input: string | WebhookMessageInput, options?: DefaultMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.delete|(options?: RequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.deleteMessage|(messageId: string, options?: WebhookMessageOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.edit|(input: WebhookTokenEdit, options?: RequestOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: WebhookMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.fetch|(options?: RequestOptions | undefined) => ResultAsync<IncomingWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.fetchMessage|(messageId: string, options?: WebhookMessageOperationOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|WebhookClient.send|(input: string | WebhookMessageInput, options?: RequestOptions | undefined) => ResultAsync<Message, CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|default|WebhookClient.shutdown|() => ResultAsync<void, never>
-operation|default|Webhooks.create|(channelId: string, input: WebhookCreate, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<CreatedWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|Webhooks.delete|(id: string, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|Webhooks.edit|(id: string, input: WebhookEdit, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<Webhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|Webhooks.fetch|(id: string, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<Webhook, CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|Webhooks.fetchForChannel|(channelId: string, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<readonly Webhook[], CancelledError | ConfigurationError | WebhookOperationFailure>
-operation|default|Webhooks.fetchForGuild|(guildId: string, options?: DefaultWebhookOperationOptions | undefined) => ResultAsync<readonly Webhook[], CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|Webhooks.create|(channelId: string, input: WebhookCreate, options?: AuditedRequestOptions | undefined) => ResultAsync<CreatedWebhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|Webhooks.delete|(id: string, options?: AuditedRequestOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|Webhooks.edit|(id: string, input: WebhookEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<Webhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|Webhooks.fetch|(id: string, options?: AuditedRequestOptions | undefined) => ResultAsync<Webhook, CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|Webhooks.fetchForChannel|(channelId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<readonly Webhook[], CancelledError | ConfigurationError | WebhookOperationFailure>
+operation|default|Webhooks.fetchForGuild|(guildId: string, options?: AuditedRequestOptions | undefined) => ResultAsync<readonly Webhook[], CancelledError | ConfigurationError | WebhookOperationFailure>
 operation|native|Attachments.download|(attachment: Attachment, options: AttachmentDownloadOptions) => Effect<Uint8Array<ArrayBufferLike>, AttachmentDownloadFailure, never>
-operation|native|Attachments.refreshUrls|(urls: readonly string[], options?: AttachmentRefreshOptions | undefined) => Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure, never>
+operation|native|Attachments.refreshUrls|(urls: readonly string[], options?: RequestOptions | undefined) => Effect<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure, never>
 operation|native|Attachments.stream|(attachment: Attachment, options: AttachmentDownloadOptions) => Stream<Uint8Array<ArrayBufferLike>, AttachmentDownloadFailure, never>
-operation|native|AuditLogs.fetchPage|(guildId: string, query: AuditLogQuery, options?: GuildOperationOptions | undefined) => Effect<AuditLogPage, GuildOperationFailure, never>
-operation|native|AuditLogs.iterate|(guildId: string, query: AuditLogIterationQuery, options?: GuildOperationOptions | undefined) => Stream<AuditLogEntry, PaginationError | GuildOperationFailure, never>
-operation|native|Channels.create|(guildId: string, input: ChannelCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
-operation|native|Channels.createForumTag|(channelId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
-operation|native|Channels.delete|(channelId: string, options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Channels.deleteForumTag|(channelId: string, tagId: string, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
-operation|native|Channels.edit|(channelId: string, input: ChannelEdit, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
-operation|native|Channels.editForumTag|(channelId: string, tagId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
-operation|native|Channels.fetch|(channelId: string, options?: ChannelOperationOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
-operation|native|Channels.fetchAll|(guildId: string, options?: ChannelOperationOptions | undefined) => Effect<readonly GuildChannel[], ChannelOperationFailure, never>
-operation|native|Channels.fetchFollowerStats|(channelId: string, options?: ChannelOperationOptions | undefined) => Effect<ChannelFollowerStats, ChannelOperationFailure, never>
-operation|native|Channels.fetchMemberCounts|(guildId: string, channelIds: readonly string[], options?: CountOperationOptions | undefined) => Effect<ChannelMemberCountsResult, CountOperationFailure, never>
-operation|native|Channels.follow|(channelId: string, input: ChannelFollowInput, options?: ChannelAuditOperationOptions | undefined) => Effect<FollowedChannel, ChannelOperationFailure, never>
+operation|native|AuditLogs.fetchPage|(guildId: string, query: AuditLogQuery, options?: RequestOptions | undefined) => Effect<AuditLogPage, GuildOperationFailure, never>
+operation|native|AuditLogs.iterate|(guildId: string, query: AuditLogIterationQuery, options?: RequestOptions | undefined) => Stream<AuditLogEntry, PaginationError | GuildOperationFailure, never>
+operation|native|Channels.create|(guildId: string, input: ChannelCreate, options?: AuditedRequestOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
+operation|native|Channels.createForumTag|(channelId: string, input: ForumTagInput, options?: AuditedRequestOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
+operation|native|Channels.delete|(channelId: string, options?: AuditedRequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Channels.deleteForumTag|(channelId: string, tagId: string, options?: AuditedRequestOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
+operation|native|Channels.edit|(channelId: string, input: ChannelEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
+operation|native|Channels.editForumTag|(channelId: string, tagId: string, input: ForumTagInput, options?: AuditedRequestOptions | undefined) => Effect<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure, never>
+operation|native|Channels.fetch|(channelId: string, options?: RequestOptions | undefined) => Effect<GuildChannel, ChannelOperationFailure, never>
+operation|native|Channels.fetchAll|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildChannel[], ChannelOperationFailure, never>
+operation|native|Channels.fetchFollowerStats|(channelId: string, options?: RequestOptions | undefined) => Effect<ChannelFollowerStats, ChannelOperationFailure, never>
+operation|native|Channels.fetchMemberCounts|(guildId: string, channelIds: readonly string[], options?: RequestOptions | undefined) => Effect<ChannelMemberCountsResult, CountOperationFailure, never>
+operation|native|Channels.follow|(channelId: string, input: ChannelFollowInput, options?: AuditedRequestOptions | undefined) => Effect<FollowedChannel, ChannelOperationFailure, never>
 operation|native|Channels.get|(channelId: string) => Effect<GuildChannel | undefined, never, never>
-operation|native|Channels.removePermissionOverwrite|(channelId: string, targetId: string, options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Channels.reorder|(guildId: string, positions: readonly ChannelPosition[], options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Channels.setPermissionOverwrite|(channelId: string, input: PermissionOverwrite, options?: ChannelAuditOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Channels.removePermissionOverwrite|(channelId: string, targetId: string, options?: AuditedRequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Channels.reorder|(guildId: string, positions: readonly ChannelPosition[], options?: AuditedRequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Channels.setPermissionOverwrite|(channelId: string, input: PermissionOverwrite, options?: AuditedRequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
 operation|native|Client.connect|() => Effect<void, ConnectError, never>
 operation|native|Client.diagnostics|() => ClientDiagnostics
 operation|native|Client.observeState|() => Stream<ConnectionState, never, never>
@@ -240,174 +240,174 @@ operation|native|ClientCache.delete|(kind: CacheKind, key: string) => void
 operation|native|ClientCache.entries|<K extends CacheKind>(kind: K, options?: CacheEntriesOptions | undefined) => Effect<readonly CachedResources<M>[K][], never, never>
 operation|native|ClientCache.onChange|<E = never, R = never>(listener: (change: CacheChange) => Effect<unknown, E, R>, options?: CacheObserverOptions | undefined) => Effect<CacheObserver, never, R | Scope>
 operation|native|ClientLogging.configure|(settings: LogLevelSettings) => void
-operation|native|CurrentBotApplication.fetch|(options?: BotApplicationOperationOptions | undefined) => Effect<BotApplication, BotApplicationOperationFailure, never>
-operation|native|DirectMessages.close|(id: string, options?: UserOperationOptions | undefined) => Effect<void, UserOperationFailure, never>
-operation|native|DirectMessages.editGroup|(id: string, input: DirectMessageGroupEdit, options?: UserOperationOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
-operation|native|DirectMessages.fetch|(id: string, options?: UserOperationOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
-operation|native|DirectMessages.fetchAll|(options?: UserOperationOptions | undefined) => Effect<readonly DirectMessageChannel[], UserOperationFailure, never>
-operation|native|DirectMessages.fetchLatestMessages|(channelIds: readonly string[], options?: UserOperationOptions | undefined) => Effect<DirectMessageLatestMessages<M>, UserOperationFailure, never>
+operation|native|CurrentBotApplication.fetch|(options?: RequestOptions | undefined) => Effect<BotApplication, BotApplicationOperationFailure, never>
+operation|native|DirectMessages.close|(id: string, options?: RequestOptions | undefined) => Effect<void, UserOperationFailure, never>
+operation|native|DirectMessages.editGroup|(id: string, input: DirectMessageGroupEdit, options?: RequestOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
+operation|native|DirectMessages.fetch|(id: string, options?: RequestOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
+operation|native|DirectMessages.fetchAll|(options?: RequestOptions | undefined) => Effect<readonly DirectMessageChannel[], UserOperationFailure, never>
+operation|native|DirectMessages.fetchLatestMessages|(channelIds: readonly string[], options?: RequestOptions | undefined) => Effect<DirectMessageLatestMessages<M>, UserOperationFailure, never>
 operation|native|DirectMessages.get|(id: string) => Effect<DirectMessageChannel | undefined, never, never>
-operation|native|DirectMessages.open|(userId: string, options?: UserOperationOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
-operation|native|DirectMessages.removeRecipient|(id: string, userId: string, options?: UserOperationOptions | undefined) => Effect<void, UserOperationFailure, never>
-operation|native|DirectMessages.send|(userId: string, input: string | ReplyInput, options?: SendOptions | undefined) => Effect<M, SendError, never>
-operation|native|Discovery.apply|(guildId: string, input: DiscoveryApplicationInput, options?: GuildOperationOptions | undefined) => Effect<DiscoveryApplication, GuildOperationFailure, never>
-operation|native|Discovery.edit|(guildId: string, input: Partial<DiscoveryApplicationInput>, options?: GuildOperationOptions | undefined) => Effect<DiscoveryApplication, GuildOperationFailure, never>
-operation|native|Discovery.fetchCategories|(options?: GuildOperationOptions | undefined) => Effect<readonly DiscoveryCategory[], GuildOperationFailure, never>
-operation|native|Discovery.fetchStatus|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<DiscoveryStatus, GuildOperationFailure, never>
-operation|native|Discovery.search|(query?: DiscoverySearchQuery | undefined, options?: GuildOperationOptions | undefined) => Effect<DiscoverySearchPage, GuildOperationFailure, never>
-operation|native|Discovery.withdraw|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Emojis.clone|(guildId: string, sourceId: string, options?: ModerationOptions | undefined) => Effect<GuildEmoji, GuildOperationFailure, never>
-operation|native|Emojis.create|(guildId: string, input: EmojiCreate, options?: ModerationOptions | undefined) => Effect<GuildEmoji, GuildOperationFailure, never>
-operation|native|Emojis.createMany|(guildId: string, input: readonly EmojiCreate[], options?: ModerationOptions | undefined) => Effect<ExpressionBatch<GuildEmoji>, GuildOperationFailure, never>
+operation|native|DirectMessages.open|(userId: string, options?: RequestOptions | undefined) => Effect<DirectMessageChannel, UserOperationFailure, never>
+operation|native|DirectMessages.removeRecipient|(id: string, userId: string, options?: RequestOptions | undefined) => Effect<void, UserOperationFailure, never>
+operation|native|DirectMessages.send|(userId: string, input: string | ReplyInput, options?: RequestOptions | undefined) => Effect<M, SendError, never>
+operation|native|Discovery.apply|(guildId: string, input: DiscoveryApplicationInput, options?: RequestOptions | undefined) => Effect<DiscoveryApplication, GuildOperationFailure, never>
+operation|native|Discovery.edit|(guildId: string, input: Partial<DiscoveryApplicationInput>, options?: RequestOptions | undefined) => Effect<DiscoveryApplication, GuildOperationFailure, never>
+operation|native|Discovery.fetchCategories|(options?: RequestOptions | undefined) => Effect<readonly DiscoveryCategory[], GuildOperationFailure, never>
+operation|native|Discovery.fetchStatus|(guildId: string, options?: RequestOptions | undefined) => Effect<DiscoveryStatus, GuildOperationFailure, never>
+operation|native|Discovery.search|(query?: DiscoverySearchQuery | undefined, options?: RequestOptions | undefined) => Effect<DiscoverySearchPage, GuildOperationFailure, never>
+operation|native|Discovery.withdraw|(guildId: string, options?: RequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Emojis.clone|(guildId: string, sourceId: string, options?: AuditedRequestOptions | undefined) => Effect<GuildEmoji, GuildOperationFailure, never>
+operation|native|Emojis.create|(guildId: string, input: EmojiCreate, options?: AuditedRequestOptions | undefined) => Effect<GuildEmoji, GuildOperationFailure, never>
+operation|native|Emojis.createMany|(guildId: string, input: readonly EmojiCreate[], options?: AuditedRequestOptions | undefined) => Effect<ExpressionBatch<GuildEmoji>, GuildOperationFailure, never>
 operation|native|Emojis.delete|(target: ExpressionReference, options?: ExpressionDeleteOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Emojis.edit|(target: ExpressionReference, input: EmojiEdit, options?: ModerationOptions | undefined) => Effect<GuildEmoji, GuildOperationFailure, never>
-operation|native|Emojis.fetchAll|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<readonly GuildEmoji[], GuildOperationFailure, never>
-operation|native|Emojis.fetchMetadata|(id: string, options?: GuildOperationOptions | undefined) => Effect<ExpressionMetadata, GuildOperationFailure, never>
-operation|native|Emojis.fetchSource|(id: string, options?: GuildOperationOptions | undefined) => Effect<ExpressionSourceGuild, GuildOperationFailure, never>
+operation|native|Emojis.edit|(target: ExpressionReference, input: EmojiEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildEmoji, GuildOperationFailure, never>
+operation|native|Emojis.fetchAll|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildEmoji[], GuildOperationFailure, never>
+operation|native|Emojis.fetchMetadata|(id: string, options?: RequestOptions | undefined) => Effect<ExpressionMetadata, GuildOperationFailure, never>
+operation|native|Emojis.fetchSource|(id: string, options?: RequestOptions | undefined) => Effect<ExpressionSourceGuild, GuildOperationFailure, never>
 operation|native|Emojis.get|(target: ExpressionReference) => Effect<GuildEmoji | undefined, never, never>
 operation|native|GatewayCommands.send|(shardId: number, op: number, d: unknown) => Effect<void, GatewaySendFailure, never>
 operation|native|Guilds.deleteOwnMessages|(guildId: string, options: OwnMessageDeletionOptions) => Effect<void, GuildOperationFailure, never>
-operation|native|Guilds.edit|(guildId: string, input: GuildEdit, options?: ModerationOptions | undefined) => Effect<Guild, GuildOperationFailure, never>
-operation|native|Guilds.editVanityUrl|(guildId: string, code: string | null, options?: ModerationOptions | undefined) => Effect<GuildVanityUrl, GuildOperationFailure, never>
-operation|native|Guilds.fetch|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<Guild, GuildOperationFailure, never>
-operation|native|Guilds.fetchCounts|(guildIds: readonly string[], options?: CountOperationOptions | undefined) => Effect<GuildCountsResult, CountOperationFailure, never>
-operation|native|Guilds.fetchPage|(query?: GuildListQuery | undefined, options?: GuildOperationOptions | undefined) => Effect<readonly GuildListSummary[], GuildOperationFailure, never>
-operation|native|Guilds.fetchVanityUrl|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<GuildVanityUrlUsage, GuildOperationFailure, never>
+operation|native|Guilds.edit|(guildId: string, input: GuildEdit, options?: AuditedRequestOptions | undefined) => Effect<Guild, GuildOperationFailure, never>
+operation|native|Guilds.editVanityUrl|(guildId: string, code: string | null, options?: AuditedRequestOptions | undefined) => Effect<GuildVanityUrl, GuildOperationFailure, never>
+operation|native|Guilds.fetch|(guildId: string, options?: RequestOptions | undefined) => Effect<Guild, GuildOperationFailure, never>
+operation|native|Guilds.fetchCounts|(guildIds: readonly string[], options?: RequestOptions | undefined) => Effect<GuildCountsResult, CountOperationFailure, never>
+operation|native|Guilds.fetchPage|(query?: GuildListQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly GuildListSummary[], GuildOperationFailure, never>
+operation|native|Guilds.fetchVanityUrl|(guildId: string, options?: RequestOptions | undefined) => Effect<GuildVanityUrlUsage, GuildOperationFailure, never>
 operation|native|Guilds.get|(guildId: string) => Effect<Guild | undefined, never, never>
-operation|native|Guilds.iterate|(query: GuildIterationQuery, options?: GuildOperationOptions | undefined) => Stream<GuildListSummary, PaginationError | GuildOperationFailure, never>
-operation|native|Guilds.leave|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Instance.resolve|(options?: InstanceResolveOptions | undefined) => Effect<ResolvedInstance, InstanceResolveError, never>
-operation|native|Invites.create|(channelId: string, input?: InviteCreate | undefined, options?: ModerationOptions | undefined) => Effect<InviteMetadata, GuildOperationFailure, never>
-operation|native|Invites.delete|(code: string, options?: ModerationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Invites.fetch|(code: string, options?: GuildOperationOptions | undefined) => Effect<Invite, GuildOperationFailure, never>
-operation|native|Invites.fetchForChannel|(channelId: string, options?: GuildOperationOptions | undefined) => Effect<readonly InviteMetadata[], GuildOperationFailure, never>
-operation|native|Invites.fetchForGuild|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<readonly InviteMetadata[], GuildOperationFailure, never>
-operation|native|Members.addRole|(member: MemberReference, roleId: string, options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Members.ban|(target: MemberReference, input?: BanInput | undefined, options?: ModerationOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Guilds.iterate|(query: GuildIterationQuery, options?: RequestOptions | undefined) => Stream<GuildListSummary, PaginationError | GuildOperationFailure, never>
+operation|native|Guilds.leave|(guildId: string, options?: RequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Instance.resolve|(options?: RequestOptions | undefined) => Effect<ResolvedInstance, InstanceResolveError, never>
+operation|native|Invites.create|(channelId: string, input?: InviteCreate | undefined, options?: AuditedRequestOptions | undefined) => Effect<InviteMetadata, GuildOperationFailure, never>
+operation|native|Invites.delete|(code: string, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Invites.fetch|(code: string, options?: RequestOptions | undefined) => Effect<Invite, GuildOperationFailure, never>
+operation|native|Invites.fetchForChannel|(channelId: string, options?: RequestOptions | undefined) => Effect<readonly InviteMetadata[], GuildOperationFailure, never>
+operation|native|Invites.fetchForGuild|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly InviteMetadata[], GuildOperationFailure, never>
+operation|native|Members.addRole|(member: MemberReference, roleId: string, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Members.ban|(target: MemberReference, input?: BanInput | undefined, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
 operation|native|Members.clearTimeout|(target: MemberReference, options?: TimeoutOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.disconnect|(target: VoiceConnectionReference, options?: ModerationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.editSelf|(guildId: string, input: MemberProfileEdit, options?: GuildAuditOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.fetch|(member: MemberReference, options?: GuildOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.fetchBans|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<readonly GuildBan[], GuildOperationFailure, never>
+operation|native|Members.disconnect|(target: VoiceConnectionReference, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.editSelf|(guildId: string, input: MemberProfileEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.fetch|(member: MemberReference, options?: RequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.fetchBans|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildBan[], GuildOperationFailure, never>
 operation|native|Members.fetchCanManage|(target: MemberReference, options?: CanManageOptions | undefined) => Effect<boolean, GuildOperationFailure, never>
-operation|native|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: GuildOperationOptions | undefined) => Effect<readonly GuildMember[], GuildOperationFailure, never>
-operation|native|Members.fetchSelf|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly GuildMember[], GuildOperationFailure, never>
+operation|native|Members.fetchSelf|(guildId: string, options?: RequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.get|(member: MemberReference) => Effect<GuildMember | undefined, never, never>
 operation|native|Members.getSelf|(guildId: string) => Effect<GuildMember | undefined, never, never>
-operation|native|Members.iterate|(guildId: string, query: UserIterationQuery, options?: GuildOperationOptions | undefined) => Stream<GuildMember, PaginationError | GuildOperationFailure, never>
+operation|native|Members.iterate|(guildId: string, query: UserIterationQuery, options?: RequestOptions | undefined) => Stream<GuildMember, PaginationError | GuildOperationFailure, never>
 operation|native|Members.iterateChunks|(guildId: string, query: MemberChunkQuery, options?: MemberChunkOptions | undefined) => Stream<MemberChunk, MemberChunkFailure, never>
-operation|native|Members.iterateSearch|(guildId: string, filters: Omit<MemberSearchQuery, "limit">, limits: MemberSearchIterationLimits, options?: GuildOperationOptions | undefined) => Stream<MemberSearchHit, PaginationError | GuildOperationFailure, never>
-operation|native|Members.kick|(target: MemberReference, options?: ModerationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Members.move|(target: VoiceConnectionReference, channelId: string, options?: ModerationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.removeRole|(member: MemberReference, roleId: string, options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Members.search|(guildId: string, filters?: MemberSearchQuery | undefined, options?: GuildOperationOptions | undefined) => Effect<MemberSearchPage, GuildOperationFailure, never>
-operation|native|Members.setDeaf|(target: MemberReference, input: VoiceDeafenInput, options?: ModerationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.setMute|(target: MemberReference, input: VoiceMuteInput, options?: ModerationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.setNickname|(member: MemberReference, nickname: string | null, options?: GuildAuditOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
-operation|native|Members.setRoles|(member: MemberReference, roleIds: readonly string[], options?: GuildAuditOperationOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.iterateSearch|(guildId: string, filters: Omit<MemberSearchQuery, "limit">, limits: MemberSearchIterationLimits, options?: RequestOptions | undefined) => Stream<MemberSearchHit, PaginationError | GuildOperationFailure, never>
+operation|native|Members.kick|(target: MemberReference, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Members.move|(target: VoiceConnectionReference, channelId: string, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.removeRole|(member: MemberReference, roleId: string, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Members.search|(guildId: string, filters?: MemberSearchQuery | undefined, options?: RequestOptions | undefined) => Effect<MemberSearchPage, GuildOperationFailure, never>
+operation|native|Members.setDeaf|(target: MemberReference, input: VoiceDeafenInput, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.setMute|(target: MemberReference, input: VoiceMuteInput, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.setNickname|(member: MemberReference, nickname: string | null, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.setRoles|(member: MemberReference, roleIds: readonly string[], options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.timeout|(target: MemberReference, durationMs: number, options?: TimeoutOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.timeoutState|(member: Pick<GuildMember, "communicationDisabledUntil">, options?: TimeoutStateOptions | undefined) => MemberTimeoutState
-operation|native|Members.unban|(target: MemberReference, options?: ModerationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Messages.addReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Members.unban|(target: MemberReference, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Messages.addReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.cleanup|(plan: MessageCleanupPlan<M>, options?: MessageCleanupOptions | undefined) => Effect<MessageCleanupReport, MessageCleanupError, never>
-operation|native|Messages.clearReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.clearReactions|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.clearReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.clearReactions|(message: MessageReference, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.collect|<E = never, R = never>(channelId: string, options?: CollectorOptions<E, R, M> | undefined) => Effect<Collector<M>, never, R | Scope>
 operation|native|Messages.collectReactions|<E = never, R = never>(message: MessageReference, options?: ReactionCollectorOptions<E, R> | undefined) => Effect<ReactionCollector, never, R | Scope>
-operation|native|Messages.delete|(message: MessageReference, options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.deleteAttachment|(message: MessageReference, attachmentId: string, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.delete|(message: MessageReference, options?: AuditedRequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.deleteAttachment|(message: MessageReference, attachmentId: string, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.deleteMany|(channelId: string, messageIds: readonly string[], options?: AuditedRequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
 operation|native|Messages.deleteOwnMessages|(channelId: string, options: OwnMessageDeletionOptions) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: MessageOperationOptions | undefined) => Effect<M, MessageOperationFailure, never>
-operation|native|Messages.fetch|(message: MessageReference, options?: MessageOperationOptions | undefined) => Effect<M, MessageOperationFailure, never>
-operation|native|Messages.fetchCrosspostSource|(target: MessageReference, options?: MessageOperationOptions | undefined) => Effect<CrosspostSource, MessageOperationFailure, never>
-operation|native|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<readonly M[], MessageOperationFailure, never>
-operation|native|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<MessagePinsPage<M>, MessageOperationFailure, never>
-operation|native|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<ReactionUsersPage, MessageOperationFailure, never>
-operation|native|Messages.forward|(channelId: string, input: ForwardMessageInput, options?: SendOptions | undefined) => Effect<M, SendError, never>
+operation|native|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: RequestOptions | undefined) => Effect<M, MessageOperationFailure, never>
+operation|native|Messages.fetch|(message: MessageReference, options?: RequestOptions | undefined) => Effect<M, MessageOperationFailure, never>
+operation|native|Messages.fetchCrosspostSource|(target: MessageReference, options?: RequestOptions | undefined) => Effect<CrosspostSource, MessageOperationFailure, never>
+operation|native|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly M[], MessageOperationFailure, never>
+operation|native|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: RequestOptions | undefined) => Effect<MessagePinsPage<M>, MessageOperationFailure, never>
+operation|native|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: RequestOptions | undefined) => Effect<ReactionUsersPage, MessageOperationFailure, never>
+operation|native|Messages.forward|(channelId: string, input: ForwardMessageInput, options?: RequestOptions | undefined) => Effect<M, SendError, never>
 operation|native|Messages.get|(message: MessageReference) => Effect<M | undefined, never, never>
-operation|native|Messages.iterateHistory|(channelId: string, query: HistoryIterationQuery, options?: MessageOperationOptions | undefined) => Stream<M, PaginationError | MessageOperationFailure, never>
-operation|native|Messages.iteratePins|(channelId: string, query: PinIterationQuery, options?: MessageOperationOptions | undefined) => Stream<MessagePin<M>, PaginationError | MessageOperationFailure, never>
-operation|native|Messages.iterateReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query: UserIterationQuery, options?: MessageOperationOptions | undefined) => Stream<ReactionUser, PaginationError | MessageOperationFailure, never>
-operation|native|Messages.iterateSearch|(context: MessageSearchContext, filters: Omit<MessageSearchQuery, "limit" | "page">, limits: MessageSearchIterationLimits, options?: MessageOperationOptions | undefined) => Stream<M, PaginationError | MessageOperationFailure, never>
-operation|native|Messages.keepTyping|<A, E, R>(channelId: string, task: Effect<A, E, R>, options?: MessageOperationOptions | undefined) => Effect<A, E | MessageOperationFailure, R>
+operation|native|Messages.iterateHistory|(channelId: string, query: HistoryIterationQuery, options?: RequestOptions | undefined) => Stream<M, PaginationError | MessageOperationFailure, never>
+operation|native|Messages.iteratePins|(channelId: string, query: PinIterationQuery, options?: RequestOptions | undefined) => Stream<MessagePin<M>, PaginationError | MessageOperationFailure, never>
+operation|native|Messages.iterateReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query: UserIterationQuery, options?: RequestOptions | undefined) => Stream<ReactionUser, PaginationError | MessageOperationFailure, never>
+operation|native|Messages.iterateSearch|(context: MessageSearchContext, filters: Omit<MessageSearchQuery, "limit" | "page">, limits: MessageSearchIterationLimits, options?: RequestOptions | undefined) => Stream<M, PaginationError | MessageOperationFailure, never>
+operation|native|Messages.keepTyping|<A, E, R>(channelId: string, task: Effect<A, E, R>, options?: RequestOptions | undefined) => Effect<A, E | MessageOperationFailure, R>
 operation|native|Messages.paginate|(channelId: string, pages: readonly PageInput[], options: ChannelPaginateOptions) => Effect<PaginateResult<M>, PaginateFailure, never>
-operation|native|Messages.pin|(message: MessageReference, options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.previewCleanup|(channelId: string, selection: MessageCleanupSelection<M>, options?: MessageOperationOptions | undefined) => Effect<MessageCleanupPlan<M>, MessageCleanupError, never>
-operation|native|Messages.publish|(target: MessageReference, options?: MessageOperationOptions | undefined) => Effect<M, MessageOperationFailure, never>
-operation|native|Messages.removeReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.removeUserReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.reply|(message: MessageReference, input: string | ReplyInput, options?: SendOptions | undefined) => Effect<M, SendError, never>
-operation|native|Messages.search|(context: MessageSearchContext, query?: MessageSearchQuery | undefined, options?: MessageOperationOptions | undefined) => Effect<MessageSearchPage<M>, MessageOperationFailure, never>
-operation|native|Messages.send|(channelId: string, input: string | MessageInput, options?: SendOptions | undefined) => Effect<M, SendError, never>
-operation|native|Messages.typing|(channelId: string, options?: MessageOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|Messages.unpin|(message: MessageReference, options?: MessageAuditOperationOptions | undefined) => Effect<void, MessageOperationFailure, never>
-operation|native|OAuthClient.authorizationUrl|(input: OAuthAuthorizationInput, options?: OAuthOperationOptions | undefined) => Effect<string, OAuthOperationFailure, never>
-operation|native|OAuthClient.exchangeCode|(input: OAuthCodeExchangeInput, options?: OAuthOperationOptions | undefined) => Effect<OAuthTokens, OAuthOperationFailure, never>
-operation|native|OAuthClient.fetchConnections|(accessToken: string, options?: OAuthOperationOptions | undefined) => Effect<readonly OAuthConnection[], OAuthOperationFailure, never>
-operation|native|OAuthClient.fetchGuilds|(accessToken: string, query?: GuildListQuery | undefined, options?: OAuthOperationOptions | undefined) => Effect<readonly GuildListSummary[], OAuthOperationFailure, never>
-operation|native|OAuthClient.fetchIdentity|(accessToken: string, options?: OAuthOperationOptions | undefined) => Effect<OAuthIdentity, OAuthOperationFailure, never>
-operation|native|OAuthClient.introspect|(token: string, options?: OAuthOperationOptions | undefined) => Effect<OAuthIntrospection, OAuthOperationFailure, never>
-operation|native|OAuthClient.refresh|(refreshToken: string, options?: OAuthOperationOptions | undefined) => Effect<OAuthTokens, OAuthOperationFailure, never>
-operation|native|OAuthClient.revoke|(input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token"; }, options?: OAuthOperationOptions | undefined) => Effect<void, OAuthOperationFailure, never>
+operation|native|Messages.pin|(message: MessageReference, options?: AuditedRequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.previewCleanup|(channelId: string, selection: MessageCleanupSelection<M>, options?: RequestOptions | undefined) => Effect<MessageCleanupPlan<M>, MessageCleanupError, never>
+operation|native|Messages.publish|(target: MessageReference, options?: RequestOptions | undefined) => Effect<M, MessageOperationFailure, never>
+operation|native|Messages.removeReaction|(message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.removeUserReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.reply|(message: MessageReference, input: string | ReplyInput, options?: RequestOptions | undefined) => Effect<M, SendError, never>
+operation|native|Messages.search|(context: MessageSearchContext, query?: MessageSearchQuery | undefined, options?: RequestOptions | undefined) => Effect<MessageSearchPage<M>, MessageOperationFailure, never>
+operation|native|Messages.send|(channelId: string, input: string | MessageInput, options?: RequestOptions | undefined) => Effect<M, SendError, never>
+operation|native|Messages.typing|(channelId: string, options?: RequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|Messages.unpin|(message: MessageReference, options?: AuditedRequestOptions | undefined) => Effect<void, MessageOperationFailure, never>
+operation|native|OAuthClient.authorizationUrl|(input: OAuthAuthorizationInput, options?: RequestOptions | undefined) => Effect<string, OAuthOperationFailure, never>
+operation|native|OAuthClient.exchangeCode|(input: OAuthCodeExchangeInput, options?: RequestOptions | undefined) => Effect<OAuthTokens, OAuthOperationFailure, never>
+operation|native|OAuthClient.fetchConnections|(accessToken: string, options?: RequestOptions | undefined) => Effect<readonly OAuthConnection[], OAuthOperationFailure, never>
+operation|native|OAuthClient.fetchGuilds|(accessToken: string, query?: GuildListQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly GuildListSummary[], OAuthOperationFailure, never>
+operation|native|OAuthClient.fetchIdentity|(accessToken: string, options?: RequestOptions | undefined) => Effect<OAuthIdentity, OAuthOperationFailure, never>
+operation|native|OAuthClient.introspect|(token: string, options?: RequestOptions | undefined) => Effect<OAuthIntrospection, OAuthOperationFailure, never>
+operation|native|OAuthClient.refresh|(refreshToken: string, options?: RequestOptions | undefined) => Effect<OAuthTokens, OAuthOperationFailure, never>
+operation|native|OAuthClient.revoke|(input: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token"; }, options?: RequestOptions | undefined) => Effect<void, OAuthOperationFailure, never>
 operation|native|OAuthClient.shutdown|() => Effect<void, never, never>
 operation|native|PermissionHelpers.calculate|(input: PermissionInput) => bigint
 operation|native|PermissionHelpers.fetch|(target: PermissionTarget, options?: PermissionFetchOptions | undefined) => Effect<bigint, ChannelOperationError | ClientClosedError | GuildOperationError, never>
-operation|native|PermissionHelpers.fetchChannels|(target: MemberReference, options?: GuildOperationOptions | undefined) => Effect<readonly ChannelPermissions[], ChannelOperationError | ClientClosedError | GuildOperationError, never>
+operation|native|PermissionHelpers.fetchChannels|(target: MemberReference, options?: RequestOptions | undefined) => Effect<readonly ChannelPermissions[], ChannelOperationError | ClientClosedError | GuildOperationError, never>
 operation|native|Presence.set|(input: PresenceInput) => Effect<void, PresenceFailure, never>
 operation|native|Presence.setMembers|(guildId: string, memberIds: readonly string[]) => Effect<void, PresenceFailure, never>
 operation|native|RestRequests.request|<T = unknown>(input: RestRequest) => Effect<RestResponse<T>, RestRequestFailure, never>
-operation|native|Roles.create|(guildId: string, input: RoleCreate, options?: GuildAuditOperationOptions | undefined) => Effect<GuildRole, GuildOperationFailure, never>
-operation|native|Roles.delete|(role: RoleReference, options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Roles.edit|(role: RoleReference, input: RoleEdit, options?: GuildAuditOperationOptions | undefined) => Effect<GuildRole, GuildOperationFailure, never>
-operation|native|Roles.fetchAll|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<readonly GuildRole[], GuildOperationFailure, never>
+operation|native|Roles.create|(guildId: string, input: RoleCreate, options?: AuditedRequestOptions | undefined) => Effect<GuildRole, GuildOperationFailure, never>
+operation|native|Roles.delete|(role: RoleReference, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Roles.edit|(role: RoleReference, input: RoleEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildRole, GuildOperationFailure, never>
+operation|native|Roles.fetchAll|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildRole[], GuildOperationFailure, never>
 operation|native|Roles.get|(role: RoleReference) => Effect<GuildRole | undefined, never, never>
 operation|native|Roles.getAll|(guildId: string) => Effect<readonly GuildRole[] | undefined, never, never>
-operation|native|Roles.reorder|(guildId: string, positions: readonly RolePosition[], options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Roles.resetHoistPositions|(guildId: string, options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Roles.setHoistPositions|(guildId: string, positions: readonly RoleHoistPosition[], options?: GuildAuditOperationOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Stickers.clone|(guildId: string, sourceId: string, options?: ModerationOptions | undefined) => Effect<GuildSticker, GuildOperationFailure, never>
-operation|native|Stickers.create|(guildId: string, input: StickerCreate, options?: ModerationOptions | undefined) => Effect<GuildSticker, GuildOperationFailure, never>
-operation|native|Stickers.createMany|(guildId: string, input: readonly StickerCreate[], options?: ModerationOptions | undefined) => Effect<ExpressionBatch<GuildSticker>, GuildOperationFailure, never>
+operation|native|Roles.reorder|(guildId: string, positions: readonly RolePosition[], options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Roles.resetHoistPositions|(guildId: string, options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Roles.setHoistPositions|(guildId: string, positions: readonly RoleHoistPosition[], options?: AuditedRequestOptions | undefined) => Effect<void, GuildOperationFailure, never>
+operation|native|Stickers.clone|(guildId: string, sourceId: string, options?: AuditedRequestOptions | undefined) => Effect<GuildSticker, GuildOperationFailure, never>
+operation|native|Stickers.create|(guildId: string, input: StickerCreate, options?: AuditedRequestOptions | undefined) => Effect<GuildSticker, GuildOperationFailure, never>
+operation|native|Stickers.createMany|(guildId: string, input: readonly StickerCreate[], options?: AuditedRequestOptions | undefined) => Effect<ExpressionBatch<GuildSticker>, GuildOperationFailure, never>
 operation|native|Stickers.delete|(target: ExpressionReference, options?: ExpressionDeleteOptions | undefined) => Effect<void, GuildOperationFailure, never>
-operation|native|Stickers.edit|(target: ExpressionReference, input: StickerEdit, options?: ModerationOptions | undefined) => Effect<GuildSticker, GuildOperationFailure, never>
-operation|native|Stickers.fetchAll|(guildId: string, options?: GuildOperationOptions | undefined) => Effect<readonly GuildSticker[], GuildOperationFailure, never>
-operation|native|Stickers.fetchMetadata|(id: string, options?: GuildOperationOptions | undefined) => Effect<ExpressionMetadata, GuildOperationFailure, never>
-operation|native|Stickers.fetchSource|(id: string, options?: GuildOperationOptions | undefined) => Effect<ExpressionSourceGuild, GuildOperationFailure, never>
+operation|native|Stickers.edit|(target: ExpressionReference, input: StickerEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildSticker, GuildOperationFailure, never>
+operation|native|Stickers.fetchAll|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildSticker[], GuildOperationFailure, never>
+operation|native|Stickers.fetchMetadata|(id: string, options?: RequestOptions | undefined) => Effect<ExpressionMetadata, GuildOperationFailure, never>
+operation|native|Stickers.fetchSource|(id: string, options?: RequestOptions | undefined) => Effect<ExpressionSourceGuild, GuildOperationFailure, never>
 operation|native|Stickers.get|(target: ExpressionReference) => Effect<GuildSticker | undefined, never, never>
-operation|native|Threads.addMember|(threadId: string, userId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Threads.create|(channelId: string, input: ThreadCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
-operation|native|Threads.createFromMessage|(message: MessageReference, input: ThreadFromMessageCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
-operation|native|Threads.createPost|(channelId: string, input: ForumPostCreate, options?: ChannelAuditOperationOptions | undefined) => Effect<ForumPost<M>, ChannelOperationFailure, never>
-operation|native|Threads.edit|(threadId: string, input: ThreadEdit, options?: ChannelAuditOperationOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
-operation|native|Threads.fetchActive|(guildId: string, options?: ChannelOperationOptions | undefined) => Effect<readonly GuildThreadChannel[], ChannelOperationFailure, never>
-operation|native|Threads.fetchArchived|(channelId: string, query?: ArchivedThreadQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<ArchivedThreadPage, ChannelOperationFailure, never>
-operation|native|Threads.fetchMember|(threadId: string, userId: string, query?: ThreadMemberQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<ThreadMember, ChannelOperationFailure, never>
-operation|native|Threads.fetchMembers|(threadId: string, query?: ThreadMemberPageQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<readonly ThreadMember[], ChannelOperationFailure, never>
-operation|native|Threads.iterateMembers|(threadId: string, query: ThreadMemberIterationQuery, options?: ChannelOperationOptions | undefined) => Stream<ThreadMember, PaginationError | ChannelOperationFailure, never>
-operation|native|Threads.join|(threadId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Threads.leave|(threadId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Threads.removeMember|(threadId: string, userId: string, options?: ChannelOperationOptions | undefined) => Effect<void, ChannelOperationFailure, never>
-operation|native|Threads.search|(channelId: string, query?: ThreadSearchQuery | undefined, options?: ChannelOperationOptions | undefined) => Effect<ThreadSearchPage<M>, ChannelOperationFailure, never>
-operation|native|Users.fetch|(id: string, options?: UserOperationOptions | undefined) => Effect<User, UserOperationFailure, never>
-operation|native|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: UserOperationOptions | undefined) => Effect<UserProfile, UserOperationFailure, never>
-operation|native|Users.fetchSelf|(options?: UserOperationOptions | undefined) => Effect<User, UserOperationFailure, never>
+operation|native|Threads.addMember|(threadId: string, userId: string, options?: RequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.create|(channelId: string, input: ThreadCreate, options?: AuditedRequestOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
+operation|native|Threads.createFromMessage|(message: MessageReference, input: ThreadFromMessageCreate, options?: AuditedRequestOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
+operation|native|Threads.createPost|(channelId: string, input: ForumPostCreate, options?: AuditedRequestOptions | undefined) => Effect<ForumPost<M>, ChannelOperationFailure, never>
+operation|native|Threads.edit|(threadId: string, input: ThreadEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildThreadChannel, ChannelOperationFailure, never>
+operation|native|Threads.fetchActive|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildThreadChannel[], ChannelOperationFailure, never>
+operation|native|Threads.fetchArchived|(channelId: string, query?: ArchivedThreadQuery | undefined, options?: RequestOptions | undefined) => Effect<ArchivedThreadPage, ChannelOperationFailure, never>
+operation|native|Threads.fetchMember|(threadId: string, userId: string, query?: ThreadMemberQuery | undefined, options?: RequestOptions | undefined) => Effect<ThreadMember, ChannelOperationFailure, never>
+operation|native|Threads.fetchMembers|(threadId: string, query?: ThreadMemberPageQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly ThreadMember[], ChannelOperationFailure, never>
+operation|native|Threads.iterateMembers|(threadId: string, query: ThreadMemberIterationQuery, options?: RequestOptions | undefined) => Stream<ThreadMember, PaginationError | ChannelOperationFailure, never>
+operation|native|Threads.join|(threadId: string, options?: RequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.leave|(threadId: string, options?: RequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.removeMember|(threadId: string, userId: string, options?: RequestOptions | undefined) => Effect<void, ChannelOperationFailure, never>
+operation|native|Threads.search|(channelId: string, query?: ThreadSearchQuery | undefined, options?: RequestOptions | undefined) => Effect<ThreadSearchPage<M>, ChannelOperationFailure, never>
+operation|native|Users.fetch|(id: string, options?: RequestOptions | undefined) => Effect<User, UserOperationFailure, never>
+operation|native|Users.fetchProfile|(id: string, query?: UserProfileQuery | undefined, options?: RequestOptions | undefined) => Effect<UserProfile, UserOperationFailure, never>
+operation|native|Users.fetchSelf|(options?: RequestOptions | undefined) => Effect<User, UserOperationFailure, never>
 operation|native|Users.get|(id: string) => Effect<User | undefined, never, never>
 operation|native|Users.getSelf|() => Effect<User | undefined, never, never>
-operation|native|WebhookClient.delete|(options?: MessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
+operation|native|WebhookClient.delete|(options?: RequestOptions | undefined) => Effect<void, WebhookOperationFailure, never>
 operation|native|WebhookClient.deleteMessage|(messageId: string, options?: WebhookMessageOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
-operation|native|WebhookClient.edit|(input: WebhookTokenEdit, options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
+operation|native|WebhookClient.edit|(input: WebhookTokenEdit, options?: RequestOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
 operation|native|WebhookClient.editMessage|(messageId: string, input: string | WebhookMessageEdit, options?: WebhookMessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
-operation|native|WebhookClient.fetch|(options?: MessageOperationOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
+operation|native|WebhookClient.fetch|(options?: RequestOptions | undefined) => Effect<IncomingWebhook, WebhookOperationFailure, never>
 operation|native|WebhookClient.fetchMessage|(messageId: string, options?: WebhookMessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
-operation|native|WebhookClient.send|(input: string | WebhookMessageInput, options?: MessageOperationOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
+operation|native|WebhookClient.send|(input: string | WebhookMessageInput, options?: RequestOptions | undefined) => Effect<Message, WebhookOperationFailure, never>
 operation|native|WebhookClient.shutdown|() => Effect<void, never, never>
-operation|native|Webhooks.create|(channelId: string, input: WebhookCreate, options?: WebhookOperationOptions | undefined) => Effect<CreatedWebhook, WebhookOperationFailure, never>
-operation|native|Webhooks.delete|(id: string, options?: WebhookOperationOptions | undefined) => Effect<void, WebhookOperationFailure, never>
-operation|native|Webhooks.edit|(id: string, input: WebhookEdit, options?: WebhookOperationOptions | undefined) => Effect<Webhook, WebhookOperationFailure, never>
-operation|native|Webhooks.fetch|(id: string, options?: WebhookOperationOptions | undefined) => Effect<Webhook, WebhookOperationFailure, never>
-operation|native|Webhooks.fetchForChannel|(channelId: string, options?: WebhookOperationOptions | undefined) => Effect<readonly Webhook[], WebhookOperationFailure, never>
-operation|native|Webhooks.fetchForGuild|(guildId: string, options?: WebhookOperationOptions | undefined) => Effect<readonly Webhook[], WebhookOperationFailure, never>
+operation|native|Webhooks.create|(channelId: string, input: WebhookCreate, options?: AuditedRequestOptions | undefined) => Effect<CreatedWebhook, WebhookOperationFailure, never>
+operation|native|Webhooks.delete|(id: string, options?: AuditedRequestOptions | undefined) => Effect<void, WebhookOperationFailure, never>
+operation|native|Webhooks.edit|(id: string, input: WebhookEdit, options?: AuditedRequestOptions | undefined) => Effect<Webhook, WebhookOperationFailure, never>
+operation|native|Webhooks.fetch|(id: string, options?: AuditedRequestOptions | undefined) => Effect<Webhook, WebhookOperationFailure, never>
+operation|native|Webhooks.fetchForChannel|(channelId: string, options?: AuditedRequestOptions | undefined) => Effect<readonly Webhook[], WebhookOperationFailure, never>
+operation|native|Webhooks.fetchForGuild|(guildId: string, options?: AuditedRequestOptions | undefined) => Effect<readonly Webhook[], WebhookOperationFailure, never>
 member|default|Client.application|CurrentBotApplication
 member|default|Client.attachments|Attachments
 member|default|Client.auditLogs|AuditLogs
@@ -643,8 +643,9 @@ field|shared|AttachmentDownloadFailure.outcome|OperationOutcome | undefined|opti
 field|shared|AttachmentDownloadFailure.reason|"busy" | "input" | "network" | "response" | "timeout" | "tooLarge" | "untrustedUrl" | undefined|optional=true|nullable=false
 field|shared|AttachmentDownloadFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|AttachmentDownloadFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|AttachmentDownloadOptions.maxBytes|number|optional=false|nullable=false
-field|native|AttachmentDownloadOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|AttachmentDownloadOptions.maxBytes|number|optional=false|nullable=false
+field|default|AttachmentDownloadOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|AttachmentDownloadOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|AttachmentFileInput.contentType|string | undefined|optional=true|nullable=false
 field|shared|AttachmentFileInput.data|undefined|optional=true|nullable=false
 field|shared|AttachmentFileInput.description|string | undefined|optional=true|nullable=false
@@ -702,7 +703,6 @@ field|shared|AttachmentRefreshFailure.reason|OperationReason | undefined|optiona
 field|shared|AttachmentRefreshFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|AttachmentRefreshFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|AttachmentRefreshFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|AttachmentRefreshOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|AttachmentStreamInput.contentType|string | undefined|optional=true|nullable=false
 field|shared|AttachmentStreamInput.data|undefined|optional=true|nullable=false
 field|shared|AttachmentStreamInput.description|string | undefined|optional=true|nullable=false
@@ -713,6 +713,9 @@ field|shared|AttachmentStreamInput.size|number|optional=false|nullable=false
 field|shared|AttachmentStreamInput.spoiler|boolean | undefined|optional=true|nullable=false
 field|shared|AttachmentStreamInput.stream|AttachmentStreamSource|optional=false|nullable=false
 field|shared|AttachmentStreamInput.title|string | undefined|optional=true|nullable=false
+field|default|AttachmentStreamOptions.maxBytes|number|optional=false|nullable=false
+field|default|AttachmentStreamOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|default|AttachmentStreamOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|AttachmentStreamReadResult.done|false | true | undefined|optional=true|nullable=false
 field|shared|AttachmentStreamReadResult.value|Uint8Array<ArrayBufferLike> | undefined|optional=true|nullable=false
 field|shared|AttachmentStreamReader.cancel|(reason?: unknown) => PromiseLike<void>|optional=false|nullable=false
@@ -781,6 +784,9 @@ field|shared|AuditLogWebhook.guildId|null | string | undefined|optional=true|nul
 field|shared|AuditLogWebhook.id|string|optional=false|nullable=false
 field|shared|AuditLogWebhook.name|string|optional=false|nullable=false
 field|shared|AuditLogWebhook.type|1 | 2|optional=false|nullable=false
+field|shared|AuditedRequestOptions.auditReason|string | undefined|optional=true|nullable=false
+field|default|AuditedRequestOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|AuditedRequestOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|AuthenticationError._tag|"AuthenticationError"|optional=false|nullable=false
 field|shared|AuthenticationError.code|string|optional=false|nullable=false
 field|shared|AuthenticationError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
@@ -820,7 +826,6 @@ field|shared|BotApplicationOperationFailure.reason|OperationReason | undefined|o
 field|shared|BotApplicationOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|BotApplicationOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|BotApplicationOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|BotApplicationOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|CacheChange.key|null | string|optional=false|nullable=true
 field|shared|CacheChange.kind|CacheKind|optional=false|nullable=false
 field|shared|CacheChange.op|"clear" | "delete" | "set"|optional=false|nullable=false
@@ -877,8 +882,9 @@ field|shared|CallVoiceState.sessionId|string | undefined|optional=true|nullable=
 field|shared|CallVoiceState.userId|string|optional=false|nullable=false
 field|shared|CallVoiceState.version|number | undefined|optional=true|nullable=false
 field|shared|CallVoiceState.viewerStreamKeys|readonly string[]|optional=false|nullable=false
-field|native|CanManageOptions.actorUserId|string | undefined|optional=true|nullable=false
-field|native|CanManageOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|CanManageOptions.actorUserId|string | undefined|optional=true|nullable=false
+field|default|CanManageOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|CanManageOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|default|CancelledError._tag|"CancelledError"|optional=false|nullable=false
 field|default|CancelledError.code|string|optional=false|nullable=false
 field|default|CancelledError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
@@ -898,8 +904,6 @@ field|shared|CategoryChannelCreate.type|4|optional=false|nullable=false
 field|shared|CategoryChannelCreate.url|null | string | undefined|optional=true|nullable=true
 field|shared|CategoryChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|CategoryChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
-field|native|ChannelAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|ChannelAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.availableTags|readonly ForumTagInput[] | undefined|optional=true|nullable=false
 field|shared|ChannelCreate.bitrate|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelCreate.contentWarningLevel|number | undefined|optional=true|nullable=false
@@ -987,11 +991,11 @@ field|shared|ChannelOperationFailure.reason|OperationReason | undefined|optional
 field|shared|ChannelOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|ChannelOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|native|ChannelPaginateOptions.idleMs|number | undefined|optional=true|nullable=false
-field|native|ChannelPaginateOptions.removeClicks|boolean | undefined|optional=true|nullable=false
-field|native|ChannelPaginateOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|native|ChannelPaginateOptions.users|PageTurners|optional=false|nullable=false
+field|shared|ChannelPaginateOptions.idleMs|number | undefined|optional=true|nullable=false
+field|shared|ChannelPaginateOptions.removeClicks|boolean | undefined|optional=true|nullable=false
+field|default|ChannelPaginateOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|ChannelPaginateOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|ChannelPaginateOptions.users|PageTurners|optional=false|nullable=false
 field|shared|ChannelPermissions.channel|GuildChannel|optional=false|nullable=false
 field|shared|ChannelPermissions.permissions|bigint|optional=false|nullable=false
 field|shared|ChannelPinsUpdate.channelId|string|optional=false|nullable=false
@@ -1061,15 +1065,17 @@ field|shared|CollectorFailure.limit|"maxBytes" | "maxPendingBytes" | "maxPending
 field|shared|CollectorFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|CollectorFailure.reason|"connectionLost" | "filter" | "handler" | "notConnected" | "overflow" | undefined|optional=true|nullable=false
 field|shared|CollectorFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|CollectorOptions.filter|((message: M) => boolean) | undefined|optional=true|nullable=false
-field|native|CollectorOptions.guildId|string | undefined|optional=true|nullable=false
-field|native|CollectorOptions.idleMs|number | undefined|optional=true|nullable=false
-field|native|CollectorOptions.maxBytes|number | undefined|optional=true|nullable=false
-field|native|CollectorOptions.maxMessages|number | undefined|optional=true|nullable=false
-field|native|CollectorOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|native|CollectorOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.filter|((message: M) => boolean) | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.guildId|string | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.idleMs|number | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.maxBytes|number | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.maxMessages|number | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
+field|default|CollectorOptions.onMessage|((message: M, signal: AbortSignal) => unknown) | undefined|optional=true|nullable=false
 field|native|CollectorOptions.onMessage|((message: M) => Effect<unknown, E, R>) | undefined|optional=true|nullable=false
-field|native|CollectorOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|default|CollectorOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|CollectorOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|CollectorResult.messages|readonly M[]|optional=false|nullable=false
 field|shared|CollectorResult.reason|"idle" | "limit" | "stopped" | "timeout"|optional=false|nullable=false
 field|shared|ConfigurationError._tag|"ConfigurationError"|optional=false|nullable=false
@@ -1136,7 +1142,6 @@ field|shared|CountOperationFailure.operation|CountOperation | undefined|optional
 field|shared|CountOperationFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|CountOperationFailure.reason|"busy" | "connectionLost" | "input" | "notConnected" | "response" | "timeout" | undefined|optional=true|nullable=false
 field|shared|CountOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|CountOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|CreatedWebhook.credentials|WebhookCredentials|optional=false|nullable=false
 field|shared|CreatedWebhook.webhook|IncomingWebhook|optional=false|nullable=false
 field|shared|CrosspostSource.guild|CrosspostSourceGuild|optional=false|nullable=false
@@ -1154,114 +1159,6 @@ field|shared|CustomStatusEmoji.name|string | undefined|optional=true|nullable=fa
 field|shared|CustomStatusInput.emoji|CustomStatusEmoji | undefined|optional=true|nullable=false
 field|shared|CustomStatusInput.expiresAt|string | undefined|optional=true|nullable=false
 field|shared|CustomStatusInput.text|string | undefined|optional=true|nullable=false
-field|default|DefaultAttachmentDownloadOptions.maxBytes|number|optional=false|nullable=false
-field|default|DefaultAttachmentDownloadOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultAttachmentDownloadOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultAttachmentRefreshOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultAttachmentRefreshOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultAttachmentStreamOptions.maxBytes|number|optional=false|nullable=false
-field|default|DefaultAttachmentStreamOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultAttachmentStreamOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultBotApplicationOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultBotApplicationOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultCanManageOptions.actorUserId|string | undefined|optional=true|nullable=false
-field|default|DefaultCanManageOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultCanManageOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultChannelAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultChannelAuditOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultChannelAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultChannelOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultChannelOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultChannelPaginateOptions.idleMs|number | undefined|optional=true|nullable=false
-field|default|DefaultChannelPaginateOptions.removeClicks|boolean | undefined|optional=true|nullable=false
-field|default|DefaultChannelPaginateOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultChannelPaginateOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultChannelPaginateOptions.users|PageTurners|optional=false|nullable=false
-field|default|DefaultCollectorOptions.filter|((message: M) => boolean) | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.guildId|string | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.idleMs|number | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.maxBytes|number | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.maxMessages|number | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.onMessage|((message: M, signal: AbortSignal) => unknown) | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultCollectorOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultCountOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultCountOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultEventWaitOptions.filter|((event: EventMap<M>[K]) => boolean) | undefined|optional=true|nullable=false
-field|default|DefaultEventWaitOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|default|DefaultEventWaitOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
-field|default|DefaultEventWaitOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultEventWaitOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultExpressionDeleteOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultExpressionDeleteOptions.purge|boolean | undefined|optional=true|nullable=false
-field|default|DefaultExpressionDeleteOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultExpressionDeleteOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultGuildAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultGuildAuditOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultGuildAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultGuildOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultGuildOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultInstanceResolveOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultInstanceResolveOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultMemberChunkOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|default|DefaultMemberChunkOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultMemberChunkOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultMessageAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultMessageAuditOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultMessageAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultMessageCleanupOptions.onProgress|((progress: MessageCleanupProgress) => unknown) | undefined|optional=true|nullable=false
-field|default|DefaultMessageCleanupOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultMessageCleanupOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultMessageOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultMessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultMessageSearchOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultMessageSearchOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultModerationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultModerationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultModerationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultOAuthOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultOAuthOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultOwnMessageDeletionOptions.confirm|true|optional=false|nullable=false
-field|default|DefaultOwnMessageDeletionOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultOwnMessageDeletionOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultPermissionFetchOptions.preferCache|boolean | undefined|optional=true|nullable=false
-field|default|DefaultPermissionFetchOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultPermissionFetchOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.emoji|ReactionEmojiInput | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.filter|((reaction: MessageReaction) => boolean) | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.guildId|string | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.idleMs|number | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.maxBytes|number | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.maxReactions|number | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.onReaction|((reaction: MessageReaction, signal: AbortSignal) => unknown) | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultReactionCollectorOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultRestRequest.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultRestRequest.body|unknown|optional=false|nullable=false
-field|default|DefaultRestRequest.files|readonly AttachmentInput[] | undefined|optional=true|nullable=false
-field|default|DefaultRestRequest.method|"DELETE" | "GET" | "PATCH" | "POST" | "PUT"|optional=false|nullable=false
-field|default|DefaultRestRequest.path|string|optional=false|nullable=false
-field|default|DefaultRestRequest.query|Readonly<Record<string, string | number | boolean | undefined>> | undefined|optional=true|nullable=false
-field|default|DefaultRestRequest.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultRestRequest.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultSendOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultSendOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultTimeoutOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultTimeoutOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultTimeoutOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultTimeoutOptions.timeoutReason|null | string | undefined|optional=true|nullable=true
-field|default|DefaultUserOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultUserOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultWebhookMessageOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultWebhookMessageOperationOptions.threadId|string | undefined|optional=true|nullable=false
-field|default|DefaultWebhookMessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|default|DefaultWebhookOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|default|DefaultWebhookOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
-field|default|DefaultWebhookOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|DeletedMessageMember.accentColor|null | number | undefined|optional=true|nullable=true
 field|shared|DeletedMessageMember.avatar|null | string | undefined|optional=true|nullable=true
 field|shared|DeletedMessageMember.banner|null | string | undefined|optional=true|nullable=true
@@ -1565,15 +1462,17 @@ field|shared|EventWaitFailure.limit|"bytes" | "messages" | undefined|optional=tr
 field|shared|EventWaitFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|EventWaitFailure.reason|"filter" | "timeout" | undefined|optional=true|nullable=false
 field|shared|EventWaitFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|EventWaitOptions.filter|((event: EventMap<M>[K]) => boolean) | undefined|optional=true|nullable=false
-field|native|EventWaitOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|native|EventWaitOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
-field|native|EventWaitOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|EventWaitOptions.filter|((event: EventMap<M>[K]) => boolean) | undefined|optional=true|nullable=false
+field|shared|EventWaitOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
+field|shared|EventWaitOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
+field|default|EventWaitOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|EventWaitOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ExpressionBatch.failed|readonly { readonly name: string; }[]|optional=false|nullable=false
 field|shared|ExpressionBatch.success|readonly A[]|optional=false|nullable=false
-field|native|ExpressionDeleteOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|ExpressionDeleteOptions.purge|boolean | undefined|optional=true|nullable=false
-field|native|ExpressionDeleteOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|ExpressionDeleteOptions.auditReason|string | undefined|optional=true|nullable=false
+field|shared|ExpressionDeleteOptions.purge|boolean | undefined|optional=true|nullable=false
+field|default|ExpressionDeleteOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|ExpressionDeleteOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ExpressionMetadata.allowCloning|boolean|optional=false|nullable=false
 field|shared|ExpressionMetadata.animated|boolean|optional=false|nullable=false
 field|shared|ExpressionMetadata.guildId|string|optional=false|nullable=false
@@ -1748,8 +1647,6 @@ field|shared|GuildAuditLogEntryCreate.options|AuditLogOptions | undefined|option
 field|shared|GuildAuditLogEntryCreate.reason|string | undefined|optional=true|nullable=false
 field|shared|GuildAuditLogEntryCreate.targetId|null | string|optional=false|nullable=true
 field|shared|GuildAuditLogEntryCreate.userId|string|optional=false|nullable=false
-field|native|GuildAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|GuildAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|GuildBan.bannedAt|string|optional=false|nullable=false
 field|shared|GuildBan.expiresAt|null | string | undefined|optional=true|nullable=true
 field|shared|GuildBan.guildId|string|optional=false|nullable=false
@@ -1999,7 +1896,6 @@ field|shared|GuildOperationFailure.reason|OperationReason | undefined|optional=t
 field|shared|GuildOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|GuildOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|GuildOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|GuildOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|GuildPrivateThreadChannel.archiveTimestamp|string|optional=false|nullable=false
 field|shared|GuildPrivateThreadChannel.archived|boolean|optional=false|nullable=false
 field|shared|GuildPrivateThreadChannel.autoArchiveMinutes|number|optional=false|nullable=false
@@ -2195,7 +2091,6 @@ field|shared|InstanceResolveError.source|"gateway" | "http" | undefined|optional
 field|shared|InstanceResolveError.status|null | number | undefined|optional=true|nullable=true
 field|shared|InstanceResolveError.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|InstanceResolveError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|InstanceResolveOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|Invite.channel|{ readonly id: string; readonly name?: string | null; readonly type: number; }|optional=false|nullable=false
 field|shared|Invite.code|string|optional=false|nullable=false
 field|shared|Invite.expiresAt|null | string | undefined|optional=true|nullable=true
@@ -2290,8 +2185,9 @@ field|shared|MemberChunkFailure.outcome|OperationOutcome | undefined|optional=tr
 field|shared|MemberChunkFailure.reason|"busy" | "connectionLost" | "input" | "notConnected" | "overflow" | "rateLimit" | "response" | "timeout" | undefined|optional=true|nullable=false
 field|shared|MemberChunkFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|MemberChunkFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|MemberChunkOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|native|MemberChunkOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|MemberChunkOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
+field|default|MemberChunkOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|MemberChunkOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|MemberChunkQuery.all|true | undefined|optional=true|nullable=false
 field|shared|MemberChunkQuery.limit|number | undefined|optional=true|nullable=false
 field|shared|MemberChunkQuery.presences|boolean | undefined|optional=true|nullable=false
@@ -2373,8 +2269,6 @@ field|shared|Message.thread|GuildThreadChannel | undefined|optional=true|nullabl
 field|shared|Message.tts|boolean | undefined|optional=true|nullable=false
 field|shared|Message.type|number | undefined|optional=true|nullable=false
 field|shared|Message.webhookId|string | undefined|optional=true|nullable=false
-field|native|MessageAuditOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|MessageAuditOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|MessageBulkDeletion.channelId|string|optional=false|nullable=false
 field|shared|MessageBulkDeletion.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageBulkDeletion.ids|readonly string[]|optional=false|nullable=false
@@ -2404,8 +2298,9 @@ field|shared|MessageCleanupFailureMetadata.outcome|MessageCleanupOutcome|optiona
 field|shared|MessageCleanupFailureMetadata.reason|MessageCleanupErrorReason|optional=false|nullable=false
 field|shared|MessageCleanupFailureMetadata.retryAfterMs|null | number|optional=false|nullable=true
 field|shared|MessageCleanupFailureMetadata.status|null | number|optional=false|nullable=true
-field|native|MessageCleanupOptions.onProgress|((progress: MessageCleanupProgress) => unknown) | undefined|optional=true|nullable=false
-field|native|MessageCleanupOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|MessageCleanupOptions.onProgress|((progress: MessageCleanupProgress) => unknown) | undefined|optional=true|nullable=false
+field|default|MessageCleanupOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|MessageCleanupOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|MessageCleanupPlan.channelId|string|optional=false|nullable=false
 field|shared|MessageCleanupPlan.scannedCount|number|optional=false|nullable=false
 field|shared|MessageCleanupPlan.selectedMessages|readonly M[]|optional=false|nullable=false
@@ -2485,7 +2380,6 @@ field|shared|MessageOperationFailure.reason|OperationReason | undefined|optional
 field|shared|MessageOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|MessageOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|MessageOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|MessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|MessagePin.message|M|optional=false|nullable=false
 field|shared|MessagePin.pinnedAt|string|optional=false|nullable=false
 field|shared|MessagePinsPage.hasMore|boolean|optional=false|nullable=false
@@ -2597,8 +2491,6 @@ field|shared|MessageUser.mentionFlags|0 | 1 | 2 | undefined|optional=true|nullab
 field|shared|MessageUser.username|string|optional=false|nullable=false
 field|default|MiddlewareRegistration.close|() => void|optional=false|nullable=false
 field|native|MiddlewareRegistration.close|() => Effect<void, never, never>|optional=false|nullable=false
-field|native|ModerationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|ModerationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|OAuthActiveIntrospection.active|true|optional=false|nullable=false
 field|shared|OAuthActiveIntrospection.clientId|string|optional=false|nullable=false
 field|shared|OAuthActiveIntrospection.expiresAtUnixSeconds|number | undefined|optional=true|nullable=false
@@ -2664,7 +2556,6 @@ field|shared|OAuthOperationFailure.reason|"busy" | "input" | "network" | "rateLi
 field|shared|OAuthOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|OAuthOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|OAuthOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|OAuthOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|OAuthTokens.accessToken|string|optional=false|nullable=false
 field|shared|OAuthTokens.expiresInSeconds|number|optional=false|nullable=false
 field|shared|OAuthTokens.refreshToken|string|optional=false|nullable=false
@@ -2680,8 +2571,9 @@ field|default|OperationOptions.signal|OperationSignal | undefined|optional=true|
 field|default|OperationSignal.aborted|boolean|optional=false|nullable=false
 field|default|OperationSignal.addEventListener|(type: "abort", listener: () => void, options?: { once?: boolean; } | undefined) => void|optional=false|nullable=false
 field|default|OperationSignal.removeEventListener|(type: "abort", listener: () => void) => void|optional=false|nullable=false
-field|native|OwnMessageDeletionOptions.confirm|true|optional=false|nullable=false
-field|native|OwnMessageDeletionOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|OwnMessageDeletionOptions.confirm|true|optional=false|nullable=false
+field|default|OwnMessageDeletionOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|OwnMessageDeletionOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|PageInput.content|string | undefined|optional=true|nullable=false
 field|shared|PageInput.embeds|readonly (EmbedBuilder | EmbedInput)[] | undefined|optional=true|nullable=false
 field|shared|PaginateFailure._tag|"ClientClosedError" | "CollectorError" | "ConfigurationError" | "MessageError" | "MessageOperationError"|optional=false|nullable=false
@@ -2710,8 +2602,9 @@ field|shared|PaginationError.inputValidation|InputValidationDetail | null|option
 field|shared|PaginationError.operation|PaginationOperation|optional=false|nullable=false
 field|shared|PaginationError.reason|"cursorStalled" | "indexing" | "input" | "pageLimit"|optional=false|nullable=false
 field|shared|PaginationError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|PermissionFetchOptions.preferCache|boolean | undefined|optional=true|nullable=false
-field|native|PermissionFetchOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|PermissionFetchOptions.preferCache|boolean | undefined|optional=true|nullable=false
+field|default|PermissionFetchOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|PermissionFetchOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|PermissionInput.channel|GuildChannel | undefined|optional=true|nullable=false
 field|shared|PermissionInput.guild|Guild|optional=false|nullable=false
 field|shared|PermissionInput.member|GuildMember|optional=false|nullable=false
@@ -2780,16 +2673,18 @@ field|default|ReactionCollector.close|() => void|optional=false|nullable=false
 field|native|ReactionCollector.close|() => Effect<void, never, never>|optional=false|nullable=false
 field|default|ReactionCollector.result|(options?: OperationOptions | undefined) => ResultAsync<ReactionCollectorResult, CancelledError | ConfigurationError | CollectorFailure>|optional=false|nullable=false
 field|native|ReactionCollector.result|() => Effect<ReactionCollectorResult, CollectorFailure, never>|optional=false|nullable=false
-field|native|ReactionCollectorOptions.emoji|ReactionEmojiInput | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.filter|((reaction: MessageReaction) => boolean) | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.guildId|string | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.idleMs|number | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.maxBytes|number | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.maxReactions|number | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.emoji|ReactionEmojiInput | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.filter|((reaction: MessageReaction) => boolean) | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.guildId|string | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.idleMs|number | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.maxBytes|number | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.maxReactions|number | undefined|optional=true|nullable=false
+field|default|ReactionCollectorOptions.onReaction|((reaction: MessageReaction, signal: AbortSignal) => unknown) | undefined|optional=true|nullable=false
 field|native|ReactionCollectorOptions.onReaction|((reaction: MessageReaction) => Effect<unknown, E, R>) | undefined|optional=true|nullable=false
-field|native|ReactionCollectorOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|default|ReactionCollectorOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|ReactionCollectorOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ReactionCollectorResult.reactions|readonly MessageReaction[]|optional=false|nullable=false
 field|shared|ReactionCollectorResult.reason|"idle" | "limit" | "stopped" | "timeout"|optional=false|nullable=false
 field|shared|ReactionEmoji.animated|boolean | undefined|optional=true|nullable=false
@@ -2846,6 +2741,8 @@ field|shared|ReplyInput.flags|number | undefined|optional=true|nullable=false
 field|shared|ReplyInput.nonce|MessageNonce | undefined|optional=true|nullable=false
 field|shared|ReplyInput.stickerIds|readonly string[] | undefined|optional=true|nullable=false
 field|shared|ReplyInput.tts|boolean | undefined|optional=true|nullable=false
+field|default|RequestOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|RequestOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ResolvedInstance.apiCodeVersion|number|optional=false|nullable=false
 field|shared|ResolvedInstance.assets|Readonly<{ userBanner(profile: Readonly<{ user: Pick<User, "id">; profile: Pick<UserProfileFields, "banner">; }>, options?: AssetUrlOptions | undefined): string | null; avatar(user: Pick<User, "avatar" | "id">, options?: AssetUrlOptions | undefined): string | null; defaultAvatar(userId: string): string; displayAvatar(user: Pick<User, "avatar" | "id">, options?: AssetUrlOptions | undefined): string; memberAvatar(member: Pick<GuildMember, "avatar" | "guildId" | "userId">, options?: AssetUrlOptions | undefined): string | null | undefined; memberBanner(member: Pick<GuildMember, "banner" | "guildId" | "userId">, options?: AssetUrlOptions | undefined): string | null | undefined; displayMemberAvatar(user: Pick<User, "avatar" | "id">, member: Pick<GuildMember, "avatar" | "guildId" | "profileFlags" | "userId">, options?: AssetUrlOptions | undefined): string | undefined; guildIcon(guild: Pick<Guild, "icon" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildBanner(guild: Pick<Guild, "banner" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildSplash(guild: Pick<Guild, "id" | "splash">, options?: AssetUrlOptions | undefined): string | null | undefined; guildEmbedSplash(guild: Pick<Guild, "embedSplash" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; emoji(emoji: Pick<GuildEmoji, "animated" | "id">, options?: AssetUrlOptions | undefined): string; sticker(sticker: Pick<GuildSticker, "animated" | "id">, options?: StickerAssetUrlOptions | undefined): string; }>|optional=false|nullable=false
 field|shared|ResolvedInstance.discoveryEnabled|boolean|optional=false|nullable=false
@@ -2853,13 +2750,14 @@ field|shared|ResolvedInstance.domainMigration|InstanceDomainMigration | null|opt
 field|shared|ResolvedInstance.endpoints|InstanceEndpoints|optional=false|nullable=false
 field|shared|ResolvedInstance.links|Readonly<{ channel(target: ChannelLinkTarget): string; message(message: MessageReference, channel: ChannelLinkTarget): string; installation(applicationId: string, options?: InstallationLinkOptions | undefined): string; }>|optional=false|nullable=false
 field|shared|ResolvedInstance.presignedAttachmentUploads|boolean|optional=false|nullable=false
-field|native|RestRequest.auditReason|string | undefined|optional=true|nullable=false
-field|native|RestRequest.body|unknown|optional=false|nullable=false
-field|native|RestRequest.files|readonly AttachmentInput[] | undefined|optional=true|nullable=false
-field|native|RestRequest.method|"DELETE" | "GET" | "PATCH" | "POST" | "PUT"|optional=false|nullable=false
-field|native|RestRequest.path|string|optional=false|nullable=false
-field|native|RestRequest.query|Readonly<Record<string, string | number | boolean | undefined>> | undefined|optional=true|nullable=false
-field|native|RestRequest.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|RestRequest.auditReason|string | undefined|optional=true|nullable=false
+field|shared|RestRequest.body|unknown|optional=false|nullable=false
+field|shared|RestRequest.files|readonly AttachmentInput[] | undefined|optional=true|nullable=false
+field|shared|RestRequest.method|"DELETE" | "GET" | "PATCH" | "POST" | "PUT"|optional=false|nullable=false
+field|shared|RestRequest.path|string|optional=false|nullable=false
+field|shared|RestRequest.query|Readonly<Record<string, string | number | boolean | undefined>> | undefined|optional=true|nullable=false
+field|default|RestRequest.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|RestRequest.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|RestRequestError._tag|"RestRequestError"|optional=false|nullable=false
 field|shared|RestRequestError.apiError|ApiErrorDetail | null|optional=false|nullable=true
 field|shared|RestRequestError.code|string|optional=false|nullable=false
@@ -2917,7 +2815,6 @@ field|shared|SendError.reason|"busy" | "input" | "network" | "rateLimit" | "reje
 field|shared|SendError.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|SendError.status|null | number | undefined|optional=true|nullable=true
 field|shared|SendError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|SendOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ShardConnectionError._tag|"ShardConnectionError"|optional=false|nullable=false
 field|shared|ShardConnectionError.code|string|optional=false|nullable=false
 field|shared|ShardConnectionError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
@@ -3058,9 +2955,10 @@ field|shared|ThreadSearchResultsPage.hasMore|boolean|optional=false|nullable=fal
 field|shared|ThreadSearchResultsPage.indexing|false|optional=false|nullable=false
 field|shared|ThreadSearchResultsPage.threads|readonly GuildThreadChannel[]|optional=false|nullable=false
 field|shared|ThreadSearchResultsPage.total|number|optional=false|nullable=false
-field|native|TimeoutOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|TimeoutOptions.timeoutMs|number | undefined|optional=true|nullable=false
-field|native|TimeoutOptions.timeoutReason|null | string | undefined|optional=true|nullable=true
+field|shared|TimeoutOptions.auditReason|string | undefined|optional=true|nullable=false
+field|default|TimeoutOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|TimeoutOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|shared|TimeoutOptions.timeoutReason|null | string | undefined|optional=true|nullable=true
 field|shared|TimeoutStateOptions.now|Date | undefined|optional=true|nullable=false
 field|shared|TypingStart.channelId|string|optional=false|nullable=false
 field|shared|TypingStart.guildId|string | undefined|optional=true|nullable=false
@@ -3113,7 +3011,6 @@ field|shared|UserOperationFailure.reason|OperationReason | undefined|optional=tr
 field|shared|UserOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|UserOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|UserOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|UserOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|UserProfile.guildProfile|UserProfileFields | null|optional=false|nullable=true
 field|shared|UserProfile.isLimited|boolean|optional=false|nullable=false
 field|shared|UserProfile.profile|UserProfileFields|optional=false|nullable=false
@@ -3200,8 +3097,9 @@ field|shared|WebhookMessageInput.stickerIds|readonly string[] | undefined|option
 field|shared|WebhookMessageInput.threadId|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.threadName|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageInput.username|string | undefined|optional=true|nullable=false
-field|native|WebhookMessageOperationOptions.threadId|string | undefined|optional=true|nullable=false
-field|native|WebhookMessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
+field|default|WebhookMessageOperationOptions.signal|OperationSignal | undefined|optional=true|nullable=false
+field|shared|WebhookMessageOperationOptions.threadId|string | undefined|optional=true|nullable=false
+field|shared|WebhookMessageOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.allowedMentions|AllowedMentions | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.avatarUrl|string | undefined|optional=true|nullable=false
 field|shared|WebhookMessageOptions.flags|number | undefined|optional=true|nullable=false
@@ -3232,8 +3130,6 @@ field|shared|WebhookOperationFailure.reason|OperationReason | undefined|optional
 field|shared|WebhookOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
 field|shared|WebhookOperationFailure.status|null | number | undefined|optional=true|nullable=true
 field|shared|WebhookOperationFailure.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|native|WebhookOperationOptions.auditReason|string | undefined|optional=true|nullable=false
-field|native|WebhookOperationOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|WebhookReplyReference.target|MessageReference|optional=false|nullable=false
 field|shared|WebhookReplyReference.type|"reply"|optional=false|nullable=false
 field|shared|WebhookSourceChannel.id|string|optional=false|nullable=false

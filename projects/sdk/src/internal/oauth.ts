@@ -16,7 +16,6 @@ import type {
     OAuthIntrospection,
     OAuthOperation,
     OAuthOperationError,
-    OAuthOperationOptions,
     OAuthTokens,
 } from "#sdk/oauth"
 import { OAuthOperationError as OAuthError, oauthCredential } from "#sdk/oauth"
@@ -39,6 +38,7 @@ import {
     unsupportedKeyFailure,
     type InputValidationConstraint,
 } from "#sdk/input-validation"
+import type { RequestOptions } from "#sdk/client"
 
 const maximumResponseBytes = 1_048_576
 const maximumConcurrentRequests = 8
@@ -389,7 +389,7 @@ export class OAuthOwner {
 
     #run<A>(
         operation: OAuthOperation,
-        options: OAuthOperationOptions | undefined,
+        options: RequestOptions | undefined,
         task: (
             api: string,
             webapp: string,
@@ -505,7 +505,7 @@ export class OAuthOwner {
 
     authorizationUrl(
         input: OAuthAuthorizationInput,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<string, OAuthOperationError | ClientClosedError> {
         return suspendInput(() => {
             if (!record(input))
@@ -835,7 +835,7 @@ export class OAuthOwner {
 
     exchangeCode(
         input: OAuthCodeExchangeInput,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
         return suspendInput(() => {
             if (!record(input))
@@ -907,7 +907,7 @@ export class OAuthOwner {
 
     refresh(
         refreshToken: string,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<OAuthTokens, OAuthOperationError | ClientClosedError> {
         if (!canonicalText(refreshToken))
             return Effect.fail(
@@ -942,7 +942,7 @@ export class OAuthOwner {
 
     revoke(
         value: { readonly token: string; readonly tokenTypeHint?: "access_token" | "refresh_token" },
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, OAuthOperationError | ClientClosedError> {
         return suspendInput(() => {
             if (!record(value))
@@ -1001,7 +1001,7 @@ export class OAuthOwner {
 
     fetchIdentity(
         accessToken: string,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<OAuthIdentity, OAuthOperationError | ClientClosedError> {
         if (!text(accessToken))
             return Effect.fail(
@@ -1022,7 +1022,7 @@ export class OAuthOwner {
     fetchGuilds(
         accessToken: string,
         query: GuildListQuery = {},
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly GuildListSummary[], OAuthOperationError | ClientClosedError> {
         return suspendInput(() => {
             const request = guildList(query)
@@ -1059,7 +1059,7 @@ export class OAuthOwner {
 
     fetchConnections(
         accessToken: string,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly OAuthConnection[], OAuthOperationError | ClientClosedError> {
         if (!text(accessToken))
             return Effect.fail(
@@ -1084,7 +1084,7 @@ export class OAuthOwner {
 
     introspect(
         token: string,
-        options?: OAuthOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<OAuthIntrospection, OAuthOperationError | ClientClosedError> {
         if (!canonicalText(token))
             return Effect.fail(

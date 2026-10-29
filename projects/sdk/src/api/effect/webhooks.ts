@@ -1,12 +1,6 @@
-import type {
-    Webhook,
-    CreatedWebhook,
-    WebhookCreate,
-    WebhookEdit,
-    WebhookOperationFailure,
-    WebhookOperationOptions,
-} from "#sdk/webhooks"
+import type { Webhook, CreatedWebhook, WebhookCreate, WebhookEdit, WebhookOperationFailure } from "#sdk/webhooks"
 import type * as Effect from "effect/Effect"
+import type { AuditedRequestOptions } from "#sdk/client"
 
 /** Create and manage webhooks with the bot token, without a gateway connection.
  * There is no webhook cache or hidden credential persistence, and no events are synthesized.
@@ -29,21 +23,21 @@ export interface Webhooks {
     create(
         channelId: string,
         input: WebhookCreate,
-        options?: WebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<CreatedWebhook, WebhookOperationFailure>
     /**
      * Fetch incoming, follower or unknown-kind metadata by decimal ID, discarding any returned token.
      * Follower sources are present only while they exist and the original creator can view them.
      * Missing source metadata does not prove deletion. A missing webhook fails with reason notFound
      */
-    fetch(id: string, options?: WebhookOperationOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    fetch(id: string, options?: AuditedRequestOptions): Effect.Effect<Webhook, WebhookOperationFailure>
     /**
      * List the channel's accessible incoming, follower and unknown-kind webhook metadata without pagination.
      * No tokens are retained and no webhook cache is filled
      */
     fetchForChannel(
         channelId: string,
-        options?: WebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
     /**
      * List the community's accessible incoming, follower and unknown-kind webhook metadata.
@@ -52,7 +46,7 @@ export interface Webhooks {
      */
     fetchForGuild(
         guildId: string,
-        options?: WebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
     /**
      * Change the supplied incoming or follower webhook settings, including its destination channel.
@@ -64,12 +58,12 @@ export interface Webhooks {
     edit(
         id: string,
         input: WebhookEdit,
-        options?: WebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<Webhook, WebhookOperationFailure>
     /**
      * Delete an incoming webhook and revoke its credential, or delete a follower webhook to unfollow its source.
      * Existing webhook messages remain. Fluxer emits Webhooks Update for the destination channel.
      * The SDK does not synthesize that event. A failure does not restore a deleted follow or revoked credential
      */
-    delete(id: string, options?: WebhookOperationOptions): Effect.Effect<void, WebhookOperationFailure>
+    delete(id: string, options?: AuditedRequestOptions): Effect.Effect<void, WebhookOperationFailure>
 }

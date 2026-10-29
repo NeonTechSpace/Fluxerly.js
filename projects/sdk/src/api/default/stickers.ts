@@ -6,11 +6,11 @@ import type {
     StickerCreate,
     StickerEdit,
     ExpressionBatch,
-    DefaultExpressionDeleteOptions,
 } from "#sdk/expressions"
 import type { ResultAsync } from "neverthrow"
-import type { GuildOperationFailure, DefaultGuildOperationOptions, DefaultModerationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AuditedRequestOptions, ExpressionDeleteOptions } from "./options.js"
 
 /**
  * Create, list, copy, edit and delete community stickers.
@@ -38,7 +38,7 @@ export interface Stickers {
     edit(
         target: ExpressionReference,
         input: StickerEdit,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Look up cached sticker metadata using decimal guildId and id, without an HTTP request.
@@ -59,7 +59,7 @@ export interface Stickers {
      */
     fetchAll(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildSticker[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch minimal sticker metadata by decimal ID, without requiring source-community membership.
@@ -67,7 +67,7 @@ export interface Stickers {
      */
     fetchMetadata(
         id: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ExpressionMetadata, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the public presentation of the community that owns a custom sticker with this decimal ID: Its ID, name, icon hash and badges.
@@ -78,7 +78,7 @@ export interface Stickers {
      */
     fetchSource(
         id: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ExpressionSourceGuild, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Upload one community sticker and return its metadata.
@@ -90,7 +90,7 @@ export interface Stickers {
     create(
         guildId: string,
         input: StickerCreate,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Upload 1–50 community stickers in one batch and return separate successes and failures.
@@ -103,7 +103,7 @@ export interface Stickers {
     createMany(
         guildId: string,
         input: readonly StickerCreate[],
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<ExpressionBatch<GuildSticker>, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Copy a sticker into a community by its source ID, using Fluxer's server-side copy.
@@ -113,7 +113,7 @@ export interface Stickers {
     clone(
         guildId: string,
         sourceId: string,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildSticker, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove a sticker, succeeding with no value after HTTP 204.
@@ -124,6 +124,6 @@ export interface Stickers {
      */
     delete(
         target: ExpressionReference,
-        options?: DefaultExpressionDeleteOptions,
+        options?: ExpressionDeleteOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }

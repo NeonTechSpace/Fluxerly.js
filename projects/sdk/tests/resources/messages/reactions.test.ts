@@ -9,9 +9,9 @@ import {
     type EventName,
     type ReactionEmojiInput,
     type ReactionUsersQuery,
-    type DefaultMessageOperationOptions,
+    type RequestOptions,
     type ReactionUsersPage,
-    type DefaultReactionCollectorOptions,
+    type ReactionCollectorOptions,
     type MessageReference,
     SdkDefect,
     type FailureReport,
@@ -161,7 +161,7 @@ test("default reaction collection throws an application SdkDefect that keeps the
         },
     })
     const error = expectThrown(() =>
-        api.defaultApi!.messages.collectReactions(target, options as DefaultReactionCollectorOptions),
+        api.defaultApi!.messages.collectReactions(target, options as ReactionCollectorOptions),
     )
     expect(error).toBeInstanceOf(SdkDefect)
     expect(error).toMatchObject({
@@ -1114,9 +1114,9 @@ test.each(modes)("%s classifies reactor read failures and shares reaction rate l
 
 async function progress(
     api: Awaited<ReturnType<typeof setup>>,
-    defaultApi: NonNullable<DefaultReactionCollectorOptions["onReaction"]>,
+    defaultApi: NonNullable<ReactionCollectorOptions["onReaction"]>,
     native: NonNullable<import("../../../src/effect.js").ReactionCollectorOptions<unknown>["onReaction"]>,
-    options: import("../../../src/collectors.js").ReactionCollectorOptions = {},
+    options: import("../../../src/collectors.js").ReactionCollectorLimits = {},
 ) {
     if (api.defaultApi) {
         const collector = await settle(
@@ -1574,16 +1574,13 @@ async function setup(mode: Mode) {
         collectorScope,
         state: () => (defaultApi ?? native)!.state,
         collectMisuse: async (
-            options?: Omit<DefaultReactionCollectorOptions, "onReaction">,
+            options?: Omit<ReactionCollectorOptions, "onReaction">,
             message: MessageReference = target,
         ) => {
             if (defaultApi) return expectThrown(() => defaultApi.messages.collectReactions(message, options))
             return expectDefect(native!.messages.collectReactions(message, options).pipe(Scope.provide(collectorScope)))
         },
-        collect: async (
-            options?: Omit<DefaultReactionCollectorOptions, "onReaction">,
-            message: MessageReference = target,
-        ) => {
+        collect: async (options?: Omit<ReactionCollectorOptions, "onReaction">, message: MessageReference = target) => {
             if (defaultApi) {
                 const source = await settle(defaultApi.messages.collectReactions(message, options))
                 return {
@@ -1621,7 +1618,7 @@ async function setup(mode: Mode) {
             operation: (typeof moderationOperations)[number],
             emoji: ReactionEmojiInput = "👍",
             userId = "31",
-            options?: Omit<DefaultMessageOperationOptions, "signal"> & { signal?: AbortSignal },
+            options?: Omit<RequestOptions, "signal"> & { signal?: AbortSignal },
         ) => {
             if (defaultApi)
                 return settle(
@@ -1642,7 +1639,7 @@ async function setup(mode: Mode) {
         users: async (
             emoji: ReactionEmojiInput = "👍",
             query?: ReactionUsersQuery,
-            options?: DefaultMessageOperationOptions,
+            options?: RequestOptions,
         ): Promise<ReactionUsersPage> =>
             defaultApi
                 ? settle(defaultApi.messages.fetchReactionUsers(target, emoji, query, options))

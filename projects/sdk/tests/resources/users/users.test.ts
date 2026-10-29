@@ -6,8 +6,7 @@ import {
     type ClientOptions,
     type EventMap,
     type EventName,
-    type DefaultSendOptions,
-    type DefaultUserOperationOptions,
+    type RequestOptions,
     type ReplyInput,
 } from "../../../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
@@ -1068,39 +1067,39 @@ async function setup(mode: Mode, cache?: ClientOptions["cache"]) {
         getUser: async (id = "30") => (defaultApi ? defaultApi.users.get(id) : settle(native!.users.get(id))),
         getDirectMessage: async (id = "10") =>
             defaultApi ? defaultApi.directMessages.get(id) : settle(native!.directMessages.get(id)),
-        fetchUser: async (id = "30", options?: DefaultUserOperationOptions) =>
+        fetchUser: async (id = "30", options?: RequestOptions) =>
             defaultApi ? settle(defaultApi.users.fetch(id, options)) : settle(native!.users.fetch(id, options)),
-        fetchSelf: async (options?: DefaultUserOperationOptions) =>
+        fetchSelf: async (options?: RequestOptions) =>
             defaultApi ? settle(defaultApi.users.fetchSelf(options)) : settle(native!.users.fetchSelf(options)),
-        open: async (id = "30", options?: DefaultUserOperationOptions) =>
+        open: async (id = "30", options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.open(id, options))
                 : settle(native!.directMessages.open(id, options)),
-        fetchDirectMessage: async (id = "10", options?: DefaultUserOperationOptions) =>
+        fetchDirectMessage: async (id = "10", options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.fetch(id, options))
                 : settle(native!.directMessages.fetch(id, options)),
-        fetchAllDirectMessages: async (options?: DefaultUserOperationOptions) =>
+        fetchAllDirectMessages: async (options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.fetchAll(options))
                 : settle(native!.directMessages.fetchAll(options)),
-        fetchLatestMessages: async (ids: readonly string[], options?: DefaultUserOperationOptions) =>
+        fetchLatestMessages: async (ids: readonly string[], options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.fetchLatestMessages(ids, options))
                 : settle(native!.directMessages.fetchLatestMessages(ids, options)),
-        editGroup: async (id: string, input: Record<string, unknown>, options?: DefaultUserOperationOptions) =>
+        editGroup: async (id: string, input: Record<string, unknown>, options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.editGroup(id, input, options))
                 : settle(native!.directMessages.editGroup(id, input, options)),
-        closeDirectMessage: async (id = "10", options?: DefaultUserOperationOptions) =>
+        closeDirectMessage: async (id = "10", options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.close(id, options))
                 : settle(native!.directMessages.close(id, options)),
-        removeRecipient: async (id: string, userId: string, options?: DefaultUserOperationOptions) =>
+        removeRecipient: async (id: string, userId: string, options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.removeRecipient(id, userId, options))
                 : settle(native!.directMessages.removeRecipient(id, userId, options)),
-        send: async (id: string, input: ReplyInput, options?: DefaultSendOptions) =>
+        send: async (id: string, input: ReplyInput, options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.directMessages.send(id, input, options))
                 : settle(native!.directMessages.send(id, input, options)),

@@ -18,19 +18,20 @@ import { clientServices } from "#sdk/internal/client-registry"
 import { throwIfErr } from "#sdk/internal/failures"
 import { defectReason } from "#sdk/internal/defects"
 import type { ClientOptions, ShutdownOptions } from "#sdk/client"
+import type { RequestOptions } from "./options.js"
 import type { CommandArgumentSchema } from "#sdk/command-arguments"
 import { ApplicationError, CancelledError, ConfigurationError, SdkDefect, type ConnectError } from "#sdk/errors"
 import { EventOverflowError } from "#sdk/message-errors"
 import { failures, mapFailureCause } from "#sdk/internal/effect-failures"
-import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
+import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput } from "#sdk/messages"
 import type { HandlerOptions, EventContext, EventMap, EventName } from "#sdk/events"
 import type { FailureReport } from "#sdk/failures"
 import {
     botRouter,
     boundDefaultReply,
-    type DefaultPrefixCommandBatch,
-    type DefaultPrefixCommandRouter,
-    type DefaultPrefixCommandsOptions,
+    type PrefixCommandBatch,
+    type PrefixCommandRouter,
+    type PrefixCommandsOptions,
 } from "#sdk/default-commands"
 import { type Subscription, type EventHandlerOptions } from "./events.js"
 import { type Client, createClient } from "./client.js"
@@ -133,7 +134,7 @@ export type BotEventContext<K extends EventName, M extends MessageCore = Message
            */
           readonly reply: (
               input: ReplyInput | string,
-              options?: SendOptions,
+              options?: Omit<RequestOptions, "signal">,
           ) => ReturnType<Client<M>["messages"]["reply"]>
       }
     : {})
@@ -197,7 +198,7 @@ export interface BotCommandsOptions<
     M extends MessageCore = Message,
     S extends Readonly<Record<string, unknown>> = Readonly<Record<string, CommandArgumentSchema | undefined>>,
 >
-    extends DefaultPrefixCommandsOptions<M>, HandlerOptions<M> {
+    extends PrefixCommandsOptions<M>, HandlerOptions<M> {
     /**
      * Commands keyed by name, such as `{ ping: { execute: ({ reply }) => reply("Pong") } }`, or a callback that
      * receives the empty router and returns it with registrations, for groups or commands built elsewhere.
@@ -205,8 +206,7 @@ export interface BotCommandsOptions<
      * router throw ConfigurationError. Any other throw from the callback creates no client, and runBot returns an Err
      * ApplicationError whose source is "runBot commands" and whose cause is the thrown value
      */
-    readonly commands:
-        DefaultPrefixCommandBatch<M, S> | ((router: DefaultPrefixCommandRouter<M>) => DefaultPrefixCommandRouter<M>)
+    readonly commands: PrefixCommandBatch<M, S> | ((router: PrefixCommandRouter<M>) => PrefixCommandRouter<M>)
     /** Receive command failures, and the reports of the router's own subscription, instead of the client-level onError,
      * as the router attach option does. Those are a failing partitionReady hook, a throwing partition function and an
      * overflow that stops the router (overflow "stop"). With overflow dropOldest, a full queue only writes a Warn record
@@ -533,7 +533,7 @@ function prepareBot<M extends MessageCore>(
         throw new ConfigurationError("configuration", 'The option "setup" must be a function')
     const entries = readBotOptions(() => snapshotBotEvents(events))
     const skipBots = readIgnoreBots(ignoreBots)
-    let router: DefaultPrefixCommandRouter<M> | undefined
+    let router: PrefixCommandRouter<M> | undefined
     let commandsFailure: ApplicationError | undefined
     try {
         router = commands === undefined ? undefined : readBotOptions(() => botRouter<M>(commands, skipBots))

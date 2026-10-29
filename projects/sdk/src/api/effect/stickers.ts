@@ -9,7 +9,8 @@ import type {
     ExpressionDeleteOptions,
 } from "#sdk/expressions"
 import type * as Effect from "effect/Effect"
-import type { GuildOperationFailure, GuildOperationOptions, ModerationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Read, upload, edit, clone or delete custom stickers.
  * Methods return Effects and share guild HTTP concurrency limits, deadlines and GuildOperationError failures.
@@ -31,7 +32,7 @@ export interface Stickers {
     edit(
         target: ExpressionReference,
         input: StickerEdit,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
     /**
      * Look up cached sticker metadata using decimal guildId and id, without an HTTP request.
@@ -46,15 +47,12 @@ export interface Stickers {
      * The list can change after the response and is not an ongoing completeness guarantee.
      * An enabled metadata cache can retain results, but not image bytes or creator accounts
      */
-    fetchAll(
-        guildId: string,
-        options?: GuildOperationOptions,
-    ): Effect.Effect<readonly GuildSticker[], GuildOperationFailure>
+    fetchAll(guildId: string, options?: RequestOptions): Effect.Effect<readonly GuildSticker[], GuildOperationFailure>
     /**
      * Fetch minimal sticker metadata by decimal ID, without requiring source-community membership.
      * This read does not populate the cache
      */
-    fetchMetadata(id: string, options?: GuildOperationOptions): Effect.Effect<ExpressionMetadata, GuildOperationFailure>
+    fetchMetadata(id: string, options?: RequestOptions): Effect.Effect<ExpressionMetadata, GuildOperationFailure>
     /**
      * Fetch the public presentation of the community that owns a custom sticker with this decimal ID: Its ID, name, icon hash and badges.
      * Fluxer answers when the source community is discoverable or the bot is a member of it.
@@ -62,10 +60,7 @@ export interface Stickers {
      * whose apiError.code is unknownResource, without revealing which case applies.
      * This read does not populate the cache, and the result does not update when the community changes
      */
-    fetchSource(
-        id: string,
-        options?: GuildOperationOptions,
-    ): Effect.Effect<ExpressionSourceGuild, GuildOperationFailure>
+    fetchSource(id: string, options?: RequestOptions): Effect.Effect<ExpressionSourceGuild, GuildOperationFailure>
     /**
      * Upload one community sticker and return its metadata.
      * Inputs are copied when execution starts.
@@ -76,7 +71,7 @@ export interface Stickers {
     create(
         guildId: string,
         input: StickerCreate,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
     /**
      * Upload 1–50 community stickers in one batch and return separate successes and failures.
@@ -89,7 +84,7 @@ export interface Stickers {
     createMany(
         guildId: string,
         input: readonly StickerCreate[],
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<ExpressionBatch<GuildSticker>, GuildOperationFailure>
     /**
      * Copy a sticker into a community by its source ID, using Fluxer's server-side copy.
@@ -99,7 +94,7 @@ export interface Stickers {
     clone(
         guildId: string,
         sourceId: string,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildSticker, GuildOperationFailure>
     /**
      * Remove a sticker, succeeding with no value after HTTP 204.

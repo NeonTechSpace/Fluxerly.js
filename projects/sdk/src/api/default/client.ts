@@ -36,10 +36,10 @@ import {
     type Subscription,
     type EventSubscription,
     type EventHandlerOptions,
-    type DefaultEventWaitOptions,
     type EventMiddleware,
     type MiddlewareRegistration,
     type StateObserver,
+    type EventWaitOptions,
 } from "./events.js"
 import { type Attachments } from "./attachments.js"
 import { type Messages } from "./messages.js"
@@ -387,7 +387,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      */
     waitFor<K extends EventName>(
         event: K,
-        options?: DefaultEventWaitOptions<K, M>,
+        options?: EventWaitOptions<K, M>,
     ): ResultAsync<EventMap<M>[K], EventWaitFailure | CancelledError | ConfigurationError>
     /**
      * Read a frozen local report of active work, queues and cache occupancy.
@@ -759,7 +759,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
                     ),
                     "subscribe",
                 ),
-            waitFor: <K extends EventName>(event: K, options?: DefaultEventWaitOptions<K, M>) =>
+            waitFor: <K extends EventName>(event: K, options?: EventWaitOptions<K, M>) =>
                 execute(waitForEvent(owner.events, event, options, true), "waitFor", options),
             diagnostics: () => owner.diagnostics(),
             get state() {

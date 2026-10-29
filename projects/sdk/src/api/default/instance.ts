@@ -1,7 +1,7 @@
 import type { ResultAsync } from "neverthrow"
-import type { OperationOptions } from "#sdk/client"
-import type { InstanceResolveError, InstanceResolveOptions, ResolvedInstance } from "#sdk/instance"
+import type { InstanceResolveError, ResolvedInstance } from "#sdk/instance"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions } from "./options.js"
 
 /**
  * Find the selected Fluxer instance's endpoints and build links and asset URLs for it.
@@ -36,14 +36,6 @@ export interface Instance {
      * Unexpected cleanup failures reject with SdkDefect, retaining safe details of any accompanying failure or interruption
      */
     resolve(
-        options?: DefaultInstanceResolveOptions,
+        options?: RequestOptions,
     ): ResultAsync<ResolvedInstance, InstanceResolveError | CancelledError | ConfigurationError>
 }
-
-/**
- * Set the discovery-wait timeout in milliseconds and optionally pass an AbortSignal.
- * The signal cancels only this caller's wait
- *
- * @category Options
- */
-export interface DefaultInstanceResolveOptions extends InstanceResolveOptions, OperationOptions {}

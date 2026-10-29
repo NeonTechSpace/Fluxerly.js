@@ -4,8 +4,8 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     ChannelType,
     type ClientOptions,
-    type DefaultChannelAuditOperationOptions,
-    type DefaultChannelOperationOptions,
+    type AuditedRequestOptions,
+    type RequestOptions,
     type EventName,
     type GuildChannel,
 } from "../../../src/index.js"
@@ -64,7 +64,7 @@ test.each(modes)("%s sends audit reasons only on supported channel mutations", a
         { method: "DELETE", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
     ])
 
-    const readOptions = { auditReason: "not applicable" } as DefaultChannelOperationOptions
+    const readOptions = { auditReason: "not applicable" } as RequestOptions
     const beforeReads = calls.length
     await expect(api.fetch("10", readOptions as unknown as { timeoutMs?: number })).rejects.toMatchObject({
         reason: "input",
@@ -951,31 +951,27 @@ async function setup(mode: Mode, cache?: ClientOptions["cache"]) {
             defaultApi ? settle(defaultApi.messages.fetch(target)) : settle(native!.messages.fetch(target)),
         getMessage: async (target = { id: "10", channelId: "20" }) =>
             defaultApi ? settle(defaultApi.messages.get(target)) : settle(native!.messages.get(target)),
-        create: async (guildId: string, input: any, options?: DefaultChannelAuditOperationOptions) =>
+        create: async (guildId: string, input: any, options?: AuditedRequestOptions) =>
             defaultApi
                 ? settle(defaultApi.channels.create(guildId, input, options))
                 : run(native!.channels.create(guildId, input, options), options?.signal as AbortSignal),
-        edit: async (id: string, input: any, options?: DefaultChannelAuditOperationOptions) =>
+        edit: async (id: string, input: any, options?: AuditedRequestOptions) =>
             defaultApi
                 ? settle(defaultApi.channels.edit(id, input, options))
                 : run(native!.channels.edit(id, input, options), options?.signal as AbortSignal),
-        delete: async (id: string, options?: DefaultChannelAuditOperationOptions) =>
+        delete: async (id: string, options?: AuditedRequestOptions) =>
             defaultApi
                 ? settle(defaultApi.channels.delete(id, options))
                 : run(native!.channels.delete(id, options), options?.signal as AbortSignal),
-        reorder: async (guildId: string, positions: any, options?: DefaultChannelAuditOperationOptions) =>
+        reorder: async (guildId: string, positions: any, options?: AuditedRequestOptions) =>
             defaultApi
                 ? settle(defaultApi.channels.reorder(guildId, positions, options))
                 : run(native!.channels.reorder(guildId, positions, options), options?.signal as AbortSignal),
-        setPermissionOverwrite: async (id: string, overwrite: any, options?: DefaultChannelAuditOperationOptions) =>
+        setPermissionOverwrite: async (id: string, overwrite: any, options?: AuditedRequestOptions) =>
             defaultApi
                 ? settle(defaultApi.channels.setPermissionOverwrite(id, overwrite, options))
                 : run(native!.channels.setPermissionOverwrite(id, overwrite, options), options?.signal as AbortSignal),
-        removePermissionOverwrite: async (
-            id: string,
-            targetId: string,
-            options?: DefaultChannelAuditOperationOptions,
-        ) =>
+        removePermissionOverwrite: async (id: string, targetId: string, options?: AuditedRequestOptions) =>
             defaultApi
                 ? settle(defaultApi.channels.removePermissionOverwrite(id, targetId, options))
                 : run(

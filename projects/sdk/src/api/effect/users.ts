@@ -1,5 +1,6 @@
-import type { User, UserProfile, UserProfileQuery, UserOperationFailure, UserOperationOptions } from "#sdk/users"
+import type { User, UserProfile, UserProfileQuery, UserOperationFailure } from "#sdk/users"
 import type * as Effect from "effect/Effect"
+import type { RequestOptions } from "#sdk/client"
 
 /** Read public account information or a privacy-filtered profile.
  * Methods return Effects with the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and at most two eligible transient read retries.
@@ -31,7 +32,7 @@ export interface Users {
      * An unknown user fails with reason notFound rather than an empty result.
      * With the user cache enabled, a concurrent fetch of another user ID does not keep this result from being stored, unless more than 256 user IDs are being read at once
      */
-    fetch(id: string, options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
+    fetch(id: string, options?: RequestOptions): Effect.Effect<User, UserOperationFailure>
     /**
      * Fetch a user's privacy-filtered profile, optionally for the community specified in query.guildId.
      * The frozen result includes only documented identity and profile fields.
@@ -54,7 +55,7 @@ export interface Users {
     fetchProfile(
         id: string,
         query?: UserProfileQuery,
-        options?: UserOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<UserProfile, UserOperationFailure>
     /**
      * Fetch the authenticated bot's public account data remotely.
@@ -62,5 +63,5 @@ export interface Users {
      * With the user cache enabled, the bot's ID is unknown until the response arrives, so some concurrent user cache changes keep the result out of the cache.
      * Examples are another users.fetch or users.fetchSelf call, a user update event and a lost gateway connection
      */
-    fetchSelf(options?: UserOperationOptions): Effect.Effect<User, UserOperationFailure>
+    fetchSelf(options?: RequestOptions): Effect.Effect<User, UserOperationFailure>
 }

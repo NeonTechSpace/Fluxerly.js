@@ -27,14 +27,12 @@ import type {
     MessageReference,
     CrosspostSource,
     MessageInput,
-    MessageOperationOptions,
-    MessageAuditOperationOptions,
     OwnMessageDeletionOptions,
     ReplyInput,
-    SendOptions,
 } from "#sdk/messages"
 import type { ReactionCollectorOptions, CollectorOptions, Collector, ReactionCollector } from "./collectors.js"
 import type { ChannelPaginateOptions, PageInput, PaginateFailure, PaginateResult } from "#sdk/reaction-pages"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /**
  * Send, read, edit or delete messages, collect future replies and reactions, or inspect indexed search results.
@@ -42,7 +40,7 @@ import type { ChannelPaginateOptions, PageInput, PaginateFailure, PaginateResult
  *
  * Results use the messageFields chosen at client creation, or full Message objects by default. Nested results, callbacks and cached snapshots use the same selection
  *
- * The delete, deleteMany, pin and unpin methods accept MessageAuditOperationOptions. Other message operations reject auditReason
+ * The delete, deleteMany, pin and unpin methods accept AuditedRequestOptions. Other message operations reject auditReason
  *
  * A collector with guildId requires that community's local shard to be ready. A channel-only collector requires the client to be Connected. Closing or Closed clients reject new work
  *
@@ -80,7 +78,7 @@ export interface Messages<M extends MessageCore = Message> {
      * An unknown outcome evicts the cached source. A lost or malformed response is never resent automatically.
      * Cancellation after dispatch cannot establish rollback. No gateway event is awaited and auditReason is not supported
      */
-    publish(target: MessageReference, options?: MessageOperationOptions): Effect.Effect<M, MessageOperationFailure>
+    publish(target: MessageReference, options?: RequestOptions): Effect.Effect<M, MessageOperationFailure>
     /**
      * Fetch frozen public source-community metadata for a published copy or a ChannelFollowAdd notice.
      * Fluxer applies ordinary message access checks and returns UNKNOWN_MESSAGE for other targets, including a published source.
@@ -93,7 +91,7 @@ export interface Messages<M extends MessageCore = Message> {
      */
     fetchCrosspostSource(
         target: MessageReference,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<CrosspostSource, MessageOperationFailure>
     /**
      * Read older messages newest first, without connecting the gateway.
@@ -128,7 +126,7 @@ export interface Messages<M extends MessageCore = Message> {
     iterateHistory(
         channelId: string,
         query: HistoryIterationQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<M, MessageOperationFailure | PaginationError>
     /**
      * Search messages in one explicit community or channel and return one page from Fluxer's search index.
@@ -159,7 +157,7 @@ export interface Messages<M extends MessageCore = Message> {
     search(
         context: MessageSearchContext,
         query?: MessageSearchQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<MessageSearchPage<M>, MessageOperationFailure>
     /**
      * Read indexed search hits from the supplied community or channel context, following numbered pages without polling, prefetching or cache population.
@@ -170,7 +168,8 @@ export interface Messages<M extends MessageCore = Message> {
      * An unexpected echoed page number or capacity fails with cursorStalled, and index changes can still skip or repeat observations.
      * An indexing response fails with PaginationError indexing rather than polling or claiming an empty result.
      * Search hits do not trigger full-message fetches.
-     * Delivered hits remain with the caller after a later failure
+     * Delivered hits remain with the caller after a later failure.
+     * The timeoutMs option applies separately to each page request, not to the whole traversal
      *
      * @remarks
      * The returned Stream reads pages only while it is consumed.
@@ -188,7 +187,7 @@ export interface Messages<M extends MessageCore = Message> {
         context: MessageSearchContext,
         filters: Omit<MessageSearchQuery, "limit" | "page">,
         limits: MessageSearchIterationLimits,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<M, MessageOperationFailure | PaginationError>
     /**
      * Read users who reacted with one selected emoji, in ascending user-ID order.
@@ -218,7 +217,7 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         query: UserIterationQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<import("#sdk/reactions").ReactionUser, MessageOperationFailure | PaginationError>
     /**
      * Read pinned messages newest pin first, without adding message cache entries.
@@ -248,7 +247,7 @@ export interface Messages<M extends MessageCore = Message> {
     iteratePins(
         channelId: string,
         query: PinIterationQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<import("#sdk/pins").MessagePin<M>, MessageOperationFailure | PaginationError>
     /**
      * Pin a message using its decimal id and channelId.
@@ -282,7 +281,7 @@ export interface Messages<M extends MessageCore = Message> {
      * })
      * ```
      */
-    pin(message: MessageReference, options?: MessageAuditOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    pin(message: MessageReference, options?: AuditedRequestOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Remove a pin without deleting the message or its pin-created system message.
      * Supply a decimal message id and channelId.
@@ -294,10 +293,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Expected failures identify operation unpin, and client closure fails with ClientClosedError.
      * No gateway connection, confirmation fetch, event synthesis or automatic rollback is performed
      */
-    unpin(
-        message: MessageReference,
-        options?: MessageAuditOperationOptions,
-    ): Effect.Effect<void, MessageOperationFailure>
+    unpin(message: MessageReference, options?: AuditedRequestOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Fetch one frozen page of pinned messages in descending pin-time order.
      * Use a decimal channel ID.
@@ -318,7 +314,7 @@ export interface Messages<M extends MessageCore = Message> {
     fetchPins(
         channelId: string,
         query?: MessagePinsQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure>
     /**
      * Remove one user's reaction for one emoji, leaving other users and emoji groups unchanged.
@@ -351,7 +347,7 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         userId: string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Remove all users' reactions for one emoji on the message.
@@ -365,7 +361,7 @@ export interface Messages<M extends MessageCore = Message> {
     clearReaction(
         message: MessageReference,
         emoji: ReactionEmojiInput,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Remove all users' reactions for all emoji on the message, without deleting the message.
@@ -376,10 +372,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Fluxer emits one clear-all event, and the SDK does not create per-emoji or per-user events or wait for notification.
      * Other users' reactions cannot be restored by the bot as those users
      */
-    clearReactions(
-        message: MessageReference,
-        options?: MessageOperationOptions,
-    ): Effect.Effect<void, MessageOperationFailure>
+    clearReactions(message: MessageReference, options?: RequestOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Fetch one page of users who currently have a selected reaction on the message.
      * Accepts the same ReactionEmojiInput forms as addReaction.
@@ -416,7 +409,7 @@ export interface Messages<M extends MessageCore = Message> {
         message: MessageReference,
         emoji: ReactionEmojiInput,
         query?: ReactionUsersQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure>
     /**
      * Add the bot's own reaction to a message.
@@ -445,7 +438,7 @@ export interface Messages<M extends MessageCore = Message> {
     addReaction(
         message: MessageReference,
         emoji: ReactionEmojiInput,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Remove only the bot's own reaction for the selected emoji.
@@ -457,7 +450,7 @@ export interface Messages<M extends MessageCore = Message> {
     removeReaction(
         message: MessageReference,
         emoji: ReactionEmojiInput,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Collect a bounded set of future messageCreate events from one channel.
@@ -677,6 +670,7 @@ export interface Messages<M extends MessageCore = Message> {
      * A full upload or request queue fails with busy before copying or reading.
      * Fluxer can impose lower limits.
      * Uploads use presigned planning or an inline multipart fallback.
+     * Upload-plan and completion responses have their own 1 MiB limit, and neither response limit caps total memory use.
      * Cleanup releases copied bytes and cancels and releases acquired readers on failure.
      * Failed uploads can leave temporary server data, without a guarantee of physical erasure.
      * Eligible created messages can enter an enabled cache, independently of send completion
@@ -692,9 +686,10 @@ export interface Messages<M extends MessageCore = Message> {
      * If omitted, the SDK creates one nonce per send execution, and the same nonce is reused for confirmed rate-limit retries.
      * Fluxer tries to suppress duplicate sends for five minutes after saving a message.
      * This does not guarantee that a repeated or concurrent send posts only one message.
-     * A lost response or cancellation after dispatch can leave a message posted, and the SDK neither retries nor rolls it back
+     * A lost response or cancellation after dispatch can leave a message posted, and the SDK neither retries nor rolls it back.
+     * Check MessageError.outcome before sending again
      */
-    send(channelId: string, input: MessageInput | string, options?: SendOptions): Effect.Effect<M, SendError>
+    send(channelId: string, input: MessageInput | string, options?: RequestOptions): Effect.Effect<M, SendError>
     /**
      * Copy an accessible source message into the destination channel and return the new message.
      * Pass the source reference in input.source.
@@ -720,7 +715,7 @@ export interface Messages<M extends MessageCore = Message> {
      * }
      * ```
      */
-    forward(channelId: string, input: ForwardMessageInput, options?: SendOptions): Effect.Effect<M, SendError>
+    forward(channelId: string, input: ForwardMessageInput, options?: RequestOptions): Effect.Effect<M, SendError>
     /**
      * Show this bot's temporary typing indicator in a channel.
      * Pass a decimal channel ID.
@@ -733,7 +728,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Input, capacity and HTTP failures use MessageOperationError operation typing, and client closure fails with ClientClosedError.
      * Cancellation waits for request cleanup
      */
-    typing(channelId: string, options?: MessageOperationOptions): Effect.Effect<void, MessageOperationFailure>
+    typing(channelId: string, options?: RequestOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Keep the bot's typing indicator active while a task runs, returning the task's value.
      * The first typing request must succeed before the task starts, and an initial failure prevents the task from running.
@@ -759,7 +754,7 @@ export interface Messages<M extends MessageCore = Message> {
     keepTyping<A, E, R>(
         channelId: string,
         task: Effect.Effect<A, E, R>,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<A, E | MessageOperationFailure, R>
     /**
      * Send a reply that references an existing message and return the new reply.
@@ -773,7 +768,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Eligible replies can enter the message cache.
      * A lost response can leave the reply posted, and the SDK does not replay a send with an unknown outcome
      */
-    reply(message: MessageReference, input: ReplyInput | string, options?: SendOptions): Effect.Effect<M, SendError>
+    reply(message: MessageReference, input: ReplyInput | string, options?: RequestOptions): Effect.Effect<M, SendError>
     /**
      * Fetch one message from Fluxer, rather than reading the cache.
      * Pass a reference with id and channelId, or an existing Message.
@@ -793,7 +788,7 @@ export interface Messages<M extends MessageCore = Message> {
      * })
      * ```
      */
-    fetch(message: MessageReference, options?: MessageOperationOptions): Effect.Effect<M, MessageOperationFailure>
+    fetch(message: MessageReference, options?: RequestOptions): Effect.Effect<M, MessageOperationFailure>
     /**
      * Fetch one page of channel messages from Fluxer, newest first.
      * Pass a decimal channel ID.
@@ -815,7 +810,7 @@ export interface Messages<M extends MessageCore = Message> {
     fetchHistory(
         channelId: string,
         query?: MessageHistoryQuery,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly M[], MessageOperationFailure>
     /**
      * Preview a bounded message-deletion selection without deleting anything.
@@ -836,7 +831,7 @@ export interface Messages<M extends MessageCore = Message> {
     previewCleanup(
         channelId: string,
         selection: MessageCleanupSelection<M>,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<MessageCleanupPlan<M>, MessageCleanupFailure>
     /**
      * Delete the exact IDs in a plan returned by previewCleanup, in sequential batches of at most 100.
@@ -909,7 +904,7 @@ export interface Messages<M extends MessageCore = Message> {
     edit(
         message: MessageReference,
         input: EditMessageInput | string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<M, MessageOperationFailure>
     /**
      * Delete one message, succeeding with no value after HTTP 204.
@@ -922,10 +917,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Request cleanup is awaited, but the deletion cannot be undone.
      * Deletes with unknown outcomes are never retried automatically
      */
-    delete(
-        message: MessageReference,
-        options?: MessageAuditOperationOptions,
-    ): Effect.Effect<void, MessageOperationFailure>
+    delete(message: MessageReference, options?: AuditedRequestOptions): Effect.Effect<void, MessageOperationFailure>
     /**
      * Delete one attachment by its decimal ID from a message authored by this bot.
      * The target is copied when execution starts, and the attachment list is neither fetched nor replaced.
@@ -949,7 +941,7 @@ export interface Messages<M extends MessageCore = Message> {
     deleteAttachment(
         message: MessageReference,
         attachmentId: string,
-        options?: MessageOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Delete 1–100 distinct decimal message IDs from one community channel.
@@ -975,7 +967,7 @@ export interface Messages<M extends MessageCore = Message> {
     deleteMany(
         channelId: string,
         messageIds: readonly string[],
-        options?: MessageAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, MessageOperationFailure>
     /**
      * Irreversibly delete this bot's entire authored message history in one channel and in every thread under it, active or archived.

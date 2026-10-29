@@ -1,4 +1,4 @@
-import type { OperationOptions } from "./client.js"
+import type { RequestOptions } from "./client.js"
 import type { Embed, EmbedInput } from "./embeds.js"
 import type { EmbedBuilder } from "./builders.js"
 import type { Attachment, AttachmentInput, AttachmentReference } from "./attachments.js"
@@ -739,80 +739,13 @@ export type MessageHistoryQuery = {
       }
 )
 
-/** Deadline settings for a remote message, reaction or pin operation.
- * The budget includes local queueing, retry delays, rate-limit waits and HTTP work.
- * Cleanup is awaited after the deadline, so completion can take longer than timeoutMs.
- * It does not control gateway connection startup
- *
- * @category Options
- */
-export interface MessageOperationOptions {
-    /** Total request budget in milliseconds, an integer from 1 through 2,147,483,647, default the bot client's rest.defaultTimeoutMs (30,000 unless configured) or 30,000 for standalone webhook clients */
-    readonly timeoutMs?: number
-}
-
-/** Remote operation settings for the Promise and Result API.
- * The signal cancels this operation only. Cancelling after dispatch cannot undo an edit or deletion.
- * The Effect entry point uses interruption instead of an AbortSignal option
- *
- * @category Options
- */
-export interface DefaultMessageOperationOptions extends MessageOperationOptions, OperationOptions {}
-
-/** Settings for message deletion, bulk deletion, pinning and unpinning, with an optional audit-log explanation
- *
- * @category Options
- */
-export interface MessageAuditOperationOptions extends MessageOperationOptions {
-    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
-     * Sent only as the raw X-Audit-Log-Reason header, without URL escaping. Omission sends no header.
-     * Non-ASCII and control characters fail before dispatch. Never included in SDK errors or diagnostics
-     */
-    readonly auditReason?: string
-}
-
-/** Default API settings for audited message mutations. Abort cancels only this call and cannot undo a dispatched change
- *
- * @category Options
- */
-export interface DefaultMessageAuditOperationOptions extends MessageAuditOperationOptions, OperationOptions {}
-
 /** Required confirmation and deadline for deleting this bot's entire authored history in a channel or community.
  * The confirm field must be the literal true, so an accidental call without it fails before any request with reason input
  * and inputValidation path options.confirm
  *
  * @category Options
  */
-export interface OwnMessageDeletionOptions extends MessageOperationOptions {
+export interface OwnMessageDeletionOptions extends RequestOptions {
     /** Must be true to acknowledge that the deletion is irreversible and cannot be rolled back */
     readonly confirm: true
 }
-
-/** Default API settings for own-history deletion. Aborting the signal cannot undo a dispatched deletion
- *
- * @category Options
- */
-export interface DefaultOwnMessageDeletionOptions extends OwnMessageDeletionOptions, OperationOptions {}
-
-/** Deadline settings for sending, replying or forwarding.
- * The timeoutMs option covers local queueing, rate-limit waits and HTTP work. Cleanup is awaited after that budget.
- * If message creation was dispatched, failure can leave delivery unknown even when no message result was returned.
- * The SDK does not automatically retry an uncertain send. Check MessageError.outcome before deciding what to do.
- * Advanced response limits: Created-message JSON is limited to 16 MiB of body bytes before parsing.
- * Upload-plan and completion responses use a separate 1 MiB limit. Neither limit caps total memory use.
- * An oversized or malformed successful response fails with reason response
- *
- * @category Options
- */
-export interface SendOptions {
-    /** Total send budget in milliseconds, an integer from 1 through 2,147,483,647, default the client's rest.defaultTimeoutMs, 30,000 unless configured */
-    readonly timeoutMs?: number
-}
-
-/** Send settings for the Promise and Result API.
- * The signal cancels this send only, without proving whether a dispatched request created a message.
- * The Effect entry point uses interruption instead of an AbortSignal option
- *
- * @category Options
- */
-export interface DefaultSendOptions extends SendOptions, OperationOptions {}

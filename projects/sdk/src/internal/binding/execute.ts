@@ -28,13 +28,13 @@ import type { PresenceError } from "#sdk/presence"
 import type { UserOperationError } from "#sdk/users"
 import type { WebhookOperationError } from "#sdk/webhooks"
 import type { PaginationError, PaginationOperation } from "#sdk/pagination"
-import type { MessageCore, MessageOperationOptions } from "#sdk/messages"
+import type { MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "#sdk/internal/client"
 import type { Pagination } from "#sdk/internal/pagination"
 import type { AttachmentDownloadFailure, AttachmentRefreshFailure } from "#sdk/attachments"
 import type { CriticalWorkerStoppedError } from "#sdk/bot-runner"
 import type { OAuthOperationFailure } from "#sdk/oauth"
-import type { OperationOptions } from "#sdk/client"
+import type { OperationOptions, RequestOptions } from "#sdk/client"
 import type { InstanceResolveError } from "#sdk/instance"
 import type { ChannelOperationError } from "#sdk/channels"
 import type { GuildOperationError } from "#sdk/guilds"
@@ -225,7 +225,7 @@ export interface DefaultContext<M extends MessageCore> {
     ) => ResultAsync<A, E | CancelledError | ConfigurationError>
     /** Open a lazy page iterator whose pages start when a loop pulls them */
     readonly iterate: <A, E extends OperationFailure>(
-        create: (options: MessageOperationOptions) => Effect.Effect<Pagination<A, E>, PaginationError>,
+        create: (options: RequestOptions) => Effect.Effect<Pagination<A, E>, PaginationError>,
         operation: PaginationOperation,
         options?: OperationOptions,
     ) => AsyncIterable<Result<A, E | PaginationError | CancelledError | ConfigurationError | ClientClosedError>>

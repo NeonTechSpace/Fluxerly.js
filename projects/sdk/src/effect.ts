@@ -61,7 +61,6 @@ export { CountOperationError } from "./counts.js"
 export type {
     CountOperation,
     CountOperationFailure,
-    CountOperationOptions,
     GuildCount,
     GuildCountsResult,
     ChannelMemberCount,
@@ -90,12 +89,7 @@ export type { GuildMemberJoinSourceType } from "./member-search.js"
 export type { ChannelPermissions, PermissionFetchOptions, PermissionInput, PermissionTarget } from "./permissions.js"
 export type { HierarchyHelpers, RoleHierarchyInput, RoleManagementInput } from "./role-hierarchy.js"
 export { BotApplicationOperationError } from "./application.js"
-export type {
-    BotApplication,
-    BotApplicationOperation,
-    BotApplicationOperationFailure,
-    BotApplicationOperationOptions,
-} from "./application.js"
+export type { BotApplication, BotApplicationOperation, BotApplicationOperationFailure } from "./application.js"
 export type {
     MemberSearchQuery,
     MemberSearchPage,
@@ -110,7 +104,6 @@ export type {
     MessageSearchEmbedType,
     MessageSearchIndexingPage,
     MessageSearchIterationLimits,
-    MessageSearchOptions,
     MessageSearchPage,
     MessageSearchQuery,
     MessageSearchResultsPage,
@@ -203,7 +196,6 @@ export type {
     DirectMessageRecipientChange,
     UserOperation,
     UserOperationFailure,
-    UserOperationOptions,
 } from "./users.js"
 export { WebhookOperationError, WebhookType } from "./webhooks.js"
 export type {
@@ -226,7 +218,6 @@ export type {
     WebhookMessageEdit,
     WebhookClientOptions,
     WebhookOperation,
-    WebhookOperationOptions,
     WebhookOperationFailure,
 } from "./webhooks.js"
 export { CriticalWorkerStoppedError } from "./bot-runner.js"
@@ -243,7 +234,6 @@ export type {
     OAuthIntrospection,
     OAuthOperation,
     OAuthOperationFailure,
-    OAuthOperationOptions,
     OAuthPkce,
     OAuthScope,
     OAuthTokens,
@@ -296,28 +286,26 @@ export type {
     PrefixCommandPrefix,
     PrefixCommandRejection,
     PrefixCommandUnmatched,
-    PrefixCommandsOptions,
 } from "./commands.js"
 export type {
-    NativeCooldownStore,
+    CooldownStore,
     MemoryCooldownStore,
-    NativePrefixCommand,
-    NativePrefixCommandContext,
-    NativePrefixCommandExecutionContext,
-    NativePrefixCommandCooldown,
-    NativePrefixCommandUnmatchedContext,
-    NativePrefixCommandsOptions,
-    NativePrefixCommandGuard,
-    NativePrefixCommandMiddleware,
-    NativePrefixCommandRejectionFeedback,
-    NativePrefixCommandRouter,
+    PrefixCommand,
+    PrefixCommandContext,
+    PrefixCommandExecutionContext,
+    PrefixCommandCooldown,
+    PrefixCommandUnmatchedContext,
+    PrefixCommandsOptions,
+    PrefixCommandGuard,
+    PrefixCommandMiddleware,
+    PrefixCommandRejectionFeedback,
+    PrefixCommandRouter,
 } from "./native-commands.js"
 export { SupervisorChildError, SupervisorError } from "./supervisor.js"
 export type {
     SupervisorAssignment,
     SupervisorAssignmentOptions,
     SupervisorChildDiagnostics,
-    SupervisorChildOptions,
     SupervisorChildSharding,
     SupervisorChildState,
     SupervisorChildStatus,
@@ -330,10 +318,10 @@ export type {
     SupervisorWaitOptions,
 } from "./supervisor.js"
 export type {
-    NativeSupervisor,
-    NativeSupervisorChildContext,
-    NativeSupervisorChildOptions,
-    NativeSupervisorTools,
+    Supervisor,
+    SupervisorChildContext,
+    SupervisorChildOptions,
+    SupervisorTools,
 } from "./native-supervisor.js"
 export { PaginationError } from "./pagination.js"
 export type {
@@ -369,7 +357,6 @@ export type {
     AttachmentInput,
     AttachmentRefreshFailure,
     AttachmentRefreshOperation,
-    AttachmentRefreshOptions,
     AttachmentReference,
     AttachmentStreamInput,
     AttachmentStreamReadResult,
@@ -436,8 +423,6 @@ export type {
     GuildChannelUpdateBulk,
     ChannelOperation,
     ChannelOperationFailure,
-    ChannelOperationOptions,
-    ChannelAuditOperationOptions,
 } from "./channels.js"
 export { ChannelFlags, ForumLayout, ForumSortOrder, ThreadAutoArchiveMinutes, isThreadChannel } from "./channels.js"
 export type {
@@ -507,27 +492,12 @@ export type {
     MemberQuery,
     GuildOperation,
     GuildOperationFailure,
-    GuildOperationOptions,
     CanManageOptions,
-    GuildAuditOperationOptions,
 } from "./guilds.js"
-export type {
-    BanInput,
-    GuildBan,
-    MemberTimeoutState,
-    ModerationOptions,
-    TimeoutOptions,
-    TimeoutStateOptions,
-} from "./guilds.js"
+export type { BanInput, GuildBan, MemberTimeoutState, TimeoutOptions, TimeoutStateOptions } from "./guilds.js"
 export type { MessageCacheOptions, MessageCacheSettings } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
-export type {
-    InstanceDomainMigration,
-    InstanceEndpoints,
-    InstanceOptions,
-    InstanceResolveError,
-    InstanceResolveOptions,
-} from "./instance.js"
+export type { InstanceDomainMigration, InstanceEndpoints, InstanceOptions, InstanceResolveError } from "./instance.js"
 export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
 export type { ReactionCollectorResult } from "./collectors.js"
 export { CollectorError } from "./collectors.js"
@@ -595,10 +565,7 @@ export type {
     MessageNonce,
     ReplyInput,
     AllowedMentions,
-    SendOptions,
     EditMessageInput,
-    MessageOperationOptions,
-    MessageAuditOperationOptions,
     OwnMessageDeletionOptions,
 } from "./messages.js"
 export type {
@@ -625,6 +592,8 @@ export type {
     ConnectionRecoveryOptions,
     ConnectionState,
     OperationSignal,
+    RequestOptions,
+    AuditedRequestOptions,
     ScheduleOptions,
     ShutdownOptions,
 } from "./client.js"
@@ -736,7 +705,7 @@ export type {
     BotOptions,
 } from "./api/effect/bot.js"
 export { guards } from "./api/effect/guards.js"
-export type { NativeGuards } from "./api/effect/guards.js"
+export type { Guards } from "./api/effect/guards.js"
 export type {
     AssetHelpers,
     ColorHelpers,
@@ -753,11 +722,11 @@ export type { EditMessageOptions, MessageContent } from "./messages.js"
 export type { WebhookMessageOptions } from "./webhooks.js"
 export type { ErrorMatchHandlers } from "./error-tools.js"
 export type {
-    NativeBatchRequirements,
-    NativeCommandRequirements,
-    NativeCommands,
-    NativeEffectRequirements,
-    NativePrefixCommandBatch,
+    BatchRequirements,
+    CommandRequirements,
+    Commands,
+    EffectRequirements,
+    PrefixCommandBatch,
 } from "./native-commands.js"
 export type { BotEventServices, HandlerServices } from "./api/effect/bot.js"
 export type { Operation } from "./errors.js"

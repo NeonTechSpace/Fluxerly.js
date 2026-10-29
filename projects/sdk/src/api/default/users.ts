@@ -1,6 +1,7 @@
-import type { User, UserProfile, UserProfileQuery, UserOperationFailure, DefaultUserOperationOptions } from "#sdk/users"
+import type { User, UserProfile, UserProfileQuery, UserOperationFailure } from "#sdk/users"
 import type { ResultAsync } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions } from "./options.js"
 
 /**
  * Read public user account and profile data, without connecting the gateway.
@@ -44,7 +45,7 @@ export interface Users {
      */
     fetch(
         id: string,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a user's privacy-filtered profile, optionally for the community specified in query.guildId.
@@ -68,7 +69,7 @@ export interface Users {
     fetchProfile(
         id: string,
         query?: UserProfileQuery,
-        options?: DefaultUserOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<UserProfile, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the authenticated bot's public account data remotely.
@@ -76,7 +77,5 @@ export interface Users {
      * With the user cache enabled, the bot's ID is unknown until the response arrives, so some concurrent user cache changes keep the result out of the cache.
      * Examples are another users.fetch or users.fetchSelf call, a user update event and a lost gateway connection
      */
-    fetchSelf(
-        options?: DefaultUserOperationOptions,
-    ): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
+    fetchSelf(options?: RequestOptions): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
 }

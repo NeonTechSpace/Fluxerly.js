@@ -1,7 +1,7 @@
 import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit } from "effect"
 import { afterEach, expect, test, vi } from "vitest"
-import type { DefaultUserOperationOptions, UserProfileQuery } from "../../../src/index.js"
+import type { RequestOptions, UserProfileQuery } from "../../../src/index.js"
 import type { Client as NativeClient } from "../../../src/effect.js"
 import { fixtureToken, modes, setup, type FixtureClientOptions, type Mode } from "../../support/both-apis.js"
 import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
@@ -69,7 +69,7 @@ async function profiles(mode: Mode, options?: FixtureClientOptions) {
     const client = await setup(mode, options)
     return {
         client,
-        fetchProfile: (id = "30", query?: UserProfileQuery, options?: DefaultUserOperationOptions) =>
+        fetchProfile: (id = "30", query?: UserProfileQuery, options?: RequestOptions) =>
             settle(client.users.fetchProfile(id, query, options)),
         fetchUser: (id = "30") => settle(client.users.fetch(id)),
         getUser: (id = "30") => settle(client.users.get(id)),

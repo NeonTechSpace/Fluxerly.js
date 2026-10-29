@@ -8,7 +8,6 @@ import type {
     GuildBan,
     GuildMember,
     MemberReference,
-    ModerationOptions,
     TimeoutOptions,
     VoiceConnectionReference,
 } from "#sdk/guilds"
@@ -18,9 +17,10 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import { timestamp } from "./decode/timestamp.js"
 import { normalizedText as text } from "./field-text.js"
 import { auditSettings as validateAuditSettings } from "./audit.js"
+import type { AuditedRequestOptions } from "#sdk/client"
 
 export function auditSettings(
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): { readonly moderation: true; readonly auditReason?: string } | InputValidationFailure {
     const settings = validateAuditSettings(options)
     return settings instanceof InputValidationFailure ? settings : { moderation: true as const, ...settings }
@@ -77,7 +77,7 @@ export function memberTimeout(
 
 export function memberKick(
     target: MemberReference,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<void> | InputValidationFailure {
     const request = memberFetch(target)
     const extra = auditSettings(options)
@@ -108,7 +108,7 @@ function voiceConnectionId(target: VoiceConnectionReference): string | undefined
 export function memberVoiceMove(
     target: VoiceConnectionReference,
     channelId: string | null,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<GuildMember> | InputValidationFailure {
     const request = memberFetch(target)
     const extra = auditSettings(options)
@@ -139,7 +139,7 @@ export function memberVoiceFlag(
     target: MemberReference,
     field: "mute" | "deaf",
     input: unknown,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<GuildMember> | InputValidationFailure {
     const request = memberFetch(target)
     const extra = auditSettings(options)
@@ -184,7 +184,7 @@ function wholeSeconds(milliseconds: unknown): unknown {
 export function guildBan(
     target: MemberReference,
     input?: BanInput,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<void> | InputValidationFailure {
     const request = memberKick(target, options)
     const value = input === undefined ? {} : input
@@ -235,7 +235,7 @@ export function guildBan(
 
 export function guildUnban(
     target: MemberReference,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
 ): GuildRequest<void> | InputValidationFailure {
     const request = memberKick(target, options)
     if (request instanceof InputValidationFailure) return request

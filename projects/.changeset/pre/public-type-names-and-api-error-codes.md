@@ -14,4 +14,4 @@ Migration:
 - Read `displayName` instead of `globalName` on `MemberSearchHit` and `OAuthIdentity`
 - Replace `MessageMention` with `MessageUser`
 - Use `ApiErrorCode`, `ApiProviderCode` or `ApiValidationCode` to branch on codes. Code that compared `explanation` against literal types compares strings instead
-- Effect code that imported a `Default*` option type imports it from `@neontechspace/fluxerly`, or uses the Effect option type of the same operation
+- Effect code that imported one of these types imports the default-API type from `@neontechspace/fluxerly` under its name without the `Default` prefix, or `RequestOptions` or `AuditedRequestOptions` for the operation option types, or uses the Effect option type of the same operation

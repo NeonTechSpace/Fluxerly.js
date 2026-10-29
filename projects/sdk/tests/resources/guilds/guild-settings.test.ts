@@ -5,7 +5,7 @@ import {
     GuildFeatureToggles,
     type Guild,
     type GuildEdit,
-    type DefaultModerationOptions,
+    type AuditedRequestOptions,
 } from "../../../src/index.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
 import { GuildFeatureToggles as NativeGuildFeatureToggles } from "../../../src/effect.js"
@@ -378,7 +378,7 @@ async function setup(mode: Mode) {
                   : never(),
         get: async (): Promise<Guild | undefined> =>
             defaultApi ? defaultApi.guilds.get("20") : native ? run(native.guilds.get("20")) : never(),
-        edit: async (input: GuildEdit, options?: DefaultModerationOptions) =>
+        edit: async (input: GuildEdit, options?: AuditedRequestOptions) =>
             defaultApi
                 ? unwrap(await defaultApi.guilds.edit("20", input, options))
                 : native

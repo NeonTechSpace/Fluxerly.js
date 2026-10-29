@@ -4,7 +4,7 @@ import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     createClient,
     errors,
-    type DefaultMessageOperationOptions,
+    type RequestOptions,
     type LogRecord,
     type MessageOperationFailure,
 } from "../../src/index.js"
@@ -108,7 +108,7 @@ async function setup(mode: Mode, logging?: ReturnType<typeof retryTime>["logging
         native,
         random,
         close,
-        read: async (operation: (typeof reads)[number] = "fetch", options?: DefaultMessageOperationOptions) => {
+        read: async (operation: (typeof reads)[number] = "fetch", options?: RequestOptions) => {
             if (defaultApi) {
                 if (operation === "fetch") return unwrap(await defaultApi.messages.fetch(target, options))
                 if (operation === "fetchHistory")

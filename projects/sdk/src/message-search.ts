@@ -1,6 +1,5 @@
 import type { GuildThreadChannel } from "./channels.js"
-import type { OperationOptions } from "./client.js"
-import type { MessageOperationOptions, Message, MessageCore } from "./messages.js"
+import type { Message, MessageCore } from "./messages.js"
 import type { PaginationQuery } from "./pagination.js"
 
 /** Community or channel in which to search messages visible to the bot.
@@ -196,18 +195,3 @@ export interface MessageSearchIterationLimits extends PaginationQuery {
      */
     readonly pageSize?: number
 }
-
-/** Deadline for one explicit search request.
- * For iterateSearch, the deadline applies separately to each page request, not to the entire traversal
- *
- * @category Messages
- */
-export interface MessageSearchOptions extends MessageOperationOptions {}
-
-/** Search settings for the Promise and Result API, including AbortSignal cancellation.
- * The signal affects this explicit request or this consumption's iterator pulls, not other callers.
- * The Effect entry point uses interruption instead
- *
- * @category Messages
- */
-export interface DefaultMessageSearchOptions extends MessageSearchOptions, OperationOptions {}

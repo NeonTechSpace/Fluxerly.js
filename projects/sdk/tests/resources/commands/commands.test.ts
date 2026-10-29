@@ -5,7 +5,7 @@ import {
     commands,
     ConfigurationError,
     SdkDefect,
-    type DefaultPrefixCommand,
+    type PrefixCommand,
     type PrefixCommandRejection,
 } from "../../../src/index.js"
 import { commands as nativeCommands } from "../../../src/effect.js"
@@ -1044,7 +1044,7 @@ test("command registration snapshots the name, aliases and callback, so later de
         execute: () => {
             received.push("initial")
         },
-    } satisfies DefaultPrefixCommand
+    } satisfies PrefixCommand
     const router = commands.create({ prefix: "!" })
     const registered = router.register(definition)
     definition.name = "changed"

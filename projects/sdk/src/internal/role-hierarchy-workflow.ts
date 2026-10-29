@@ -4,7 +4,7 @@
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Effect from "effect/Effect"
-import type { CanManageOptions, GuildOperationFailure, GuildOperationOptions, MemberReference } from "#sdk/guilds"
+import type { CanManageOptions, GuildOperationFailure, MemberReference } from "#sdk/guilds"
 import { GuildOperationError } from "#sdk/guilds"
 import { ClientClosedError } from "#sdk/errors"
 import { composedStepFacts } from "#sdk/api-errors"
@@ -15,6 +15,7 @@ import { identifier, record } from "./decode/primitives.js"
 import { suspendInput } from "./defects.js"
 import { evaluateMemberHierarchy } from "./role-hierarchy.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import type { RequestOptions } from "#sdk/client"
 
 const inputFailure = (failure: InputValidationFailure) =>
     new GuildOperationError({
@@ -79,7 +80,7 @@ function options(value: unknown): CanManageOptions | InputValidationFailure {
     return { ...(actorUserId === undefined ? {} : { actorUserId }), ...(timeoutMs === undefined ? {} : { timeoutMs }) }
 }
 
-function remaining(deadline: number, now: () => number): GuildOperationOptions | undefined {
+function remaining(deadline: number, now: () => number): RequestOptions | undefined {
     const timeoutMs = Math.floor(deadline - now())
     return timeoutMs > 0 ? { timeoutMs } : undefined
 }

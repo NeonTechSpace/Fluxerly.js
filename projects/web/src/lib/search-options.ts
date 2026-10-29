@@ -48,8 +48,8 @@ const isHubUrl = (url: string) => hubPaths.has(pagePath(url) ?? "\0")
 // Effect guides are the optional path after the default API guides
 const isEffectGuideUrl = (url: string) => (pagePath(url) ?? "").startsWith("effect-")
 
-// Effect entry points repeat most default API symbols under the same names,
-// and name command types Native<Name> where the default API uses Default<Name>
+// Effect entry points repeat default API symbols under the same names.
+// Snapshots generated before the shared type names call Effect types Native<Name> where the default API uses Default<Name>
 const effectEntryPoints: Record<string, string> = { Effect: "js-ts", "Effect-testing": "testing" }
 function defaultTwins(url: string): string[] {
     const match = /^(.*\/api\/(?:modules\/|[a-z]+\/))(Effect(?:-testing)?)([.#/]|$)(.*)$/.exec(url)

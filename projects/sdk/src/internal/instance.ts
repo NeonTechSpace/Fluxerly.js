@@ -26,12 +26,8 @@ import { suspendInput } from "#sdk/internal/defects"
 import { unsupportedKeyHint } from "#sdk/internal/suggest"
 import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transport/index"
 import { createInstanceLinks } from "#sdk/helpers"
-import type {
-    InstanceDomainMigration,
-    InstanceResolveError,
-    InstanceResolveOptions,
-    ResolvedInstance,
-} from "#sdk/instance"
+import type { InstanceDomainMigration, InstanceResolveError, ResolvedInstance } from "#sdk/instance"
+import type { RequestOptions } from "#sdk/client"
 
 const hostedBootstrap = "https://fluxer.app"
 const discoveryPath = "/.well-known/fluxer"
@@ -566,7 +562,7 @@ export class InstanceResolver {
     }
 
     /** Resolve the public immutable result without a second request, with one caller-local deadline */
-    resolveInfo(options?: InstanceResolveOptions): Effect.Effect<ResolvedInstance, InstanceResolveError> {
+    resolveInfo(options?: RequestOptions): Effect.Effect<ResolvedInstance, InstanceResolveError> {
         // Reading the caller options is marked as application input, and discovery runs outside that region
         return suspendInput<number, InstanceResolveError, never>(() => {
             if (options !== undefined && !record(options))

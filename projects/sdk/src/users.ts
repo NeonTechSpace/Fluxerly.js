@@ -2,9 +2,7 @@ import type { ClientClosedError } from "./errors.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
-import type { MessageOperationOptions } from "./messages.js"
 import type { Message, MessageCore } from "./messages.js"
-import type { OperationOptions } from "./client.js"
 
 /** Public identity of a Fluxer account, suitable for displaying who sent a message or belongs to a conversation.
  * This returned data cannot be changed and does not update when the account changes. It excludes private account fields even for users.fetchSelf.
@@ -153,21 +151,6 @@ export interface DirectMessageLatestMessages<M extends MessageCore = Message> {
     /** Requested IDs omitted by Fluxer, in input order. Omission is distinct from a returned null */
     readonly omittedChannelIds: readonly string[]
 }
-
-/** Request deadline settings shared with message operations.
- * The timeoutMs option defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured, milliseconds across local queueing, rate waits, retries and transport.
- * Cleanup is awaited after the deadline and can make completion take longer
- *
- * @category Options
- */
-export interface UserOperationOptions extends MessageOperationOptions {}
-
-/**
- * Default API operations begin immediately. Abort interrupts only this operation and does not roll back remote changes
- *
- * @category Options
- */
-export interface DefaultUserOperationOptions extends UserOperationOptions, OperationOptions {}
 
 /**
  * User/private-conversation operation named by safe failure metadata

@@ -4,7 +4,6 @@ import {
     ChannelType,
     type ChannelCreate,
     type ChannelEdit,
-    type DefaultWebhookMessageOperationOptions,
     type ForumChannelCreate,
     type ForumDefaultReaction,
     type ForumTag,
@@ -73,7 +72,7 @@ export const unknownSetting: ForumChannelCreate = {
 export const message: WebhookMessageInput = { content: "Release", threadName: "1.2", appliedTagIds: ["70"] }
 export const inThread: WebhookMessageInput = { content: "Reply", threadId: "500" }
 export const fetchOptions: WebhookMessageOperationOptions = { threadId: "500", timeoutMs: 1000 }
-export const defaultFetchOptions: DefaultWebhookMessageOperationOptions = {
+export const defaultFetchOptions: WebhookMessageOperationOptions = {
     threadId: "500",
     signal: new AbortController().signal,
 }

@@ -23,18 +23,6 @@ export interface InstanceOptions {
     readonly allowInsecure?: boolean
 }
 
-/** Set how long an explicit instance.resolve call may spend finding the server's addresses.
- * The deadline covers discovery work, but the SDK still waits for owned response cleanup before completing
- *
- * @category Options
- */
-export interface InstanceResolveOptions {
-    /** Time allowed to find service addresses, in milliseconds. Use an integer from 1–2,147,483,647. Default 30,000.
-     * Includes bootstrap redirects and document reads, but required cleanup can take longer
-     */
-    readonly timeoutMs?: number
-}
-
 /** Where the selected Fluxer instance hosts its services, validated from its discovery document.
  * Services may use different origins, which selecting that instance trusts
  *

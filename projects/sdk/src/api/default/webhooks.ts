@@ -1,13 +1,7 @@
-import type {
-    Webhook,
-    CreatedWebhook,
-    WebhookCreate,
-    WebhookEdit,
-    WebhookOperationFailure,
-    DefaultWebhookOperationOptions,
-} from "#sdk/webhooks"
+import type { Webhook, CreatedWebhook, WebhookCreate, WebhookEdit, WebhookOperationFailure } from "#sdk/webhooks"
 import type { ResultAsync } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { AuditedRequestOptions } from "./options.js"
 
 /**
  * Manage webhooks with this bot's credentials, without connecting the gateway.
@@ -37,7 +31,7 @@ export interface Webhooks {
     create(
         channelId: string,
         input: WebhookCreate,
-        options?: DefaultWebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<CreatedWebhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch incoming, follower or unknown-kind metadata by decimal ID, discarding any returned token.
@@ -46,7 +40,7 @@ export interface Webhooks {
      */
     fetch(
         id: string,
-        options?: DefaultWebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * List the channel's accessible incoming, follower and unknown-kind webhook metadata without pagination.
@@ -54,7 +48,7 @@ export interface Webhooks {
      */
     fetchForChannel(
         channelId: string,
-        options?: DefaultWebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * List the community's accessible incoming, follower and unknown-kind webhook metadata.
@@ -63,7 +57,7 @@ export interface Webhooks {
      */
     fetchForGuild(
         guildId: string,
-        options?: DefaultWebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change the supplied incoming or follower webhook settings, including its destination channel.
@@ -75,7 +69,7 @@ export interface Webhooks {
     edit(
         id: string,
         input: WebhookEdit,
-        options?: DefaultWebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete an incoming webhook and revoke its credential, or delete a follower webhook to unfollow its source.
@@ -84,6 +78,6 @@ export interface Webhooks {
      */
     delete(
         id: string,
-        options?: DefaultWebhookOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
 }

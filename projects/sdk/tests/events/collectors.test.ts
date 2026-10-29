@@ -4,13 +4,7 @@ import { setImmediate as turn } from "node:timers/promises"
 import { runInNewContext } from "node:vm"
 import { Cause, Clock, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import {
-    createClient,
-    SdkDefect,
-    type CollectorResult,
-    type DefaultCollectorOptions,
-    type Message,
-} from "../../src/index.js"
+import { createClient, SdkDefect, type CollectorResult, type CollectorOptions, type Message } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { sdkClock } from "../support/client-clock.js"
@@ -169,7 +163,7 @@ async function driver(mode: Mode, connected = true, cache = true) {
         connect,
         shutdown,
         state: () => (defaultApi ?? native)!.state,
-        async open(options?: Omit<DefaultCollectorOptions, "onMessage">, channelId = "20") {
+        async open(options?: Omit<CollectorOptions, "onMessage">, channelId = "20") {
             if (defaultApi) {
                 const collector = defaultApi.messages.collect(channelId, options)
                 return {

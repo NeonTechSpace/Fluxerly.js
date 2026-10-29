@@ -3,11 +3,11 @@ import type {
     DirectMessageGroupEdit,
     DirectMessageLatestMessages,
     UserOperationFailure,
-    UserOperationOptions,
 } from "#sdk/users"
 import type * as Effect from "effect/Effect"
 import type { SendError } from "#sdk/message-errors"
-import type { Message, MessageCore, ReplyInput, SendOptions } from "#sdk/messages"
+import type { Message, MessageCore, ReplyInput } from "#sdk/messages"
+import type { RequestOptions } from "#sdk/client"
 
 /** Open private conversations, send messages or manage existing groups.
  * Methods return Effects with the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and at most two eligible transient read retries.
@@ -40,7 +40,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * })
      * ```
      */
-    send(userId: string, input: ReplyInput | string, options?: SendOptions): Effect.Effect<M, SendError>
+    send(userId: string, input: ReplyInput | string, options?: RequestOptions): Effect.Effect<M, SendError>
     /**
      * Look up a private channel in the optional cache using its decimal ID, without a request.
      * A hit may be stale and becomes more recently used without extending its age.
@@ -59,20 +59,20 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * A failed opening that was started clears the direct-message cache, because its outcome may be unknown and no channel is known to evict.
      * Invalid input fails before the cache is touched and leaves it intact
      */
-    open(userId: string, options?: UserOperationOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
+    open(userId: string, options?: RequestOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
     /**
      * Fetch a private channel by decimal ID.
      * A community-channel response is rejected as invalid.
      * With the direct-message cache enabled, a concurrent fetch of another private channel ID does not keep this result from being stored, unless more than 256 private channel IDs are in flight at once
      */
-    fetch(id: string, options?: UserOperationOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
+    fetch(id: string, options?: RequestOptions): Effect.Effect<DirectMessageChannel, UserOperationFailure>
     /**
      * Fetch this bot's currently open one-to-one and group conversations.
      * Personal notes are excluded.
      * The list is neither an atomic snapshot nor complete message history.
      * Enabled cache replacement is skipped when a later targeted request or channel observation conflicts
      */
-    fetchAll(options?: UserOperationOptions): Effect.Effect<readonly DirectMessageChannel[], UserOperationFailure>
+    fetchAll(options?: RequestOptions): Effect.Effect<readonly DirectMessageChannel[], UserOperationFailure>
     /**
      * Fetch the latest messages for 1–100 selected, distinct private channel IDs through Fluxer's batch endpoint.
      * IDs are copied by index when execution starts.
@@ -84,7 +84,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      */
     fetchLatestMessages(
         channelIds: readonly string[],
-        options?: UserOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<DirectMessageLatestMessages<M>, UserOperationFailure>
     /**
      * Change supplied settings of an existing group conversation.
@@ -97,7 +97,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
     editGroup(
         id: string,
         input: DirectMessageGroupEdit,
-        options?: UserOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<DirectMessageChannel, UserOperationFailure>
     /**
      * Close a one-to-one conversation for this bot, or leave a group conversation.
@@ -106,7 +106,7 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * Enabled cache invalidation normally stays scoped to this conversation.
      * A cache-wide conflict check can also prevent older in-flight results from being stored
      */
-    close(id: string, options?: UserOperationOptions): Effect.Effect<void, UserOperationFailure>
+    close(id: string, options?: RequestOptions): Effect.Effect<void, UserOperationFailure>
     /**
      * Remove a group recipient as owner, or remove the bot itself.
      * This does not request deletion of that user's messages.
@@ -114,9 +114,5 @@ export interface DirectMessages<M extends MessageCore = Message> {
      * Enabled cache invalidation normally stays scoped to this conversation.
      * A cache-wide conflict check can also prevent older in-flight results from being stored
      */
-    removeRecipient(
-        id: string,
-        userId: string,
-        options?: UserOperationOptions,
-    ): Effect.Effect<void, UserOperationFailure>
+    removeRecipient(id: string, userId: string, options?: RequestOptions): Effect.Effect<void, UserOperationFailure>
 }

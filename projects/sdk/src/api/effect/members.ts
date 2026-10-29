@@ -16,10 +16,7 @@ import type {
     GuildBan,
     MemberQuery,
     GuildOperationFailure,
-    GuildOperationOptions,
     CanManageOptions,
-    GuildAuditOperationOptions,
-    ModerationOptions,
     TimeoutOptions,
     TimeoutStateOptions,
     MemberTimeoutState,
@@ -27,6 +24,7 @@ import type {
 import type * as Effect from "effect/Effect"
 import type * as Stream from "effect/Stream"
 import type { PaginationError, UserIterationQuery } from "#sdk/pagination"
+import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Read community members, change their roles and nicknames, or perform moderation actions including bans.
  * HTTP methods return Effects and use the same concurrency limits, deadlines and error rules as Guilds.
@@ -35,7 +33,7 @@ import type { PaginationError, UserIterationQuery } from "#sdk/pagination"
  * Returned members are frozen snapshots. ClientOptions.cache.members can retain them, but does not predict permissions or download a whole community
  *
  * Writes retry only confirmed 429 rejections, never unknown outcomes. Interruption cannot undo a write request already sent.
- * The setRoles, editSelf, setNickname, addRole and removeRole methods accept GuildAuditOperationOptions.
+ * The setRoles, editSelf, setNickname, addRole and removeRole methods accept AuditedRequestOptions.
  * Member reads and searches reject auditReason. Moderation methods retain their more specific audited option types
  *
  * @category Guilds and members
@@ -128,7 +126,7 @@ export interface Members {
     setRoles(
         member: MemberReference,
         roleIds: readonly string[],
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Search Fluxer's member index for a community, without using or populating the member cache.
@@ -156,7 +154,7 @@ export interface Members {
     search(
         guildId: string,
         filters?: MemberSearchQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<MemberSearchPage, GuildOperationFailure>
     /**
      * Read unique indexed member-search hits with a bounded scan.
@@ -184,7 +182,7 @@ export interface Members {
         guildId: string,
         filters: Omit<MemberSearchQuery, "limit">,
         limits: MemberSearchIterationLimits,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<MemberSearchHit, GuildOperationFailure | PaginationError>
     /**
      * Change this bot's community profile, not its global account or another member.
@@ -199,7 +197,7 @@ export interface Members {
     editSelf(
         guildId: string,
         input: MemberProfileEdit,
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Set one member's nickname, or pass null to clear it.
@@ -228,7 +226,7 @@ export interface Members {
     setNickname(
         member: MemberReference,
         nickname: string | null,
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Move a member who is already in voice to a positive decimal voice-channel ID.
@@ -254,7 +252,7 @@ export interface Members {
     move(
         target: VoiceConnectionReference,
         channelId: string,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Disconnect one observed voice connection, or all active connections if target.connectionId is omitted.
@@ -266,7 +264,7 @@ export interface Members {
      */
     disconnect(
         target: VoiceConnectionReference,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Set or clear the community mute flag for a member currently connected to voice.
@@ -279,7 +277,7 @@ export interface Members {
     setMute(
         target: MemberReference,
         input: VoiceMuteInput,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Set or clear the community deafen flag for a member currently connected to voice.
@@ -292,7 +290,7 @@ export interface Members {
     setDeaf(
         target: MemberReference,
         input: VoiceDeafenInput,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Temporarily restrict a community member for durationMs milliseconds.
@@ -366,7 +364,7 @@ export interface Members {
      * The timeout method's execution, deadline and failure rules apply.
      * Writes with unknown outcomes are not replayed
      */
-    kick(target: MemberReference, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
+    kick(target: MemberReference, options?: AuditedRequestOptions): Effect.Effect<void, GuildOperationFailure>
     /**
      * Ban a user from a community, including a user who is not currently a member.
      * Pass decimal guildId and userId.
@@ -388,7 +386,7 @@ export interface Members {
     ban(
         target: MemberReference,
         input?: BanInput,
-        options?: ModerationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, GuildOperationFailure>
     /**
      * Remove a user's community ban, succeeding with no value after HTTP 204.
@@ -397,7 +395,7 @@ export interface Members {
      * The user is not rejoined and queued message deletion is not cancelled.
      * The ban method's execution, failures, cleanup and cached-member invalidation apply
      */
-    unban(target: MemberReference, options?: ModerationOptions): Effect.Effect<void, GuildOperationFailure>
+    unban(target: MemberReference, options?: AuditedRequestOptions): Effect.Effect<void, GuildOperationFailure>
     /**
      * Fetch a community's current full ban list with BanMembers permission.
      * Results are frozen.
@@ -406,10 +404,7 @@ export interface Members {
      * Shared guild deadlines and read retries apply.
      * A malformed response fails rather than producing a partial list
      */
-    fetchBans(
-        guildId: string,
-        options?: GuildOperationOptions,
-    ): Effect.Effect<readonly GuildBan[], GuildOperationFailure>
+    fetchBans(guildId: string, options?: RequestOptions): Effect.Effect<readonly GuildBan[], GuildOperationFailure>
     /**
      * Read community members by ascending user ID, without connecting the gateway or downloading the community eagerly.
      * The maxItems option is required, and pageSize defaults to 100, and maxPages defaults to the pages maxItems needs at pageSize plus 100.
@@ -441,7 +436,7 @@ export interface Members {
     iterate(
         guildId: string,
         query: UserIterationQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Stream.Stream<GuildMember, GuildOperationFailure | PaginationError>
     /**
      * Look up a community member by decimal guildId and userId in the enabled cache, without a request.
@@ -482,12 +477,12 @@ export interface Members {
      * Fetch one community member by decimal guildId and userId.
      * A missing member fails with reason notFound rather than an empty result
      */
-    fetch(member: MemberReference, options?: GuildOperationOptions): Effect.Effect<GuildMember, GuildOperationFailure>
+    fetch(member: MemberReference, options?: RequestOptions): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Fetch this bot's membership in a community without knowing its user ID.
      * No gateway READY event or connection is required
      */
-    fetchSelf(guildId: string, options?: GuildOperationOptions): Effect.Effect<GuildMember, GuildOperationFailure>
+    fetchSelf(guildId: string, options?: RequestOptions): Effect.Effect<GuildMember, GuildOperationFailure>
     /**
      * Check whether the bot, or the member named by options.actorUserId, is above a target member in the community's role hierarchy.
      * Pass actorUserId to check a moderator who ran a command, such as `{ actorUserId: message.author.id }`.
@@ -518,7 +513,7 @@ export interface Members {
     fetchPage(
         guildId: string,
         query?: MemberQuery,
-        options?: GuildOperationOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly GuildMember[], GuildOperationFailure>
     /**
      * Grant one role to a member without replacing their other roles.
@@ -548,7 +543,7 @@ export interface Members {
     addRole(
         member: MemberReference,
         roleId: string,
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, GuildOperationFailure>
     /**
      * Remove one role from a member while leaving other roles unchanged.
@@ -559,6 +554,6 @@ export interface Members {
     removeRole(
         member: MemberReference,
         roleId: string,
-        options?: GuildAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): Effect.Effect<void, GuildOperationFailure>
 }

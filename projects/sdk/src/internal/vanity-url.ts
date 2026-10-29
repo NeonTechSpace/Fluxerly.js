@@ -3,11 +3,12 @@
  * Invariant: Codes are validated locally, and URLs are built from the instance's discovered invite base.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import type { GuildVanityUrl, GuildVanityUrlUsage, ModerationOptions } from "#sdk/guilds"
+import type { GuildVanityUrl, GuildVanityUrlUsage } from "#sdk/guilds"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
+import type { AuditedRequestOptions } from "#sdk/client"
 
 const hostedInvite = "https://fluxer.gg"
 
@@ -52,7 +53,7 @@ export function vanityUrlFetch(
 export function vanityUrlEdit(
     guildId: string,
     code: string | null,
-    options?: ModerationOptions,
+    options?: AuditedRequestOptions,
     inviteBase = hostedInvite,
 ): GuildRequest<GuildVanityUrl> | InputValidationFailure {
     const base = vanityUrlFetch(guildId, inviteBase)

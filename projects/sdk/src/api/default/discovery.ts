@@ -8,8 +8,9 @@ import type {
     DiscoveryStatus,
 } from "#sdk/discovery"
 import type { ResultAsync } from "neverthrow"
-import type { GuildOperationFailure, DefaultGuildOperationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions } from "./options.js"
 
 /**
  * Search Fluxer's public community directory and manage a community's directory application.
@@ -40,7 +41,7 @@ export interface Discovery {
      */
     search(
         query?: DiscoverySearchQuery,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DiscoverySearchPage, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a community's current directory eligibility and application state.
@@ -52,7 +53,7 @@ export interface Discovery {
      */
     fetchStatus(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DiscoveryStatus, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch directory category IDs and Fluxer's category labels in provider order.
@@ -60,7 +61,7 @@ export interface Discovery {
      * No category copy is kept
      */
     fetchCategories(
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly DiscoveryCategory[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Submit a community's application to the public directory.
@@ -74,7 +75,7 @@ export interface Discovery {
     apply(
         guildId: string,
         input: DiscoveryApplicationInput,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change supplied fields of a pending or approved directory application.
@@ -87,7 +88,7 @@ export interface Discovery {
     edit(
         guildId: string,
         input: DiscoveryApplicationEdit,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<DiscoveryApplication, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Withdraw a pending application or remove an approved directory listing.
@@ -100,6 +101,6 @@ export interface Discovery {
      */
     withdraw(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }

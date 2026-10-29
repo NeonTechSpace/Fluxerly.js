@@ -16,19 +16,20 @@ import { ApplicationError, ConfigurationError, type ConnectError } from "#sdk/er
 import { failures, keepConvertedFailures, mapFailureCause } from "#sdk/internal/effect-failures"
 import { CriticalWorkerStoppedError, type RunBotOptions } from "#sdk/bot-runner"
 import { EventOverflowError, type SendError } from "#sdk/message-errors"
-import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput, SendOptions } from "#sdk/messages"
+import type { Message, MessageCore, MessageFields, SelectedMessage, ReplyInput } from "#sdk/messages"
 import type { HandlerOptions, EventContext, EventMap, EventName } from "#sdk/events"
 import type { CommandArgumentSchema } from "#sdk/command-arguments"
 import {
     nativeBotRouter,
-    type NativeBatchRequirements,
-    type NativePrefixCommandBatch,
-    type NativePrefixCommandRouter,
-    type NativePrefixCommandsOptions,
+    type BatchRequirements,
+    type PrefixCommandBatch,
+    type PrefixCommandRouter,
+    type PrefixCommandsOptions,
 } from "#sdk/native-commands"
 import { type ClientOptions, type Client, createClient } from "./client.js"
 import { type FailureReport } from "./failures.js"
 import { type Subscription, type EventHandlerOptions } from "./events.js"
+import type { RequestOptions } from "#sdk/client"
 
 /**
  * Give a bot handler its event payload, client and EventContext. The messageCreate context also provides
@@ -52,7 +53,7 @@ export type BotEventContext<K extends EventName, M extends MessageCore = Message
           /** The messageCreate payload, identical to event */
           readonly message: M
           /** Build a native reply Effect targeting this message. A string is sent as the content. Executing it can fail with SendError */
-          readonly reply: (input: ReplyInput | string, options?: SendOptions) => Effect.Effect<M, SendError>
+          readonly reply: (input: ReplyInput | string, options?: RequestOptions) => Effect.Effect<M, SendError>
       }
     : {})
 
@@ -136,7 +137,7 @@ export interface BotCommandsOptions<
     RouterServices = never,
     ReadyServices = never,
 >
-    extends NativePrefixCommandsOptions<unknown, never, M>, HandlerOptions<M> {
+    extends PrefixCommandsOptions<unknown, never, M>, HandlerOptions<M> {
     /**
      * Commands keyed by name, such as `{ ping: { execute: ({ reply }) => reply("Pong") } }`, or a callback that
      * receives the empty router and returns it with registrations, for groups or commands built elsewhere.
@@ -145,8 +146,8 @@ export interface BotCommandsOptions<
      * client, and runBot fails with ApplicationError whose source is "runBot commands" and whose cause is the thrown value
      */
     readonly commands:
-        | (C & NativePrefixCommandBatch<M, S>)
-        | ((router: NativePrefixCommandRouter<never, M>) => NativePrefixCommandRouter<RouterServices, M>)
+        | (C & PrefixCommandBatch<M, S>)
+        | ((router: PrefixCommandRouter<never, M>) => PrefixCommandRouter<RouterServices, M>)
     /** Receive command failures, and the reports of the router's own subscription, instead of the client-level onError,
      * as the router attach option does. Those are a failing partitionReady hook, a throwing partition function and an
      * overflow that stops the router (overflow "stop"). With overflow dropOldest, a full queue only writes a Warn record
@@ -257,7 +258,7 @@ interface PreparedNativeBot {
     readonly entries: ReturnType<typeof snapshotBotEvents>
     /** Whether bot-authored messageCreate and messageUpdate events skip the handlers */
     readonly skipBots: boolean
-    readonly router: NativePrefixCommandRouter<unknown, Message> | undefined
+    readonly router: PrefixCommandRouter<unknown, Message> | undefined
     readonly onError: ((report: FailureReport) => Effect.Effect<unknown, unknown, never>) | undefined
     /** The command router's delivery settings, passed to its attach unchanged */
     readonly delivery: Readonly<Record<string, unknown>> | undefined
@@ -272,7 +273,7 @@ function prepareNativeBot(events: unknown, ignoreBots: unknown, commands: unknow
         throw new ConfigurationError("configuration", 'The option "setup" must be a function')
     const entries = snapshotBotEvents(events)
     const skipBots = readIgnoreBots(ignoreBots)
-    let router: NativePrefixCommandRouter<unknown, Message> | undefined
+    let router: PrefixCommandRouter<unknown, Message> | undefined
     let commandsFailure: ApplicationError | undefined
     try {
         router = commands === undefined ? undefined : nativeBotRouter<Message>(commands as never, skipBots)
@@ -321,7 +322,7 @@ function registerNativeBot(
                                                 client,
                                                 context,
                                                 message: payload,
-                                                reply: (input: ReplyInput | string, options?: SendOptions) =>
+                                                reply: (input: ReplyInput | string, options?: RequestOptions) =>
                                                     client.messages.reply(payload as Message, input, options),
                                             }
                                           : { event: payload, client, context },
@@ -565,7 +566,7 @@ export function runBot<
     ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,
     Exclude<
         | BotEventServices<Events>
-        | NativeBatchRequirements<C>
+        | BatchRequirements<C>
         | RouterServices
         | OptionsServices
         | SetupServices
@@ -644,7 +645,7 @@ export function runBot<
         ConnectError | CriticalWorkerStoppedError | ApplicationError | ConfigurationError,
         Exclude<
             | BotEventServices<Events>
-            | NativeBatchRequirements<C>
+            | BatchRequirements<C>
             | RouterServices
             | OptionsServices
             | SetupServices

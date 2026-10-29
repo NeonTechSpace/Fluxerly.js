@@ -92,7 +92,7 @@ test("The default API form of a symbol takes its Effect twin's place", () => {
         ["api/modules/js-ts#permissionname", "api/modules/Effect#permissionname", "api/interfaces/js-ts.PermissionHelpers"])
 })
 
-test("A default command type takes the place of its Effect Native twin", () => {
+test("A default command type takes the place of its Effect Native twin in older snapshots", () => {
     const member = (path, title) => [page(path, title), heading(path, "cooldown")]
     const native = member("api/interfaces/Effect.NativePrefixCommand", "NativePrefixCommand")
     const other = member("api/interfaces/js-ts.PrefixCommandMetadata", "PrefixCommandMetadata")

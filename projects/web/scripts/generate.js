@@ -243,7 +243,7 @@ export async function generateVersion(version, output, { plannedVersion, unrelea
     // Fix gaps in SDK source comments or exports, not in generated output
     if (gapReport.length) throw new Error(gapReport.join("\n"))
     const reflections = Object.values(project.reflections)
-    for (const name of ["createClient", "Message", "SendOptions"])
+    for (const name of ["createClient", "Message", "RequestOptions"])
         if (!reflections.some((reflection) => reflection.name === name))
             throw new Error(`Missing public reference: ${name}`)
     for (const name of ["RestRuntime", "RestOwner", "superviseShards", "routeDispatch"])

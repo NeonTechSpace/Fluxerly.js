@@ -6,7 +6,7 @@ import {
     ForumLayout,
     ForumSortOrder,
     ThreadAutoArchiveMinutes,
-    type ChannelAuditOperationOptions,
+    type AuditedRequestOptions,
     type ChannelCreate,
     type ChannelEdit,
     type ForumTagInput,
@@ -482,15 +482,15 @@ async function open(mode: Mode) {
             defaultTest
                 ? settle(defaultTest.client.channels.edit(channelId, input))
                 : settle(nativeTest!.client.channels.edit(channelId, input)),
-        createTag: (channelId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions) =>
+        createTag: (channelId: string, input: ForumTagInput, options?: AuditedRequestOptions) =>
             defaultTest
                 ? settle(defaultTest.client.channels.createForumTag(channelId, input, options))
                 : settle(nativeTest!.client.channels.createForumTag(channelId, input, options)),
-        editTag: (channelId: string, tagId: string, input: ForumTagInput, options?: ChannelAuditOperationOptions) =>
+        editTag: (channelId: string, tagId: string, input: ForumTagInput, options?: AuditedRequestOptions) =>
             defaultTest
                 ? settle(defaultTest.client.channels.editForumTag(channelId, tagId, input, options))
                 : settle(nativeTest!.client.channels.editForumTag(channelId, tagId, input, options)),
-        deleteTag: (channelId: string, tagId: string, options?: ChannelAuditOperationOptions) =>
+        deleteTag: (channelId: string, tagId: string, options?: AuditedRequestOptions) =>
             defaultTest
                 ? settle(defaultTest.client.channels.deleteForumTag(channelId, tagId, options))
                 : settle(nativeTest!.client.channels.deleteForumTag(channelId, tagId, options)),

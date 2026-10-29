@@ -1,5 +1,4 @@
 import { operationDetails } from "./errors.js"
-import type { OperationOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
 import {
     operationErrorFields,
@@ -11,7 +10,6 @@ import {
 } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
-import type { MessageOperationOptions } from "./messages.js"
 
 /** The result of reading an attachment stream: A byte chunk, or done true when the stream ends.
  * This type accepts Node's native ReadableStream without requiring browser types.
@@ -303,20 +301,6 @@ export interface RefreshedAttachmentUrl {
 }
 
 /**
- * Per-call deadline for an attachment URL refresh, separate from attachment download limits
- *
- * @category Messages
- */
-export interface AttachmentRefreshOptions extends MessageOperationOptions {}
-
-/**
- * Add cancellation to an attachment URL refresh in the default API
- *
- * @category Messages
- */
-export interface DefaultAttachmentRefreshOptions extends AttachmentRefreshOptions, OperationOptions {}
-
-/**
  * Attachment URL refresh operation identified by safe failure metadata
  *
  * @category Errors
@@ -389,20 +373,6 @@ export interface AttachmentDownloadOptions {
      */
     readonly timeoutMs?: number
 }
-
-/**
- * Add an optional AbortSignal to the download limits. Aborting cancels this download, not the client or other operations
- *
- * @category Messages
- */
-export interface DefaultAttachmentDownloadOptions extends AttachmentDownloadOptions, OperationOptions {}
-
-/**
- * Add an optional AbortSignal to the stream limits. Aborting stops this stream's consumption, not the client or other operations
- *
- * @category Messages
- */
-export interface DefaultAttachmentStreamOptions extends AttachmentDownloadOptions, OperationOptions {}
 
 /**
  * Expected bounded attachment-download failure, without a URL, response body or credential.

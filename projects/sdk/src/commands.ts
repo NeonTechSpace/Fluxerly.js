@@ -321,16 +321,6 @@ export function parseQuotedPrefixCommand<M extends MessageCore = Message>(
 }
 
 /**
- * Configure how an attached router recognizes command messages, without connecting or subscribing during construction
- *
- * @category Commands
- */
-export interface PrefixCommandsOptions<M extends MessageCore = Message> extends PrefixCommandParsing<M> {
-    /** Prefix text, accepted-prefix list or per-message resolver, which may return a promise. If several prefixes match, the longest wins */
-    readonly prefix: PrefixCommandPrefix<M>
-}
-
-/**
  * Parsing and cooldown settings shared by both API styles, apart from the prefix, which each API resolves in its own way
  *
  * @category Commands

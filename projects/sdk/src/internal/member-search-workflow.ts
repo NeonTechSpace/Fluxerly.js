@@ -4,7 +4,7 @@
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Effect from "effect/Effect"
-import { GuildOperationError, Permissions, type GuildOperationOptions } from "#sdk/guilds"
+import { GuildOperationError, Permissions } from "#sdk/guilds"
 import type { MemberSearchQuery, MemberSearchIterationLimits } from "#sdk/member-search"
 import { PaginationError } from "#sdk/pagination"
 import type { ClientOwner } from "./client.js"
@@ -15,6 +15,7 @@ import { Pagination, defaultMaxPages } from "./pagination.js"
 import { suspendInput } from "./defects.js"
 import { identifier, record } from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
+import type { RequestOptions } from "#sdk/client"
 
 const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
@@ -24,7 +25,7 @@ export function searchMembers(
     owner: Pick<ClientOwner, "guild" | "logical"> & { readonly defaultTimeoutMs?: number },
     guildId: string,
     query?: MemberSearchQuery,
-    options?: GuildOperationOptions,
+    options?: RequestOptions,
 ) {
     const invalid = (failure: InputValidationFailure) =>
         Effect.fail(
@@ -120,7 +121,7 @@ export function searchMemberPagination(
     guildId: string,
     filters: Omit<MemberSearchQuery, "limit">,
     limits: MemberSearchIterationLimits,
-    options?: GuildOperationOptions,
+    options?: RequestOptions,
 ) {
     // Reading and validating the caller filters, limits and options is marked as application input
     return suspendInput(() => {

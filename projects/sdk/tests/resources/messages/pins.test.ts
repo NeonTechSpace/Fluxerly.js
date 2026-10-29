@@ -4,7 +4,7 @@ import {
     type EventName,
     type MessagePinsQuery,
     type MessageReference,
-    type DefaultMessageOperationOptions,
+    type RequestOptions,
 } from "../../../src/index.js"
 import {
     defaultApi as createDefaultApi,
@@ -80,15 +80,11 @@ async function fixture(mode: Mode) {
             defaultApi ? settle(defaultApi.messages.fetch(message)) : settle(native!.messages.fetch(message)),
         get: async (message = target) =>
             defaultApi ? settle(defaultApi.messages.get(message)) : settle(native!.messages.get(message)),
-        mutate: async (
-            operation: "pin" | "unpin",
-            message: MessageReference = target,
-            options?: DefaultMessageOperationOptions,
-        ) =>
+        mutate: async (operation: "pin" | "unpin", message: MessageReference = target, options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.messages[operation](message, options))
                 : run(native!.messages[operation](message, options), options?.signal as AbortSignal | undefined),
-        pins: async (query?: MessagePinsQuery, channel = "20", options?: DefaultMessageOperationOptions) =>
+        pins: async (query?: MessagePinsQuery, channel = "20", options?: RequestOptions) =>
             defaultApi
                 ? settle(defaultApi.messages.fetchPins(channel, query, options))
                 : run(native!.messages.fetchPins(channel, query, options), options?.signal as AbortSignal | undefined),

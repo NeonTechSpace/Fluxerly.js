@@ -2,13 +2,11 @@ import type {
     Attachment,
     AttachmentDownloadFailure,
     AttachmentRefreshFailure,
-    DefaultAttachmentRefreshOptions,
-    DefaultAttachmentDownloadOptions,
-    DefaultAttachmentStreamOptions,
     RefreshedAttachmentUrl,
 } from "#sdk/attachments"
 import type { ResultAsync, Result } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AttachmentDownloadOptions, AttachmentStreamOptions } from "./options.js"
 
 /**
  * Refresh signed attachment URL strings explicitly, or download received Attachment data all at once or as chunks.
@@ -40,7 +38,7 @@ export interface Attachments {
      */
     refreshUrls(
         urls: readonly string[],
-        options?: DefaultAttachmentRefreshOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure | CancelledError | ConfigurationError>
     /**
      * Download attachment.url into one Uint8Array.
@@ -59,7 +57,7 @@ export interface Attachments {
      */
     download(
         attachment: Attachment,
-        options: DefaultAttachmentDownloadOptions,
+        options: AttachmentDownloadOptions,
     ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
     /**
      * Read attachment.url as chunks without combining the file into one array.
@@ -101,6 +99,6 @@ export interface Attachments {
      */
     stream(
         attachment: Attachment,
-        options: DefaultAttachmentStreamOptions,
+        options: AttachmentStreamOptions,
     ): AsyncIterable<Result<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>>
 }

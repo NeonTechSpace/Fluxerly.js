@@ -2,7 +2,7 @@ import { Session } from "node:inspector"
 import { setImmediate as turn } from "node:timers/promises"
 import { Clock, Context, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { createClient, SdkDefect, type DefaultCollectorOptions } from "../../src/index.js"
+import { createClient, SdkDefect, type CollectorOptions } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { sdkClock } from "../support/client-clock.js"
@@ -56,7 +56,7 @@ async function driver(mode: Mode) {
         collectorScope,
         connect: () => (defaultApi ? settle(defaultApi.connect()) : settle(native!.connect())),
         shutdown,
-        collect: async (options?: import("../../src/collectors.js").CollectorOptions) => {
+        collect: async (options?: import("../../src/collectors.js").CollectorLimits) => {
             if (defaultApi) {
                 const collector = defaultApi.messages.collect("20", options)
                 return {
@@ -75,9 +75,9 @@ async function driver(mode: Mode) {
 
 async function progress(
     api: Awaited<ReturnType<typeof driver>>,
-    defaultApi: NonNullable<DefaultCollectorOptions["onMessage"]>,
+    defaultApi: NonNullable<CollectorOptions["onMessage"]>,
     native: NonNullable<import("../../src/effect.js").CollectorOptions<unknown>["onMessage"]>,
-    options: import("../../src/collectors.js").CollectorOptions = {},
+    options: import("../../src/collectors.js").CollectorLimits = {},
 ) {
     if (api.defaultApi) {
         const collector = api.defaultApi.messages.collect("20", { ...options, onMessage: defaultApi })
@@ -256,9 +256,9 @@ test.each(modes)("%s queued messages do not postpone idle completion during a ca
 test.each(modes)("%s rejects an invalid onMessage handler locally", async (mode) => {
     const api = await driver(mode)
     if (api.defaultApi) {
-        expect(() =>
-            api.defaultApi!.messages.collect("20", { onMessage: 3 } as unknown as DefaultCollectorOptions),
-        ).toThrow(expect.objectContaining({ _tag: "ConfigurationError", field: "onMessage" }))
+        expect(() => api.defaultApi!.messages.collect("20", { onMessage: 3 } as unknown as CollectorOptions)).toThrow(
+            expect.objectContaining({ _tag: "ConfigurationError", field: "onMessage" }),
+        )
         return
     }
     const exit = await Effect.runPromiseExit(
@@ -325,7 +325,7 @@ test.each(
                 timeoutMs: reason === "timeout" ? 100 : 10_000,
                 idleMs: reason === "idle" ? 100 : 5_000,
                 ...(mode === "default" ? { signal: controller.signal } : {}),
-            } as import("../../src/collectors.js").CollectorOptions,
+            } as import("../../src/collectors.js").CollectorLimits,
         )
         const result = collector.wait().then(
             (value) => {
@@ -470,7 +470,7 @@ test("default onMessage getter defects become an application SdkDefect carrying 
     })
     let error: unknown
     try {
-        api.defaultApi!.messages.collect("20", options as DefaultCollectorOptions)
+        api.defaultApi!.messages.collect("20", options as CollectorOptions)
     } catch (caught) {
         error = caught
     }
@@ -509,7 +509,7 @@ test.each(modes)("%s releases progress callbacks and failed message snapshots af
     async function trackedCancellation() {
         const defaultApi = async (
             message: import("../../src/index.js").Message,
-            signal: Parameters<NonNullable<DefaultCollectorOptions["onMessage"]>>[1],
+            signal: Parameters<NonNullable<CollectorOptions["onMessage"]>>[1],
         ) => {
             weak.push(new WeakRef(message))
             started = true
@@ -524,7 +524,7 @@ test.each(modes)("%s releases progress callbacks and failed message snapshots af
         return progress(api, defaultApi, native, {
             maxMessages: 2,
             ...(mode === "default" ? { signal: controller.signal } : {}),
-        } as import("../../src/collectors.js").CollectorOptions)
+        } as import("../../src/collectors.js").CollectorLimits)
     }
 
     const cancelled = await trackedCancellation()

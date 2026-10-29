@@ -1,4 +1,4 @@
-import type { CountOperationFailure, DefaultCountOperationOptions, ChannelMemberCountsResult } from "#sdk/counts"
+import type { CountOperationFailure, ChannelMemberCountsResult } from "#sdk/counts"
 import type { ResultAsync } from "neverthrow"
 import type {
     PermissionOverwrite,
@@ -10,13 +10,12 @@ import type {
     FollowedChannel,
     ChannelFollowerStats,
     ChannelOperationFailure,
-    DefaultChannelOperationOptions,
-    DefaultChannelAuditOperationOptions,
     ForumTagInput,
     GuildForumChannel,
     GuildMediaChannel,
 } from "#sdk/channels"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AuditedRequestOptions } from "./options.js"
 
 /**
  * Read, create and change community channels, with optional local cache lookup.
@@ -47,7 +46,7 @@ import type { CancelledError, ConfigurationError } from "#sdk/errors"
  * Local input failure before dispatch preserves the cache, and a change rejected after dispatch removes the same entries.
  * No write is followed by an automatic confirmation fetch.
  * The follow, create, edit, delete, reorder, permission-overwrite and forum-tag mutations accept a raw audit reason through
- * DefaultChannelAuditOperationOptions. Read operations reject auditReason instead of sending a meaningless header.
+ * AuditedRequestOptions. Read operations reject auditReason instead of sending a meaningless header.
  * Expected failures return ChannelOperationError or ClientClosedError.
  * Abort returns CancelledError after cleanup.
  * Unexpected failures reject with SdkDefect
@@ -75,7 +74,7 @@ export interface Channels {
     follow(
         channelId: string,
         input: ChannelFollowInput,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<FollowedChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch frozen channel and distinct community follower counts for a viewable announcement channel.
@@ -84,7 +83,7 @@ export interface Channels {
      */
     fetchFollowerStats(
         channelId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ChannelFollowerStats, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Request fresh member counts for 1–25 channels in one community over the connected gateway.
@@ -108,7 +107,7 @@ export interface Channels {
     fetchMemberCounts(
         guildId: string,
         channelIds: readonly string[],
-        options?: DefaultCountOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<ChannelMemberCountsResult, CountOperationFailure | CancelledError | ConfigurationError>
     /**
      * Look up a community channel in the enabled cache, without an HTTP request or a connection.
@@ -135,7 +134,7 @@ export interface Channels {
      */
     fetch(
         channelId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch the community channels currently visible to the bot, without pagination.
@@ -145,7 +144,7 @@ export interface Channels {
      */
     fetchAll(
         guildId: string,
-        options?: DefaultChannelOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly GuildChannel[], ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Create a supported community channel and return its frozen server snapshot.
@@ -191,7 +190,7 @@ export interface Channels {
     create(
         guildId: string,
         input: ChannelCreate,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change only the supplied channel settings and return the frozen server snapshot.
@@ -219,7 +218,7 @@ export interface Channels {
     edit(
         channelId: string,
         input: ChannelEdit,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete a community channel, succeeding with no value after HTTP 204.
@@ -231,7 +230,7 @@ export interface Channels {
      */
     delete(
         channelId: string,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Submit community-channel moves, succeeding with no value after HTTP 204.
@@ -251,7 +250,7 @@ export interface Channels {
     reorder(
         guildId: string,
         positions: readonly ChannelPosition[],
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Replace one explicit role or member permission overwrite.
@@ -272,7 +271,7 @@ export interface Channels {
     setPermissionOverwrite(
         channelId: string,
         input: PermissionOverwrite,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Remove one explicit permission overwrite by decimal role or member target ID.
@@ -290,7 +289,7 @@ export interface Channels {
     removePermissionOverwrite(
         channelId: string,
         targetId: string,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add one tag to a forum or media channel and return the frozen updated channel.
@@ -305,7 +304,7 @@ export interface Channels {
     createForumTag(
         channelId: string,
         input: ForumTagInput,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Replace one tag of a forum or media channel and return the frozen updated channel.
@@ -320,7 +319,7 @@ export interface Channels {
         channelId: string,
         tagId: string,
         input: ForumTagInput,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Delete one tag from a forum or media channel and return the frozen updated channel.
@@ -333,6 +332,6 @@ export interface Channels {
     deleteForumTag(
         channelId: string,
         tagId: string,
-        options?: DefaultChannelAuditOperationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<GuildForumChannel | GuildMediaChannel, ChannelOperationFailure | CancelledError | ConfigurationError>
 }

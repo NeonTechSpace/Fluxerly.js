@@ -675,6 +675,34 @@ export interface ScheduleOptions {
     readonly intervalMs?: number
 }
 
+/** Settings for one remote operation: Its deadline. Methods document what their deadline covers beyond these rules.
+ * Effect operations are cancelled by interrupting their fiber
+ *
+ * @category Options
+ */
+export interface RequestOptions {
+    /** Total milliseconds for this call, an integer from 1 through 2,147,483,647.
+     * For a bot client's REST calls it covers local queueing, rate-limit waits, retries and HTTP, and defaults to the
+     * client's rest.defaultTimeoutMs, 30,000 unless configured. Calls outside a bot client's REST settings, such as
+     * standalone webhook clients, OAuth, instance discovery and gateway counts, default to 30,000.
+     * Owned cleanup is awaited afterward, so the call can finish later than this deadline
+     */
+    readonly timeoutMs?: number
+}
+
+/** Settings for a remote mutation that Fluxer can record in the community audit log: Its deadline and an optional reason
+ *
+ * @category Options
+ */
+export interface AuditedRequestOptions extends RequestOptions {
+    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
+     * Sent only as the raw X-Audit-Log-Reason header, without URL escaping, because Fluxer does not decode escapes.
+     * Non-ASCII and control characters fail before dispatch. Omission sends no header. Never included in SDK errors or diagnostics.
+     * Header delivery does not guarantee that Fluxer stores the reason in an audit entry. Methods name the known paths that do not
+     */
+    readonly auditReason?: string
+}
+
 /** Add cancellation to a default-API operation with an AbortController's signal.
  * Aborting affects this operation's owned work, not unrelated calls
  *

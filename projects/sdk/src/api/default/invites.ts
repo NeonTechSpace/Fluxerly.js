@@ -1,7 +1,8 @@
 import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
 import type { ResultAsync } from "neverthrow"
-import type { GuildOperationFailure, DefaultGuildOperationOptions, DefaultModerationOptions } from "#sdk/guilds"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { RequestOptions, AuditedRequestOptions } from "./options.js"
 
 /**
  * Inspect, create, list and revoke invite codes with the bot's credentials.
@@ -28,7 +29,7 @@ export interface Invites {
      */
     fetch(
         code: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<Invite, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Create an invite for an accessible channel, including an existing group direct message.
@@ -41,7 +42,7 @@ export interface Invites {
     create(
         channelId: string,
         input?: InviteCreate,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<InviteMetadata, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * List a channel's management-visible invites in Fluxer's order.
@@ -50,7 +51,7 @@ export interface Invites {
      */
     fetchForChannel(
         channelId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * List a community's management-visible invites with ManageGuild permission.
@@ -58,7 +59,7 @@ export interface Invites {
      */
     fetchForGuild(
         guildId: string,
-        options?: DefaultGuildOperationOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly InviteMetadata[], GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Revoke an invite code, succeeding with no value after HTTP 204.
@@ -68,6 +69,6 @@ export interface Invites {
      */
     delete(
         code: string,
-        options?: DefaultModerationOptions,
+        options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
 }

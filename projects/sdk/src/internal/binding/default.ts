@@ -7,7 +7,7 @@
 import * as Effect from "effect/Effect"
 import { err, ok, type Result, type ResultAsync } from "neverthrow"
 import { ConfigurationError, type CancelledError, type ClientClosedError, type Operation } from "#sdk/errors"
-import type { DefaultMessageOperationOptions, MessageCore } from "#sdk/messages"
+import type { MessageCore } from "#sdk/messages"
 import { PaginationError, type PaginationOperation } from "#sdk/pagination"
 import type { OperationOptions } from "#sdk/client"
 import { InputValidationFailure } from "#sdk/input-validation"
@@ -17,6 +17,7 @@ import { operationSignalError } from "#sdk/internal/operation-signal"
 import { iterationOptions, type Pagination } from "#sdk/internal/pagination"
 import { executeOperation, localValue, lookup, type DefaultContext, type OperationFailure } from "./execute.js"
 import { eachEntry, operationTable, type OperationTable } from "./operations.js"
+import type { RequestOptions } from "#sdk/api/default/options"
 
 type Run<E> = E extends { readonly run: (owner: never, ...args: infer P) => infer R } ? [P, R] : never
 
@@ -61,9 +62,9 @@ export function defaultContext<M extends MessageCore>(owner: ClientOwner<M>): De
         options?: OperationOptions,
     ) => executeOperation(owner.logging.provide(effect), operation, options)
     const iterate = <A, E extends OperationFailure>(
-        create: (options: DefaultMessageOperationOptions) => Effect.Effect<Pagination<A, E>, PaginationError>,
+        create: (options: RequestOptions) => Effect.Effect<Pagination<A, E>, PaginationError>,
         operation: PaginationOperation,
-        options?: DefaultMessageOperationOptions,
+        options?: RequestOptions,
     ): AsyncIterable<Result<A, E | PaginationError | CancelledError | ConfigurationError | ClientClosedError>> =>
         Object.freeze({
             async *[Symbol.asyncIterator]() {
@@ -143,7 +144,7 @@ export function bindDefault<M extends MessageCore>(context: DefaultContext<M>): 
                                 ...args.slice(entry.optionsAt + 1),
                             ) as Effect.Effect<Pagination<unknown, OperationFailure>, PaginationError>,
                         id as PaginationOperation,
-                        args[entry.optionsAt] as DefaultMessageOperationOptions | undefined,
+                        args[entry.optionsAt] as RequestOptions | undefined,
                     )
             case "custom":
                 return entry.default(context)

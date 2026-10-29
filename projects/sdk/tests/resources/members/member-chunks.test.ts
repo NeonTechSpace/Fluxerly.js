@@ -1,12 +1,7 @@
 import { Cause, Effect, Exit, Logger, Pull, Scope, Stream } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import WebSocket from "ws"
-import {
-    createClient,
-    type MemberChunk,
-    type MemberChunkQuery,
-    type DefaultMemberChunkOptions,
-} from "../../../src/index.js"
+import { createClient, type MemberChunk, type MemberChunkQuery, type MemberChunkOptions } from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
@@ -62,7 +57,7 @@ async function fixture(mode: Mode, connect = true) {
             const source = defaultApi.members
                 .iterateChunks(guildId, query as MemberChunkQuery, {
                     signal: controller.signal,
-                    ...(options as DefaultMemberChunkOptions),
+                    ...(options as MemberChunkOptions),
                 })
                 [Symbol.asyncIterator]()
             const close = async () => {
@@ -81,11 +76,7 @@ async function fixture(mode: Mode, connect = true) {
             }
         }
         const streamScope = Scope.makeUnsafe()
-        const stream = native!.members.iterateChunks(
-            guildId,
-            query as MemberChunkQuery,
-            options as DefaultMemberChunkOptions,
-        )
+        const stream = native!.members.iterateChunks(guildId, query as MemberChunkQuery, options as MemberChunkOptions)
         const pull = Effect.runPromise(Stream.toPull(stream).pipe(Scope.provide(streamScope)))
         const close = async () => {
             await Effect.runPromise(Scope.close(streamScope, Exit.void))
@@ -160,11 +151,11 @@ async function fixture(mode: Mode, connect = true) {
         counts: (ids: readonly string[] = ["20"], options?: unknown) =>
             defaultApi
                 ? defaultApi.guilds
-                      .fetchCounts(ids, options as import("../../../src/counts.js").DefaultCountOperationOptions)
+                      .fetchCounts(ids, options as import("../../../src/index.js").RequestOptions)
                       .then((r) => (r.isErr() ? r.error : r.value))
                 : Effect.runPromise(
                       native!.guilds
-                          .fetchCounts(ids, options as import("../../../src/counts.js").CountOperationOptions)
+                          .fetchCounts(ids, options as import("../../../src/effect.js").RequestOptions)
                           .pipe(Effect.catch((error) => Effect.succeed(error))),
                   ),
     }
