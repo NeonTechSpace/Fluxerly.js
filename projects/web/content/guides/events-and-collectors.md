@@ -40,7 +40,7 @@ A successful `connect()` means Fluxer accepted the session, not that every commu
 <details>
 <summary>What else does a handler receive?</summary>
 
-A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, `receipt` numbers events in the order the client received them, and `receivedBytes` is the size of the gateway message that carried it. Compare receipts to tell which of two events came first, as [`EventContext.receipt`](/docs/{{version}}/api/interfaces/js-ts.EventContext/#receipt) describes
+A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, `receipt` numbers events in the order the client received them, and `receivedBytes` is the size of the gateway message that carried it. Compare receipts to tell which of two events came first, as [`EventContext.receipt`](/docs/{{version}}/api/interfaces/js-ts.EventContext/#receipt) describes. Work that is not an event, such as a timer, can read `client.lastReceipt` when it starts and treat any event with a larger receipt as newer. For a change or removal, the context's `previous` holds the cached value from before it, as the [next section](/docs/{{version}}/events-and-collectors/#log-edits-and-deletions) shows
 Pass the signal to SDK operations inside the handler so they stop with it. To run code around every handler, such as timing or tracing, register event [middleware](/docs/{{version}}/glossary/#middleware) with `client.use`
 
 A handler runs one event at a time by default, and later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead
@@ -49,6 +49,28 @@ To handle several events at a time and still keep related events in order, pass 
 When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. The [`overflow`](/docs/{{version}}/api/interfaces/js-ts.HandlerOptions/#overflow) reference lists how the backlog to drop from is chosen
 
 </details>
+
+## Log edits and deletions
+
+Update and delete events carry only the new state or the removed IDs. When the matching cache is enabled, the handler's context also holds `previous`, the value that cache held just before the change, so a log can show what changed. Enable the message cache for message edits and deletions, the member and role caches for member and role changes, the channel cache for channels and threads, and the guild cache for community changes
+
+```ts
+import type { Client } from "@neontechspace/fluxerly"
+
+// Create the client with createClient({ token, cache: { messages: true } })
+export function logMessageChanges(client: Client, log: (line: string) => void) {
+    const edits = client.on("messageUpdate", (message, _signal, { previous }) => {
+        if (previous !== undefined && previous.content !== message.content)
+            log(`Message ${message.id} was edited from "${previous.content}" to "${message.content}"`)
+    })
+    const deletions = client.on("messageDelete", (deletion, _signal, { previous }) => {
+        log(`Message ${deletion.id} was deleted${previous === undefined ? "" : `: "${previous.content}"`}`)
+    })
+    return [edits, deletions]
+}
+```
+
+The snapshot is the client's own last observation, never fetched. It is `undefined` when the cache is off, never saw the entity, or already removed it, such as after an expiry, a capacity limit or a lost connection. The [`PreviousSnapshots`](/docs/{{version}}/api/interfaces/js-ts.PreviousSnapshots/) reference lists the events that carry one
 
 ## Wait for a community's setup
 

@@ -46,7 +46,7 @@ import type { SocketFactory } from "../transport/index.js"
 import type { IdentifyFields, SubmitFailure } from "../gateway/commands.js"
 import { checkSnapshot, usedSnapshot, type ShardPlan } from "../sharding.js"
 import { backoffCeiling, retryDelay, stayedHealthy } from "./backoff.js"
-import { applyEvent, guildIntake, invalidateDispatch, type ClientCaches } from "./intake.js"
+import { invalidateDispatch, shardIntake, type ClientCaches } from "./intake.js"
 import { formatDuration } from "./lifetime.js"
 import { emitObservation } from "../observer.js"
 import { retryableConnection } from "../retryable-connection.js"
@@ -224,7 +224,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             logger.log({ category: "lifecycle", ...input, shardId: shard.shardId }, fiber.context)
         const clock = yield* Clock.Clock
         const now = () => nowMs(clock)
-        const onGuild = guildIntake(host.caches)
+        const intake = shardIntake(host.caches)
         let established = options.established ?? false
         /** Whether startup has used a saved session, until readiness, including a fallback after partial replay */
         let restoredSession = false
@@ -407,8 +407,8 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                         host.setShardState(shard, "Recovering")
                     },
                     onDispatch: (event, message, bytes) => {
-                        applyEvent(host.caches, event, message)
-                        host.events.offer(event, message, bytes, shard.shardId, shard.sessionEpoch)
+                        const previous = intake.event(event, message)
+                        host.events.offer(event, message, bytes, shard.shardId, shard.sessionEpoch, previous)
                     },
                     onRaw: (t, s, d, bytes) => {
                         // READY is session control and never reaches the dispatch table, so its user is taken here
@@ -441,7 +441,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                             shard.submit = undefined
                         },
                     },
-                    onGuild,
+                    onGuild: intake.guild,
                     presence: {
                         attach: (send, members, mode) => host.presence.attach(send, members, mode, shard.shardId),
                         detach: () => host.presence.detach(shard.shardId),

@@ -661,6 +661,8 @@ export type {
     EventContext,
     EventInvocation,
     EventInvocationOf,
+    PreviousSnapshot,
+    PreviousSnapshots,
 } from "./events.js"
 export type { CacheChange, CacheObserverOptions } from "./cache.js"
 export type { IdentifyCoordinator, SessionSnapshot, SessionStore } from "./sharding.js"

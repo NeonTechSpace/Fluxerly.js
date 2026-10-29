@@ -128,6 +128,11 @@ export class MessageCache<M extends MessageCore = Message> {
         return entry.message
     }
 
+    /** The retained message, without counting a lookup or making it more recently used */
+    peek(target: MessageReference): M | undefined {
+        return this.#peek(target)?.message
+    }
+
     #peek(target: MessageReference) {
         const entry = this.#entries.get(target.id)
         if (!entry || entry.message.channelId !== target.channelId) return undefined

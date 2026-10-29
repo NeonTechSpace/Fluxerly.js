@@ -296,7 +296,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Observe the subscription's outcome as well as the client's run or waitForClose outcome.
      * Registration misuse, such as an unknown event name, fails with a suggested correction
      *
-     * Each invocation also receives an EventContext with the receiving shard, its session epoch and the received frame size.
+     * Each invocation also receives an EventContext with the receiving shard, its session epoch, its receipt, the received
+     * frame size and, for an event that changes or removes a cached entity, the previous snapshot of the enabled cache.
      * Event middleware registered with use runs around every handler invocation, including those of subscriptions registered earlier
      *
      * @remarks
@@ -329,7 +330,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      */
     on<E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
         event: K,
-        handler: (event: EventMap<M>[K], context: EventContext) => Effect.Effect<unknown, E, R>,
+        handler: (event: EventMap<M>[K], context: EventContext<K, M>) => Effect.Effect<unknown, E, R>,
         options?: EventHandlerOptions<E2, R2, EventMap<M>[K]>,
     ): Effect.Effect<Subscription, never, R | R2 | Scope.Scope>
     /**
@@ -708,7 +709,7 @@ export function openClient<E = never, R = never, const F extends MessageFields |
                 logging: namespaces.logging,
                 on: <E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(
                     event: K,
-                    handler: (event: EventMap<M>[K], context: EventContext) => Effect.Effect<unknown, E, R>,
+                    handler: (event: EventMap<M>[K], context: EventContext<K, M>) => Effect.Effect<unknown, E, R>,
                     options?: EventHandlerOptions<E2, R2, EventMap<M>[K]>,
                 ) =>
                     Effect.gen(function* () {
@@ -778,6 +779,9 @@ export function openClient<E = never, R = never, const F extends MessageFields |
                 diagnostics: () => owner.diagnostics(),
                 get state() {
                     return owner.state
+                },
+                get lastReceipt() {
+                    return owner.events.lastReceipt
                 },
                 get gatewayLatencyMs() {
                     return owner.gatewayLatencyMs

@@ -138,7 +138,9 @@ export interface TestClient<M extends MessageCore = Message> extends AsyncDispos
     /**
      * Deliver one gateway dispatch to a connected shard synchronously, with the next sequence number.
      * The type is the Fluxer wire dispatch name, such as MESSAGE_CREATE or GUILD_MEMBER_ADD, and the payload is the wire
-     * body in snake_case, so it passes through the SDK's real decoders, cache updates and handlers.
+     * body in snake_case, so it passes through the SDK's real decoders, cache updates and handlers. With the
+     * client's cache option enabled, handlers receive EventContext.previous exactly as against Fluxer, and every
+     * accepted dispatch advances client.lastReceipt.
      * Handlers run afterwards on their own schedule. Register client.waitFor before emitting to await delivery.
      * Unknown types are delivered too unless explicitly suppressed, and malformed payloads follow the client's
      * gateway.onMalformedDispatch policy.

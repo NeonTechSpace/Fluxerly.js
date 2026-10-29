@@ -159,6 +159,11 @@ export class ChannelCache {
         return this.#peek(channelId) !== undefined
     }
 
+    /** The retained channel, without counting a lookup or making it less likely to be removed */
+    peek(channelId: string): GuildChannel | undefined {
+        return this.#peek(channelId)?.value
+    }
+
     diagnostics(): CacheDiagnostic {
         this.#purge()
         this.#schedule()

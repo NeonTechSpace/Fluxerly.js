@@ -20,7 +20,7 @@ const pairedSurfaces = [
     ...clientNamespaceTypes,
     ...pairedValues,
 ]
-const inheritedClientMembers = ["state", "shards", "gatewayLatencyMs"]
+const inheritedClientMembers = ["state", "lastReceipt", "shards", "gatewayLatencyMs"]
 const symbolIsAlias = 1 << 21
 // Member signatures are compared by the compile-time comparator in fixtures/public-client-parity. This script checks
 // that its Paired map covers exactly these surfaces, that the comparator rejects deliberate mutations, and the member

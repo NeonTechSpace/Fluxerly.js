@@ -131,6 +131,14 @@ export class GuildCache {
     }
 
     /**
+     * The retained snapshot, without counting a lookup or making it more recently used. An expired entry is removed and
+     * gives undefined, as a lookup would
+     */
+    peek<K extends ResourceKind>(kind: K, guildId: string, id?: string): Resources[K] | undefined {
+        return this.#peek({ kind, guildId, ...(id === undefined ? {} : { id }) })?.value as Resources[K] | undefined
+    }
+
+    /**
      * Every role of a guild, highest in the hierarchy first as Fluxer lists them, or undefined unless the list is complete.
      * A hit makes the roles more recently used without extending expiry
      */

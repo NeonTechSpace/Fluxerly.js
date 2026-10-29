@@ -2,12 +2,15 @@
  * Gateway cache intake: How decoded events, raw guild dispatches and skipped malformed dispatches update or invalidate
  * the client's message, guild, channel and user caches.
  * Invariant: Fluxer is the source of truth, and intake runs before subscriber delivery, so a subscriber never observes
- * a cache older than the event it is handling. A skipped dispatch clears every entry it could have changed.
+ * a cache older than the event it is handling. The snapshot an event replaced is read just before intake applies it and
+ * travels with the event as its previous snapshot, never fetched or copied. A skipped dispatch clears every entry it
+ * could have changed.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
-import type { GuildChannel } from "#sdk/channels"
-import type { EventMap, EventName } from "#sdk/events"
-import type { Message, MessageCore } from "#sdk/messages"
+import { isThreadChannel, type GuildChannel } from "#sdk/channels"
+import type { EventMap, EventName, PreviousSnapshot, ThreadDeletion } from "#sdk/events"
+import type { Guild, GuildDeletion, MemberReference, RoleReference } from "#sdk/guilds"
+import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { User } from "#sdk/users"
 import type { MessageCache } from "../cache.js"
 import type { ChannelCache } from "../channel-cache.js"
@@ -41,8 +44,70 @@ export function clearCaches<M extends MessageCore>(caches: ClientCaches<M>) {
     caches.userCache.clear()
 }
 
+/**
+ * The snapshot the enabled cache held for the entity an event changes, read before its intake applies the event, or
+ * undefined when the event has none or the cache held none. The raw guild intake has already applied GUILD_UPDATE and
+ * GUILD_DELETE, so their guild is the one shardIntake read just before that
+ */
+function previousSnapshot<M extends MessageCore, K extends EventName>(
+    caches: ClientCaches<M>,
+    event: K,
+    message: EventMap<M>[K],
+    replacedGuild: Guild | undefined,
+): PreviousSnapshot<K, M> {
+    const { cache, resources, channelCache } = caches
+    let previous: unknown
+    if (event === "messageUpdate" || event === "messageDelete") previous = cache?.peek(message as MessageReference)
+    else if (event === "guildMemberUpdate" || event === "guildMemberRemove") {
+        const member = message as MemberReference
+        previous = resources?.peek("members", member.guildId, member.userId)
+    } else if (event === "guildRoleUpdate" || event === "guildRoleDelete") {
+        const role = message as RoleReference
+        previous = resources?.peek("roles", role.guildId, role.id)
+    } else if (event === "guildChannelUpdate" || event === "guildChannelDelete")
+        previous = channelCache?.peek((message as GuildChannel).id)
+    else if (event === "threadUpdate" || event === "threadDelete") {
+        const channel = channelCache?.peek((message as ThreadDeletion).id)
+        previous = channel !== undefined && isThreadChannel(channel) ? channel : undefined
+    } else if (
+        (event === "guildUpdate" || event === "guildDelete") &&
+        replacedGuild?.id === (message as GuildDeletion).id
+    )
+        previous = replacedGuild
+    return previous as PreviousSnapshot<K, M>
+}
+
+/**
+ * One shard's cache intake, which applies each dispatch and returns the snapshot its event replaced, for the event's
+ * EventContext.previous. Every step of one dispatch runs synchronously on the socket's turn, so the guild a raw
+ * GUILD_UPDATE or GUILD_DELETE replaced is held only until that dispatch's decoded event, or the next dispatch
+ */
+export function shardIntake<M extends MessageCore>(caches: ClientCaches<M>) {
+    const raw = guildIntake(caches)
+    let replacedGuild: Guild | undefined
+    return {
+        /** Raw guild intake for the dispatch table, or undefined when no cache can use it */
+        guild:
+            raw &&
+            ((event: string, value: unknown) => {
+                replacedGuild =
+                    (event === "GUILD_UPDATE" || event === "GUILD_DELETE") && record(value) && identifier(value.id)
+                        ? caches.resources?.peek("guilds", value.id)
+                        : undefined
+                raw(event, value)
+            }),
+        /** Apply one decoded event and return the snapshot it replaced */
+        event<K extends EventName>(event: K, message: EventMap<M>[K]): PreviousSnapshot<K, M> {
+            const previous = previousSnapshot(caches, event, message, replacedGuild)
+            replacedGuild = undefined
+            applyEvent(caches, event, message)
+            return previous
+        },
+    }
+}
+
 /** Apply one decoded event to the caches before it is offered to subscribers */
-export function applyEvent<M extends MessageCore, K extends EventName>(
+function applyEvent<M extends MessageCore, K extends EventName>(
     caches: ClientCaches<M>,
     event: K,
     message: EventMap<M>[K],
@@ -136,7 +201,7 @@ function applyThreadEffects<M extends MessageCore>(
  * Raw guild lifecycle, expression, own thread membership and attached member intake, or undefined when no cache can use it.
  * The members that message, reaction and typing dispatches carry reach only the member cache
  */
-export function guildIntake<M extends MessageCore>(
+function guildIntake<M extends MessageCore>(
     caches: ClientCaches<M>,
 ): ((event: string, value: unknown) => void) | undefined {
     const { cache, resources, channelCache, logging } = caches

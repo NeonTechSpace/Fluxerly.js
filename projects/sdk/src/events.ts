@@ -1,11 +1,11 @@
 import type { Message, MessageCore, MessageDeletion, MessageBulkDeletion } from "./messages.js"
 import type { ChannelPinsUpdate } from "./pins.js"
-import type { Guild, GuildDeletion, GuildMember, MemberReference } from "./guilds.js"
+import type { Guild, GuildDeletion, GuildMember, GuildRole, MemberReference } from "./guilds.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval, ReactionTarget } from "./reactions.js"
 import type { InviteMetadata } from "./invites.js"
 import type { AuditLogEntry } from "./audit-logs.js"
-import type { GuildThreadChannel, ThreadMember } from "./channels.js"
+import type { GuildChannel, GuildThreadChannel, ThreadMember } from "./channels.js"
 
 /** Notice that the webhooks in a channel changed.
  * No webhook details or token are included. Fetch the current set explicitly if needed.
@@ -200,11 +200,14 @@ export interface GuildLifecycleEvents {
      * by ID only, so from those only the bot's own member is stored, completed from READY's account
      */
     readonly guildCreate: GuildCreate
-    /** Current community configuration, not previous-and-current values or a patch to merge */
+    /** Current community configuration, not a patch to merge. EventContext.previous holds the enabled community
+     * cache's snapshot from before the update
+     */
     readonly guildUpdate: Guild
     /** Community visibility ended or became temporarily unavailable, without establishing deletion or the bot's membership outcome.
      * Before delivery, enabled community-resource and channel caches invalidate this community's observations.
-     * Cached messages in this community or with unknown community scope also invalidate, since the SDK has no channel-to-community lookup index
+     * Cached messages in this community or with unknown community scope also invalidate, since the SDK has no channel-to-community lookup index.
+     * EventContext.previous holds the enabled community cache's snapshot from before the event
      */
     readonly guildDelete: GuildDeletion
 }
@@ -490,8 +493,8 @@ export type ThreadCreateEvent = GuildThreadChannel & {
 }
 
 /**
- * Identity of a deleted thread, without its former settings or messages.
- * Deleting a parent channel deletes its threads without this event
+ * Identity of a deleted thread, without its former settings or messages, which EventContext.previous can hold from the
+ * channel cache. Deleting a parent channel deletes its threads without this event
  *
  * @category Events and collectors
  */
@@ -541,12 +544,84 @@ export interface ThreadMembersUpdate {
 }
 
 /**
- * Delivery details for one event, passed to on handlers and event middleware.
- * The object is frozen and describes how this client received the event, not Fluxer state
+ * The cached snapshot that EventContext.previous holds for each event that changes or removes one cached entity, keyed
+ * by event name. Events not listed here have no previous snapshot.
+ * Each snapshot is the frozen value the client's own cache held just before it applied the event, the same value a
+ * local lookup such as client.messages.get returned until then. It is never fetched and is not Fluxer's history of the
+ * entity. It can be older than the change, because Fluxer may have sent changes this client did not receive or apply.
+ * The previous field is undefined when the cache category is not enabled in the cache client option, or when the cache
+ * held no snapshot: The entity was never observed, the snapshot expired or was removed for capacity, or an earlier event,
+ * write, clear or connection gap removed it
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function editLog(client: Client, log: (line: string) => void) {
+ *     // Create the client with the message cache enabled, as in createClient({ token, cache: { messages: true } })
+ *     return client.on("messageUpdate", (message, _signal, { previous }) => {
+ *         if (previous !== undefined && previous.content !== message.content)
+ *             log(`Message ${message.id} changed from ${previous.content} to ${message.content}`)
+ *     })
+ * }
+ * ```
  *
  * @category Events and collectors
  */
-export interface EventContext {
+export interface PreviousSnapshots<M extends MessageCore = Message> {
+    /** The edited message from the message cache, with this client's selected message fields. Like every cached
+     * message it has no member or other field that only messageCreate carries. A lost gateway connection clears cached
+     * messages even when the session resumes
+     */
+    readonly messageUpdate: M
+    /** The deleted message from the message cache, as for messageUpdate. A messageDeleteBulk event has no previous snapshots */
+    readonly messageDelete: M
+    /** The member from the member cache before the update */
+    readonly guildMemberUpdate: GuildMember
+    /** The member from the member cache before the removal. A guildBanAdd event for the account removes it from the
+     * cache first, so a removal that follows one has none
+     */
+    readonly guildMemberRemove: GuildMember
+    /** The role from the role cache before the update. A guildRoleUpdateBulk event has no previous snapshots */
+    readonly guildRoleUpdate: GuildRole
+    /** The deleted role from the role cache */
+    readonly guildRoleDelete: GuildRole
+    /** The channel from the channel cache before the update. A category update or a guildChannelUpdateBulk event clears
+     * the community's cached channels, so a later update of one of them has none
+     */
+    readonly guildChannelUpdate: GuildChannel
+    /** The deleted or hidden channel from the channel cache */
+    readonly guildChannelDelete: GuildChannel
+    /** The thread from the channel cache before the update, with the bot's membership when the cached snapshot had it */
+    readonly threadUpdate: GuildThreadChannel
+    /** The deleted thread from the channel cache */
+    readonly threadDelete: GuildThreadChannel
+    /** The community from the community cache, the guilds category, before the update */
+    readonly guildUpdate: Guild
+    /** The community from the community cache before it was removed or became unavailable */
+    readonly guildDelete: Guild
+}
+
+/**
+ * The type of EventContext.previous for event K: The PreviousSnapshots entry or undefined, and only undefined for an
+ * event without one
+ *
+ * @category Events and collectors
+ */
+export type PreviousSnapshot<
+    K extends EventName,
+    M extends MessageCore = Message,
+> = K extends keyof PreviousSnapshots<M> ? PreviousSnapshots<M>[K] | undefined : undefined
+
+/**
+ * Delivery details for one event, passed to on handlers, runBot handlers and event middleware.
+ * The object is frozen and describes how this client received the event, not Fluxer state.
+ * The type parameters K and M choose the event and the client's message type that previous is typed for. A handler's
+ * context has both set for its event. The defaults accept the context of any event and message selection, so a helper
+ * that takes EventContext works with every handler
+ *
+ * @category Events and collectors
+ */
+export interface EventContext<K extends EventName = EventName, M extends MessageCore = MessageCore> {
     /**
      * Local shard whose gateway connection received the event. A client without a sharding plan uses shard 0 until
      * Fluxer requires more shards and it moves to automatic sharding
@@ -582,7 +657,7 @@ export interface EventContext {
      * One handler sees gaps between the numbers, because the client also numbers events that its subscription does not
      * receive, so only the order has meaning.
      * Under a supervisor each child process numbers its own events, so receipts from different processes cannot be
-     * compared
+     * compared. The client's lastReceipt reads the newest receipt given, for work that is not an event
      *
      * @example
      * ```ts
@@ -600,6 +675,16 @@ export interface EventContext {
      * Events decoded from one frame, such as guildCreate and its voiceStateSnapshot, report the same value
      */
     readonly receivedBytes: number
+    /**
+     * The snapshot this client's cache held for the changed or removed entity just before it applied the event, as
+     * PreviousSnapshots lists per event, or undefined. It is undefined for every other event, when that cache category
+     * is disabled, and when the cache held no snapshot because the entity was never observed or its snapshot expired or
+     * was removed. Compare it with the payload to log what changed, and treat undefined as unknown, not as absent in Fluxer.
+     * Every handler of the event receives the same frozen snapshot, which is not copied. A queued event keeps its
+     * snapshot in memory until the handler runs or the event is dropped, and maxPendingBytes does not count it.
+     * The SDK always sets the property. It is optional so that a context built by hand, such as in a unit test, can leave it out
+     */
+    readonly previous?: PreviousSnapshot<K, M>
 }
 
 /**
@@ -612,8 +697,8 @@ export interface EventInvocationOf<K extends EventName, M extends MessageCore = 
     readonly event: K
     /** Frozen event payload the handler receives */
     readonly payload: EventMap<M>[K]
-    /** Shard, its session epoch, receipt number and received size of the frame that carried the event */
-    readonly context: EventContext
+    /** Shard, its session epoch, receipt number, received size of the frame that carried the event and the previous snapshot */
+    readonly context: EventContext<K, M>
     /** Identifier of the subscription whose handler this invocation runs, such as messageCreate#3 */
     readonly subscriptionId: string
 }
@@ -697,7 +782,8 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Updates its enabled channel-cache observation
      */
     readonly guildChannelCreate: import("./channels.js").GuildChannel
-    /** Current community channel data, without previous values. Fetch explicitly if a decision requires fresh permissions.
+    /** Current community channel data. EventContext.previous holds the enabled channel cache's snapshot from before the
+     * update. Fetch explicitly if a decision requires fresh permissions.
      * Updates its enabled channel-cache observation, except a category update invalidates all channels cached for the community.
      * Fluxer retypes a converted channel's threads without thread events for archived ones, so a text or announcement
      * channel update also evicts the channel's cached threads whose type its type cannot hold. Fluxer removes forum tags
@@ -712,7 +798,8 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no threadDelete
      * for them. The channel cache then evicts the threads whose parentId is this channel, and the message cache evicts
      * the messages of every channel in this community that the channel cache does not hold outside those threads,
-     * including messages without community context. Without the channel cache that is every message of the community
+     * including messages without community context. Without the channel cache that is every message of the community.
+     * EventContext.previous holds the enabled channel cache's snapshot of the channel from before the event
      */
     readonly guildChannelDelete: import("./channels.js").GuildChannel
     /** Visible community-channel updates grouped into one batch, without individual guildChannelUpdate events.
@@ -724,12 +811,14 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * Stores the thread, without isNewlyCreated, in the enabled channel cache
      */
     readonly threadCreate: ThreadCreateEvent
-    /** Current thread data after a change such as a rename, archive or lock, without previous values.
-     * Fluxer leaves the bot's membership out of this event. Replaces the thread's enabled channel-cache observation
+    /** Current thread data after a change such as a rename, archive or lock.
+     * Fluxer leaves the bot's membership out of this event. Replaces the thread's enabled channel-cache observation, and
+     * EventContext.previous holds the snapshot it replaced
      */
     readonly threadUpdate: GuildThreadChannel
     /** A thread was deleted. Evicts it from the enabled channel cache and evicts its cached messages, without
-     * generating message deletion events. Deleting a parent channel deletes its threads without this event
+     * generating message deletion events. Deleting a parent channel deletes its threads without this event.
+     * EventContext.previous holds the enabled channel cache's snapshot of the thread from before the event
      */
     readonly threadDelete: ThreadDeletion
     /** The bot's active threads in a community, or in some of its channels, were replaced. Before delivery, the enabled
@@ -744,25 +833,26 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
     readonly threadMembersUpdate: ThreadMembersUpdate
     /** A community role creation observation, not an initial enumeration of roles. Updates the enabled role-cache observation */
     readonly guildRoleCreate: import("./guilds.js").GuildRole
-    /** Current role data, without previous values. Updates the enabled role-cache observation */
+    /** Current role data. Updates the enabled role-cache observation, and EventContext.previous holds the snapshot it replaced */
     readonly guildRoleUpdate: import("./guilds.js").GuildRole
     /** Role updates grouped into one batch, without individual guildRoleUpdate events or a complete role list.
      * Updates the enabled role-cache observations for supplied roles
      */
     readonly guildRoleUpdateBulk: import("./guilds.js").GuildRoleUpdateBulk
-    /** Deleted role's IDs, without its former settings or a guarantee that affected members each produce an update.
-     * Invalidates enabled role and member caches for the community
+    /** Deleted role's IDs, without a guarantee that affected members each produce an update.
+     * Invalidates enabled role and member caches for the community. EventContext.previous holds the enabled role cache's
+     * snapshot of the role from before the event
      */
     readonly guildRoleDelete: import("./guilds.js").RoleReference
     /** A member join observation, not an initial roster or complete community membership view. Updates the enabled member-cache observation */
     readonly guildMemberAdd: import("./guilds.js").GuildMember
     /** Current member data. Fluxer can limit delivery by community size and session visibility, so fetch when current state matters.
-     * Updates the enabled member-cache observation. Before handlers run, invalidates the member's enabled account-cache entry
-     * and affected private-conversation snapshots
+     * Updates the enabled member-cache observation, and EventContext.previous holds the snapshot it replaced. Before
+     * handlers run, invalidates the member's enabled account-cache entry and affected private-conversation snapshots
      */
     readonly guildMemberUpdate: import("./guilds.js").GuildMember
     /** Membership ended, with only community and account IDs supplied. No account lookup or removal-cause inference follows.
-     * Evicts the enabled member-cache entry
+     * Evicts the enabled member-cache entry, and EventContext.previous holds the evicted snapshot
      */
     readonly guildMemberRemove: import("./guilds.js").MemberReference
     /** A delivered presence observation with its custom status, without account data, retained state or automatic member subscriptions */
@@ -780,14 +870,16 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
      * member cache, whichever message fields the client selects
      */
     readonly messageCreate: M
-    /** Message data supplied for an update, not previous-and-current values or a patch to merge.
+    /** Message data supplied for an update, not a patch to merge. EventContext.previous holds the enabled message
+     * cache's snapshot from before the update.
      * Optional metadata may be absent. A non-text change can deliver the same selected values again.
      * Replaces the enabled message-cache observation rather than merging absent metadata from an older snapshot.
      * Also stores the author's member, when Fluxer attached one, in the enabled member cache
      */
     readonly messageUpdate: M
     /** One deleted message's channel and message IDs, plus supplied community ID, text and author ID when available.
-     * Evicts its enabled message-cache entry without reconstructing missing context
+     * Evicts its enabled message-cache entry without reconstructing missing context, and EventContext.previous holds the
+     * evicted message
      */
     readonly messageDelete: MessageDeletion
     /** Deleted message IDs grouped by channel, with community context only when supplied.

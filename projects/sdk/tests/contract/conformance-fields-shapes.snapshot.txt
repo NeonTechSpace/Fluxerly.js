@@ -21,7 +21,7 @@ operation|default|Channels.setPermissionOverwrite|(channelId: string, input: Per
 operation|default|Client.connect|(options?: OperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ConnectError>
 operation|default|Client.diagnostics|() => ClientDiagnostics
 operation|default|Client.observeState|(listener: (state: ConnectionState) => unknown) => StateObserver
-operation|default|Client.on|<K extends EventName>(event: K, handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext) => unknown, options?: EventHandlerOptions<EventMap<M>[K]> | undefined) => Subscription
+operation|default|Client.on|<K extends EventName>(event: K, handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext<K, M>) => unknown, options?: EventHandlerOptions<EventMap<M>[K]> | undefined) => Subscription
 operation|default|Client.run|(options?: OperationOptions | undefined) => ResultAsync<void, CancelledError | ConfigurationError | ConnectError>
 operation|default|Client.schedule|(task: (signal: AbortSignal) => unknown, options?: ScheduleOptions | undefined) => ScheduledTask
 operation|default|Client.shardIdForGuild|(guildId: string) => number | undefined
@@ -226,7 +226,7 @@ operation|native|Channels.setPermissionOverwrite|(channelId: string, input: Perm
 operation|native|Client.connect|() => Effect<void, ConnectError, never>
 operation|native|Client.diagnostics|() => ClientDiagnostics
 operation|native|Client.observeState|() => Stream<ConnectionState, never, never>
-operation|native|Client.on|<E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(event: K, handler: (event: EventMap<M>[K], context: EventContext) => Effect<unknown, E, R>, options?: EventHandlerOptions<E2, R2, EventMap<M>[K]> | undefined) => Effect<Subscription, never, R | R2 | Scope>
+operation|native|Client.on|<E, R, E2 = never, R2 = never, K extends EventName = "messageCreate">(event: K, handler: (event: EventMap<M>[K], context: EventContext<K, M>) => Effect<unknown, E, R>, options?: EventHandlerOptions<E2, R2, EventMap<M>[K]> | undefined) => Effect<Subscription, never, R | R2 | Scope>
 operation|native|Client.run|() => Effect<void, ConnectError, never>
 operation|native|Client.schedule|<E = never, R = never>(task: Effect<unknown, E, R>, options?: ScheduleOptions | undefined) => Effect<ScheduledTask, never, Exclude<R, Scope>>
 operation|native|Client.shardIdForGuild|(guildId: string) => number | undefined
@@ -421,6 +421,7 @@ member|default|Client.gatewayLatencyMs|number | null
 member|default|Client.guilds|Guilds
 member|default|Client.instance|Instance
 member|default|Client.invites|Invites
+member|default|Client.lastReceipt|number
 member|default|Client.logging|ClientLogging
 member|default|Client.members|Members
 member|default|Client.messages|Messages<M>
@@ -449,6 +450,7 @@ member|native|Client.gatewayLatencyMs|number | null
 member|native|Client.guilds|Guilds
 member|native|Client.instance|Instance
 member|native|Client.invites|Invites
+member|native|Client.lastReceipt|number
 member|native|Client.logging|ClientLogging
 member|native|Client.members|Members
 member|native|Client.messages|Messages<M>
@@ -1448,6 +1450,7 @@ field|shared|EntranceSoundPlay.url|string|optional=false|nullable=false
 field|shared|EntranceSoundPlay.userId|string|optional=false|nullable=false
 field|shared|EventBufferOptions.maxPendingBytes|number | undefined|optional=true|nullable=false
 field|shared|EventBufferOptions.maxPendingMessages|number | undefined|optional=true|nullable=false
+field|shared|EventContext.previous|PreviousSnapshot<K, M> | undefined|optional=true|nullable=false
 field|shared|EventContext.receipt|number|optional=false|nullable=false
 field|shared|EventContext.receivedBytes|number|optional=false|nullable=false
 field|shared|EventContext.sessionEpoch|number|optional=false|nullable=false
@@ -1461,11 +1464,11 @@ field|shared|EventHandlerOptions.overflow|"dropNewest" | "dropOldest" | "stop" |
 field|shared|EventHandlerOptions.partition|"channel" | "guild" | ((event: T) => string | undefined) | undefined|optional=true|nullable=false
 field|default|EventHandlerOptions.partitionReady|((key: string, signal: AbortSignal) => unknown) | undefined|optional=true|nullable=false
 field|native|EventHandlerOptions.partitionReady|((key: string) => Effect<unknown, E, R>) | undefined|optional=true|nullable=false
-field|shared|EventInvocation.context|EventContext|optional=false|nullable=false
+field|shared|EventInvocation.context|EventContext<"callCreate", M> | EventContext<"callDelete", M> | EventContext<"callUpdate", M> | EventContext<"channelPinsUpdate", M> | EventContext<"directMessageCreate", M> | EventContext<"directMessageDelete", M> | EventContext<"directMessageRecipientAdd", M> | EventContext<"directMessageRecipientRemove", M> | EventContext<"directMessageUpdate", M> | EventContext<"entranceSoundPlay", M> | EventContext<"guildAuditLogEntryCreate", M> | EventContext<"guildBanAdd", M> | EventContext<"guildBanRemove", M> | EventContext<"guildChannelCreate", M> | EventContext<"guildChannelDelete", M> | EventContext<"guildChannelUpdate", M> | EventContext<"guildChannelUpdateBulk", M> | EventContext<"guildCreate", M> | EventContext<"guildDelete", M> | EventContext<"guildEmojisUpdate", M> | EventContext<"guildHealthUpdate", M> | EventContext<"guildMemberAdd", M> | EventContext<"guildMemberRemove", M> | EventContext<"guildMemberUpdate", M> | EventContext<"guildRoleCreate", M> | EventContext<"guildRoleDelete", M> | EventContext<"guildRoleUpdate", M> | EventContext<"guildRoleUpdateBulk", M> | EventContext<"guildStickersUpdate", M> | EventContext<"guildUpdate", M> | EventContext<"inviteCreate", M> | EventContext<"inviteDelete", M> | EventContext<"messageCreate", M> | EventContext<"messageDelete", M> | EventContext<"messageDeleteBulk", M> | EventContext<"messageReactionAdd", M> | EventContext<"messageReactionAddMany", M> | EventContext<"messageReactionRemove", M> | EventContext<"messageReactionRemoveAll", M> | EventContext<"messageReactionRemoveEmoji", M> | EventContext<"messageUpdate", M> | EventContext<"presenceUpdate", M> | EventContext<"presenceUpdateBulk", M> | EventContext<"raw", M> | EventContext<"threadCreate", M> | EventContext<"threadDelete", M> | EventContext<"threadListSync", M> | EventContext<"threadMembersUpdate", M> | EventContext<"threadUpdate", M> | EventContext<"typingStart", M> | EventContext<"userUpdate", M> | EventContext<"voiceStateSnapshot", M> | EventContext<"voiceStateUpdate", M> | EventContext<"webhooksUpdate", M>|optional=false|nullable=false
 field|shared|EventInvocation.event|"callCreate" | "callDelete" | "callUpdate" | "channelPinsUpdate" | "directMessageCreate" | "directMessageDelete" | "directMessageRecipientAdd" | "directMessageRecipientRemove" | "directMessageUpdate" | "entranceSoundPlay" | "guildAuditLogEntryCreate" | "guildBanAdd" | "guildBanRemove" | "guildChannelCreate" | "guildChannelDelete" | "guildChannelUpdate" | "guildChannelUpdateBulk" | "guildCreate" | "guildDelete" | "guildEmojisUpdate" | "guildHealthUpdate" | "guildMemberAdd" | "guildMemberRemove" | "guildMemberUpdate" | "guildRoleCreate" | "guildRoleDelete" | "guildRoleUpdate" | "guildRoleUpdateBulk" | "guildStickersUpdate" | "guildUpdate" | "inviteCreate" | "inviteDelete" | "messageCreate" | "messageDelete" | "messageDeleteBulk" | "messageReactionAdd" | "messageReactionAddMany" | "messageReactionRemove" | "messageReactionRemoveAll" | "messageReactionRemoveEmoji" | "messageUpdate" | "presenceUpdate" | "presenceUpdateBulk" | "raw" | "threadCreate" | "threadDelete" | "threadListSync" | "threadMembersUpdate" | "threadUpdate" | "typingStart" | "userUpdate" | "voiceStateSnapshot" | "voiceStateUpdate" | "webhooksUpdate"|optional=false|nullable=false
 field|shared|EventInvocation.payload|CallCreate | CallDelete | CallUpdate | ChannelPinsUpdate | DirectMessageChannel | DirectMessageRecipientChange | EntranceSoundPlay | Guild | GuildAuditLogEntryCreate | GuildChannel | GuildChannelUpdateBulk | GuildCreate | GuildDeletion | GuildEmojisUpdate | GuildHealthUpdate | GuildMember | GuildRole | GuildRoleUpdateBulk | GuildStickersUpdate | GuildThreadChannel | InviteDeleteEvent | InviteMetadata | M | MemberReference | MessageBulkDeletion | MessageDeletion | MessageReaction | MessageReactionBatch | MessageReactionEmojiRemoval | PresenceUpdate | PresenceUpdateBulk | RawDispatch | ReactionTarget | RoleReference | ThreadCreateEvent | ThreadDeletion | ThreadListSync | ThreadMembersUpdate | TypingStart | User | VoiceState | VoiceStateSnapshot | WebhooksUpdate | { readonly id: string; }|optional=false|nullable=false
 field|shared|EventInvocation.subscriptionId|string|optional=false|nullable=false
-field|shared|EventInvocationOf.context|EventContext|optional=false|nullable=false
+field|shared|EventInvocationOf.context|EventContext<K, M>|optional=false|nullable=false
 field|shared|EventInvocationOf.event|K|optional=false|nullable=false
 field|shared|EventInvocationOf.payload|EventMap<M>[K]|optional=false|nullable=false
 field|shared|EventInvocationOf.subscriptionId|string|optional=false|nullable=false
@@ -2750,6 +2753,18 @@ field|shared|PresenceUpdate.status|ObservedPresenceStatus|optional=false|nullabl
 field|shared|PresenceUpdate.userId|string|optional=false|nullable=false
 field|shared|PresenceUpdateBulk.guildId|string|optional=false|nullable=false
 field|shared|PresenceUpdateBulk.presences|readonly PresenceUpdate[]|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildChannelDelete|GuildChannel|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildChannelUpdate|GuildChannel|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildDelete|Guild|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildMemberRemove|GuildMember|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildMemberUpdate|GuildMember|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildRoleDelete|GuildRole|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildRoleUpdate|GuildRole|optional=false|nullable=false
+field|shared|PreviousSnapshots.guildUpdate|Guild|optional=false|nullable=false
+field|shared|PreviousSnapshots.messageDelete|M|optional=false|nullable=false
+field|shared|PreviousSnapshots.messageUpdate|M|optional=false|nullable=false
+field|shared|PreviousSnapshots.threadDelete|GuildThreadChannel|optional=false|nullable=false
+field|shared|PreviousSnapshots.threadUpdate|GuildThreadChannel|optional=false|nullable=false
 field|shared|RateLimitError._tag|"RateLimitError"|optional=false|nullable=false
 field|shared|RateLimitError.code|string|optional=false|nullable=false
 field|shared|RateLimitError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false

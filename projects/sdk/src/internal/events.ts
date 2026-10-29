@@ -31,6 +31,7 @@ import type {
     HandlerOptions,
     EventMap,
     EventName,
+    PreviousSnapshot,
 } from "#sdk/events"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import {
@@ -103,6 +104,11 @@ interface Origin {
     readonly sessionEpoch: number
     /** The client-wide number of the event, the same for every handler that receives it */
     readonly receipt: number
+    /**
+     * The cached snapshot the event replaced, shared by every handler. A queued event keeps it alive until delivered or
+     * dropped, and it is not counted against maxPendingBytes, which counts received frame bytes
+     */
+    readonly previous?: unknown
 }
 
 /** One admitted event with the shard, its session epoch, receipt and the received frame size it arrived with */
@@ -231,12 +237,13 @@ export function nativeMiddleware(
 }
 
 /** Frozen delivery details for a handler */
-function eventContext(delivery: Delivery<unknown>): EventContext {
+function eventContext<K extends EventName, M extends MessageCore>(delivery: Delivery<unknown>): EventContext<K, M> {
     return Object.freeze({
         shardId: delivery.shardId,
         sessionEpoch: delivery.sessionEpoch,
         receipt: delivery.receipt,
         receivedBytes: delivery.bytes,
+        previous: delivery.previous as PreviousSnapshot<K, M>,
     })
 }
 
@@ -1145,7 +1152,18 @@ export class EventBus<M extends MessageCore = Message> {
         })
         return source
     }
-    offer<K extends EventName>(event: K, message: EventMap<M>[K], bytes: number, shardId = 0, sessionEpoch = 0) {
+    /** The receipt of the most recently accepted event, 0 before any */
+    get lastReceipt() {
+        return this.#receipts
+    }
+    offer<K extends EventName>(
+        event: K,
+        message: EventMap<M>[K],
+        bytes: number,
+        shardId = 0,
+        sessionEpoch = 0,
+        previous?: PreviousSnapshot<K, M>,
+    ) {
         const reaction =
             event === "messageReactionAdd" ||
             event === "messageReactionAddMany" ||
@@ -1169,7 +1187,8 @@ export class EventBus<M extends MessageCore = Message> {
         for (const offer of reactionCollectors ?? [])
             offer(reaction!, bytes, shardId, event === "messageReactionRemove")
         for (const offer of messageCollectors ?? []) offer(message as M, bytes, shardId)
-        const origin: Origin = { shardId, sessionEpoch, receipt }
+        const origin: Origin =
+            previous === undefined ? { shardId, sessionEpoch, receipt } : { shardId, sessionEpoch, receipt, previous }
         for (const source of this.#sources[event]) source.offer(message, bytes, origin)
     }
     stop() {
@@ -1237,7 +1256,7 @@ export class EventBus<M extends MessageCore = Message> {
     on<K extends EventName, E, R, E2, R2>(
         event: K,
         subscription: {
-            readonly handler: (message: EventMap<M>[K], context: EventContext) => Effect.Effect<unknown, E, R>
+            readonly handler: (message: EventMap<M>[K], context: EventContext<K, M>) => Effect.Effect<unknown, E, R>
             readonly options?: HandlerOptions<EventMap<M>[K]> | undefined
             readonly onError?: ((report: InternalReport) => Effect.Effect<unknown, E2, R2>) | undefined
             readonly scope: Scope.Scope
@@ -1340,7 +1359,7 @@ export class EventBus<M extends MessageCore = Message> {
                 // Run the middleware registered when this invocation starts, first registered outermost, around the handler
                 const invoke = (
                     message: EventMap<M>[K],
-                    context: EventContext,
+                    context: EventContext<K, M>,
                     outcome: Outcome,
                 ): Effect.Effect<unknown, unknown, R> => {
                     const chain = bus.#middleware
@@ -1468,7 +1487,7 @@ export class EventBus<M extends MessageCore = Message> {
                 const worker = (delivery: Delivery<EventMap<M>[K]>) =>
                     Effect.withFiber((fiber) => {
                         const { message } = delivery
-                        const context = eventContext(delivery)
+                        const context = eventContext<K, M>(delivery)
                         const outcome: Outcome = { command, failure: undefined }
                         const startedAt = observing(bus.logging?.()) ? performance.now() : undefined
                         // Rejection records of this invocation wait for its outcome, so a failure is logged once

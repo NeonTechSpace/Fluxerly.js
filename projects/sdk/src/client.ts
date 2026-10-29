@@ -158,7 +158,9 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * Fluxer does not replay thread list changes, so a resumed shard's threads are cleared.
      * Resume sends no community snapshots, so a process that resumes a session from sharding.sessions refills the enabled
      * community, role and channel caches through REST once every shard is ready, unless sharding.refillCaches is false.
-     * When a snapshot lacks enough community context to identify its shard, the SDK clears it conservatively
+     * When a snapshot lacks enough community context to identify its shard, the SDK clears it conservatively.
+     * Enabled message, member, role, channel and community caches also give update and delete events the snapshot they
+     * replaced, as EventContext.previous
      */
     readonly cache?: {
         /** Cache public account profiles from explicit reads and complete user events, not partial message authors.
@@ -574,6 +576,32 @@ export interface ClientDiagnostics {
 export interface ClientState {
     /** Current connection state, controlled by the SDK rather than the consumer */
     readonly state: ConnectionState
+    /**
+     * The receipt of the most recently accepted event, as EventContext.receipt numbers events, or 0 before the first.
+     * It is read live, counts every event the client accepted whether or not a handler receives it, and is not reset
+     * by reconnects. Events refused during a draining shutdown get no receipt.
+     * Work that is not an event, such as a timer or a command's follow-up, can use it to find its place in the event
+     * order: Record it when the work starts, and treat any event whose receipt is larger as newer than the work, such as
+     * a later edit that makes the work's result stale.
+     * Under a supervisor each child process numbers its own events, so values from different processes cannot be
+     * compared
+     *
+     * @example
+     * ```ts
+     * import type { Client } from "@neontechspace/fluxerly"
+     * const edited = new Map<string, number>()
+     * export function trackEdits(client: Client) {
+     *     return client.on("messageUpdate", (message, _signal, context) => void edited.set(message.id, context.receipt))
+     * }
+     * export async function summarize(client: Client, messageId: string, work: () => Promise<string>) {
+     *     const startedAt = client.lastReceipt
+     *     const summary = await work()
+     *     // An edit accepted after the work started makes the summary stale
+     *     return (edited.get(messageId) ?? 0) > startedAt ? undefined : summary
+     * }
+     * ```
+     */
+    readonly lastReceipt: number
     /**
      * The slowest current heartbeat round-trip time in milliseconds across this client's gateway shards.
      * Null unless the client is Connected and every local shard has a current heartbeat acknowledgement.

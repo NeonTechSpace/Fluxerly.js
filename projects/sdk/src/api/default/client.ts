@@ -236,7 +236,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Observe the subscription's outcome as well as the client's run or waitForClose outcome.
      * Registration misuse, such as an unknown event name, fails with a suggested correction
      *
-     * Each invocation also receives an EventContext with the receiving shard, its session epoch and the received frame size.
+     * Each invocation also receives an EventContext with the receiving shard, its session epoch, its receipt, the received
+     * frame size and, for an event that changes or removes a cached entity, the previous snapshot of the enabled cache.
      * Event middleware registered with use runs around every handler invocation, including those of subscriptions registered earlier
      *
      * @remarks
@@ -266,7 +267,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      */
     on<K extends EventName>(
         event: K,
-        handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext) => unknown,
+        handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext<K, M>) => unknown,
         options?: EventHandlerOptions<EventMap<M>[K]>,
     ): Subscription
     /**
@@ -677,7 +678,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
             logging: namespaces.logging,
             on: <K extends EventName>(
                 event: K,
-                handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext) => unknown,
+                handler: (event: EventMap<M>[K], signal: AbortSignal, context: EventContext<K, M>) => unknown,
                 options?: EventHandlerOptions<EventMap<M>[K]>,
             ) => {
                 return register(
@@ -761,6 +762,9 @@ export function createClient<const F extends MessageFields | undefined = undefin
             diagnostics: () => owner.diagnostics(),
             get state() {
                 return owner.state
+            },
+            get lastReceipt() {
+                return owner.events.lastReceipt
             },
             get gatewayLatencyMs() {
                 return owner.gatewayLatencyMs
