@@ -318,10 +318,10 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
 
 test("Upstream drift runs daily with serialized read-only observations and retains failed comparisons", () => {
     const workflow = workflows["upstream-drift.yml"]
-    const [minute, hour, day, month, weekday] = workflow.on.schedule[0].cron.split(" ")
-    assert.deepEqual([day, month, weekday], ["*", "*", "*"])
-    assert.ok(Number(minute) > 0 && Number(minute) < 60 && Number(minute) !== 30)
-    assert.ok(Number(hour) >= 0 && Number(hour) < 24)
+    const [schedule] = workflow.on.schedule
+    assert.equal(schedule.cron, "0 0 * * *")
+    // Midnight in Berlin all year, as the nightly schedule keeps its Berlin times
+    assert.equal(schedule.timezone, "Europe/Berlin")
     assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"))
     assert.deepEqual(workflow.permissions, { contents: "read", actions: "read" })
     assertSerialized(workflow.concurrency, "upstream-drift.yml")
