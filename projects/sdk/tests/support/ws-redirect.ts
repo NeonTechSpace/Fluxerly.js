@@ -1,4 +1,5 @@
 import type * as WsModule from "ws"
+import { isLoopbackHost } from "./loopback.js"
 
 export interface WsTarget {
     /**
@@ -22,7 +23,7 @@ export const wsTarget: WsTarget = { url: "", sockets: [], requested: [] }
 
 function isLoopback(url: string | URL): boolean {
     try {
-        return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname)
+        return isLoopbackHost(new URL(url).hostname)
     } catch {
         // An unparsable address is not a loopback fixture
         return false

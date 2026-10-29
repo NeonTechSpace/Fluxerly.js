@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import type { Socket } from "node:net"
 import type { Duplex } from "node:stream"
+import { fixtureHost } from "../loopback.js"
 
 /** A constrained local fixture for unfragmented text and close frames, not a WebSocket server implementation */
 function frame(opcode: number, payload: Buffer): Buffer {
@@ -68,9 +69,10 @@ export async function startServer(options: { holdHandshake?: boolean; holdClose?
             }
         })
     })
+    const host = await fixtureHost()
     await new Promise<void>((resolve, reject) => {
         server.once("error", reject)
-        server.listen(0, "127.0.0.1", () => {
+        server.listen(0, host, () => {
             server.removeListener("error", reject)
             resolve()
         })
@@ -79,8 +81,8 @@ export async function startServer(options: { holdHandshake?: boolean; holdClose?
     if (!address || typeof address === "string") throw new Error("Expected a local TCP address")
     let cleanup: Promise<void> | undefined
     return {
-        httpUrl: `http://127.0.0.1:${address.port}`,
-        socketUrl: `ws://127.0.0.1:${address.port}`,
+        httpUrl: `http://${host}:${address.port}`,
+        socketUrl: `ws://${host}:${address.port}`,
         upgraded: upgraded.promise,
         receivedClose: receivedClose.promise,
         peerClosed: peerClosed.promise,

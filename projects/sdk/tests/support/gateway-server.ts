@@ -3,6 +3,7 @@ import type { Server } from "node:http"
 import { onTestFinished } from "vitest"
 import { WebSocketServer, type WebSocket } from "ws"
 import { Opcode as GatewayOpcode } from "../../src/internal/protocol/gateway.js"
+import { fixtureHost } from "./loopback.js"
 import { wsTarget } from "./ws-redirect.js"
 
 /** A command frame the fixture received from a client, with the index of the connection that sent it */
@@ -68,11 +69,11 @@ export interface GatewayServer {
 export async function startGatewayServer(options: GatewayServerOptions = {}): Promise<GatewayServer> {
     const gateway = options.server
         ? new WebSocketServer({ server: options.server })
-        : new WebSocketServer({ port: 0, host: "127.0.0.1" })
+        : new WebSocketServer({ port: 0, host: await fixtureHost() })
     if (!options.server) await once(gateway, "listening")
     const address = (options.server ?? gateway).address()
     if (!address || typeof address === "string") throw new Error("Missing gateway fixture port")
-    const url = `ws://127.0.0.1:${address.port}`
+    const url = `ws://${address.address}:${address.port}`
     const sockets: WebSocket[] = []
     const commands: ReceivedCommand[] = []
     const clientCloses: { readonly connection: number; readonly code: number }[] = []

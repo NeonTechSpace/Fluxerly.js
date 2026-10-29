@@ -112,9 +112,11 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
         await vi.advanceTimersByTimeAsync(400)
         watching = true
         barrier.release()
-        // After the held child reports its send, the next grant waits on the parent's only new timer
-        await realTimeUntil(() => armed.length > 0)
-        await vi.advanceTimersByTimeAsync(armed[0]!)
+        // After the held child reports its send, the next grant waits on a spacing timer of at most minimumSpacingMs.
+        // Other parent timers, such as acknowledgement or diagnostics deadlines, are longer and can be armed first, so
+        // advancing by one of them would also expire the held child's acknowledgement before its report arrives
+        await realTimeUntil(() => armed.some((delay) => delay <= minimumSpacingMs))
+        await vi.advanceTimersByTimeAsync(armed.find((delay) => delay <= minimumSpacingMs)!)
         await realTimeUntil(() => identifies.length === 2)
         // The second Identify follows the first actual send, not its grant, by the full spacing
         expect(identifies).toEqual([400, 400 + minimumSpacingMs])

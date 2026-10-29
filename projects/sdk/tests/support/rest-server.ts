@@ -1,6 +1,7 @@
 import { once } from "node:events"
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http"
 import { onTestFinished } from "vitest"
+import { fixtureHost } from "./loopback.js"
 
 /** One request received by a loopback REST fixture */
 export interface RecordedRequest {
@@ -21,7 +22,7 @@ export type RouteHandler = (request: RecordedRequest, response: ServerResponse) 
 
 export interface RestServer {
     readonly server: Server
-    /** http://127.0.0.1:port */
+    /** http://host:port on this fixture's own loopback address */
     readonly origin: string
     /** Every received request in arrival order */
     readonly requests: RecordedRequest[]
@@ -73,7 +74,8 @@ export async function startRestServer(
         if (handler) return handler(request, response)
         response.writeHead(404).end()
     })
-    server.listen(0, "127.0.0.1")
+    const host = await fixtureHost()
+    server.listen(0, host)
     await once(server, "listening")
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing loopback fixture port")
@@ -83,7 +85,7 @@ export async function startRestServer(
     })
     return {
         server,
-        origin: `http://127.0.0.1:${address.port}`,
+        origin: `http://${host}:${address.port}`,
         requests,
         requestsTo: (key) => requests.filter((request) => `${request.method} ${request.path}` === key),
     }
