@@ -49,6 +49,8 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
  * The rest client option changes these limits.
  * Each remote call has a total deadline of rest.defaultTimeoutMs by default (30,000 ms unless configured). Queue, retry and rate-limit waits count toward it. Cleanup is awaited afterward
  *
+ * Text with a lone surrogate, half of a character such as an emoji left by `slice`, fails locally with reason input, because Fluxer answers it with HTTP 503 and stores nothing. The text.truncate and text.split helpers and `toWellFormed()` clean it
+ *
  * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers, fetchHasReaction and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
  * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline. When a retry could not start before the deadline, the received failure is returned at once.
  * A retry reads the same target and query, but does not guarantee an unchanged snapshot. Other rejections and malformed successes never retry.

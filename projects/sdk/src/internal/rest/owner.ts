@@ -112,6 +112,9 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Longest single timer delay, and the largest accepted timeoutMs */
 const maximumTimerMs = 2_147_483_647
+// JSON.stringify writes a lone surrogate as an escape and a valid pair as its own characters, so in the JSON the SDK
+// encodes, such an escape after an even run of backslashes is a lone surrogate
+const loneSurrogateEscape = /(?<!\\)(?:\\\\)*\\ud[89a-f][0-9a-f]{2}/
 /** Bounded retries for a GET after a transient failure */
 const maximumReadRetries = 2
 /** Minimum backoff before the first and later read retries, before jitter */
@@ -1587,6 +1590,15 @@ export class RestOwner<M extends MessageCore = Message> {
         const runtime = this.#runtime
         return Effect.suspend((): Effect.Effect<A, RestFailure | ClientClosedError> => {
             if (runtime.closed) return Effect.fail(closedBeforeSend())
+            // Fluxer answers a lone surrogate with a 503 page and stores nothing, which would look like an outage
+            if (!request.callerDescribed && request.body && loneSurrogateEscape.test(request.body.json))
+                return Effect.fail(
+                    localInputFailure(
+                        "input",
+                        "format",
+                        "Text must not contain a lone surrogate, half of a character such as an emoji. Clean it with text.truncate, text.split or toWellFormed()",
+                    ),
+                )
             let requested: ReturnType<typeof deadlineOption>
             let unsupported: RestFailure | undefined
             try {

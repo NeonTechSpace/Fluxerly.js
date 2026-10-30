@@ -55,6 +55,8 @@ import type {
  * The rest client option changes these limits.
  * These limits apply across the shards assigned to this client
  *
+ * Text with a lone surrogate, half of a character such as an emoji left by `slice`, fails locally with reason input, because Fluxer answers it with HTTP 503 and stores nothing. The text.truncate and text.split helpers and `toWellFormed()` clean it
+ *
  * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers, fetchHasReaction and fetchPins methods retry transport failures and HTTP 500, 502, 503 or 504 at most twice.
  * The retry delays are 125–250 ms, then 250–500 ms, or a longer valid Retry-After.
  * Retries use the same target and query and never reset the deadline. When a retry could not start before the deadline, the received failure is returned at once.

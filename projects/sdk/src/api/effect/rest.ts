@@ -16,6 +16,7 @@ export interface RestRequests {
      * out and sent again while the deadline allows. A GET is also retried at most twice after a network error, including
      * a connection lost while the response body arrives, or HTTP 500, 502, 503 or 504. Another method is never sent
      * again after an uncertain outcome.
+     * The body is sent as given, including a lone surrogate, which Fluxer answers with HTTP 503.
      * Invalid input fails with RestRequestError reason input before any request, a non-2xx status fails with its status
      * and sanitized apiError, and closure fails with ClientClosedError. Message and resource caches are not updated.
      * Percent-encoded unreserved letters cannot bypass the reserved /v1 prefix or token-webhook route checks, which remain case-sensitive.

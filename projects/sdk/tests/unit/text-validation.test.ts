@@ -97,7 +97,7 @@ async function webhookClients(mode: Mode): Promise<WebhookClients> {
 
 function exactUnits(maximum: number): string {
     if (maximum < 4) return "a".repeat(maximum)
-    return `${"a".repeat(maximum - 4)}e\u0301\ud800a`
+    return `${"a".repeat(maximum - 4)}e\u0301ba`
 }
 
 function paddedMaximum(maximum: number): string {
@@ -113,7 +113,7 @@ function astralOver(maximum: number): string {
 }
 
 function customNameAtRawLimit(): string {
-    const core = `${"a".repeat(95)}\ufe0f\ud800   bc`
+    const core = `${"a".repeat(95)}\ufe0fb   bc`
     return `  ${"\u200d\u200e".repeat(4_947)}${core}  `
 }
 
