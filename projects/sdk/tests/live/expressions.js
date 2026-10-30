@@ -5,7 +5,7 @@
 // and its absence verified
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { crc32, deflateSync } from "node:zlib"
+import { solidPngBase64 } from "./support/solid-png.js"
 import { Effect, Scope, Exit } from "effect"
 import {
     acquireLock,
@@ -39,30 +39,6 @@ async function expressionEvent(kind, predicate, after = -1) {
     throw new Error("Timed out waiting for test-owned expression event")
 }
 const api = createSandboxApi({ fetch: rawFetch, token: () => token, accept: successOrNotFound })
-
-// Authored solid-color 128px PNG; no remote image or user file enters the fixture
-function image() {
-    const chunk = (name, data) => {
-        const bytes = Buffer.concat([Buffer.from(name), data])
-        const length = Buffer.alloc(4),
-            checksum = Buffer.alloc(4)
-        length.writeUInt32BE(data.length)
-        checksum.writeUInt32BE(crc32(bytes))
-        return Buffer.concat([length, bytes, checksum])
-    }
-    const header = Buffer.alloc(13)
-    header.writeUInt32BE(128, 0)
-    header.writeUInt32BE(128, 4)
-    header[8] = 8
-    header[9] = 6
-    const pixels = Buffer.alloc(128 * 513)
-    for (let y = 0; y < 128; y++)
-        for (let x = 0; x < 128; x++) {
-            const offset = y * 513 + 1 + x * 4
-            pixels.set([40, 130, 220, 255], offset)
-        }
-    return `data:image/png;charset=utf-8;base64,${Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(pixels)), chunk("IEND", Buffer.alloc(0))]).toString("base64")}`
-}
 
 async function cleanup() {
     if (!verified || !journal) return
@@ -207,7 +183,7 @@ try {
             const created = await value(
                 client[kind].create(guildId, {
                     name: entry.name,
-                    image: image(),
+                    image: `data:image/png;charset=utf-8;base64,${solidPngBase64()}`,
                     ...(kind === "stickers" ? { description: "SDK live fixture", tags: ["test"] } : {}),
                 }),
             )
@@ -323,7 +299,7 @@ try {
             save()
             const batch = await value(
                 client[kind].createMany(guildId, [
-                    { name: good.name, image: image() },
+                    { name: good.name, image: `data:image/png;charset=utf-8;base64,${solidPngBase64()}` },
                     { name: bad.name, image: "bm90IGFuIGltYWdl" },
                 ]),
             )

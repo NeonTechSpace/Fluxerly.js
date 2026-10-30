@@ -129,6 +129,8 @@ export interface WireRole {
     readonly hoist: boolean
     /** Whether anyone may mention the role */
     readonly mentionable: boolean
+    /** Image icon hash, or null when the role has no image icon */
+    readonly icon: string | null
     /** Unicode emoji shown with the role, or null when unset */
     readonly unicode_emoji: string | null
 }
@@ -631,6 +633,7 @@ export function createFixtures(): Fixtures {
                 permissions: "0",
                 hoist: false,
                 mentionable: false,
+                icon: null,
                 unicode_emoji: null,
             },
             overrides,

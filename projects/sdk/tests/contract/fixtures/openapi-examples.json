@@ -1,9 +1,9 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "4e38842557d7231fe0a11338812141583fe88b69",
+        "commit": "b80ae44b7d629cc2770a0cf27d622e6e0563760d",
         "path": "fluxer_api/src/api/openapi/openapi.json",
-        "sha256": "6acd961a54313f9c798d235ad3363c584173f9844d4588389ad43d374690088e"
+        "sha256": "d65ba1b485ac2f00b2eec4e5c9278473720a7dbccf026731a0284516339f615b"
     },
     "factsSha256": "5bf75bdd8f429eca8e6a8e8c43440e0b0afbab72e1f0f8d899b038be6a7444bd",
     "schemas": {
@@ -5416,6 +5416,7 @@
                             "permissions": "33787032395841535",
                             "hoist": true,
                             "mentionable": true,
+                            "icon": "icon",
                             "unicode_emoji": "unicode_emoji"
                         }
                     ],
@@ -5595,6 +5596,7 @@
                             "permissions": "33787032395841535",
                             "hoist": true,
                             "mentionable": true,
+                            "icon": null,
                             "unicode_emoji": null
                         }
                     ],
@@ -5775,6 +5777,7 @@
                                 "permissions": "33787032395841535",
                                 "hoist": true,
                                 "mentionable": true,
+                                "icon": "icon",
                                 "unicode_emoji": "unicode_emoji"
                             }
                         ],
@@ -5959,6 +5962,7 @@
                                 "permissions": "33787032395841535",
                                 "hoist": true,
                                 "mentionable": true,
+                                "icon": null,
                                 "unicode_emoji": null
                             }
                         ],
@@ -6357,7 +6361,9 @@
                     "position": 0,
                     "permissions": "0",
                     "hoist": false,
-                    "mentionable": false
+                    "mentionable": false,
+                    "icon": "icon",
+                    "unicode_emoji": "unicode_emoji"
                 }
             },
             {
@@ -6371,6 +6377,7 @@
                     "permissions": "33787032395841535",
                     "hoist": true,
                     "mentionable": true,
+                    "icon": "icon",
                     "unicode_emoji": "unicode_emoji"
                 }
             },
@@ -6385,6 +6392,7 @@
                     "permissions": "33787032395841535",
                     "hoist": true,
                     "mentionable": true,
+                    "icon": null,
                     "unicode_emoji": null
                 }
             }
@@ -6403,6 +6411,7 @@
                         "permissions": "33787032395841535",
                         "hoist": true,
                         "mentionable": true,
+                        "icon": "icon",
                         "unicode_emoji": "unicode_emoji"
                     }
                 ]
@@ -6419,6 +6428,7 @@
                         "permissions": "33787032395841535",
                         "hoist": true,
                         "mentionable": true,
+                        "icon": null,
                         "unicode_emoji": null
                     }
                 ]

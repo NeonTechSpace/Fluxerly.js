@@ -751,7 +751,11 @@ export interface GuildRole extends RoleReference {
     readonly mentionable: boolean
     /** Separate member-list ordering, preserving absent versus null */
     readonly hoistPosition?: number | null
-    /** Role emoji, preserving absent versus null */
+    /** Image icon hash, not an image URL. Use assets.roleIcon for its URL. Null means no image icon, and omission means unavailable.
+     * A role has at most one of icon and unicodeEmoji
+     */
+    readonly icon?: string | null
+    /** Unicode emoji shown as the role's icon. Null means no emoji, and omission means unavailable */
     readonly unicodeEmoji?: string | null
 }
 
@@ -770,6 +774,14 @@ export interface RoleCreate {
     readonly color?: number
     /** Bigint from 0n through 9_223_372_036_854_775_807n, default 0n: Unlike raw Fluxer, never inherit everyone's grants implicitly. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
     readonly permissions?: bigint
+    /** Image data URI for the role's icon, or null for none. Fluxer accepts a still image of at most 256 KiB and from 32 through
+     * 1024 pixels on each side. It cannot be combined with an emoji or iconSourceRoleId
+     */
+    readonly icon?: string | null
+    /** A single Unicode emoji to show as the role's icon, or null for none. Fluxer refuses text and more than one emoji */
+    readonly unicodeEmoji?: string | null
+    /** ID of a role in this community whose icon the new role copies. An image is stored again, so the copy outlives the source */
+    readonly iconSourceRoleId?: string
 }
 
 /** Change the name, grants or display settings of an existing role.
@@ -793,6 +805,12 @@ export interface RoleEdit {
     readonly hoistPosition?: number | null
     /** Allow anyone to mention this role */
     readonly mentionable?: boolean
+    /** Image data URI for the role's icon, under the same limits as RoleCreate.icon, or null to remove the image.
+     * Setting an image replaces an emoji icon, and both together fail
+     */
+    readonly icon?: string | null
+    /** A single Unicode emoji to show as the role's icon, or null to remove it. Setting an emoji replaces an image icon */
+    readonly unicodeEmoji?: string | null
 }
 
 /**

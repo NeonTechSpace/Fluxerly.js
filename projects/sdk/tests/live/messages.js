@@ -35,6 +35,7 @@ import {
 import { closeScenarioScope } from "./support/scenario-scope.js"
 import { createOutcomeReporter } from "./support/reporting.js"
 import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
+import { solidPngBase64 } from "./support/solid-png.js"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -721,6 +722,26 @@ async function verifyGuildRoles(ops, roleId, botId) {
             0x123456,
         )
         await waitForAuditEntry(botId, auditActions.roleUpdate, roleId, roleEdit.auditReason)
+        stage = "role_icon_lifecycle"
+        const withEmoji = await ops.editRole(roleId, { unicodeEmoji: "🧪" }, auditOptions("role-icon-emoji"))
+        assert.equal(withEmoji.unicodeEmoji, "🧪")
+        assert.equal(withEmoji.icon, null)
+        const withImage = await ops.editRole(
+            roleId,
+            { icon: `data:image/png;base64,${solidPngBase64()}` },
+            auditOptions("role-icon-image"),
+        )
+        assert.match(withImage.icon ?? "", /^\w+$/)
+        assert.equal(withImage.unicodeEmoji, null)
+        const { assets } = await import("@neontechspace/fluxerly")
+        const served = await fetch(assets.roleIcon(withImage))
+        assert.equal(served.status, 200)
+        assert.match(served.headers.get("content-type") ?? "", /^image\//)
+        await served.arrayBuffer()
+        const cleared = await ops.editRole(roleId, { icon: null }, auditOptions("role-icon-clear"))
+        assert.equal(cleared.icon, null)
+        assert.equal(cleared.unicodeEmoji, null)
+        report(stage, true)
         stage = "role_reorder"
         const roleReorder = auditOptions("role-reorder")
         const reorderEventStart = seen.length

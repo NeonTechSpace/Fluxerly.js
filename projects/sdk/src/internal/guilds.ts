@@ -775,6 +775,7 @@ function decodeRole(value: unknown, guildId: string): GuildRole | undefined {
         typeof value.hoist !== "boolean" ||
         typeof value.mentionable !== "boolean" ||
         (value.hoist_position !== undefined && value.hoist_position !== null && !int32(value.hoist_position)) ||
+        !nullableText(value.icon) ||
         !nullableText(value.unicode_emoji)
     )
         return undefined
@@ -788,6 +789,7 @@ function decodeRole(value: unknown, guildId: string): GuildRole | undefined {
         hoist: value.hoist,
         mentionable: value.mentionable,
         ...(value.hoist_position === undefined ? {} : { hoistPosition: value.hoist_position as number | null }),
+        ...(value.icon === undefined ? {} : { icon: value.icon as string | null }),
         ...(value.unicode_emoji === undefined ? {} : { unicodeEmoji: value.unicode_emoji as string | null }),
     })
 }
@@ -818,14 +820,35 @@ export function roleList(guildId: string): GuildValidationResult<readonly GuildR
     }
 }
 
+/** Fluxer takes one of an image, an emoji or a role to copy from, and null clears, so only non-null values conflict */
+function roleIconFailure(icon: unknown, unicodeEmoji: unknown, sourceRoleId: unknown) {
+    const hasIcon = icon !== undefined && icon !== null
+    const hasEmoji = unicodeEmoji !== undefined && unicodeEmoji !== null
+    if (hasIcon && !imageDataUri(icon))
+        return inputValidationFailure("icon", "format", "Role icon must be null or a base64 image data URI")
+    if (hasEmoji && (typeof unicodeEmoji !== "string" || unicodeEmoji.length < 1 || unicodeEmoji.length > 64))
+        return inputValidationFailure(
+            "unicodeEmoji",
+            "length",
+            "Role emoji must be null or 1 through 64 UTF-16 code units",
+        )
+    if (sourceRoleId !== undefined && !identifier(sourceRoleId))
+        return inputValidationFailure("iconSourceRoleId", "format", "Role IDs must be decimal strings")
+    if (hasIcon && hasEmoji)
+        return inputValidationFailure("input", "relationship", "A role icon can be an image or an emoji, not both")
+    if (sourceRoleId !== undefined && (hasIcon || hasEmoji))
+        return inputValidationFailure("input", "relationship", "A role can set an icon or copy one, not both")
+    return undefined
+}
+
 function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | InputValidationFailure {
     if (!record(input)) return inputValidationFailure("input", "type", "Role input must be an object")
     const keys = create
-        ? ["name", "color", "permissions"]
-        : ["name", "color", "permissions", "hoist", "hoistPosition", "mentionable"]
+        ? ["name", "color", "permissions", "icon", "unicodeEmoji", "iconSourceRoleId"]
+        : ["name", "color", "permissions", "hoist", "hoistPosition", "mentionable", "icon", "unicodeEmoji"]
     const unsupported = unsupportedKeyFailure(input, keys, "input", "the role input")
     if (unsupported) return unsupported
-    const { name, color, permissions, hoist, hoistPosition, mentionable } = input
+    const { name, color, permissions, hoist, hoistPosition, mentionable, icon, unicodeEmoji, iconSourceRoleId } = input
     if (create && name === undefined) return inputValidationFailure("name", "required", "Role name is required")
     if (name !== undefined && !text(name, 1, 100))
         return inputValidationFailure(
@@ -851,6 +874,8 @@ function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | Input
             "range",
             "Role hoist position must be null or an integer from -2,147,483,648 through 2,147,483,647",
         )
+    const iconFailure = roleIconFailure(icon, unicodeEmoji, iconSourceRoleId)
+    if (iconFailure) return iconFailure
     const body = {
         name,
         color: create ? (color ?? 0) : color,
@@ -858,6 +883,9 @@ function roleBody(input: RoleCreate | RoleEdit, create: boolean): string | Input
         hoist,
         hoist_position: hoistPosition,
         mentionable,
+        icon,
+        unicode_emoji: unicodeEmoji,
+        icon_source_role_id: iconSourceRoleId,
     }
     const json = JSON.stringify(body)
     return json === "{}" ? inputValidationFailure("input", "required", "Role edit must contain a change") : json
@@ -897,7 +925,9 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidatio
         (input.name !== undefined ||
             input.hoist !== undefined ||
             input.hoistPosition !== undefined ||
-            input.mentionable !== undefined)
+            input.mentionable !== undefined ||
+            input.icon !== undefined ||
+            input.unicodeEmoji !== undefined)
     )
         return inputValidationFailure(
             "input",

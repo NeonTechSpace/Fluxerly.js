@@ -460,6 +460,51 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s reads and writes role icons as an image, an emoji or a copy", async (mode) => {
+    const bodies: unknown[] = []
+    rest(async (_url, init) => {
+        const body = init.body ? JSON.parse(String(init.body)) : {}
+        bodies.push(body)
+        // Fluxer stores an uploaded image and answers with its hash
+        return Response.json(wireRole("50", { unicode_emoji: null, ...body, icon: body.icon ? "hash" : null }))
+    })
+    const api = await setup(mode)
+    const image = "data:image/png;base64,AAAA"
+
+    expect(await api.roles.edit({ icon: image })).toMatchObject({ icon: "hash", unicodeEmoji: null })
+    expect(await api.roles.edit({ unicodeEmoji: "🛡️" })).toMatchObject({ icon: null, unicodeEmoji: "🛡️" })
+    await api.roles.edit({ icon: null, unicodeEmoji: null })
+    await api.roles.create({ name: "image", icon: image })
+    await api.roles.create({ name: "copy", iconSourceRoleId: "51" })
+    await api.roles.create({ name: "charset", icon: "data:image/png;charset=utf-8;base64,AAAA" })
+    expect(bodies.slice(2)).toEqual([
+        { icon: null, unicode_emoji: null },
+        { name: "image", color: 0, permissions: "0", icon: image },
+        { name: "copy", color: 0, permissions: "0", icon_source_role_id: "51" },
+        { name: "charset", color: 0, permissions: "0", icon: "data:image/png;charset=utf-8;base64,AAAA" },
+    ])
+
+    bodies.length = 0
+    for (const input of [
+        { name: "ok", icon: "https://example.com/icon.png" },
+        { name: "ok", unicodeEmoji: "" },
+        { name: "ok", unicodeEmoji: "x".repeat(65) },
+        { name: "ok", iconSourceRoleId: "not-an-id" },
+        { name: "ok", icon: image, unicodeEmoji: "🛡️" },
+        { name: "ok", icon: image, iconSourceRoleId: "51" },
+        { name: "ok", unicodeEmoji: "🛡️", iconSourceRoleId: "51" },
+    ])
+        await expect(api.roles.create(input as RoleCreate)).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    await expect(api.roles.edit({ iconSourceRoleId: "51" } as RoleEdit)).rejects.toMatchObject({ reason: "input" })
+    expect(bodies).toEqual([])
+    // Null removes an icon, so it can accompany the other kind or a copy
+    await api.roles.create({ name: "ok", icon: null, iconSourceRoleId: "51" })
+    expect(bodies).toHaveLength(1)
+})
+
 test.each(modes)(
     "%s rejects default-role display patches locally while retaining color and permission patches",
     async (mode) => {
@@ -475,6 +520,8 @@ test.each(modes)(
             { hoist: true },
             { hoistPosition: 1 },
             { mentionable: true },
+            { icon: "data:image/png;base64,AAAA" },
+            { unicodeEmoji: "🛡️" },
             { name: "renamed", color: 1, permissions: Permissions.ViewChannel },
             { hoist: true, color: 1, permissions: Permissions.ViewChannel },
             { hoistPosition: 1, color: 1, permissions: Permissions.ViewChannel },

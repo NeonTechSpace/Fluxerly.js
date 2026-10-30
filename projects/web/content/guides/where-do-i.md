@@ -55,6 +55,7 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Check permissions](/docs/{{version}}/guilds-and-permissions/#check-permissions-using-available-data)
 - [Check whether the bot or a moderator outranks a member](/docs/{{version}}/api/interfaces/js-ts.Members/#fetchcanmanage)
 - [Give a member a role](/docs/{{version}}/guilds-and-permissions/#grant-a-configured-opt-in-role)
+- [Give a role an icon](/docs/{{version}}/guilds-and-permissions/#give-a-role-an-icon)
 - [Kick, ban or time out a member](/docs/{{version}}/guilds-and-permissions/#moderate-members)
 - [Look up member and role methods](/docs/{{version}}/api/interfaces/js-ts.Members/)
 

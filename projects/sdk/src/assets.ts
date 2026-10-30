@@ -2,7 +2,7 @@ import { operationErrorMessage } from "./api-errors.js"
 import { FluxerlyError, operationDetails } from "./errors.js"
 import { err, ok, type Result } from "neverthrow"
 import { GuildMemberProfileFlags } from "./guilds.js"
-import type { Guild, GuildMember } from "./guilds.js"
+import type { Guild, GuildMember, GuildRole } from "./guilds.js"
 import { snowflakes, valueOrThrow } from "./helpers.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { User, UserProfileFields } from "./users.js"
@@ -98,6 +98,7 @@ export class AssetUrlError extends FluxerlyError {
             | "assets.guildBanner"
             | "assets.guildSplash"
             | "assets.guildEmbedSplash"
+            | "assets.roleIcon"
             | "assets.emoji"
             | "assets.sticker",
         /** Whether the structural target, decimal ID, asset hash, or transform options were invalid */
@@ -440,6 +441,11 @@ export type AssetHelpers = Readonly<{
         options?: AssetUrlOptions,
     ): string | undefined
     /**
+     * Build a role icon URL from the role's id and icon. Role icons are never animated.
+     * An omitted icon hash produces undefined, and an explicitly absent icon produces null. A role that shows an emoji has no image icon, so read its unicodeEmoji
+     */
+    roleIcon(role: Pick<GuildRole, "id" | "icon">, options?: AssetUrlOptions): string | null | undefined
+    /**
      * Build a community icon URL from the community's id and icon.
      * An omitted icon hash produces undefined, and an explicitly absent icon produces null
      */
@@ -581,6 +587,20 @@ const assetUrls = Object.freeze({
                   "assets.displayMemberAvatar",
               )
     },
+    roleIcon(
+        role: Pick<GuildRole, "id" | "icon">,
+        options?: AssetUrlOptions,
+    ): Result<string | null | undefined, AssetUrlError> {
+        const resolved = guildTarget(role, "icon", "assets.roleIcon")
+        if (resolved.isErr()) return err(resolved.error)
+        return absentOrOwnerAsset(
+            resolved.value.id,
+            resolved.value.asset,
+            (id, hash, format) => `/role-icons/${id}/${hash}.${format}`,
+            options,
+            "assets.roleIcon",
+        )
+    },
     guildIcon(
         guild: Pick<Guild, "id" | "icon">,
         options?: AssetUrlOptions,
@@ -689,6 +709,7 @@ export const assets: AssetHelpers = Object.freeze({
         valueOrThrow(assetUrls.memberBanner(...input)),
     displayMemberAvatar: (...input: Parameters<typeof assetUrls.displayMemberAvatar>) =>
         valueOrThrow(assetUrls.displayMemberAvatar(...input)),
+    roleIcon: (...input: Parameters<typeof assetUrls.roleIcon>) => valueOrThrow(assetUrls.roleIcon(...input)),
     guildIcon: (...input: Parameters<typeof assetUrls.guildIcon>) => valueOrThrow(assetUrls.guildIcon(...input)),
     guildBanner: (...input: Parameters<typeof assetUrls.guildBanner>) => valueOrThrow(assetUrls.guildBanner(...input)),
     guildSplash: (...input: Parameters<typeof assetUrls.guildSplash>) => valueOrThrow(assetUrls.guildSplash(...input)),
@@ -720,6 +741,7 @@ export function createInstanceAssets(media: string, staticCdn: string): AssetHel
         memberBanner: (...input: Parameters<typeof assets.memberBanner>) => project(assets.memberBanner(...input)),
         displayMemberAvatar: (...input: Parameters<typeof assets.displayMemberAvatar>) =>
             project(assets.displayMemberAvatar(...input)),
+        roleIcon: (...input: Parameters<typeof assets.roleIcon>) => project(assets.roleIcon(...input)),
         guildIcon: (...input: Parameters<typeof assets.guildIcon>) => project(assets.guildIcon(...input)),
         guildBanner: (...input: Parameters<typeof assets.guildBanner>) => project(assets.guildBanner(...input)),
         guildSplash: (...input: Parameters<typeof assets.guildSplash>) => project(assets.guildSplash(...input)),

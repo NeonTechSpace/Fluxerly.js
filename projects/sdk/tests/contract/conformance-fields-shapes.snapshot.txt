@@ -1952,6 +1952,7 @@ field|shared|GuildRole.color|number|optional=false|nullable=false
 field|shared|GuildRole.guildId|string|optional=false|nullable=false
 field|shared|GuildRole.hoist|boolean|optional=false|nullable=false
 field|shared|GuildRole.hoistPosition|null | number | undefined|optional=true|nullable=true
+field|shared|GuildRole.icon|null | string | undefined|optional=true|nullable=true
 field|shared|GuildRole.id|string|optional=false|nullable=false
 field|shared|GuildRole.mentionable|boolean|optional=false|nullable=false
 field|shared|GuildRole.name|string|optional=false|nullable=false
@@ -2745,7 +2746,7 @@ field|shared|ReplyInput.tts|boolean | undefined|optional=true|nullable=false
 field|default|RequestOptions.signal|OperationSignal | undefined|optional=true|nullable=false
 field|shared|RequestOptions.timeoutMs|number | undefined|optional=true|nullable=false
 field|shared|ResolvedInstance.apiCodeVersion|number|optional=false|nullable=false
-field|shared|ResolvedInstance.assets|Readonly<{ userBanner(profile: Readonly<{ user: Pick<User, "id">; profile: Pick<UserProfileFields, "banner">; }>, options?: AssetUrlOptions | undefined): string | null; avatar(user: Pick<User, "avatar" | "id">, options?: AssetUrlOptions | undefined): string | null; defaultAvatar(userId: string): string; displayAvatar(user: Pick<User, "avatar" | "id">, options?: AssetUrlOptions | undefined): string; memberAvatar(member: Pick<GuildMember, "avatar" | "guildId" | "userId">, options?: AssetUrlOptions | undefined): string | null | undefined; memberBanner(member: Pick<GuildMember, "banner" | "guildId" | "userId">, options?: AssetUrlOptions | undefined): string | null | undefined; displayMemberAvatar(user: Pick<User, "avatar" | "id">, member: Pick<GuildMember, "avatar" | "guildId" | "profileFlags" | "userId">, options?: AssetUrlOptions | undefined): string | undefined; guildIcon(guild: Pick<Guild, "icon" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildBanner(guild: Pick<Guild, "banner" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildSplash(guild: Pick<Guild, "id" | "splash">, options?: AssetUrlOptions | undefined): string | null | undefined; guildEmbedSplash(guild: Pick<Guild, "embedSplash" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; emoji(emoji: Pick<GuildEmoji, "animated" | "id">, options?: AssetUrlOptions | undefined): string; sticker(sticker: Pick<GuildSticker, "animated" | "id">, options?: StickerAssetUrlOptions | undefined): string; }>|optional=false|nullable=false
+field|shared|ResolvedInstance.assets|Readonly<{ userBanner(profile: Readonly<{ user: Pick<User, "id">; profile: Pick<UserProfileFields, "banner">; }>, options?: AssetUrlOptions | undefined): string | null; avatar(user: Pick<User, "avatar" | "id">, options?: AssetUrlOptions | undefined): string | null; defaultAvatar(userId: string): string; displayAvatar(user: Pick<User, "avatar" | "id">, options?: AssetUrlOptions | undefined): string; memberAvatar(member: Pick<GuildMember, "avatar" | "guildId" | "userId">, options?: AssetUrlOptions | undefined): string | null | undefined; memberBanner(member: Pick<GuildMember, "banner" | "guildId" | "userId">, options?: AssetUrlOptions | undefined): string | null | undefined; displayMemberAvatar(user: Pick<User, "avatar" | "id">, member: Pick<GuildMember, "avatar" | "guildId" | "profileFlags" | "userId">, options?: AssetUrlOptions | undefined): string | undefined; roleIcon(role: Pick<GuildRole, "icon" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildIcon(guild: Pick<Guild, "icon" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildBanner(guild: Pick<Guild, "banner" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; guildSplash(guild: Pick<Guild, "id" | "splash">, options?: AssetUrlOptions | undefined): string | null | undefined; guildEmbedSplash(guild: Pick<Guild, "embedSplash" | "id">, options?: AssetUrlOptions | undefined): string | null | undefined; emoji(emoji: Pick<GuildEmoji, "animated" | "id">, options?: AssetUrlOptions | undefined): string; sticker(sticker: Pick<GuildSticker, "animated" | "id">, options?: StickerAssetUrlOptions | undefined): string; }>|optional=false|nullable=false
 field|shared|ResolvedInstance.discoveryEnabled|boolean|optional=false|nullable=false
 field|shared|ResolvedInstance.domainMigration|InstanceDomainMigration | null|optional=false|nullable=true
 field|shared|ResolvedInstance.endpoints|InstanceEndpoints|optional=false|nullable=false
@@ -2787,14 +2788,19 @@ field|shared|RestResponse.body|T|optional=false|nullable=false
 field|shared|RestResponse.headers|Readonly<Record<string, string>>|optional=false|nullable=false
 field|shared|RestResponse.status|number|optional=false|nullable=false
 field|shared|RoleCreate.color|number | undefined|optional=true|nullable=false
+field|shared|RoleCreate.icon|null | string | undefined|optional=true|nullable=true
+field|shared|RoleCreate.iconSourceRoleId|string | undefined|optional=true|nullable=false
 field|shared|RoleCreate.name|string|optional=false|nullable=false
 field|shared|RoleCreate.permissions|bigint | undefined|optional=true|nullable=false
+field|shared|RoleCreate.unicodeEmoji|null | string | undefined|optional=true|nullable=true
 field|shared|RoleEdit.color|number | undefined|optional=true|nullable=false
 field|shared|RoleEdit.hoist|boolean | undefined|optional=true|nullable=false
 field|shared|RoleEdit.hoistPosition|null | number | undefined|optional=true|nullable=true
+field|shared|RoleEdit.icon|null | string | undefined|optional=true|nullable=true
 field|shared|RoleEdit.mentionable|boolean | undefined|optional=true|nullable=false
 field|shared|RoleEdit.name|string | undefined|optional=true|nullable=false
 field|shared|RoleEdit.permissions|bigint | undefined|optional=true|nullable=false
+field|shared|RoleEdit.unicodeEmoji|null | string | undefined|optional=true|nullable=true
 field|shared|RoleHoistPosition.hoistPosition|number|optional=false|nullable=false
 field|shared|RoleHoistPosition.id|string|optional=false|nullable=false
 field|shared|RolePosition.id|string|optional=false|nullable=false

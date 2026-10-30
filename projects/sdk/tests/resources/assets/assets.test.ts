@@ -55,6 +55,9 @@ test("builds every hosted asset route through both public entries without fetchi
         `https://fluxerusercontent.com/guilds/${guildId}/users/${userId}/avatars/member_hash.webp`,
     )
     expect(defaultApi.assets.guildIcon(guild)).toBe(`https://fluxerusercontent.com/icons/${guildId}/icon_hash.webp`)
+    expect(defaultApi.assets.roleIcon({ id: guildId, icon: "role_hash" })).toBe(
+        `https://fluxerusercontent.com/role-icons/${guildId}/role_hash.webp`,
+    )
     expect(defaultApi.assets.guildBanner(guild)).toBe(
         `https://fluxerusercontent.com/banners/${guildId}/banner_hash.webp`,
     )
@@ -88,6 +91,9 @@ test("builds every hosted asset route through both public entries without fetchi
         `https://fluxerusercontent.com/guilds/${guildId}/users/${userId}/avatars/member_hash.webp`,
     )
     expect(native.assets.guildIcon(guild)).toBe(`https://fluxerusercontent.com/icons/${guildId}/icon_hash.webp`)
+    expect(native.assets.roleIcon({ id: guildId, icon: "role_hash" })).toBe(
+        `https://fluxerusercontent.com/role-icons/${guildId}/role_hash.webp`,
+    )
     expect(native.assets.guildBanner(guild)).toBe(`https://fluxerusercontent.com/banners/${guildId}/banner_hash.webp`)
     expect(native.assets.guildSplash(guild)).toBe(`https://fluxerusercontent.com/splashes/${guildId}/splash_hash.webp`)
     expect(native.assets.guildEmbedSplash(guild)).toBe(
@@ -110,6 +116,8 @@ test("preserves missing versus unknown assets and uses only known display-avatar
     expect(defaultApi.assets.memberAvatar({ guildId, userId, avatar: null })).toBeNull()
     expect(defaultApi.assets.memberBanner({ guildId, userId })).toBeUndefined()
     expect(defaultApi.assets.guildIcon({ id: guildId })).toBeUndefined()
+    expect(defaultApi.assets.roleIcon({ id: guildId })).toBeUndefined()
+    expect(defaultApi.assets.roleIcon({ id: guildId, icon: null })).toBeNull()
     expect(defaultApi.assets.guildBanner({ id: guildId, banner: null })).toBeNull()
     expect(
         defaultApi.assets.displayMemberAvatar(userWithoutAvatar, {

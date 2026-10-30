@@ -236,7 +236,7 @@ export function syncedChildren(category: GuildChannel, channels: readonly GuildC
 
 ## Grant a configured opt-in role
 
-Call this helper from a command in a community that lets a member opt into a role. Take `roleId` from trusted application configuration, not from command text, and configure only roles that members may assign to themselves. Before the request, `fetchCanManage` checks the [role hierarchy](/docs/{{version}}/glossary/#role-hierarchy): The bot can manage a member only when its highest role ranks above theirs
+Call this helper from a command in a community that lets a member opt into a role. Take `roleId` from trusted application configuration, not from command text, and configure only roles that members may assign to themselves. Fluxer checks the [role hierarchy](/docs/{{version}}/glossary/#role-hierarchy) on the request: The bot's highest role must rank above the role, whichever member receives it
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly"
@@ -247,23 +247,30 @@ export async function grantOptInRole(
     roleId: string,
 ) {
     if (message.author.isBot || !message.guildId) return
-    const member = { guildId: message.guildId, userId: message.author.id }
-    const canManage = await client.members.fetchCanManage(member)
-    if (canManage.isErr()) return canManage
-    if (!canManage.value) return
-    return await client.members.addRole(member, roleId)
+    return await client.members.addRole({ guildId: message.guildId, userId: message.author.id }, roleId)
 }
 ```
 
-The helper gives the configured role to the command's author. It returns `undefined` when the message is not from a person in a community or the bot's highest role does not rank above that member's, and otherwise the Result of the rank check or the role request
+The helper gives the configured role to the command's author. It returns `undefined` when the message is not from a person in a community, and otherwise the Result of the role request. Fluxer enforces the role hierarchy, management restrictions and the bot's `ManageRoles` permission on [`addRole`](/docs/{{version}}/api/interfaces/js-ts.Members/#addrole), so the command must inspect that Result and apply any additional access policy of the application
 
-<details>
-<summary>Why check rank and still inspect the result?</summary>
+## Give a role an icon
 
-Use [`fetchCanManage`](/docs/{{version}}/api/interfaces/js-ts.Members/#fetchcanmanage) to compare the bot's role rank with the member's. Fluxer itself enforces the role hierarchy, management restrictions and the bot's `ManageRoles` permission on [`addRole`](/docs/{{version}}/api/interfaces/js-ts.Members/#addrole).
-An earlier check can become stale before the request, so the command must still inspect the final Result and apply any additional access policy of the application
+A role shows an image or a single Unicode emoji, never both. Setting one replaces the other, and null removes it
 
-</details>
+```ts
+import { assets, orThrow, type Client, type RoleReference } from "@neontechspace/fluxerly"
+
+export async function setRoleEmoji(client: Client, role: RoleReference) {
+    return orThrow(await client.roles.edit(role, { unicodeEmoji: "🛡️" }))
+}
+
+export async function setRoleImage(client: Client, role: RoleReference, png: Buffer) {
+    const updated = orThrow(await client.roles.edit(role, { icon: `data:image/png;base64,${png.toString("base64")}` }))
+    return assets.roleIcon(updated)
+}
+```
+
+Fluxer accepts a still image of at most 256 KiB and from 32 through 1024 pixels on each side. The bot needs `ManageRoles`, and its highest role must rank above the role
 
 ## Moderate members
 
@@ -345,9 +352,6 @@ await runBot({
                 execute: async ({ client, message, reply }) => {
                     if (!optInRoleId || !message.guildId) return reply("The opt-in role is not configured")
                     const member = { guildId: message.guildId, userId: message.author.id }
-                    const canManage = await client.members.fetchCanManage(member)
-                    if (canManage.isErr()) return canManage
-                    if (!canManage.value) return reply("The bot's highest role must rank above the member's")
                     const added = await client.members.addRole(member, optInRoleId)
                     return added.isErr() ? added : reply("Role added")
                 },

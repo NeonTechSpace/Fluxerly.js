@@ -1,7 +1,7 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "4e38842557d7231fe0a11338812141583fe88b69",
+        "commit": "b80ae44b7d629cc2770a0cf27d622e6e0563760d",
         "path": "fluxer_docs/src/content/docs/gateway",
         "sha256": "154a7df55aac2264478b9626da4c2a0b9f0c805048ecd86397f245538de84d79"
     },
