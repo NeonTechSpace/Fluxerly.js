@@ -5,7 +5,7 @@
  */
 import { GuildFeatureToggles, type Guild, type GuildEdit, type GuildFeatureToggle } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, imageDataUri, record } from "./decode/primitives.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
@@ -27,11 +27,6 @@ import {
 } from "./field-rules.js"
 import type { AuditedRequestOptions } from "#sdk/client"
 
-const imageDataUri = (value: unknown): value is string =>
-    typeof value === "string" &&
-    /^data:image\/[a-zA-Z0-9.+-]+(?:;[a-zA-Z0-9.+-]+(?:=[a-zA-Z0-9!#$&^_.+-]+)?)*;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/.test(
-        value,
-    )
 const guildFeatureToggles = new Set<GuildFeatureToggle>(Object.values(GuildFeatureToggles))
 const image = (label: string) =>
     nullable(field(imageDataUri, "format", `Guild ${label} must be null or a base64 image data URI`))

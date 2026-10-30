@@ -28,7 +28,14 @@ import type {
 import { GuildVerificationLevels } from "#sdk/guilds"
 import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { count as nonNegativeInt32, identifier, int32, nonNegativeInteger, record } from "./decode/primitives.js"
+import {
+    count as nonNegativeInt32,
+    identifier,
+    imageDataUri,
+    int32,
+    nonNegativeInteger,
+    record,
+} from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import type { ResourceRequest } from "./guild-cache.js"
 import type { ChannelCacheRequest } from "./channel-cache.js"
@@ -82,8 +89,6 @@ const guildExplicitContentFilter = (value: unknown): value is GuildExplicitConte
 const guildContentWarningLevel = (value: unknown): value is GuildContentWarningLevel => value === 0 || value === 1
 const guildSplashCardAlignment = (value: unknown): value is GuildSplashCardAlignment =>
     value === 0 || value === 1 || value === 2
-const imageDataUri = (value: unknown): value is string =>
-    typeof value === "string" && /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
 
 export const guildEvents = {
     GUILD_MEMBER_ADD: "guildMemberAdd",

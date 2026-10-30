@@ -65,3 +65,10 @@ export function snapshotArray(value: unknown, maximum: number): readonly unknown
     for (let index = 0; index < length; index++) items[index] = value[index]
     return Object.freeze(items)
 }
+
+/** A base64 image data URI, with any media type parameters, the form Fluxer accepts for uploaded images */
+export const imageDataUri = (value: unknown): value is string =>
+    typeof value === "string" &&
+    /^data:image\/[a-zA-Z0-9.+-]+(?:;[a-zA-Z0-9.+-]+(?:=[a-zA-Z0-9!#$&^_.+-]+)?)*;base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$/.test(
+        value,
+    )

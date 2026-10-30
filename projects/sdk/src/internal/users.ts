@@ -15,7 +15,7 @@ import type {
 import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
 import { decodeMessage } from "./message.js"
-import { identifier, record, safeInteger as integer } from "./decode/primitives.js"
+import { identifier, imageDataUri, record, safeInteger as integer } from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { channelName, normalizedText } from "./field-text.js"
 
@@ -343,12 +343,7 @@ export function directMessageEdit(
             "format",
             "Group DM name must be null or contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
         )
-    if (
-        input.icon !== undefined &&
-        input.icon !== null &&
-        (typeof input.icon !== "string" ||
-            !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]+={0,2}$/.test(input.icon))
-    )
+    if (input.icon !== undefined && input.icon !== null && !imageDataUri(input.icon))
         return inputValidationFailure("input", "format", "Group DM icon must be null or a base64 image data URI")
     if (input.ownerId !== undefined && !identifier(input.ownerId))
         return inputValidationFailure("input", "format", "Group DM owner IDs must be decimal strings")
