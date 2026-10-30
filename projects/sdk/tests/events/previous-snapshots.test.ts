@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope } from "effect"
 import { expect, onTestFinished, test } from "vitest"
-import type { EventContext, EventName } from "../../src/index.js"
+import type { Client, EventContext, EventName } from "../../src/index.js"
 import { createTestClient as createDefaultTestClient, type TestClientOptions } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { modes, type Mode } from "../support/both-apis.js"
@@ -27,6 +27,7 @@ async function open(mode: Mode, options: TestClientOptions = {}) {
     return {
         fixtures: test.fixtures,
         client,
+        rest: test.rest,
         ready: () => (defaultTest ? defaultTest.ready() : Effect.runPromise(nativeTest!.ready())),
         idle: () => (defaultTest ? defaultTest.idle() : Effect.runPromise(nativeTest!.idle())),
         emit: async (type: string, value: unknown) =>
@@ -285,6 +286,90 @@ test.each(modes)("%s a queued event keeps the snapshot from when the client acce
     ])
     // Middleware sees the same context object as the handler
     expect(invocations.filter((context) => updates.includes(context))).toHaveLength(2)
+})
+
+test.each(modes)(
+    "%s a write by the client replaces or removes the snapshot of the event that follows",
+    async (mode) => {
+        const api = await open(mode, { cache: cached })
+        const { fixtures, client } = api
+        const messages = await api.record("messageUpdate")
+        const members = await api.record("guildMemberUpdate")
+        await api.ready()
+        await api.emit("GUILD_CREATE", fixtures.guildCreate())
+        const message = fixtures.message({ content: "first" })
+        await api.emit("MESSAGE_CREATE", message)
+        await api.emit("GUILD_MEMBER_ADD", fixtures.member())
+        await api.idle()
+        const guildId = fixtures.ids.guild
+        const userId = fixtures.ids.user
+        expect(await api.lookup.member(guildId, userId)).toBeDefined()
+
+        // The edit's response replaces the cached message, so the event no longer sees the text from before the edit
+        const edited = { ...message, content: "edited" }
+        api.rest.respond("PATCH /channels/:id/messages/:id", { body: edited })
+        await settle(client.messages.edit({ id: message.id, channelId: message.channel_id }, { content: "edited" }))
+        await api.emit("MESSAGE_UPDATE", edited)
+        // A role change's response holds no member, so the cached member is removed
+        api.rest.respond("PUT /guilds/:id/members/:id/roles/:id", { status: 204 })
+        await settle(client.members.addRole({ guildId, userId }, fixtures.nextId()))
+        await api.emit("GUILD_MEMBER_UPDATE", { ...fixtures.member(), nick: "renamed" })
+        await api.idle()
+
+        expect(previous(messages)).toEqual([expect.objectContaining({ id: message.id, content: "edited" })])
+        expect(previous(members)).toEqual([undefined])
+    },
+)
+
+test.each(modes)("%s a bulk deletion lists the messages the cache held, once each in ID order", async (mode) => {
+    const api = await open(mode, { cache: cached })
+    const { fixtures } = api
+    const deletions = await api.record("messageDeleteBulk")
+    await api.ready()
+    const first = fixtures.message({ content: "first" })
+    const second = fixtures.message({ content: "second" })
+    // A cached message of another channel with an ID in the batch stays out of the list and in the cache
+    const elsewhere = fixtures.message({ channel_id: fixtures.nextId(), content: "elsewhere" })
+    for (const message of [first, second, elsewhere]) await api.emit("MESSAGE_CREATE", message)
+    const ids = [second.id, fixtures.nextId(), elsewhere.id, first.id, second.id]
+    await api.emit("MESSAGE_DELETE_BULK", { channel_id: first.channel_id, ids })
+    await api.idle()
+
+    expect(previous(deletions)).toEqual([
+        [
+            expect.objectContaining({ id: second.id, content: "second" }),
+            expect.objectContaining({ id: first.id, content: "first" }),
+        ],
+    ])
+    expect(Object.isFrozen(deletions[0]!.previous)).toBe(true)
+    expect(await api.lookup.message(first.id, first.channel_id)).toBeUndefined()
+    expect(await api.lookup.message(elsewhere.id, elsewhere.channel_id)).toMatchObject({ content: "elsewhere" })
+})
+
+test.each(modes)("%s a bulk deletion has no snapshot when the cache holds none of its messages", async (mode) => {
+    const disabled = await open(mode)
+    const enabled = await open(mode, { cache: cached })
+    for (const api of [disabled, enabled]) {
+        const deletions = await api.record("messageDeleteBulk")
+        await api.ready()
+        const message = api.fixtures.message()
+        if (api === disabled) await api.emit("MESSAGE_CREATE", message)
+        await api.emit("MESSAGE_DELETE_BULK", { channel_id: message.channel_id, ids: [message.id] })
+        await api.idle()
+        expect(previous(deletions)).toEqual([undefined])
+    }
+})
+
+test("a raw handler runs after the cache applied its dispatch", async () => {
+    const api = await open("default", { cache: cached })
+    const message = api.fixtures.message()
+    const seen = Promise.withResolvers<unknown>()
+    ;(api.client as Client).on("raw", async (dispatch) => {
+        if (dispatch.t === "MESSAGE_CREATE") seen.resolve(await api.lookup.message(message.id, message.channel_id))
+    })
+    await api.ready()
+    await api.emit("MESSAGE_CREATE", message)
+    expect(await seen.promise).toMatchObject({ id: message.id })
 })
 
 test.each(modes)("%s lastReceipt reads the receipt of the most recently accepted event", async (mode) => {

@@ -573,8 +573,14 @@ export interface PreviousSnapshots<M extends MessageCore = Message> {
      * messages even when the session resumes
      */
     readonly messageUpdate: M
-    /** The deleted message from the message cache, as for messageUpdate. A messageDeleteBulk event has no previous snapshots */
+    /** The deleted message from the message cache, as for messageUpdate */
     readonly messageDelete: M
+    /** The deleted messages from the message cache, as for messageUpdate, in a frozen list in the order of the event's ids and
+     * once per message. Fluxer sends only IDs for a bulk deletion, so this list is the only source of their content and
+     * authors. It leaves out each message the cache did not hold, so an ID with no message here is unknown, not absent in
+     * Fluxer. When the cache held none of them, previous is undefined instead of an empty list
+     */
+    readonly messageDeleteBulk: readonly M[]
     /** The member from the member cache before the update */
     readonly guildMemberUpdate: GuildMember
     /** The member from the member cache before the removal. A guildBanAdd event for the account removes it from the
@@ -680,6 +686,8 @@ export interface EventContext<K extends EventName = EventName, M extends Message
      * PreviousSnapshots lists per event, or undefined. It is undefined for every other event, when that cache category
      * is disabled, and when the cache held no snapshot because the entity was never observed or its snapshot expired or
      * was removed. Compare it with the payload to log what changed, and treat undefined as unknown, not as absent in Fluxer.
+     * A write through an SDK resource method updates the cache too, so the event after it can hold the value the write stored, or undefined
+     * where the write removed the entry, instead of the value from before the write.
      * Every handler of the event receives the same frozen snapshot, which is not copied. A queued event keeps its
      * snapshot in memory until the handler runs or the event is dropped, and maxPendingBytes does not count it.
      * The SDK always sets the property. It is optional so that a context built by hand, such as in a unit test, can leave it out
@@ -921,7 +929,7 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
  * Raw subscribers do not change cache updates or decoded event delivery
  *
  * Each delivery is logged at Trace with code events.raw.
- * A raw dispatch is offered before the SDK updates caches for it and before its decoded event.
+ * A raw dispatch is offered before its decoded event, but its handler runs after the SDK has updated caches for it, so it cannot read the values the dispatch replaced.
  * The body object is shared by every raw subscriber, so treat it as read-only.
  * A raw subscriber turns off automatic event suppression, while explicitly ignored types never arrive
  *

@@ -2641,8 +2641,11 @@ async function verifyMessageSearch(ops, channelId) {
 }
 
 function observeMessageChanges(channelId) {
-    const received = { messageUpdate: [], messageDelete: [], messageDeleteBulk: [] }
+    const received = { messageUpdate: [], messageDelete: [], messageDeleteBulk: [], bulkSnapshots: [] }
     return {
+        receiveBulkSnapshot(batch, previous) {
+            if (batch.channelId === channelId) received.bulkSnapshots.push({ ids: batch.ids, previous })
+        },
         receive(event, payload) {
             if (payload.channelId !== channelId) return
             assert.ok(received[event].length < 32)
@@ -2739,6 +2742,19 @@ function observeMessageChanges(channelId) {
             if (get) {
                 for (const id of ids) await waitForCache(get, { id, channelId }, (current) => current === undefined)
                 report("cache_gateway_bulk_delete", true)
+                // The deletion came from outside the client, so its cache still held both messages when the event arrived
+                const { previous } = await waitFor("bulkSnapshots", (snapshot) =>
+                    ids.every((id) => snapshot.ids.includes(id)),
+                )
+                assert.ok(Object.isFrozen(previous))
+                assert.deepEqual(
+                    previous.map((message) => [message.id, message.content]).sort(),
+                    seeds
+                        .slice(1)
+                        .map((seed) => [seed.id, seed.content])
+                        .sort(),
+                )
+                report("previous_gateway_bulk_delete", true)
             }
             report(stage, true)
         },
@@ -4222,6 +4238,9 @@ try {
                 if (changes || cache) {
                     const probe = observeMessageChanges(channel.id)
                     const updates = client.on("messageUpdate", (message) => probe.receive("messageUpdate", message))
+                    const bulkSnapshots = client.on("messageDeleteBulk", (batch, _signal, { previous }) =>
+                        probe.receiveBulkSnapshot(batch, previous),
+                    )
                     const deletion = client.subscribe("messageDelete")
                     const bulk = client.subscribe("messageDeleteBulk")
                     const consume = async (event, subscription) => {
@@ -4238,9 +4257,11 @@ try {
                         await probe.exercise(user.id, cache ? cacheGet : undefined)
                     } finally {
                         updates.close()
+                        bulkSnapshots.close()
                         deletion.close()
                         bulk.close()
                         assert.ok((await updates.waitForClose()).isOk())
+                        assert.ok((await bulkSnapshots.waitForClose()).isOk())
                         assert.ok((await readsDone).every((result) => result.status === "fulfilled"))
                     }
                 }
@@ -5171,6 +5192,9 @@ try {
                                 Effect.gen(function* () {
                                     yield* client.on("messageUpdate", (message) =>
                                         Effect.sync(() => probe.receive("messageUpdate", message)),
+                                    )
+                                    yield* client.on("messageDeleteBulk", (batch, { previous }) =>
+                                        Effect.sync(() => probe.receiveBulkSnapshot(batch, previous)),
                                     )
                                     for (const event of ["messageDelete", "messageDeleteBulk"]) {
                                         yield* Effect.forkScoped(

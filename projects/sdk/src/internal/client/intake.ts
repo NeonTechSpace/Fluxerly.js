@@ -10,7 +10,7 @@
 import { isThreadChannel, type GuildChannel } from "#sdk/channels"
 import type { EventMap, EventName, PreviousSnapshot, ThreadDeletion } from "#sdk/events"
 import type { Guild, GuildDeletion, MemberReference, RoleReference } from "#sdk/guilds"
-import type { Message, MessageCore, MessageReference } from "#sdk/messages"
+import type { Message, MessageBulkDeletion, MessageCore, MessageReference } from "#sdk/messages"
 import type { User } from "#sdk/users"
 import type { MessageCache } from "../cache.js"
 import type { ChannelCache } from "../channel-cache.js"
@@ -58,7 +58,11 @@ function previousSnapshot<M extends MessageCore, K extends EventName>(
     const { cache, resources, channelCache } = caches
     let previous: unknown
     if (event === "messageUpdate" || event === "messageDelete") previous = cache?.peek(message as MessageReference)
-    else if (event === "guildMemberUpdate" || event === "guildMemberRemove") {
+    else if (event === "messageDeleteBulk") {
+        const { channelId, ids } = message as MessageBulkDeletion
+        const held = [...new Set(ids)].flatMap((id) => cache?.peek({ id, channelId }) ?? [])
+        if (held.length > 0) previous = Object.freeze(held)
+    } else if (event === "guildMemberUpdate" || event === "guildMemberRemove") {
         const member = message as MemberReference
         previous = resources?.peek("members", member.guildId, member.userId)
     } else if (event === "guildRoleUpdate" || event === "guildRoleDelete") {

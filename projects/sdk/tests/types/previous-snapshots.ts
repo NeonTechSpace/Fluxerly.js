@@ -31,6 +31,10 @@ export function defaultHandlers(client: Client, selected: Client<Selected>) {
         const previous: Assert<Equal<typeof context.previous, undefined>> = true
         return previous
     })
+    selected.on("messageDeleteBulk", (_batch, _signal, context) => {
+        const previous: Assert<Equal<typeof context.previous, readonly Selected[] | undefined>> = true
+        return previous
+    })
     selected.on("messageDelete", (_deletion, _signal, context) => {
         const previous: Assert<Equal<typeof context.previous, Selected | undefined>> = true
         return [previous, receiptOf(context)]
@@ -61,4 +65,5 @@ export const botContexts: [
     Assert<Equal<BotEventContext<"guildChannelDelete">["context"]["previous"], GuildChannel | undefined>>,
     Assert<Equal<NativeBotEventContext<"guildUpdate">["context"]["previous"], PreviousSnapshot<"guildUpdate">>>,
     Assert<Equal<PreviousSnapshot<"guildBanAdd">, undefined>>,
-] = [true, true, true]
+    Assert<Equal<PreviousSnapshot<"messageDeleteBulk">, readonly Message[] | undefined>>,
+] = [true, true, true, true]

@@ -54,6 +54,10 @@ When the queue is full, a partitioned handler drops from the longest backlog ins
 
 Update and delete events carry only the new state or the removed IDs. When the matching cache is enabled, the handler's context also holds `previous`, the value that cache held just before the change, so a log can show what changed. Enable the message cache for message edits and deletions, the member and role caches for member and role changes, the channel cache for channels and threads, and the guild cache for community changes
 
+Fluxer sends only IDs for a bulk deletion, such as the messages a ban removes, so its `previous` is the only source of their content and authors. It lists the messages the cache held and leaves out the rest, so compare it with the event's `ids` to see how many are unknown
+
+Writes through the SDK's resource methods, such as `messages.edit`, update these caches too. After an edit by the bot, the event that follows can hold the value the edit stored, or no `previous` at all where the write removed the entry, such as a member after a role change. A log that must show the value from before the bot's own edits has to keep that value itself
+
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
 
@@ -66,7 +70,10 @@ export function logMessageChanges(client: Client, log: (line: string) => void) {
     const deletions = client.on("messageDelete", (deletion, _signal, { previous }) => {
         log(`Message ${deletion.id} was deleted${previous === undefined ? "" : `: "${previous.content}"`}`)
     })
-    return [edits, deletions]
+    const purges = client.on("messageDeleteBulk", (batch, _signal, { previous }) => {
+        log(`${batch.ids.length} messages were deleted, ${previous?.length ?? 0} of them cached`)
+    })
+    return [edits, deletions, purges]
 }
 ```
 

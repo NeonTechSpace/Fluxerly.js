@@ -2655,6 +2655,7 @@ field|shared|PreviousSnapshots.guildRoleDelete|GuildRole|optional=false|nullable
 field|shared|PreviousSnapshots.guildRoleUpdate|GuildRole|optional=false|nullable=false
 field|shared|PreviousSnapshots.guildUpdate|Guild|optional=false|nullable=false
 field|shared|PreviousSnapshots.messageDelete|M|optional=false|nullable=false
+field|shared|PreviousSnapshots.messageDeleteBulk|readonly M[]|optional=false|nullable=false
 field|shared|PreviousSnapshots.messageUpdate|M|optional=false|nullable=false
 field|shared|PreviousSnapshots.threadDelete|GuildThreadChannel|optional=false|nullable=false
 field|shared|PreviousSnapshots.threadUpdate|GuildThreadChannel|optional=false|nullable=false
