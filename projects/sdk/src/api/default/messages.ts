@@ -55,7 +55,7 @@ import type {
  * The rest client option changes these limits.
  * These limits apply across the shards assigned to this client
  *
- * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500, 502, 503 or 504 at most twice.
+ * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers, fetchHasReaction and fetchPins methods retry transport failures and HTTP 500, 502, 503 or 504 at most twice.
  * The retry delays are 125–250 ms, then 250–500 ms, or a longer valid Retry-After.
  * Retries use the same target and query and never reset the deadline. When a retry could not start before the deadline, the received failure is returned at once.
  * Results can change between attempts.
@@ -455,6 +455,29 @@ export interface Messages<M extends MessageCore = Message> {
         query?: ReactionUsersQuery,
         options?: RequestOptions,
     ): ResultAsync<ReactionUsersPage, MessageOperationFailure | CancelledError | ConfigurationError>
+    /**
+     * Check whether one user currently has a given reaction on a message, with one request and no cache.
+     * The answer can change right after the request. A deleted or unavailable message fails instead of answering false.
+     * This call shares the channel reaction rate limit and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured), which timeoutMs overrides.
+     * The namespace's bounded read retries apply within the original deadline
+     *
+     * Invalid input, malformed pages, HTTP failures and timeout fail with MessageOperationError for fetchHasReaction.
+     * HTTP 404 is notFound.
+     * No gateway connection is needed, and cancellation waits for request cleanup
+     *
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly"
+     * export const hasReactionExample = (client: Client, message: MessageReference, userId: string) =>
+     *     client.messages.fetchHasReaction(message, "✅", userId)
+     * ```
+     */
+    fetchHasReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        userId: string,
+        options?: RequestOptions,
+    ): ResultAsync<boolean, MessageOperationFailure | CancelledError | ConfigurationError>
     /**
      * Add the bot's own reaction to a message.
      * Pass Unicode such as "👍", custom markup such as "<a:party:123>", a parsed custom emoji, or a received emoji snapshot.

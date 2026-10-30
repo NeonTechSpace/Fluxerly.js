@@ -46,6 +46,7 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Wait for one future event](/docs/{{version}}/events-and-collectors/#wait-for-one-future-event)
 - [Ask a question and collect the reply](/docs/{{version}}/events-and-collectors/#ask-a-question-without-missing-a-fast-reply)
 - [Collect reactions](/docs/{{version}}/events-and-collectors/#accept-a-confirmation-reaction)
+- [Check whether one user reacted](/docs/{{version}}/api/interfaces/js-ts.Messages/#fetchhasreaction)
 - [Run code around every handler](/docs/{{version}}/api/interfaces/js-ts.Client/#use)
 - [Look up the handler registration options](/docs/{{version}}/api/interfaces/js-ts.Client/#on)
 

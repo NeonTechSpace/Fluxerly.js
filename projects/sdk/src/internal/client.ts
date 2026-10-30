@@ -1517,6 +1517,10 @@ export class ClientOwner<M extends MessageCore = Message> {
         return this.#open((token) => this.rest.fetchReactionUsers(token, target, emoji, query, options))
     }
 
+    fetchHasReaction(target: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: RequestOptions) {
+        return this.#open((token) => this.rest.fetchHasReaction(token, target, emoji, userId, options))
+    }
+
     reaction(
         operation: "addReaction" | "removeReaction" | "removeUserReaction" | "clearReaction" | "clearReactions",
         target: MessageReference,

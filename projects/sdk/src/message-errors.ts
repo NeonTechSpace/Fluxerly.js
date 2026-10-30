@@ -167,6 +167,7 @@ export class MessageOperationError extends FluxerlyError {
         | "fetchHistory"
         | "search"
         | "fetchReactionUsers"
+        | "fetchHasReaction"
         | "pin"
         | "unpin"
         | "fetchPins"

@@ -762,6 +762,44 @@ export class RestOwner<M extends MessageCore = Message> {
         query?: ReactionUsersQuery,
         options?: RequestOptions,
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure> {
+        return this.#reactionUsersPage(token, target, emoji, query, options).pipe(
+            mapFailureCause(restFailures, (error) =>
+                operationFailure(error, MessageOperationError, "fetchReactionUsers"),
+            ),
+        )
+    }
+
+    fetchHasReaction(
+        token: Redacted.Redacted<string>,
+        target: MessageReference,
+        emoji: ReactionEmojiInput,
+        userId: string,
+        options?: RequestOptions,
+    ): Effect.Effect<boolean, MessageOperationFailure> {
+        return suspendInput((): Effect.Effect<boolean, RestFailure | ClientClosedError> => {
+            if (!identifier(userId))
+                return Effect.fail(localInputFailure("userId", "format", "User IDs must be decimal strings"))
+            // Reactors are listed by ascending ID after an exclusive cursor, so the first one after the ID below
+            // this user's is this user exactly when this user reacted
+            const below = BigInt(userId) - 1n
+            const query = below > 0n ? { limit: 1, after: below.toString() } : { limit: 1 }
+            return this.#reactionUsersPage(token, target, emoji, query, options).pipe(
+                Effect.map((page) => page.items[0]?.id === userId),
+            )
+        }).pipe(
+            mapFailureCause(restFailures, (error) =>
+                operationFailure(error, MessageOperationError, "fetchHasReaction"),
+            ),
+        )
+    }
+
+    #reactionUsersPage(
+        token: Redacted.Redacted<string>,
+        target: MessageReference,
+        emoji: ReactionEmojiInput,
+        query?: ReactionUsersQuery,
+        options?: RequestOptions,
+    ): Effect.Effect<ReactionUsersPage, RestFailure | ClientClosedError> {
         return suspendInput((): Effect.Effect<ReactionUsersPage, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
             const encoded = encodeReactionEmoji(emoji)
@@ -795,11 +833,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 },
                 options,
             )
-        }).pipe(
-            mapFailureCause(restFailures, (error) =>
-                operationFailure(error, MessageOperationError, "fetchReactionUsers"),
-            ),
-        )
+        })
     }
 
     fetchPins(

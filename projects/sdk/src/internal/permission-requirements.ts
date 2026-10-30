@@ -291,6 +291,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     fetchPins: requires("channel", ["ViewChannel"]),
     // channel/services/MessageInteractionService.ts:162
     fetchReactionUsers: requires("channel", ["ViewChannel"]),
+    fetchHasReaction: requires("channel", ["ViewChannel"]),
     // channel/services/MessageInteractionService.ts:227, channel/services/interaction/MessageReactionService.ts:221-222, 409-418
     addReaction: requires(
         "channel",

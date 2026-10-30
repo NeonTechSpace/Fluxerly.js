@@ -937,6 +937,11 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         return result.data.map((user) => user.id)
     }
     const assertReactionUsers = async (input, path) => {
+        // One ID above and below the bot's stay false, so the answer cannot come from the next reactor
+        assert.equal(await ops.hasReaction(message, input, botId), true)
+        assert.equal(await ops.hasReaction(message, input, (BigInt(botId) - 1n).toString()), false)
+        assert.equal(await ops.hasReaction(message, input, (BigInt(botId) + 1n).toString()), false)
+        report("reaction_has_reaction", true)
         const page = await ops.users(message, input, { limit: 1 })
         const raw = await api("GET", `/channels/${channelId}/messages/${message.id}/reactions/${path}/users?limit=1`)
         assert.equal(raw.status, 200)
@@ -1163,6 +1168,7 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         await wait("messageReactionRemove", (value) => value.emoji.id === emoji.id)
         assert.deepEqual(await reactors(customPath), [])
         assert.deepEqual(await ops.users(message, emoji), { items: [], hasMore: false, nextAfter: null })
+        assert.equal(await ops.hasReaction(message, emoji, botId), false)
         await ops.add(message, "👍")
         await wait("messageReactionAdd")
         const resumedResult = await resumedCollector.wait()
@@ -1210,6 +1216,11 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         await assert.rejects(ops.users(message, "👍"), {
             _tag: "MessageOperationError",
             operation: "fetchReactionUsers",
+            reason: "notFound",
+        })
+        await assert.rejects(ops.hasReaction(message, "👍", botId), {
+            _tag: "MessageOperationError",
+            operation: "fetchHasReaction",
             reason: "notFound",
         })
         report(stage, true)
@@ -4078,6 +4089,11 @@ try {
                                 if (result.isErr()) throw result.error
                                 return result.value
                             },
+                            hasReaction: async (target, emoji, userId) => {
+                                const result = await client.messages.fetchHasReaction(target, emoji, userId)
+                                if (result.isErr()) throw result.error
+                                return result.value
+                            },
                             on: async (event, handler) => {
                                 const subscription = client.on(event, handler)
                                 return async () => {
@@ -4979,6 +4995,16 @@ try {
                                                 typedResult(
                                                     Effect,
                                                     client.messages.fetchReactionUsers(target, emoji, query),
+                                                ),
+                                            )
+                                            if (result._tag === "Failure") throw result.failure
+                                            return result.success
+                                        },
+                                        hasReaction: async (target, emoji, userId) => {
+                                            const result = await Effect.runPromise(
+                                                typedResult(
+                                                    Effect,
+                                                    client.messages.fetchHasReaction(target, emoji, userId),
                                                 ),
                                             )
                                             if (result._tag === "Failure") throw result.failure

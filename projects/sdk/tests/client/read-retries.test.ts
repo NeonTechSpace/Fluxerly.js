@@ -13,7 +13,7 @@ import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { fakeHostTime, hostTurnsUntil, sdkClock } from "../support/client-clock.js"
 
-const reads = ["fetch", "fetchHistory", "fetchReactionUsers", "fetchPins"] as const
+const reads = ["fetch", "fetchHistory", "fetchReactionUsers", "fetchHasReaction", "fetchPins"] as const
 const target = { id: "10", channelId: "20" }
 const wire = { id: "10", channel_id: "20", content: "read", author: { id: "30", username: "fixture" } }
 const body = (operation: (typeof reads)[number]) =>
@@ -21,7 +21,7 @@ const body = (operation: (typeof reads)[number]) =>
         ? wire
         : operation === "fetchHistory"
           ? [wire]
-          : operation === "fetchReactionUsers"
+          : operation === "fetchReactionUsers" || operation === "fetchHasReaction"
             ? { items: [{ id: "30", username: "fixture" }], has_more: false, next_after: null }
             : { items: [{ message: wire, pinned_at: "2026-09-08T12:00:00Z" }], has_more: false }
 /** A success response whose connection drops after its first body bytes, as when a socket resets mid-body */
@@ -115,6 +115,8 @@ async function setup(mode: Mode, logging?: ReturnType<typeof retryTime>["logging
                     return unwrap(await defaultApi.messages.fetchHistory("20", { limit: 1, before: "11" }, options))
                 if (operation === "fetchReactionUsers")
                     return unwrap(await defaultApi.messages.fetchReactionUsers(target, "👍", { limit: 1 }, options))
+                if (operation === "fetchHasReaction")
+                    return unwrap(await defaultApi.messages.fetchHasReaction(target, "👍", "30", options))
                 return unwrap(await defaultApi.messages.fetchPins("20", { limit: 1 }, options))
             }
             const signal = options?.signal as AbortSignal | undefined
@@ -123,6 +125,8 @@ async function setup(mode: Mode, logging?: ReturnType<typeof retryTime>["logging
                 return run(native!.messages.fetchHistory("20", { limit: 1, before: "11" }, options), signal)
             if (operation === "fetchReactionUsers")
                 return run(native!.messages.fetchReactionUsers(target, "👍", { limit: 1 }, options), signal)
+            if (operation === "fetchHasReaction")
+                return run(native!.messages.fetchHasReaction(target, "👍", "30", options), signal)
             return run(native!.messages.fetchPins("20", { limit: 1 }, options), signal)
         },
         get: async () => (defaultApi ? defaultApi.messages.get(target) : run(native!.messages.get(target))),

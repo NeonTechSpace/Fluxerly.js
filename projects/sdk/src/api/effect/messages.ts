@@ -49,7 +49,7 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
  * The rest client option changes these limits.
  * Each remote call has a total deadline of rest.defaultTimeoutMs by default (30,000 ms unless configured). Queue, retry and rate-limit waits count toward it. Cleanup is awaited afterward
  *
- * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
+ * The fetch, fetchCrosspostSource, fetchHistory, fetchReactionUsers, fetchHasReaction and fetchPins methods retry transport failures and HTTP 500/502/503/504 at most twice.
  * Retry delays are jittered 125–250 ms then 250–500 ms, or a valid longer Retry-After. Retries never reset the deadline. When a retry could not start before the deadline, the received failure is returned at once.
  * A retry reads the same target and query, but does not guarantee an unchanged snapshot. Other rejections and malformed successes never retry.
  * Confirmed HTTP 429 responses use the applicable route or client-wide rate-limit wait. They do not count against the two transient-read retries
@@ -411,6 +411,29 @@ export interface Messages<M extends MessageCore = Message> {
         query?: ReactionUsersQuery,
         options?: RequestOptions,
     ): Effect.Effect<ReactionUsersPage, MessageOperationFailure>
+    /**
+     * Check whether one user currently has a given reaction on a message, with one request and no cache.
+     * The answer can change right after the request. A deleted or unavailable message fails instead of answering false.
+     * This call shares the channel reaction rate limit and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured), which timeoutMs overrides.
+     * The namespace's bounded read retries apply within the original deadline
+     *
+     * Invalid input, malformed pages, HTTP failures and timeout fail with MessageOperationError for fetchHasReaction.
+     * HTTP 404 is notFound.
+     * No gateway connection is needed, and cancellation waits for request cleanup
+     *
+     * @example
+     * ```ts
+     * import type { Client, MessageReference } from "@neontechspace/fluxerly/effect"
+     * export const hasReactionExample = (client: Client, message: MessageReference, userId: string) =>
+     *     client.messages.fetchHasReaction(message, "✅", userId)
+     * ```
+     */
+    fetchHasReaction(
+        message: MessageReference,
+        emoji: ReactionEmojiInput,
+        userId: string,
+        options?: RequestOptions,
+    ): Effect.Effect<boolean, MessageOperationFailure>
     /**
      * Add the bot's own reaction to a message.
      * Pass Unicode such as "👍", custom markup such as "<a:party:123>", a parsed custom emoji, or a received emoji snapshot.

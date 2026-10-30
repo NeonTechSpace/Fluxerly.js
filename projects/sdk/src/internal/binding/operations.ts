@@ -958,6 +958,19 @@ function defineOperations<M extends MessageCore>() {
                     ) => owner.fetchReactionUsers(message, emoji, query, options),
                 ),
             ),
+            fetchHasReaction: named(
+                "fetchHasReaction",
+                op(
+                    3,
+                    (
+                        owner: Owner,
+                        message: MessageReference,
+                        emoji: ReactionEmojiInput,
+                        userId: string,
+                        options?: RequestOptions,
+                    ) => owner.fetchHasReaction(message, emoji, userId, options),
+                ),
+            ),
             addReaction: named(
                 "addReaction",
                 op(2, (owner: Owner, message: MessageReference, emoji: ReactionEmojiInput, options?: RequestOptions) =>

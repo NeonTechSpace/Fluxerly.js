@@ -420,6 +420,7 @@ export type Operation =
     | "previewCleanup"
     | "search"
     | "fetchReactionUsers"
+    | "fetchHasReaction"
     | "pin"
     | "unpin"
     | "fetchPins"

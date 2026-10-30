@@ -116,6 +116,7 @@ operation|default|Messages.deleteOwnMessages|(channelId: string, options: OwnMes
 operation|default|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetch|(message: MessageReference, options?: RequestOptions | undefined) => ResultAsync<M, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchCrosspostSource|(target: MessageReference, options?: RequestOptions | undefined) => ResultAsync<CrosspostSource, CancelledError | ConfigurationError | MessageOperationFailure>
+operation|default|Messages.fetchHasReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: RequestOptions | undefined) => ResultAsync<boolean, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly M[], CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<MessagePinsPage<M>, CancelledError | ConfigurationError | MessageOperationFailure>
 operation|default|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<ReactionUsersPage, CancelledError | ConfigurationError | MessageOperationFailure>
@@ -321,6 +322,7 @@ operation|native|Messages.deleteOwnMessages|(channelId: string, options: OwnMess
 operation|native|Messages.edit|(message: MessageReference, input: string | EditMessageInput, options?: RequestOptions | undefined) => Effect<M, MessageOperationFailure, never>
 operation|native|Messages.fetch|(message: MessageReference, options?: RequestOptions | undefined) => Effect<M, MessageOperationFailure, never>
 operation|native|Messages.fetchCrosspostSource|(target: MessageReference, options?: RequestOptions | undefined) => Effect<CrosspostSource, MessageOperationFailure, never>
+operation|native|Messages.fetchHasReaction|(message: MessageReference, emoji: ReactionEmojiInput, userId: string, options?: RequestOptions | undefined) => Effect<boolean, MessageOperationFailure, never>
 operation|native|Messages.fetchHistory|(channelId: string, query?: MessageHistoryQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly M[], MessageOperationFailure, never>
 operation|native|Messages.fetchPins|(channelId: string, query?: MessagePinsQuery | undefined, options?: RequestOptions | undefined) => Effect<MessagePinsPage<M>, MessageOperationFailure, never>
 operation|native|Messages.fetchReactionUsers|(message: MessageReference, emoji: ReactionEmojiInput, query?: ReactionUsersQuery | undefined, options?: RequestOptions | undefined) => Effect<ReactionUsersPage, MessageOperationFailure, never>
@@ -2363,7 +2365,7 @@ field|shared|MessageOperationError.code|string|optional=false|nullable=false
 field|shared|MessageOperationError.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|MessageOperationError.hint|string | undefined|optional=true|nullable=false
 field|shared|MessageOperationError.inputValidation|InputValidationDetail | null|optional=false|nullable=true
-field|shared|MessageOperationError.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin"|optional=false|nullable=false
+field|shared|MessageOperationError.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHasReaction" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin"|optional=false|nullable=false
 field|shared|MessageOperationError.outcome|OperationOutcome|optional=false|nullable=false
 field|shared|MessageOperationError.reason|OperationReason|optional=false|nullable=false
 field|shared|MessageOperationError.retryAfterMs|null | number|optional=false|nullable=true
@@ -2375,7 +2377,7 @@ field|shared|MessageOperationFailure.code|string|optional=false|nullable=false
 field|shared|MessageOperationFailure.details|Readonly<Record<string, unknown>>|optional=false|nullable=false
 field|shared|MessageOperationFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
-field|shared|MessageOperationFailure.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin" | undefined|optional=true|nullable=false
+field|shared|MessageOperationFailure.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHasReaction" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin" | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.reason|OperationReason | undefined|optional=true|nullable=false
 field|shared|MessageOperationFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true
@@ -2586,7 +2588,7 @@ field|shared|PaginateFailure.field|"aliases" | "args" | "assignments" | "attempt
 field|shared|PaginateFailure.hint|string | undefined|optional=true|nullable=false
 field|shared|PaginateFailure.inputValidation|InputValidationDetail | null | undefined|optional=true|nullable=true
 field|shared|PaginateFailure.limit|"maxBytes" | "maxPendingBytes" | "maxPendingMessages" | null | undefined|optional=true|nullable=true
-field|shared|PaginateFailure.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin" | undefined|optional=true|nullable=false
+field|shared|PaginateFailure.operation|"addReaction" | "clearReaction" | "clearReactions" | "delete" | "deleteAttachment" | "deleteMany" | "deleteOwnMessages" | "edit" | "fetch" | "fetchCrosspostSource" | "fetchHasReaction" | "fetchHistory" | "fetchPins" | "fetchReactionUsers" | "messages.get" | "pin" | "publish" | "removeReaction" | "removeUserReaction" | "search" | "typing" | "unpin" | undefined|optional=true|nullable=false
 field|shared|PaginateFailure.outcome|OperationOutcome | undefined|optional=true|nullable=false
 field|shared|PaginateFailure.reason|"busy" | "connectionLost" | "filter" | "handler" | "input" | "network" | "notConnected" | "overflow" | "rateLimit" | "rejected" | "response" | "timeout" | OperationReason | undefined|optional=true|nullable=false
 field|shared|PaginateFailure.retryAfterMs|null | number | undefined|optional=true|nullable=true

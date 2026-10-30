@@ -999,6 +999,57 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s checks one user's reaction with one bounded read around that user's ID", async (mode) => {
+    const queries: URLSearchParams[] = []
+    let status = 200
+    // Fluxer lists reactors by ascending ID after the cursor, so the next reactor can be someone else
+    const reactors = ["40", "50", "9007199254740993"]
+    mockRest(async (url) => {
+        const params = new URL(String(url)).searchParams
+        queries.push(params)
+        if (status !== 200) return Response.json({ code: "UNKNOWN_MESSAGE", message: "Unknown" }, { status })
+        const after = BigInt(params.get("after") ?? 0)
+        const next = reactors.find((id) => BigInt(id) > after)
+        return Response.json({
+            items: next ? [{ id: next, username: "fixture" }] : [],
+            has_more: false,
+            next_after: null,
+        })
+    })
+    const api = await setup(mode)
+
+    expect(await api.hasReaction("50")).toBe(true)
+    expect(queries.at(-1)?.get("limit")).toBe("1")
+    expect(queries.at(-1)?.get("after")).toBe("49")
+    // The exact ID survives past the precision of a JavaScript number
+    expect(await api.hasReaction("9007199254740993")).toBe(true)
+    expect(queries.at(-1)?.get("after")).toBe("9007199254740992")
+    // A later reactor or no reactor at all both answer false
+    expect(await api.hasReaction("45")).toBe(false)
+    expect(await api.hasReaction("60")).toBe(false)
+    // An ID above every reactor gets an empty page
+    expect(await api.hasReaction("9007199254740994")).toBe(false)
+    // No positive ID sits below 1, so it sends no cursor
+    expect(await api.hasReaction("1")).toBe(false)
+    expect(queries.at(-1)?.has("after")).toBe(false)
+
+    // Each check is one request, whatever it answers
+    const sent = queries.length
+    expect(sent).toBe(6)
+    for (const userId of ["", "01", "abc", 42])
+        await expect(api.hasReaction(userId as string)).rejects.toMatchObject({
+            operation: "fetchHasReaction",
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    await expect(api.hasReaction("50", "not valid/emoji")).rejects.toMatchObject({ operation: "fetchHasReaction" })
+    expect(queries).toHaveLength(sent)
+
+    // A missing message is a failure, never a false answer
+    status = 404
+    await expect(api.hasReaction("50")).rejects.toMatchObject({ operation: "fetchHasReaction", reason: "notFound" })
+})
+
 test.each(modes)(
     "%s rejects invalid reactor queries before dispatch and malformed pages without partial results",
     async (mode) => {
@@ -1644,6 +1695,10 @@ async function setup(mode: Mode) {
             defaultApi
                 ? settle(defaultApi.messages.fetchReactionUsers(target, emoji, query, options))
                 : settle(native!.messages.fetchReactionUsers(target, emoji, query, options)),
+        hasReaction: async (userId: string, emoji: ReactionEmojiInput = "👍"): Promise<boolean> =>
+            defaultApi
+                ? settle(defaultApi.messages.fetchHasReaction(target, emoji, userId))
+                : settle(native!.messages.fetchHasReaction(target, emoji, userId)),
         cancelledUsers: (signal: AbortSignal) =>
             defaultApi
                 ? defaultApi.messages.fetchReactionUsers(target, "👍", undefined, { signal }).then((r) => r.isErr())
