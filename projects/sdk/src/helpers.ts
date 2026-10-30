@@ -249,7 +249,7 @@ function helperExplanation(operation: HelperError["operation"], reason: HelperEr
                 ? "Colors must be integers from 0 through 16,777,215, 6-digit hex strings such as #ff8800, or [red, green, blue] arrays of integers from 0 through 255"
                 : "Colors must be integers from 0 through 16,777,215"
         case "text":
-            return "Text must be a well-formed string without unpaired surrogates"
+            return "Text must be a string"
         case "limit":
             if (operation === "text.truncate")
                 return "Truncate options must be an object with only maxLength, a positive safe integer, and an optional suffix, a well-formed string of at most maxLength units"

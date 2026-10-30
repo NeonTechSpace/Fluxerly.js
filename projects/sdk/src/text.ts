@@ -32,20 +32,24 @@ export type TextHelpers = Readonly<{
     /**
      * Split text into a frozen array of pieces, each with `string.length` at most `options.maxLength` UTF-16 units.
      * Prefer the last newline within a full piece, then the last whitespace, otherwise split a long word.
-     * Whitespace stays in the preceding piece, so joining with an empty separator reconstructs the exact input.
+     * Whitespace stays in the preceding piece, so joining with an empty separator reconstructs the input.
+     * Each lone surrogate, such as half of an emoji left by `slice`, first becomes U+FFFD (�) of the same length, because Fluxer refuses a lone surrogate.
+     * The pieces then join to `content.toWellFormed()`. To reject such text instead, check `content.isWellFormed()` first.
      * Empty text gives []
      *
      * No trimming, prefix or suffix insertion, Markdown repair, message-length lookup or remote request occurs.
      * Every piece ends at a grapheme boundary of `Intl.Segmenter`, so a visible character stays whole: The two UTF-16 units of a single Unicode code point,
      * a base character with its combining marks, a flag, a skin-tone emoji, a joined emoji and "\r\n" are never separated.
      * A piece can therefore be shorter than maxLength. Only a single character longer than maxLength is cut, between code points.
-     * Throws HelperError for invalid text or options, lone surrogates, or a ceiling too small for a surrogate pair.
+     * Throws HelperError for text that is not a string, invalid options, or a ceiling too small for a surrogate pair.
      * Input and returned pieces are application-owned, and result size is proportional to the supplied text
      */
     split(content: string, options: TextSplitOptions): readonly string[]
     /**
      * Shorten text to at most `options.maxLength` UTF-16 units, ending in `options.suffix` when anything was cut.
-     * Text that already fits is returned unchanged. Otherwise the text is cut so that the kept text and the suffix together fit,
+     * Each lone surrogate, such as half of an emoji left by `slice`, first becomes U+FFFD (�) of the same length, because Fluxer refuses a lone surrogate.
+     * To reject such text instead, check `content.isWellFormed()` first.
+     * Text that then fits is returned as it is. Otherwise the text is cut so that the kept text and the suffix together fit,
      * at a grapheme boundary of `Intl.Segmenter`, so only whole visible characters are kept:
      * The two UTF-16 units of a single Unicode code point, a base character with its combining marks, a flag, a skin-tone emoji
      * and a joined emoji are never separated, which can leave the result shorter than maxLength.
@@ -54,7 +58,7 @@ export type TextHelpers = Readonly<{
      *
      * No trimming, word boundary, Markdown repair, message-length lookup or remote request occurs.
      * To cut at a word boundary instead, take the first piece of `text.split` with a limit that leaves room for the suffix, and trim its end.
-     * Throws HelperError for text that is not a string or has lone surrogates, so call `content.toWellFormed()` first for untrusted input.
+     * Throws HelperError for text that is not a string.
      * Also throws HelperError for options that are not an object with only maxLength and suffix, a maxLength that is not a
      * positive safe integer, or a suffix that is not a well-formed string of at most maxLength units
      */
@@ -73,7 +77,7 @@ export const text: TextHelpers = Object.freeze({
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
 /** Shorten text with the public truncate rules, returning invalid input as an Err */
-function truncateText(content: string, options: TextTruncateOptions): Result<string, HelperError> {
+function truncateText(input: string, options: TextTruncateOptions): Result<string, HelperError> {
     if (
         typeof options !== "object" ||
         options === null ||
@@ -86,7 +90,8 @@ function truncateText(content: string, options: TextTruncateOptions): Result<str
     const suffix = options.suffix === undefined ? "…" : options.suffix
     if (typeof suffix !== "string" || !suffix.isWellFormed() || suffix.length > options.maxLength)
         return err(new HelperError("text.truncate", "limit"))
-    if (typeof content !== "string" || !content.isWellFormed()) return err(new HelperError("text.truncate", "text"))
+    if (typeof input !== "string") return err(new HelperError("text.truncate", "text"))
+    const content = input.toWellFormed()
     if (content.length <= options.maxLength) return ok(content)
     let end = options.maxLength - suffix.length
     // Cut at the last grapheme boundary within the room, which is 0 when the first grapheme does not fit
@@ -95,7 +100,7 @@ function truncateText(content: string, options: TextTruncateOptions): Result<str
 }
 
 /** Split text with the public split rules, returning invalid input as an Err for SDK callers that map it to their own error */
-export function splitText(content: string, options: TextSplitOptions): Result<readonly string[], HelperError> {
+export function splitText(input: string, options: TextSplitOptions): Result<readonly string[], HelperError> {
     if (
         typeof options !== "object" ||
         options === null ||
@@ -105,7 +110,8 @@ export function splitText(content: string, options: TextSplitOptions): Result<re
         options.maxLength <= 0
     )
         return err(new HelperError("text.split", "limit"))
-    if (typeof content !== "string" || !content.isWellFormed()) return err(new HelperError("text.split", "text"))
+    if (typeof input !== "string") return err(new HelperError("text.split", "text"))
+    const content = input.toWellFormed()
     const chunks: string[] = []
     const segments = graphemes.segment(content)
     // The end of text and the start of a grapheme are boundaries, and an index inside a grapheme is not

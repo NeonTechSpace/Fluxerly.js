@@ -88,8 +88,9 @@ export function commandHelp(
                 (command.description ? "\n" + command.description : ""),
         )
     }
-    const pages = splitText(entries.join("\n\n"), { maxLength })
-    if (pages.isErr())
+    const help = entries.join("\n\n")
+    const pages = splitText(help, { maxLength })
+    if (!help.isWellFormed() || pages.isErr())
         throw new ConfigurationError(
             "help",
             'Help text must be well-formed, and the help option "maxLength" must fit each Unicode code point',

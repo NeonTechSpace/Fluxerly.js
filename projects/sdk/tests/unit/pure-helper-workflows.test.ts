@@ -157,7 +157,7 @@ test("splits losslessly at line, word and surrogate-safe hard boundaries", () =>
         expect(Object.isFrozen(parts)).toBe(true)
     }
     expect(thrown(() => defaultApi.text.split("🦊", { maxLength: 1 }))).toMatchObject({ reason: "limit" })
-    expect(thrown(() => defaultApi.text.split("\ud800", { maxLength: 2 }))).toMatchObject({ reason: "text" })
+    expect(thrown(() => defaultApi.text.split(1 as never, { maxLength: 2 }))).toMatchObject({ reason: "text" })
     for (const options of [
         undefined,
         null,
@@ -299,13 +299,40 @@ test("split cuts a single huge character without scanning it again for every pie
     }
 })
 
+test.each([
+    ["default", defaultApi.text],
+    ["native", native.text],
+])("%s text helpers replace each lone surrogate instead of failing", (_mode, text) => {
+    // Slicing through an emoji leaves its first half, which Fluxer refuses in a message
+    const sliced = "Hello 😀 world".slice(0, 7)
+    expect(sliced.isWellFormed()).toBe(false)
+    expect(text.truncate(sliced, { maxLength: 100 })).toBe("Hello �")
+    expect(text.split(sliced, { maxLength: 100 })).toEqual(["Hello �"])
+
+    // A replacement keeps both neighbors apart, where removal would join them into new text
+    expect(text.truncate("@every\ud83done", { maxLength: 100 })).toBe("@every�one")
+    expect(text.split("a\udc00b", { maxLength: 100 })).toEqual(["a�b"])
+    // Whole emoji stay whole next to fragments
+    expect(text.truncate("😀\ud83d😀", { maxLength: 100 })).toBe("😀�😀")
+
+    // The replacement has the same length, so limits hold and the suffix still marks a cut
+    const long = `${"x".repeat(10)}\ud83d${"y".repeat(10)}`
+    const cut = text.truncate(long, { maxLength: 15 })
+    expect(cut).toBe(`${"x".repeat(10)}�yyy…`)
+    expect(cut).toHaveLength(15)
+    const pieces = text.split(long, { maxLength: 4 })
+    expect(pieces.join("")).toBe(long.toWellFormed())
+    expect(pieces.every((piece) => piece.length <= 4 && piece.isWellFormed())).toBe(true)
+
+    // A suffix is the developer's own text, so a broken one still fails
+    expect(thrown(() => text.truncate(long, { maxLength: 15, suffix: "\ud83d" }))).toMatchObject({ reason: "limit" })
+})
+
 test("truncate rejects invalid text and options with HelperError", () => {
-    expect(thrown(() => defaultApi.text.truncate("\ud800", { maxLength: 4 }))).toMatchObject({
+    expect(thrown(() => defaultApi.text.truncate(1 as never, { maxLength: 4 }))).toMatchObject({
         operation: "text.truncate",
         reason: "text",
     })
-    expect(thrown(() => defaultApi.text.truncate(1 as never, { maxLength: 4 }))).toMatchObject({ reason: "text" })
-    expect(defaultApi.text.truncate("\ud800".toWellFormed(), { maxLength: 4 })).toBe("�")
     for (const options of [
         undefined,
         null,

@@ -295,7 +295,7 @@ export const colors: ColorHelpers = Object.freeze({
 })
 
 /**
- * Split long text into length-bounded pieces without losing its contents, or truncate it to a length with a marker.
+ * Split long text into length-bounded pieces without losing its contents, or truncate it to a length with a marker. Each lone surrogate becomes U+FFFD (�) first.
  * The caller chooses the length limit, how to send the result and any Markdown handling.
  * The maxLength option of split and truncate counts UTF-16 code units, and cuts fall between visible characters, so a result can be shorter. Only split cuts inside a single character, and only one longer than maxLength. Truncate returns the suffix alone when its first character does not fit before the suffix.
  * The split and truncate methods return their result directly, without sending it.

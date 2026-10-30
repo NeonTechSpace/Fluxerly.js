@@ -65,7 +65,7 @@ export const permissionBits: PermissionBitHelpers = sharedPermissionBits
 export const colors: ColorHelpers = sharedColors
 
 /**
- * Split a string into frozen pieces without dropping or changing its text, or truncate it to a length with a marker.
+ * Split a string into frozen pieces without dropping its text, or truncate it to a length with a marker. Each lone surrogate becomes U+FFFD (�) first.
  * The maxLength option of split and truncate counts UTF-16 code units, as JavaScript string.length does.
  * Cuts fall between visible characters, so a piece or truncated string can be shorter than maxLength. Only split cuts inside a single character, and only one longer than maxLength. Truncate returns the suffix alone when its first character does not fit before the suffix.
  * The pieces or the truncated string are returned directly, and invalid text or options throw HelperError.
