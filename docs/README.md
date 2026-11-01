@@ -50,7 +50,7 @@ await runBot({
   <img src="/docs/assets/demo.webp" width="720" alt="A terminal runs fluxerly init and npm start, then in a chat !ping gets the reply Pong!">
 </p>
 
-The same SDK runs large bots. [NeonFlux](https://github.com/NeonTechSpace/NeonFlux) is a real Fluxer bot being rebuilt with it
+The same SDK runs large bots. [NeonFlux](https://github.com/NeonTechSpace/NeonFlux) is a real Fluxer bot using it
 
 ## What Fluxerly includes
 
