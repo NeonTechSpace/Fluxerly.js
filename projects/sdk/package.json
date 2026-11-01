@@ -177,7 +177,7 @@
         "effect": "^4.1.0"
     },
     "devDependencies": {
-        "@effect/tsgo": "0.53.4",
+        "@effect/tsgo": "0.57.0",
         "@types/node": "24.19.2",
         "@types/ws": "8.18.2",
         "effect": "4.1.0",
