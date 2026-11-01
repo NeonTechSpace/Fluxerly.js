@@ -38,14 +38,40 @@ type Settings = Required<Omit<ReactionCollectorLimits, "filter" | "emoji" | "gui
         readonly idleMs: number | undefined
     } & OperationOptions
 
+type Budgets = {
+    maxReactions: number
+    maxBytes: number
+    timeoutMs: number
+    idleMs: number | undefined
+    maxPendingMessages: number
+    maxPendingBytes: number
+}
+
+/** Copy each supplied collector budget over its default, returning the failure for the first invalid one */
+function readBudgets(input: Record<string, unknown>, result: Budgets): ConfigurationError | undefined {
+    for (const key of Object.keys(result) as (keyof Budgets)[]) {
+        const value = input[key]
+        if (value === undefined) continue
+        if (
+            typeof value !== "number" ||
+            !Number.isSafeInteger(value) ||
+            value <= 0 ||
+            ((key === "timeoutMs" || key === "idleMs") && value > 2_147_483_647)
+        )
+            return new ConfigurationError(key, collectorBudgetMessage(key))
+        result[key] = value
+    }
+    return undefined
+}
+
 function settings(options: unknown, defaultApi: boolean): Settings | ConfigurationError {
     const input = options === undefined ? {} : options
     if (!record(input)) return new ConfigurationError("collectorOptions", "Collector options must be an object")
-    const result = {
+    const result: Budgets = {
         maxReactions: 1,
         maxBytes: 4_194_304,
         timeoutMs: 30_000,
-        idleMs: undefined as number | undefined,
+        idleMs: undefined,
         maxPendingMessages: 256,
         maxPendingBytes: 4_194_304,
     }
@@ -66,18 +92,8 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
                 hint: unsupportedKeyHint(unsupported, supported),
             },
         )
-    for (const key of Object.keys(result) as (keyof typeof result)[]) {
-        const value = input[key]
-        if (value === undefined) continue
-        if (
-            typeof value !== "number" ||
-            !Number.isSafeInteger(value) ||
-            value <= 0 ||
-            ((key === "timeoutMs" || key === "idleMs") && value > 2_147_483_647)
-        )
-            return new ConfigurationError(key, collectorBudgetMessage(key))
-        result[key] = value
-    }
+    const invalidBudget = readBudgets(input, result)
+    if (invalidBudget) return invalidBudget
     if (input.filter !== undefined && typeof input.filter !== "function")
         return new ConfigurationError("filter", "Collector filter must be a function")
     if (input.guildId !== undefined && !guildId(input.guildId))

@@ -252,33 +252,10 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
     const value = record(body) ? body : undefined
     if (memberDecoratedDispatches.has(type)) resources?.evictRejectedMember(type, value)
     if (type.startsWith("MESSAGE_")) {
-        // Reactions never change cached message snapshots
-        if (type.startsWith("MESSAGE_REACTION")) return
-        if (value && identifier(value.channel_id)) {
-            if (identifier(value.id)) cache?.delete({ id: value.id, channelId: value.channel_id })
-            else cache?.deleteChannel(value.channel_id)
-        } else if (value && identifier(value.id)) {
-            // Without a usable channel the message can still be found by its ID, which is the cache key
-            cache?.deleteId(value.id)
-        } else if (value && identifier(value.guild_id)) {
-            const guildId = value.guild_id
-            cache?.gap((candidate) => candidate === undefined || candidate === guildId)
-        } else cache?.gap()
+        invalidateMessageDispatch(caches, type, value)
         return
     }
-    if (
-        type === "TYPING_START" ||
-        type.startsWith("PRESENCE_UPDATE") ||
-        type.startsWith("INVITE_") ||
-        type === "WEBHOOKS_UPDATE" ||
-        type === "VOICE_STATE_UPDATE" ||
-        type === "GUILD_AUDIT_LOG_ENTRY_CREATE" ||
-        type === "GUILD_HEALTH_UPDATE" ||
-        // Calls and entrance sounds feed no cache category
-        type.startsWith("CALL_") ||
-        type === "ENTRANCE_SOUND_PLAY"
-    )
-        return
+    if (feedsNoCache(type)) return
     if (type === "USER_UPDATE") {
         userCache.invalidate("users")
         return
@@ -315,6 +292,43 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
         return
     }
     clearCaches(caches)
+}
+
+/** Clear cached messages that a skipped message dispatch could have changed */
+function invalidateMessageDispatch<M extends MessageCore>(
+    caches: ClientCaches<M>,
+    type: string,
+    value: Record<string, unknown> | undefined,
+) {
+    const { cache } = caches
+    // Reactions never change cached message snapshots
+    if (type.startsWith("MESSAGE_REACTION")) return
+    if (value && identifier(value.channel_id)) {
+        if (identifier(value.id)) cache?.delete({ id: value.id, channelId: value.channel_id })
+        else cache?.deleteChannel(value.channel_id)
+    } else if (value && identifier(value.id)) {
+        // Without a usable channel the message can still be found by its ID, which is the cache key
+        cache?.deleteId(value.id)
+    } else if (value && identifier(value.guild_id)) {
+        const guildId = value.guild_id
+        cache?.gap((candidate) => candidate === undefined || candidate === guildId)
+    } else cache?.gap()
+}
+
+/** Whether a dispatch type changes nothing that any cache holds */
+function feedsNoCache(type: string): boolean {
+    return (
+        type === "TYPING_START" ||
+        type.startsWith("PRESENCE_UPDATE") ||
+        type.startsWith("INVITE_") ||
+        type === "WEBHOOKS_UPDATE" ||
+        type === "VOICE_STATE_UPDATE" ||
+        type === "GUILD_AUDIT_LOG_ENTRY_CREATE" ||
+        type === "GUILD_HEALTH_UPDATE" ||
+        // Calls and entrance sounds feed no cache category
+        type.startsWith("CALL_") ||
+        type === "ENTRANCE_SOUND_PLAY"
+    )
 }
 
 /**

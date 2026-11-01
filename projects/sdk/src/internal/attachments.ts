@@ -111,141 +111,182 @@ export function encodeAttachments(value: unknown, edit: boolean) {
         const item: unknown = value[index]
         if (!record(item)) return inputValidationFailure("attachments[]", "type", "Each attachment must be an object")
         const field = fieldsOnce(item)
-        const retainedId = field("id")
-        if (retainedId !== undefined) {
-            if (!edit)
-                return inputValidationFailure(
-                    "attachments[].id",
-                    "relationship",
-                    "Retained attachment IDs are accepted only when editing a message",
-                )
-            if (!identifier(retainedId))
-                return inputValidationFailure("attachments[].id", "format", "Attachment IDs must be decimal strings")
-            const unsupported = unsupportedKeyFailure(
-                item,
-                ["id", "title", "description"],
-                "attachments[]",
-                "A retained attachment",
-            )
-            if (unsupported) return unsupported
-            if (retained.has(retainedId))
-                return inputValidationFailure("attachments[].id", "unique", "Retained attachment IDs must be unique")
-            for (const [key, max] of [
-                ["title", 1024],
-                ["description", 4096],
-            ] as const)
-                if (field(key) !== undefined && field(key) !== null && !normalizedText(field(key), 1, max))
-                    return inputValidationFailure(
-                        `attachments[].${key}`,
-                        "length",
-                        `Retained attachment ${key} must be null or contain 1 through ${max} UTF-16 code units after Fluxer's normalization`,
-                    )
-            retained.add(retainedId)
-            metadataValues.push({
-                id: retainedId,
-                ...(field("title") === undefined ? {} : { title: field("title") }),
-                ...(field("description") === undefined ? {} : { description: field("description") }),
-            })
+        if (field("id") !== undefined) {
+            const retainedMetadata = encodeRetainedAttachment(item, field, edit, retained)
+            if (retainedMetadata instanceof InputValidationFailure) return retainedMetadata
+            metadataValues.push(retainedMetadata)
             continue
         }
         const id = metadataValues.length
-        let source: FileSource
-        let size: number
-        if (Object.prototype.hasOwnProperty.call(item, "data")) {
-            const unsupported = unsupportedKeyFailure(
-                item,
-                ["data", "filename", "contentType", "title", "description", "spoiler"],
-                "attachments[]",
-                "A byte attachment",
-            )
-            if (unsupported) return unsupported
-            const data = field("data")
-            const buffer = data instanceof Uint8Array ? data.buffer : undefined
-            if (!(data instanceof Uint8Array) || !(buffer instanceof ArrayBuffer))
-                return inputValidationFailure(
-                    "attachments[].data",
-                    "type",
-                    "Attachment data must be an ArrayBuffer-backed Uint8Array",
-                )
-            const byteLength = data.byteLength
-            if (byteLength > attachmentMaxBytes)
-                return inputValidationFailure(
-                    "attachments[].data",
-                    "size",
-                    "Attachment data must not exceed 52,428,800 bytes (50 MiB)",
-                )
-            try {
-                new Uint8Array(buffer, data.byteOffset, byteLength)
-            } catch {
-                // allow-silent: A detached or invalid buffer becomes the typed input failure returned below
-                return inputValidationFailure(
-                    "attachments[].data",
-                    "type",
-                    "Attachment data must reference an accessible ArrayBuffer range",
-                )
-            }
-            source = { kind: "bytes", data }
-            size = byteLength
-        } else if (Object.prototype.hasOwnProperty.call(item, "file")) {
-            const unsupported = unsupportedKeyFailure(
-                item,
-                ["file", "filename", "contentType", "title", "description", "spoiler"],
-                "attachments[]",
-                "A file attachment",
-            )
-            if (unsupported) return unsupported
-            const file = field("file")
-            const fileSize = fileSourceSize(file)
-            if (fileSize === undefined)
-                return inputValidationFailure(
-                    "attachments[].file",
-                    "type",
-                    "Attachment files must be File or Blob objects with slice and stream methods and a size from 0 through 52,428,800 bytes (50 MiB)",
-                )
-            source = { kind: "file", file: file as AttachmentFileSource }
-            size = fileSize
-        } else if (Object.prototype.hasOwnProperty.call(item, "stream")) {
-            const unsupported = unsupportedKeyFailure(
-                item,
-                ["stream", "size", "filename", "contentType", "title", "description", "spoiler"],
-                "attachments[]",
-                "A stream attachment",
-            )
-            if (unsupported) return unsupported
-            const stream = field("stream")
-            if (!streamSource(stream))
-                return inputValidationFailure(
-                    "attachments[].stream",
-                    "type",
-                    "Attachment streams must be ReadableStream objects with a getReader method",
-                )
-            const streamSize = field("size")
-            if (
-                typeof streamSize !== "number" ||
-                !Number.isSafeInteger(streamSize) ||
-                streamSize < 0 ||
-                streamSize > attachmentMaxBytes
-            )
-                return inputValidationFailure(
-                    "attachments[].size",
-                    "range",
-                    "Attachment stream size must be an integer from 0 through 52,428,800 bytes (50 MiB)",
-                )
-            source = { kind: "stream", stream }
-            size = streamSize
-        } else
-            return inputValidationFailure(
-                "attachments[]",
-                "required",
-                "Each new attachment must contain exactly one of data, file, or stream",
-            )
+        const selected = encodeAttachmentSource(item, field)
+        if (selected instanceof InputValidationFailure) return selected
         const acceptedContentType = metadata(field, id, metadataValues)
         if (acceptedContentType instanceof InputValidationFailure) return acceptedContentType
         const acceptedFilename = field("filename") as string
         uploadedFilenames.push(acceptedFilename)
-        files.push({ id, filename: acceptedFilename, contentType: acceptedContentType, size, source })
+        files.push({
+            id,
+            filename: acceptedFilename,
+            contentType: acceptedContentType,
+            size: selected.size,
+            source: selected.source,
+        })
     }
     return { metadata: metadataValues, files, uploadedFilenames }
+}
+
+/** Validate an attachment an edit keeps by ID, recording its ID in retained, and return its metadata */
+function encodeRetainedAttachment(
+    item: Record<string, unknown>,
+    field: (key: string) => unknown,
+    edit: boolean,
+    retained: Set<string>,
+): Record<string, unknown> | InputValidationFailure {
+    const retainedId = field("id")
+    if (!edit)
+        return inputValidationFailure(
+            "attachments[].id",
+            "relationship",
+            "Retained attachment IDs are accepted only when editing a message",
+        )
+    if (!identifier(retainedId))
+        return inputValidationFailure("attachments[].id", "format", "Attachment IDs must be decimal strings")
+    const unsupported = unsupportedKeyFailure(
+        item,
+        ["id", "title", "description"],
+        "attachments[]",
+        "A retained attachment",
+    )
+    if (unsupported) return unsupported
+    if (retained.has(retainedId))
+        return inputValidationFailure("attachments[].id", "unique", "Retained attachment IDs must be unique")
+    for (const [key, max] of [
+        ["title", 1024],
+        ["description", 4096],
+    ] as const)
+        if (field(key) !== undefined && field(key) !== null && !normalizedText(field(key), 1, max))
+            return inputValidationFailure(
+                `attachments[].${key}`,
+                "length",
+                `Retained attachment ${key} must be null or contain 1 through ${max} UTF-16 code units after Fluxer's normalization`,
+            )
+    retained.add(retainedId)
+    return {
+        id: retainedId,
+        ...(field("title") === undefined ? {} : { title: field("title") }),
+        ...(field("description") === undefined ? {} : { description: field("description") }),
+    }
+}
+
+type SizedSource = { readonly source: FileSource; readonly size: number }
+
+/** Validate the one byte, file or stream source of a new attachment */
+function encodeAttachmentSource(
+    item: Record<string, unknown>,
+    field: (key: string) => unknown,
+): SizedSource | InputValidationFailure {
+    if (Object.prototype.hasOwnProperty.call(item, "data")) return encodeByteSource(item, field)
+    if (Object.prototype.hasOwnProperty.call(item, "file")) return encodeFileSource(item, field)
+    if (Object.prototype.hasOwnProperty.call(item, "stream")) return encodeStreamSource(item, field)
+    return inputValidationFailure(
+        "attachments[]",
+        "required",
+        "Each new attachment must contain exactly one of data, file, or stream",
+    )
+}
+
+function encodeByteSource(
+    item: Record<string, unknown>,
+    field: (key: string) => unknown,
+): SizedSource | InputValidationFailure {
+    const unsupported = unsupportedKeyFailure(
+        item,
+        ["data", "filename", "contentType", "title", "description", "spoiler"],
+        "attachments[]",
+        "A byte attachment",
+    )
+    if (unsupported) return unsupported
+    const data = field("data")
+    const buffer = data instanceof Uint8Array ? data.buffer : undefined
+    if (!(data instanceof Uint8Array) || !(buffer instanceof ArrayBuffer))
+        return inputValidationFailure(
+            "attachments[].data",
+            "type",
+            "Attachment data must be an ArrayBuffer-backed Uint8Array",
+        )
+    const byteLength = data.byteLength
+    if (byteLength > attachmentMaxBytes)
+        return inputValidationFailure(
+            "attachments[].data",
+            "size",
+            "Attachment data must not exceed 52,428,800 bytes (50 MiB)",
+        )
+    try {
+        new Uint8Array(buffer, data.byteOffset, byteLength)
+    } catch {
+        // allow-silent: A detached or invalid buffer becomes the typed input failure returned below
+        return inputValidationFailure(
+            "attachments[].data",
+            "type",
+            "Attachment data must reference an accessible ArrayBuffer range",
+        )
+    }
+    return { source: { kind: "bytes", data }, size: byteLength }
+}
+
+function encodeFileSource(
+    item: Record<string, unknown>,
+    field: (key: string) => unknown,
+): SizedSource | InputValidationFailure {
+    const unsupported = unsupportedKeyFailure(
+        item,
+        ["file", "filename", "contentType", "title", "description", "spoiler"],
+        "attachments[]",
+        "A file attachment",
+    )
+    if (unsupported) return unsupported
+    const file = field("file")
+    const fileSize = fileSourceSize(file)
+    if (fileSize === undefined)
+        return inputValidationFailure(
+            "attachments[].file",
+            "type",
+            "Attachment files must be File or Blob objects with slice and stream methods and a size from 0 through 52,428,800 bytes (50 MiB)",
+        )
+    return { source: { kind: "file", file: file as AttachmentFileSource }, size: fileSize }
+}
+
+function encodeStreamSource(
+    item: Record<string, unknown>,
+    field: (key: string) => unknown,
+): SizedSource | InputValidationFailure {
+    const unsupported = unsupportedKeyFailure(
+        item,
+        ["stream", "size", "filename", "contentType", "title", "description", "spoiler"],
+        "attachments[]",
+        "A stream attachment",
+    )
+    if (unsupported) return unsupported
+    const stream = field("stream")
+    if (!streamSource(stream))
+        return inputValidationFailure(
+            "attachments[].stream",
+            "type",
+            "Attachment streams must be ReadableStream objects with a getReader method",
+        )
+    const streamSize = field("size")
+    if (
+        typeof streamSize !== "number" ||
+        !Number.isSafeInteger(streamSize) ||
+        streamSize < 0 ||
+        streamSize > attachmentMaxBytes
+    )
+        return inputValidationFailure(
+            "attachments[].size",
+            "range",
+            "Attachment stream size must be an integer from 0 through 52,428,800 bytes (50 MiB)",
+        )
+    return { source: { kind: "stream", stream }, size: streamSize }
 }
 
 export function decodeAttachments(value: unknown): readonly Attachment[] | undefined
@@ -256,58 +297,65 @@ export function decodeAttachments(value: unknown, construct = true): readonly At
     if (!Array.isArray(value)) return undefined
     const result: Attachment[] | undefined = construct ? [] : undefined
     for (const item of value) {
-        if (
-            !record(item) ||
-            !identifier(item.id) ||
-            typeof item.filename !== "string" ||
-            typeof item.size !== "number" ||
-            !Number.isSafeInteger(item.size) ||
-            item.size < 0 ||
-            typeof item.flags !== "number" ||
-            !Number.isSafeInteger(item.flags) ||
-            item.flags < 0
-        )
-            return undefined
-        const out: Record<string, unknown> | undefined = construct
-            ? {
-                  id: item.id,
-                  filename: item.filename,
-                  size: item.size,
-                  flags: item.flags,
-              }
-            : undefined
-        for (const [key, wire] of Object.entries({
-            title: "title",
-            description: "description",
-            contentType: "content_type",
-            contentHash: "content_hash",
-            url: "url",
-            proxyUrl: "proxy_url",
-            placeholder: "placeholder",
-            waveform: "waveform",
-            expiresAt: "expires_at",
-        })) {
-            if (item[wire] == null) continue
-            if (typeof item[wire] !== "string") return undefined
-            if (out) out[key] = item[wire]
-        }
-        for (const key of ["width", "height", "duration"] as const) {
-            if (item[key] == null) continue
-            if (
-                typeof item[key] !== "number" ||
-                !Number.isInteger(item[key]) ||
-                item[key] < -2_147_483_648 ||
-                item[key] > 2_147_483_647
-            )
-                return undefined
-            if (out) out[key] = item[key]
-        }
-        for (const key of ["nsfw", "expired"] as const) {
-            if (item[key] == null) continue
-            if (typeof item[key] !== "boolean") return undefined
-            if (out) out[key] = item[key]
-        }
-        if (out) result!.push(Object.freeze(out) as unknown as Attachment)
+        const decoded = decodeAttachment(item, construct)
+        if (decoded === undefined) return undefined
+        if (result && decoded !== true) result.push(decoded)
     }
     return result ? Object.freeze(result) : true
+}
+
+/** Validate one received attachment. The value true is the validation-only success marker */
+function decodeAttachment(item: unknown, construct: boolean): Attachment | true | undefined {
+    if (
+        !record(item) ||
+        !identifier(item.id) ||
+        typeof item.filename !== "string" ||
+        typeof item.size !== "number" ||
+        !Number.isSafeInteger(item.size) ||
+        item.size < 0 ||
+        typeof item.flags !== "number" ||
+        !Number.isSafeInteger(item.flags) ||
+        item.flags < 0
+    )
+        return undefined
+    const out: Record<string, unknown> | undefined = construct
+        ? {
+              id: item.id,
+              filename: item.filename,
+              size: item.size,
+              flags: item.flags,
+          }
+        : undefined
+    for (const [key, wire] of Object.entries({
+        title: "title",
+        description: "description",
+        contentType: "content_type",
+        contentHash: "content_hash",
+        url: "url",
+        proxyUrl: "proxy_url",
+        placeholder: "placeholder",
+        waveform: "waveform",
+        expiresAt: "expires_at",
+    })) {
+        if (item[wire] == null) continue
+        if (typeof item[wire] !== "string") return undefined
+        if (out) out[key] = item[wire]
+    }
+    for (const key of ["width", "height", "duration"] as const) {
+        if (item[key] == null) continue
+        if (
+            typeof item[key] !== "number" ||
+            !Number.isInteger(item[key]) ||
+            item[key] < -2_147_483_648 ||
+            item[key] > 2_147_483_647
+        )
+            return undefined
+        if (out) out[key] = item[key]
+    }
+    for (const key of ["nsfw", "expired"] as const) {
+        if (item[key] == null) continue
+        if (typeof item[key] !== "boolean") return undefined
+        if (out) out[key] = item[key]
+    }
+    return out ? (Object.freeze(out) as unknown as Attachment) : true
 }

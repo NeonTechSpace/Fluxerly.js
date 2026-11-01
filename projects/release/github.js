@@ -175,6 +175,24 @@ export async function verifyPreparation(github, runId, repository, timing) {
     return result
 }
 
+/**
+ * The versions of published Stable releases, skipping any tag that isn't a valid version
+ * @param {any[]} releases
+ */
+function stableVersions(releases) {
+    return releases
+        .filter((item) => !item.draft && !item.prerelease)
+        .map((item) => {
+            try {
+                parseVersion(item.tag_name.slice(1))
+                return item.tag_name.startsWith("v") ? item.tag_name.slice(1) : null
+            } catch {
+                return null
+            }
+        })
+        .filter(Boolean)
+}
+
 export async function reconcileRelease(
     candidate,
     directory,
@@ -238,9 +256,8 @@ export async function reconcileRelease(
             await wait(Math.min(delay, remaining))
         }
     }
-    let release = await github.release(tag)
-    let createdHere = false
-    if (!release) {
+    /** Creates the draft release, confirming it by reading it back after an uncertain result */
+    async function createDraft() {
         const existingCommit = await github.tagCommit(tag)
         if (existingCommit !== null && existingCommit !== candidate.sourceCommit)
             throw new Error("Existing GitHub tag source conflicts with this candidate")
@@ -259,33 +276,21 @@ export async function reconcileRelease(
             if (isDefiniteRejection(error)) throw rejected(error, "release creation")
             // A network or server failure can follow a completed creation. Never create again here, read back instead
         }
-        release = await awaitVisibility(created?.id)
-        if (!release)
+        const visible = await awaitVisibility(created?.id)
+        if (!visible)
             throw new Error(
                 "GitHub release creation is unconfirmed after a network or server failure, rerun Release publish with the same candidate to reconcile it",
             )
-        createdHere = true
+        return visible
     }
-    const taggedCommit = await github.tagCommit(tag)
-    if (
-        (taggedCommit !== candidate.sourceCommit &&
-            !(taggedCommit === null && release.draft && release.target_commitish === candidate.sourceCommit)) ||
-        release.tag_name !== tag ||
-        release.name !== tag ||
-        release.body !== notes ||
-        release.prerelease !== (candidate.channel !== "stable")
-    )
-        throw new Error("Existing GitHub release tag, source, notes or readiness conflicts with this candidate")
-    // The upload command resolves a draft by tag, not by release ID
-    if (createdHere) {
-        const tagVisible = await awaitVisibility(undefined, (item) => item.id === release.id)
-        if (tagVisible?.id !== release.id)
-            throw new Error("GitHub release tag is not visible for asset upload, rerun Release publish with the same candidate")
-    }
-    for (const asset of release.assets) {
-        if (!expected.has(asset.name)) throw new Error("Existing GitHub release contains an unexpected asset")
-    }
-    for (const [name, bytes] of expected) {
+    /**
+     * Replaces an incomplete asset, uploads a missing one and verifies the contents of the result
+     * @param {any} current
+     * @param {string} name
+     * @param {Buffer} bytes
+     */
+    async function reconcileAsset(current, name, bytes) {
+        let release = current
         let matches = release.assets.filter((asset) => asset.name === name)
         if (matches.length > 1) throw new Error("GitHub release contains duplicate named assets")
         if (matches.length && matches[0].state !== "uploaded") {
@@ -328,59 +333,91 @@ export async function reconcileRelease(
             sha256(await github.download(assets[0].id)) !== sha256(bytes)
         )
             throw new Error("GitHub release asset contents are unconfirmed or conflicting, rerun Release publish with the same candidate")
+        return release
     }
-    const versions = (await github.releases())
-        .filter((item) => !item.draft && !item.prerelease)
-        .map((item) => {
+    /**
+     * Publishes a draft or moves the latest marker, without repeating an update whose result is uncertain
+     * @param {any} current
+     * @param {boolean} latest
+     */
+    async function publish(current, latest) {
+        if (current.draft) {
             try {
-                parseVersion(item.tag_name.slice(1))
-                return item.tag_name.startsWith("v") ? item.tag_name.slice(1) : null
-            } catch {
-                return null
+                await github.update(current.id, {
+                    draft: false,
+                    target_commitish: candidate.sourceCommit,
+                    make_latest: latest ? "true" : "false",
+                })
+            } catch (error) {
+                if (isDefiniteRejection(error)) throw rejected(error, "release publication update")
+                // A network or server failure can follow a completed update. Reconcile without repeating it
             }
-        })
-        .filter(Boolean)
+        } else if (latest && (await github.latest())?.tag_name !== tag) {
+            try {
+                await github.update(current.id, { make_latest: "true" })
+            } catch (error) {
+                if (isDefiniteRejection(error)) throw rejected(error, "latest-release update")
+                // Confirm the latest-release state without issuing a second update
+            }
+        }
+    }
+    /**
+     * Verifies the published release, its tag and every asset against the candidate
+     * @param {any} final
+     */
+    async function assertFinal(final) {
+        if (
+            !final ||
+            final.draft ||
+            final.body !== notes ||
+            final.prerelease !== (candidate.channel !== "stable") ||
+            !(await awaitTagCommit()) ||
+            final.assets.length !== expected.size
+        )
+            throw new Error("GitHub release final readback does not match this candidate")
+        for (const [name, bytes] of expected) {
+            const asset = final.assets.find((item) => item.name === name)
+            if (
+                !asset ||
+                asset.state !== "uploaded" ||
+                asset.size !== bytes.length ||
+                sha256(await github.download(asset.id)) !== sha256(bytes)
+            )
+                throw new Error("GitHub release final asset readback does not match this candidate")
+        }
+    }
+    let release = await github.release(tag)
+    let createdHere = false
+    if (!release) {
+        release = await createDraft()
+        createdHere = true
+    }
+    const taggedCommit = await github.tagCommit(tag)
+    if (
+        (taggedCommit !== candidate.sourceCommit &&
+            !(taggedCommit === null && release.draft && release.target_commitish === candidate.sourceCommit)) ||
+        release.tag_name !== tag ||
+        release.name !== tag ||
+        release.body !== notes ||
+        release.prerelease !== (candidate.channel !== "stable")
+    )
+        throw new Error("Existing GitHub release tag, source, notes or readiness conflicts with this candidate")
+    // The upload command resolves a draft by tag, not by release ID
+    if (createdHere) {
+        const tagVisible = await awaitVisibility(undefined, (item) => item.id === release.id)
+        if (tagVisible?.id !== release.id)
+            throw new Error("GitHub release tag is not visible for asset upload, rerun Release publish with the same candidate")
+    }
+    for (const asset of release.assets) {
+        if (!expected.has(asset.name)) throw new Error("Existing GitHub release contains an unexpected asset")
+    }
+    for (const [name, bytes] of expected) release = await reconcileAsset(release, name, bytes)
+    const versions = stableVersions(await github.releases())
     const latest =
         candidate.channel === "stable" && versions.every((version) => compareVersions(candidate.version, version) >= 0)
-    if (release.draft) {
-        try {
-            await github.update(release.id, {
-                draft: false,
-                target_commitish: candidate.sourceCommit,
-                make_latest: latest ? "true" : "false",
-            })
-        } catch (error) {
-            if (isDefiniteRejection(error)) throw rejected(error, "release publication update")
-            // A network or server failure can follow a completed update. Reconcile without repeating it
-        }
-    } else if (latest && (await github.latest())?.tag_name !== tag) {
-        try {
-            await github.update(release.id, { make_latest: "true" })
-        } catch (error) {
-            if (isDefiniteRejection(error)) throw rejected(error, "latest-release update")
-            // Confirm the latest-release state without issuing a second update
-        }
-    }
+    await publish(release, latest)
     const final = await awaitVisibility(release.id, (item) => !item.draft && item.assets.length === expected.size)
-    if (
-        !final ||
-        final.draft ||
-        final.body !== notes ||
-        final.prerelease !== (candidate.channel !== "stable") ||
-        !(await awaitTagCommit()) ||
-        final.assets.length !== expected.size
-    )
-        throw new Error("GitHub release final readback does not match this candidate")
-    for (const [name, bytes] of expected) {
-        const asset = final.assets.find((item) => item.name === name)
-        if (
-            !asset ||
-            asset.state !== "uploaded" ||
-            asset.size !== bytes.length ||
-            sha256(await github.download(asset.id)) !== sha256(bytes)
-        )
-            throw new Error("GitHub release final asset readback does not match this candidate")
-    }
+    await assertFinal(final)
     if (latest && !(await awaitLatest()))
         throw new Error("GitHub latest-release readback failed, rerun Release publish with the same candidate")
     return { tag, sourceCommit: candidate.sourceCommit, url: final.html_url, latest }

@@ -23,6 +23,7 @@ const codeValue = (value: unknown): value is string =>
     value !== "." &&
     value !== ".."
 
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per invite field
 function decode(value: unknown, inviteBase = hostedInvite): Invite | undefined {
     if (
         !record(value) ||

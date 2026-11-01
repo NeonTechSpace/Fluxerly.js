@@ -37,6 +37,46 @@ function destination(value: unknown, allowInsecure: boolean): value is string {
     }
 }
 
+/** Fill a plan's parts from its single-part or multipart upload fields, returning false for invalid ones */
+function readUploadParts(
+    item: Record<string, unknown>,
+    plan: UploadPlan,
+    file: FilePart,
+    allowInsecure: boolean,
+): boolean {
+    if (item.upload_mode === "singlepart") {
+        if (!destination(item.upload_url, allowInsecure) || (item.file_size as number) > 10_485_760) return false
+        plan.parts.push({ url: item.upload_url, offset: 0, size: file.size })
+        return true
+    }
+    if (item.upload_mode !== "multipart") return false
+    if (
+        !text(item.upload_id, 1024) ||
+        typeof item.part_size !== "number" ||
+        !Number.isSafeInteger(item.part_size) ||
+        item.part_size <= 0 ||
+        item.part_size > 52_428_800 ||
+        !Array.isArray(item.parts) ||
+        item.parts.length === 0 ||
+        item.parts.length > 10_000 ||
+        item.parts.length !== Math.ceil(file.size / item.part_size)
+    )
+        return false
+    plan.uploadId = item.upload_id
+    for (let index = 0; index < item.parts.length; index++) {
+        const part = item.parts[index]
+        if (!record(part) || part.part_number !== index + 1 || !destination(part.upload_url, allowInsecure))
+            return false
+        const offset = index * item.part_size
+        plan.parts.push({
+            url: part.upload_url,
+            offset,
+            size: Math.min(item.part_size, file.size - offset),
+        })
+    }
+    return true
+}
+
 /** Validate the complete plan before dispatching any file bytes. Unknown response properties are discarded */
 export function decodeUploadPlans(
     value: unknown,
@@ -72,35 +112,7 @@ export function decodeUploadPlans(
             key: item.upload_filename,
             parts: [],
         }
-        if (item.upload_mode === "singlepart") {
-            if (!destination(item.upload_url, allowInsecure) || item.file_size > 10_485_760) return undefined
-            plan.parts.push({ url: item.upload_url, offset: 0, size: file.size })
-        } else if (item.upload_mode === "multipart") {
-            if (
-                !text(item.upload_id, 1024) ||
-                typeof item.part_size !== "number" ||
-                !Number.isSafeInteger(item.part_size) ||
-                item.part_size <= 0 ||
-                item.part_size > 52_428_800 ||
-                !Array.isArray(item.parts) ||
-                item.parts.length === 0 ||
-                item.parts.length > 10_000 ||
-                item.parts.length !== Math.ceil(file.size / item.part_size)
-            )
-                return undefined
-            plan.uploadId = item.upload_id
-            for (let index = 0; index < item.parts.length; index++) {
-                const part = item.parts[index]
-                if (!record(part) || part.part_number !== index + 1 || !destination(part.upload_url, allowInsecure))
-                    return undefined
-                const offset = index * item.part_size
-                plan.parts.push({
-                    url: part.upload_url,
-                    offset,
-                    size: Math.min(item.part_size, file.size - offset),
-                })
-            }
-        } else return undefined
+        if (!readUploadParts(item, plan, file, allowInsecure)) return undefined
         for (const part of plan.parts) {
             if (urls.has(part.url)) return undefined
             urls.add(part.url)

@@ -460,6 +460,7 @@ function encodeOverwrites(value: unknown): readonly Record<string, string | numb
     return overwrites
 }
 
+// oxlint-disable-next-line complexity -- a flat encoder, one wire field per channel input field
 function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): string | InputValidationFailure {
     if (!record(input)) return inputValidationFailure("input", "type", "Channel input must be an object")
     const validated = validateOptionalFields(input, create)

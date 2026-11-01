@@ -423,6 +423,31 @@ export function childClientOptions<T extends object>(
     )
 }
 
+function shardTotal(value: unknown): value is number {
+    return safeInteger(value) && value >= 1 && value <= maximumShardCount
+}
+
+/** The restart policy of the restart option, where false turns restarts off */
+function readRestart(restart: unknown): RestartConfiguration | undefined | ConfigurationError {
+    if (restart === false) return undefined
+    if (restart === undefined) return defaultRestart
+    return readCaller(() => restartSettings(restart))
+}
+
+/** The environment of each child: This process's variables, replaced by the caller's overrides */
+function mergedEnvironment(overrides: Iterable<readonly [string, string]>): Map<string, string> {
+    const environment = new Map<string, string>()
+    for (const [key, value] of Object.entries(process.env)) {
+        if (typeof value === "string") environment.set(key, value)
+    }
+    for (const [key, value] of overrides) environment.set(key, value)
+    return environment
+}
+
+function childOutputMode(value: unknown): value is "prefix" | "inherit" | "ignore" {
+    return value === "prefix" || value === "inherit" || value === "ignore"
+}
+
 /**
  * Validate and snapshot supervisor configuration without creating a child process. Each caller field is read once, and
  * only the reads of the options are marked as application input, so a fault in the surrounding validation or logger
@@ -448,7 +473,7 @@ function supervisorSettings(
             new ConfigurationError("entry", 'The supervisor option "entry" must be an absolute path or a file URL'),
         )
     const totalShards = field("totalShards")
-    if (totalShards !== "auto" && (!safeInteger(totalShards) || totalShards < 1 || totalShards > maximumShardCount))
+    if (totalShards !== "auto" && !shardTotal(totalShards))
         return Effect.fail(
             new ConfigurationError(
                 "totalShards",
@@ -479,14 +504,8 @@ function supervisorSettings(
               ? readCaller(() => fixedAssignments(field("assignments"), totalShards))
               : splitShards(totalShards, split)
     if (children instanceof ConfigurationError) return Effect.fail(children)
-    const restart = field("restart")
-    let restartConfiguration: RestartConfiguration | undefined = defaultRestart
-    if (restart === false) restartConfiguration = undefined
-    else if (restart !== undefined) {
-        const configured = readCaller(() => restartSettings(restart))
-        if (configured instanceof ConfigurationError) return Effect.fail(configured)
-        restartConfiguration = configured
-    }
+    const restartConfiguration = readRestart(field("restart"))
+    if (restartConfiguration instanceof ConfigurationError) return Effect.fail(restartConfiguration)
     const identify = readCaller(() => identifySettings(field("identify")))
     if (identify instanceof ConfigurationError) return Effect.fail(identify)
     const diagnosticsInput = field("diagnosticsIntervalMs")
@@ -518,11 +537,7 @@ function supervisorSettings(
         )
     const childEnvironmentOverrides = readCaller(() => childEnvironment(field("childEnvironment")))
     if (childEnvironmentOverrides instanceof ConfigurationError) return Effect.fail(childEnvironmentOverrides)
-    const environment = new Map<string, string>()
-    for (const [key, value] of Object.entries(process.env)) {
-        if (typeof value === "string") environment.set(key, value)
-    }
-    for (const [key, value] of childEnvironmentOverrides) environment.set(key, value)
+    const environment = mergedEnvironment(childEnvironmentOverrides)
     const argsInput = field("args")
     const args = argsInput === undefined ? Object.freeze([]) : readCaller(() => stringArray(argsInput, "args"))
     if (args instanceof ConfigurationError) return Effect.fail(args)
@@ -533,7 +548,7 @@ function supervisorSettings(
     if (execArgv instanceof ConfigurationError) return Effect.fail(execArgv)
     const childOutputInput = field("childOutput")
     const childOutput = childOutputInput === undefined ? "prefix" : childOutputInput
-    if (childOutput !== "prefix" && childOutput !== "inherit" && childOutput !== "ignore")
+    if (!childOutputMode(childOutput))
         return Effect.fail(
             new ConfigurationError(
                 "childOutput",
@@ -1340,9 +1355,24 @@ export class SupervisorOwner {
         if (!record(message) || typeof message.type !== "string")
             return this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
         if ("generation" in message && message.generation !== generation) return
+        if (
+            this.#lifecycleMessage(slot, generation, message) ||
+            this.#identifyRequestMessage(slot, generation, message) ||
+            this.#identifyCancelMessage(slot, generation, message) ||
+            this.#identifySentMessage(slot, generation, message) ||
+            this.#endMessage(slot, message)
+        )
+            return
+        this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+    }
+
+    /** Handle a child's hello, diagnostics, state or ready message. Returns false for any other message */
+    #lifecycleMessage(slot: ChildSlot, generation: number, message: Record<string, unknown>): boolean {
         if (message.type === "hello") {
-            if (!hasExactKeys(message, ["type"]) || slot.hello)
-                return this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+            if (!hasExactKeys(message, ["type"]) || slot.hello) {
+                this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+                return true
+            }
             slot.hello = true
             const { diagnosticsIntervalMs, shutdownTimeoutMs } = this.#configuration!
             this.#send(slot, {
@@ -1356,7 +1386,7 @@ export class SupervisorOwner {
             // A new or restarted child starts with the account's running global pause
             const waitMs = Math.ceil(this.#globalPauseUntil - performance.now())
             if (waitMs > 0) this.#send(slot, { type: "globalPause", generation, waitMs })
-            return
+            return true
         }
         if (
             message.type === "diagnostics" &&
@@ -1369,7 +1399,7 @@ export class SupervisorOwner {
                 receivedAt: Date.now(),
                 client: deepFreeze(message.diagnostics as unknown as ClientDiagnostics),
             })
-            return
+            return true
         }
         if (
             message.type === "state" &&
@@ -1378,7 +1408,7 @@ export class SupervisorOwner {
             !slot.ready &&
             connectionState(message.state)
         )
-            return
+            return true
         if (message.type === "ready" && hasExactKeys(message, ["type", "generation"]) && slot.hello && !slot.ready) {
             slot.ready = true
             slot.readyAt = performance.now()
@@ -1389,7 +1419,7 @@ export class SupervisorOwner {
                 this.#state = "running"
                 Deferred.doneUnsafe(this.#startup, Effect.void)
             }
-            return
+            return true
         }
         if (
             message.type === "state" &&
@@ -1400,9 +1430,14 @@ export class SupervisorOwner {
         ) {
             slot.connectionState = message.state
             this.#refreshReadiness()
-            return
+            return true
         }
-        if (
+        return false
+    }
+
+    /** Queue a child's request to identify. Returns false for any other message */
+    #identifyRequestMessage(slot: ChildSlot, generation: number, message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "identify" &&
             hasExactKeys(message, ["type", "generation", "requestId", "shardId"]) &&
             safeInteger(message.requestId) &&
@@ -1411,54 +1446,64 @@ export class SupervisorOwner {
             slot.hello &&
             slot.ready &&
             slot.configuration.assignment.shardIds.includes(message.shardId)
-        ) {
-            // Every child stops during a reshard, so its request stays unanswered until stopping withdraws it
-            if (this.#resharding !== undefined) return
-            if (
-                this.#pending.some(
-                    (request) =>
-                        request.slot === slot &&
-                        request.generation === generation &&
-                        request.requestId === message.requestId,
-                ) ||
-                (this.#outstanding?.slot === slot &&
-                    this.#outstanding.generation === generation &&
-                    this.#outstanding.requestId === message.requestId)
-            )
-                return this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
-            this.#pending.push({ slot, generation, requestId: message.requestId, shardId: message.shardId })
-            this.#scheduleGrant()
-            return
-        }
+        ))
+            return false
+        // Every child stops during a reshard, so its request stays unanswered until stopping withdraws it
+        if (this.#resharding !== undefined) return true
         if (
+            this.#pending.some(
+                (request) =>
+                    request.slot === slot &&
+                    request.generation === generation &&
+                    request.requestId === message.requestId,
+            ) ||
+            (this.#outstanding?.slot === slot &&
+                this.#outstanding.generation === generation &&
+                this.#outstanding.requestId === message.requestId)
+        ) {
+            this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+            return true
+        }
+        this.#pending.push({ slot, generation, requestId: message.requestId, shardId: message.shardId })
+        this.#scheduleGrant()
+        return true
+    }
+
+    /** Withdraw a child's identify request. Returns false for any other message */
+    #identifyCancelMessage(slot: ChildSlot, generation: number, message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "cancel" &&
             hasExactKeys(message, ["type", "generation", "requestId"]) &&
             safeInteger(message.requestId) &&
             message.requestId >= 0
-        ) {
-            if (
-                this.#outstanding?.slot === slot &&
-                this.#outstanding.generation === generation &&
-                this.#outstanding.requestId === message.requestId
-            ) {
-                if (this.#outstanding.stalled) return
-                this.#clearOutstanding()
-                this.#send(slot, { type: "cancelled", generation, requestId: message.requestId })
-                this.#scheduleGrant()
-                return
-            }
-            this.#pending = this.#pending.filter(
-                (request) =>
-                    !(
-                        request.slot === slot &&
-                        request.generation === generation &&
-                        request.requestId === message.requestId
-                    ),
-            )
-            this.#send(slot, { type: "cancelled", generation, requestId: message.requestId })
-            return
-        }
+        ))
+            return false
         if (
+            this.#outstanding?.slot === slot &&
+            this.#outstanding.generation === generation &&
+            this.#outstanding.requestId === message.requestId
+        ) {
+            if (this.#outstanding.stalled) return true
+            this.#clearOutstanding()
+            this.#send(slot, { type: "cancelled", generation, requestId: message.requestId })
+            this.#scheduleGrant()
+            return true
+        }
+        this.#pending = this.#pending.filter(
+            (request) =>
+                !(
+                    request.slot === slot &&
+                    request.generation === generation &&
+                    request.requestId === message.requestId
+                ),
+        )
+        this.#send(slot, { type: "cancelled", generation, requestId: message.requestId })
+        return true
+    }
+
+    /** Complete the identify a child reports as sent. Returns false for any other message */
+    #identifySentMessage(slot: ChildSlot, generation: number, message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "sent" &&
             hasExactKeys(message, ["type", "generation", "requestId"]) &&
             safeInteger(message.requestId) &&
@@ -1467,35 +1512,42 @@ export class SupervisorOwner {
             this.#outstanding.requestId === message.requestId &&
             // A send before the grant, while the coordinator is still deciding, is a protocol failure
             this.#outstanding.timer !== undefined
-        ) {
-            if (this.#outstanding.stalled) return
-            this.#clearOutstanding()
-            this.#lastIdentifyAt = performance.now()
-            this.#scheduleGrant()
-            return
-        }
-        if (
+        ))
+            return false
+        if (this.#outstanding.stalled) return true
+        this.#clearOutstanding()
+        this.#lastIdentifyAt = performance.now()
+        this.#scheduleGrant()
+        return true
+    }
+
+    /** Handle a child's report that its client closed or failed. Returns false for any other message */
+    #endMessage(slot: ChildSlot, message: Record<string, unknown>): boolean {
+        if (!(
             (message.type === "closed" || message.type === "failed") &&
             hasExactKeys(
                 message,
                 message.type === "closed" ? ["type", "generation"] : ["type", "generation", "reason"],
             ) &&
             slot.hello
+        ))
+            return false
+        if (
+            message.type === "failed" &&
+            message.reason !== "client" &&
+            message.reason !== "configure" &&
+            message.reason !== "sharding"
         ) {
-            if (
-                message.type === "failed" &&
-                message.reason !== "client" &&
-                message.reason !== "configure" &&
-                message.reason !== "sharding"
-            )
-                return this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
-            // An explicit total is the application's plan, so its 4011 closure is an ordinary child failure
-            if (message.type === "failed" && message.reason === "sharding" && this.#configuration!.automatic)
-                return this.#reshard(slot)
-            this.#requestStop(slot)
-            return
+            this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+            return true
         }
-        this.#fail(new SupervisorError(slot.configuration.id, "protocol"))
+        // An explicit total is the application's plan, so its 4011 closure is an ordinary child failure
+        if (message.type === "failed" && message.reason === "sharding" && this.#configuration!.automatic) {
+            this.#reshard(slot)
+            return true
+        }
+        this.#requestStop(slot)
+        return true
     }
 
     /**
@@ -2103,6 +2155,21 @@ export class ChildBridge {
         if (this.#ended) return
         if (!record(message) || typeof message.type !== "string") return this.#protocol()
         if (
+            this.#memberAnswerMessage(message) ||
+            this.#globalPauseMessage(message) ||
+            this.#assignmentMessage(message) ||
+            this.#grantMessage(message) ||
+            this.#cancelledMessage(message) ||
+            this.#deniedMessage(message) ||
+            this.#shutdownMessage(message)
+        )
+            return
+        this.#protocol()
+    }
+
+    /** Deliver the parent's answer to a member request. Returns false for any other message */
+    #memberAnswerMessage(message: Record<string, unknown>): boolean {
+        if (!(
             (message.type === "memberGrant" || message.type === "memberDenied") &&
             hasExactKeys(
                 message,
@@ -2114,32 +2181,40 @@ export class ChildBridge {
             message.generation === this.#generation &&
             safeInteger(message.requestId) &&
             (message.type === "memberGrant" || positiveTimer(message.retryAfterMs))
-        ) {
-            const answer = this.#memberAnswers.get(message.requestId)
-            // An answer after this child stopped waiting is ignored. The child withdrew that request then
-            if (!answer) return
-            this.#memberAnswers.delete(message.requestId)
-            answer(
-                message.type === "memberGrant"
-                    ? this.#grantedMember(message.generation, message.requestId)
-                    : { kind: "refused", retryAfterMs: message.retryAfterMs as number },
-            )
-            return
-        }
-        if (
+        ))
+            return false
+        const answer = this.#memberAnswers.get(message.requestId)
+        // An answer after this child stopped waiting is ignored. The child withdrew that request then
+        if (!answer) return true
+        this.#memberAnswers.delete(message.requestId)
+        answer(
+            message.type === "memberGrant"
+                ? this.#grantedMember(message.generation, message.requestId)
+                : { kind: "refused", retryAfterMs: message.retryAfterMs as number },
+        )
+        return true
+    }
+
+    /** Apply a global pause another child learned. Returns false for any other message */
+    #globalPauseMessage(message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "globalPause" &&
             hasExactKeys(message, ["type", "generation", "waitMs"]) &&
             message.generation === this.#generation &&
             positiveTimer(message.waitMs)
-        ) {
-            const until = performance.now() + message.waitMs
-            if (until > this.#globalPauseUntil) {
-                this.#globalPauseUntil = until
-                this.#onGlobalPause?.(message.waitMs)
-            }
-            return
+        ))
+            return false
+        const until = performance.now() + message.waitMs
+        if (until > this.#globalPauseUntil) {
+            this.#globalPauseUntil = until
+            this.#onGlobalPause?.(message.waitMs)
         }
-        if (
+        return true
+    }
+
+    /** Accept this child's shard assignment. Returns false for any other message */
+    #assignmentMessage(message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "assignment" &&
             hasExactKeys(message, ["type", "generation", "assignment", "diagnosticsIntervalMs", "drainMs"]) &&
             safeInteger(message.generation) &&
@@ -2152,100 +2227,121 @@ export class ChildBridge {
             hasExactKeys(message.assignment, ["totalShards", "shardIds"]) &&
             safeInteger(message.assignment.totalShards) &&
             message.assignment.totalShards > 0
-        ) {
-            if (this.#generation !== undefined) return this.#protocol()
-            const shardIds = assignment(message.assignment.shardIds, message.assignment.totalShards)
-            if (!shardIds) return this.#protocol()
-            this.#generation = message.generation
-            this.#diagnosticsIntervalMs = message.diagnosticsIntervalMs
-            this.#drainMs = message.drainMs
-            Deferred.doneUnsafe(
-                this.#assignment,
-                Effect.succeed(
-                    Object.freeze({
-                        totalShards: message.assignment.totalShards,
-                        shardIds: Object.freeze([...shardIds]),
-                    }),
-                ),
-            )
-            return
+        ))
+            return false
+        if (this.#generation !== undefined) {
+            this.#protocol()
+            return true
         }
-        if (
+        const shardIds = assignment(message.assignment.shardIds, message.assignment.totalShards)
+        if (!shardIds) {
+            this.#protocol()
+            return true
+        }
+        this.#generation = message.generation
+        this.#diagnosticsIntervalMs = message.diagnosticsIntervalMs
+        this.#drainMs = message.drainMs
+        Deferred.doneUnsafe(
+            this.#assignment,
+            Effect.succeed(
+                Object.freeze({
+                    totalShards: message.assignment.totalShards,
+                    shardIds: Object.freeze([...shardIds]),
+                }),
+            ),
+        )
+        return true
+    }
+
+    /** Let a waiting identify send now that the parent granted it. Returns false for any other message */
+    #grantMessage(message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "grant" &&
             hasExactKeys(message, ["type", "generation", "requestId"]) &&
             message.generation === this.#generation &&
             safeInteger(message.requestId)
-        ) {
-            const pending = this.#pending.get(message.requestId)
-            if (!pending) {
-                if (this.#cancelled.delete(message.requestId)) return
-                return this.#protocol()
-            }
-            this.#pending.delete(message.requestId)
-            const generation = this.#generation
-            pending.resume(
-                Effect.uninterruptible(
-                    Effect.try({
-                        try: () => {
-                            if (this.#stopping || this.#ended) throw new Error("closed")
-                            pending.send()
-                            if (
-                                generation === undefined ||
-                                !this.#send({ type: "sent", generation, requestId: message.requestId })
-                            )
-                                throw new Error("closed")
-                        },
-                        catch: () => supervisorStopped(),
-                    }),
-                ),
-            )
-            return
+        ))
+            return false
+        const pending = this.#pending.get(message.requestId)
+        if (!pending) {
+            if (!this.#cancelled.delete(message.requestId)) this.#protocol()
+            return true
         }
-        if (
+        this.#pending.delete(message.requestId)
+        const generation = this.#generation
+        pending.resume(
+            Effect.uninterruptible(
+                Effect.try({
+                    try: () => {
+                        if (this.#stopping || this.#ended) throw new Error("closed")
+                        pending.send()
+                        if (
+                            generation === undefined ||
+                            !this.#send({ type: "sent", generation, requestId: message.requestId })
+                        )
+                            throw new Error("closed")
+                    },
+                    catch: () => supervisorStopped(),
+                }),
+            ),
+        )
+        return true
+    }
+
+    /** Forget an identify the parent confirmed as cancelled. Returns false for any other message */
+    #cancelledMessage(message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "cancelled" &&
             hasExactKeys(message, ["type", "generation", "requestId"]) &&
             message.generation === this.#generation &&
             safeInteger(message.requestId)
-        ) {
-            this.#cancelled.delete(message.requestId)
-            return
-        }
-        if (
+        ))
+            return false
+        this.#cancelled.delete(message.requestId)
+        return true
+    }
+
+    /** Fail a waiting identify the parent's coordinator refused. Returns false for any other message */
+    #deniedMessage(message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "denied" &&
             hasExactKeys(message, ["type", "generation", "requestId"]) &&
             message.generation === this.#generation &&
             safeInteger(message.requestId)
-        ) {
-            const pending = this.#pending.get(message.requestId)
-            if (!pending) {
-                if (this.#cancelled.delete(message.requestId)) return
-                return this.#protocol()
-            }
-            this.#pending.delete(message.requestId)
-            // The parent logged the coordinator's failure. The client retries this like a network failure
-            pending.resume(
-                Effect.fail(
-                    new ConnectionError("gateway", "network", null, {
-                        details: {
-                            detail: "the supervisor's identify coordinator did not grant permission to start a new session",
-                        },
-                        hint: "Check the supervisor's records with code supervisor.identifyPermitFailed and the permit function of its identify.coordinator",
-                    }),
-                ),
-            )
-            return
+        ))
+            return false
+        const pending = this.#pending.get(message.requestId)
+        if (!pending) {
+            if (!this.#cancelled.delete(message.requestId)) this.#protocol()
+            return true
         }
-        if (
+        this.#pending.delete(message.requestId)
+        // The parent logged the coordinator's failure. The client retries this like a network failure
+        pending.resume(
+            Effect.fail(
+                new ConnectionError("gateway", "network", null, {
+                    details: {
+                        detail: "the supervisor's identify coordinator did not grant permission to start a new session",
+                    },
+                    hint: "Check the supervisor's records with code supervisor.identifyPermitFailed and the permit function of its identify.coordinator",
+                }),
+            ),
+        )
+        return true
+    }
+
+    /** Begin stopping when the parent asks. Returns false for any other message */
+    #shutdownMessage(message: Record<string, unknown>): boolean {
+        if (!(
             message.type === "shutdown" &&
             hasExactKeys(message, ["type", "generation"]) &&
             message.generation === this.#generation
-        ) {
-            this.#stopping = true
-            this.#abort.abort()
-            Deferred.doneUnsafe(this.#stop, Effect.void)
-            return
-        }
-        this.#protocol()
+        ))
+            return false
+        this.#stopping = true
+        this.#abort.abort()
+        Deferred.doneUnsafe(this.#stop, Effect.void)
+        return true
     }
 
     #disconnect() {

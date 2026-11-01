@@ -346,6 +346,88 @@ function messageRequest(id: string, messageId?: string, threadId?: string): Webh
     }
 }
 
+function avatarUrlFailure(avatarUrl: unknown): InputValidationFailure | undefined {
+    if (typeof avatarUrl !== "string" || avatarUrl.length > 8192)
+        return inputValidationFailure(
+            "avatarUrl",
+            "format",
+            "Webhook avatarUrl must be an HTTP or HTTPS URL of at most 8,192 characters",
+        )
+    try {
+        const url = new URL(avatarUrl)
+        if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
+            return inputValidationFailure(
+                "avatarUrl",
+                "format",
+                "Webhook avatarUrl must be an HTTP or HTTPS URL without a username or password",
+            )
+    } catch {
+        return inputValidationFailure("avatarUrl", "format", "Webhook avatarUrl must be a valid HTTP or HTTPS URL")
+        // allow-silent: The parse failure becomes the typed input failure
+    }
+    return undefined
+}
+
+/** Encode a forward send, which keeps only the message's nonce, flags and allowed mentions beside its source */
+function encodeWebhookForward(message: Record<string, unknown>, source: unknown): EncodedBody | InputValidationFailure {
+    const forward = encodeForward("0", source, "")
+    const options = encodeMessage(
+        "0",
+        { content: "_", nonce: message.nonce, flags: message.flags, allowedMentions: message.allowedMentions },
+        "",
+    )
+    if (forward instanceof MessageError) return new InputValidationFailure(forward.inputValidation!)
+    if (options instanceof MessageError) return new InputValidationFailure(options.inputValidation!)
+    const payload = JSON.parse(options.json)
+    const forwardPayload = JSON.parse(forward.json)
+    if (message.nonce !== undefined && forwardPayload.nonce !== "")
+        return inputValidationFailure(
+            "nonce",
+            "relationship",
+            "Webhook forwards accept a nonce on the message or its forward source, not both",
+        )
+    return {
+        files: [],
+        json: JSON.stringify({
+            ...(message.flags === undefined ? {} : { flags: payload.flags }),
+            allowed_mentions: payload.allowed_mentions,
+            ...forwardPayload,
+            nonce: message.nonce === undefined ? forwardPayload.nonce : payload.nonce,
+        }),
+    }
+}
+
+/** Encode the message of a webhook send: A plain message, a reply or a forward */
+function encodeWebhookBody(
+    message: Record<string, unknown>,
+    messageReference: unknown,
+): EncodedBody | MessageError | InputValidationFailure {
+    const reference = record(messageReference) ? fieldsOnce(messageReference) : undefined
+    const referenceType = reference?.("type")
+    const replyTarget =
+        reference !== undefined && referenceType === "reply"
+            ? webhookReplyTarget(messageReference, reference)
+            : undefined
+    if (messageReference === undefined) return encodeMessage("0", message, "")
+    if (replyTarget !== undefined)
+        return encodeMessage(replyTarget.channelId, { ...message, messageReference: replyTarget }, "")
+    if (
+        reference !== undefined &&
+        referenceType === "forward" &&
+        Object.keys(messageReference as object).every((key) => ["type", "source"].includes(key)) &&
+        !("content" in message) &&
+        !("embeds" in message) &&
+        !("attachments" in message) &&
+        !("stickerIds" in message)
+    )
+        return encodeWebhookForward(message, reference("source"))
+    return inputValidationFailure(
+        "messageReference",
+        "relationship",
+        "Webhook messageReference must be a valid reply, or a forward with only type and source sent without content, embeds, attachments, or stickerIds",
+    )
+}
+
 export function webhookSend(id: string, value: WebhookMessageInput | string): WebhookValidationResult<Message> {
     const input = messageObject(value)
     if (!record(input))
@@ -414,75 +496,11 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
             "Webhook username must contain 1 through 80 UTF-16 code units after Fluxer's normalization",
         )
     if (avatarUrl !== undefined) {
-        if (typeof avatarUrl !== "string" || avatarUrl.length > 8192)
-            return inputValidationFailure(
-                "avatarUrl",
-                "format",
-                "Webhook avatarUrl must be an HTTP or HTTPS URL of at most 8,192 characters",
-            )
-        try {
-            const url = new URL(avatarUrl)
-            if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
-                return inputValidationFailure(
-                    "avatarUrl",
-                    "format",
-                    "Webhook avatarUrl must be an HTTP or HTTPS URL without a username or password",
-                )
-        } catch {
-            return inputValidationFailure("avatarUrl", "format", "Webhook avatarUrl must be a valid HTTP or HTTPS URL")
-            // allow-silent: The parse failure becomes the typed input failure
-        }
+        const invalidAvatar = avatarUrlFailure(avatarUrl)
+        if (invalidAvatar) return invalidAvatar
     }
-    let body: EncodedBody | MessageError
-    const reference = record(messageReference) ? fieldsOnce(messageReference) : undefined
-    const referenceType = reference?.("type")
-    const replyTarget =
-        reference !== undefined && referenceType === "reply"
-            ? webhookReplyTarget(messageReference, reference)
-            : undefined
-    if (messageReference === undefined) body = encodeMessage("0", message, "")
-    else if (replyTarget !== undefined)
-        body = encodeMessage(replyTarget.channelId, { ...message, messageReference: replyTarget }, "")
-    else if (
-        reference !== undefined &&
-        referenceType === "forward" &&
-        Object.keys(messageReference as object).every((key) => ["type", "source"].includes(key)) &&
-        !("content" in message) &&
-        !("embeds" in message) &&
-        !("attachments" in message) &&
-        !("stickerIds" in message)
-    ) {
-        const forward = encodeForward("0", reference("source"), "")
-        const options = encodeMessage(
-            "0",
-            { content: "_", nonce: message.nonce, flags: message.flags, allowedMentions: message.allowedMentions },
-            "",
-        )
-        if (forward instanceof MessageError) return new InputValidationFailure(forward.inputValidation!)
-        if (options instanceof MessageError) return new InputValidationFailure(options.inputValidation!)
-        const payload = JSON.parse(options.json)
-        const forwardPayload = JSON.parse(forward.json)
-        if (message.nonce !== undefined && forwardPayload.nonce !== "")
-            return inputValidationFailure(
-                "nonce",
-                "relationship",
-                "Webhook forwards accept a nonce on the message or its forward source, not both",
-            )
-        body = {
-            files: [],
-            json: JSON.stringify({
-                ...(message.flags === undefined ? {} : { flags: payload.flags }),
-                allowed_mentions: payload.allowed_mentions,
-                ...forwardPayload,
-                nonce: message.nonce === undefined ? forwardPayload.nonce : payload.nonce,
-            }),
-        }
-    } else
-        return inputValidationFailure(
-            "messageReference",
-            "relationship",
-            "Webhook messageReference must be a valid reply, or a forward with only type and source sent without content, embeds, attachments, or stickerIds",
-        )
+    const body = encodeWebhookBody(message, messageReference)
+    if (body instanceof InputValidationFailure) return body
     if (body instanceof MessageError) return new InputValidationFailure(body.inputValidation!)
     const payload = JSON.parse(body.json)
     if (payload.nonce === "") delete payload.nonce

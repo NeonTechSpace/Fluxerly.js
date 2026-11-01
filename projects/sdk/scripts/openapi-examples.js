@@ -202,6 +202,65 @@ function schemaExamples(spec, root, facts = []) {
      * @param {any} schema
      * @param {Context} context
      * @param {Position} at
+     * @param {boolean} notNull
+     * @returns {unknown}
+     */
+    const buildRef = (schema, context, at, notNull) => {
+        const [name, target] = resolveRef(schema.$ref)
+        if (at.stack.filter((item) => item === name).length >= maximumRepeats) return missing
+        // A full instance spells out each named object schema once and repeats it minimally, bounding the fixture size
+        const repeated = context.mode === "full" && target.type === "object" && context.expanded.has(name)
+        context.expanded.add(name)
+        const inner = repeated ? { ...context, mode: /** @type {const} */ ("minimal") } : context
+        return build(target, inner, { owner: name, local: "", stack: [...at.stack, name], name: at.name }, notNull)
+    }
+
+    /**
+     * @param {any} schema
+     * @param {Context} context
+     * @param {Position} at
+     * @param {boolean} notNull
+     * @returns {unknown}
+     */
+    const buildUnion = (schema, context, at, notNull) => {
+        const union = schema.anyOf
+        const nullable = union.findIndex((/** @type {any} */ branch) => branch?.type === "null")
+        if (context.nulls && nullable >= 0 && !notNull) return null
+        const options = union
+            .map((/** @type {any} */ _, /** @type {number} */ index) => index)
+            .filter((/** @type {number} */ index) => index !== nullable)
+        const index = choose(context, `${at.owner}${at.local}`, options, (item) => label(union[item]))
+        const { anyOf: _anyOf, ...siblings } = schema
+        const value = build({ ...siblings, ...union[index] }, context, at)
+        return value === missing && nullable >= 0 ? null : value
+    }
+
+    /**
+     * @param {any} schema
+     * @param {Context} context
+     * @param {Position} at
+     * @param {boolean} notNull
+     * @returns {unknown}
+     */
+    const buildTypeList = (schema, context, at, notNull) => {
+        const nullable = schema.type.includes("null")
+        if (context.nulls && nullable && !notNull) return null
+        const types = schema.type.filter((/** @type {string} */ type) => type !== "null")
+        if (types.length === 0) return null
+        const index = choose(
+            context,
+            `${at.owner}${at.local}`,
+            types.map((/** @type {string} */ _, /** @type {number} */ index) => index),
+            (item) => types[item],
+        )
+        const value = build({ ...schema, type: types[index] }, context, at)
+        return value === missing && nullable ? null : value
+    }
+
+    /**
+     * @param {any} schema
+     * @param {Context} context
+     * @param {Position} at
      * @param {boolean} [notNull] Keeps a value where the nulls variant would choose null
      * @returns {unknown}
      */
@@ -210,41 +269,12 @@ function schemaExamples(spec, root, facts = []) {
         const unknown = Object.keys(schema).find((key) => !knownKeywords.has(key) && !key.startsWith("x-"))
         if (unknown !== undefined) throw new Error(`Unsupported schema keyword ${unknown} at ${at.owner}${at.local}`)
         if (context.each && at.stack.length === 1 && at.local === `.${context.each.property}`) return context.each.value
-        if (typeof schema.$ref === "string") {
-            const [name, target] = resolveRef(schema.$ref)
-            if (at.stack.filter((item) => item === name).length >= maximumRepeats) return missing
-            // A full instance spells out each named object schema once and repeats it minimally, bounding the fixture size
-            const repeated = context.mode === "full" && target.type === "object" && context.expanded.has(name)
-            context.expanded.add(name)
-            const inner = repeated ? { ...context, mode: /** @type {const} */ ("minimal") } : context
-            return build(target, inner, { owner: name, local: "", stack: [...at.stack, name], name: at.name }, notNull)
-        }
+        if (typeof schema.$ref === "string") return buildRef(schema, context, at, notNull)
         if (schema.const !== undefined) return schema.const
         if (Array.isArray(schema.enum)) return context.mode === "minimal" ? schema.enum[0] : schema.enum.at(-1)
         const union = schema.anyOf
-        if (Array.isArray(union)) {
-            const nullable = union.findIndex((branch) => branch?.type === "null")
-            if (context.nulls && nullable >= 0 && !notNull) return null
-            const options = union.map((_, index) => index).filter((index) => index !== nullable)
-            const index = choose(context, `${at.owner}${at.local}`, options, (item) => label(union[item]))
-            const { anyOf: _anyOf, ...siblings } = schema
-            const value = build({ ...siblings, ...union[index] }, context, at)
-            return value === missing && nullable >= 0 ? null : value
-        }
-        if (Array.isArray(schema.type)) {
-            const nullable = schema.type.includes("null")
-            if (context.nulls && nullable && !notNull) return null
-            const types = schema.type.filter((/** @type {string} */ type) => type !== "null")
-            if (types.length === 0) return null
-            const index = choose(
-                context,
-                `${at.owner}${at.local}`,
-                types.map((/** @type {string} */ _, /** @type {number} */ index) => index),
-                (item) => types[item],
-            )
-            const value = build({ ...schema, type: types[index] }, context, at)
-            return value === missing && nullable ? null : value
-        }
+        if (Array.isArray(union)) return buildUnion(schema, context, at, notNull)
+        if (Array.isArray(schema.type)) return buildTypeList(schema, context, at, notNull)
         switch (schema.type) {
             case "object":
                 return object(schema, context, at)

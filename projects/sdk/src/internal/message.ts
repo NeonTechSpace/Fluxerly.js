@@ -137,14 +137,26 @@ function decodeCreatedFields(
     }
 }
 
-function decodeMessageValue(
-    value: unknown,
-    fields: ReadonlySet<MessageField> | undefined,
-    allowReferencedMessage: boolean,
-    construct: boolean,
-): MessageObservation | true | undefined {
+/** The wire fields a message's scalar checks establish */
+type MessageWire = Record<string, unknown> & {
+    readonly id: string
+    readonly channel_id: string
+    readonly content: string
+    readonly pinned?: boolean
+    readonly tts?: boolean
+    readonly timestamp?: string
+    readonly edited_timestamp?: string | null
+    readonly type?: number
+    readonly flags?: number
+    readonly guild_id?: string
+    readonly mention_everyone?: boolean
+    readonly nonce?: string | null
+    readonly webhook_id?: string | null
+}
+
+function validMessageFields(value: unknown): value is MessageWire {
     if (!record(value) || !identifier(value.id) || !identifier(value.channel_id) || typeof value.content !== "string")
-        return undefined
+        return false
     if (
         (value.pinned !== undefined && typeof value.pinned !== "boolean") ||
         (value.tts !== undefined && typeof value.tts !== "boolean") ||
@@ -158,11 +170,16 @@ function decodeMessageValue(
         (value.mention_everyone !== undefined && typeof value.mention_everyone !== "boolean") ||
         (value.nonce !== undefined && value.nonce !== null && typeof value.nonce !== "string")
     )
-        return undefined
-    if (value.webhook_id != null && !identifier(value.webhook_id)) return undefined
-    const author = decodeMessageUser(value.author, construct)
-    if (!author) return undefined
-    const selected = (field: MessageField) => construct && (fields === undefined || fields.has(field))
+        return false
+    return !(value.webhook_id != null && !identifier(value.webhook_id))
+}
+
+/** Decode a message's nested objects in wire order, returning undefined when any of them is invalid */
+function decodeMessageParts(
+    value: MessageWire,
+    selected: (field: MessageField) => boolean,
+    allowReferencedMessage: boolean,
+) {
     const embeds = decodeEmbeds(value.embeds, selected("embeds"))
     const attachments = decodeAttachments(value.attachments, selected("attachments"))
     const stickers = decodeStickers(value.stickers, selected("stickers"))
@@ -194,11 +211,26 @@ function decodeMessageValue(
         return undefined
     const thread = value.thread === undefined ? undefined : decodeThread(value.thread)
     if (value.thread !== undefined && thread === undefined) return undefined
-    if (!construct) return true
-    return Object.freeze({
-        id: value.id,
-        channelId: value.channel_id,
-        content: value.content,
+    return {
+        embeds,
+        attachments,
+        stickers,
+        mentions,
+        referencedUsers,
+        mentionRoles,
+        nsfwEmojiIds,
+        mentionChannels,
+        reactions,
+        messageReference,
+        messageSnapshots,
+        referencedMessage,
+        thread,
+    }
+}
+
+/** The selected scalar fields of a validated message */
+function messageScalarFields(value: MessageWire, selected: (field: MessageField) => boolean) {
+    return {
         ...(!selected("nonce") || value.nonce === undefined ? {} : { nonce: value.nonce }),
         ...(!selected("webhookId") || value.webhook_id == null ? {} : { webhookId: value.webhook_id }),
         ...(!selected("pinned") || value.pinned === undefined ? {} : { pinned: value.pinned }),
@@ -211,6 +243,17 @@ function decodeMessageValue(
         ...(!selected("mentionedEveryone") || value.mention_everyone === undefined
             ? {}
             : { mentionedEveryone: value.mention_everyone }),
+    }
+}
+
+/** The selected nested objects of a validated message */
+function messagePartFields(
+    parts: NonNullable<ReturnType<typeof decodeMessageParts>>,
+    selected: (field: MessageField) => boolean,
+) {
+    const { embeds, attachments, stickers, mentions, referencedUsers, mentionRoles, nsfwEmojiIds } = parts
+    const { mentionChannels, reactions, messageReference, messageSnapshots, referencedMessage, thread } = parts
+    return {
         ...(embeds === true ? {} : { embeds }),
         ...(attachments === true ? {} : { attachments }),
         ...(stickers === true ? {} : { stickers }),
@@ -224,6 +267,28 @@ function decodeMessageValue(
         ...(messageSnapshots.value === undefined ? {} : { messageSnapshots: messageSnapshots.value }),
         ...(referencedMessage.value === undefined ? {} : { referencedMessage: referencedMessage.value }),
         ...(!selected("thread") || thread === undefined ? {} : { thread }),
+    }
+}
+
+function decodeMessageValue(
+    value: unknown,
+    fields: ReadonlySet<MessageField> | undefined,
+    allowReferencedMessage: boolean,
+    construct: boolean,
+): MessageObservation | true | undefined {
+    if (!validMessageFields(value)) return undefined
+    const author = decodeMessageUser(value.author, construct)
+    if (!author) return undefined
+    const selected = (field: MessageField) => construct && (fields === undefined || fields.has(field))
+    const parts = decodeMessageParts(value, selected, allowReferencedMessage)
+    if (!parts) return undefined
+    if (!construct) return true
+    return Object.freeze({
+        id: value.id,
+        channelId: value.channel_id,
+        content: value.content,
+        ...messageScalarFields(value, selected),
+        ...messagePartFields(parts, selected),
         author: author as MessageUser,
     })
 }
@@ -249,6 +314,7 @@ function decodeStickers(value: unknown, construct = true): readonly MessageStick
     return stickers ? Object.freeze(stickers) : true
 }
 
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per user field
 function decodeMessageUser(value: unknown, construct = true): MessageUser | true | undefined {
     if (
         !record(value) ||
@@ -546,6 +612,50 @@ export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefi
     })
 }
 
+function encodeStickerIds(stickerInput: unknown): readonly unknown[] | undefined | InputValidationFailure {
+    if (stickerInput === undefined) return undefined
+    if (!Array.isArray(stickerInput))
+        return inputValidationFailure("stickerIds", "type", "Sticker IDs must be an array")
+    const count = stickerInput.length
+    if (count > 3)
+        return inputValidationFailure("stickerIds", "length", "A message may contain at most three sticker IDs")
+    const stickerIds = snapshotArray(stickerInput, count)
+    if (!stickerIds.every(identifier))
+        return inputValidationFailure("stickerIds[]", "format", "Sticker IDs must be decimal strings")
+    return stickerIds
+}
+
+function hasMessageContent(
+    content: unknown,
+    body: { readonly embeds?: readonly unknown[] },
+    fileCount: number,
+    stickerIds: readonly unknown[] | undefined,
+): boolean {
+    return (
+        (typeof content === "string" && content.length > 0) ||
+        !!body.embeds?.length ||
+        !!fileCount ||
+        !!stickerIds?.length
+    )
+}
+
+function encodeReplyReference(rawReference: unknown, channelId: string) {
+    const ref = rawReference === undefined ? undefined : snapshotReference(rawReference)
+    if (rawReference !== undefined && ref === undefined)
+        return inputValidationFailure(
+            "messageReference",
+            "format",
+            "Message references require decimal id and channelId strings",
+        )
+    if (ref !== undefined && ref.channelId !== channelId)
+        return inputValidationFailure(
+            "messageReference.channelId",
+            "relationship",
+            "A reply reference must point to a message in the destination channel",
+        )
+    return ref
+}
+
 const messageInputKeys: readonly string[] = [
     "content",
     "nonce",
@@ -594,20 +704,8 @@ export function encodeMessage(
     if (attachments instanceof InputValidationFailure) return invalid(attachments)
     const body = encodeBody(field, attachments.uploadedFilenames)
     if (body instanceof InputValidationFailure) return invalid(body)
-    const stickerInput = field("stickerIds")
-    let stickerIds: readonly unknown[] | undefined
-    if (stickerInput !== undefined) {
-        if (!Array.isArray(stickerInput))
-            return invalid(inputValidationFailure("stickerIds", "type", "Sticker IDs must be an array"))
-        const count = stickerInput.length
-        if (count > 3)
-            return invalid(
-                inputValidationFailure("stickerIds", "length", "A message may contain at most three sticker IDs"),
-            )
-        stickerIds = snapshotArray(stickerInput, count)
-        if (!stickerIds.every(identifier))
-            return invalid(inputValidationFailure("stickerIds[]", "format", "Sticker IDs must be decimal strings"))
-    }
+    const stickerIds = encodeStickerIds(field("stickerIds"))
+    if (stickerIds instanceof InputValidationFailure) return invalid(stickerIds)
     const flags = field("flags")
     if (flags !== undefined && !writableFlags(flags))
         return invalid(
@@ -628,13 +726,7 @@ export function encodeMessage(
                 "A message must contain non-empty content, an embed, an attachment, or a sticker",
             ),
         )
-    const content = field("content")
-    if (
-        !(typeof content === "string" && content.length > 0) &&
-        !body.embeds?.length &&
-        !attachments.files.length &&
-        !stickerIds?.length
-    )
+    if (!hasMessageContent(field("content"), body, attachments.files.length, stickerIds))
         return invalid(
             inputValidationFailure(
                 "input",
@@ -644,24 +736,8 @@ export function encodeMessage(
         )
     const mentions = encodeAllowedMentions(field("allowedMentions"))
     if (mentions instanceof InputValidationFailure) return invalid(mentions)
-    const rawReference = replyTarget ?? field("messageReference")
-    const ref = rawReference === undefined ? undefined : snapshotReference(rawReference)
-    if (rawReference !== undefined && ref === undefined)
-        return invalid(
-            inputValidationFailure(
-                "messageReference",
-                "format",
-                "Message references require decimal id and channelId strings",
-            ),
-        )
-    if (ref !== undefined && ref.channelId !== channelId)
-        return invalid(
-            inputValidationFailure(
-                "messageReference.channelId",
-                "relationship",
-                "A reply reference must point to a message in the destination channel",
-            ),
-        )
+    const ref = encodeReplyReference(replyTarget ?? field("messageReference"), channelId)
+    if (ref instanceof InputValidationFailure) return invalid(ref)
     return {
         files: attachments.files,
         json: JSON.stringify({

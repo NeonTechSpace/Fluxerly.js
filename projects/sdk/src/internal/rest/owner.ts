@@ -90,7 +90,7 @@ import { RestAdmission } from "./admission.js"
 import { defaultRestConfiguration, type RestConfiguration } from "./options.js"
 import { RestRequestError, type RestRequest, type RestRequestFailure, type RestResponse } from "#sdk/rest"
 import type { RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
-import { isReadRequest, runAttempt, type Request } from "./attempt.js"
+import { isReadRequest, runAttempt, type AttemptResult, type Request } from "./attempt.js"
 import { encodeRestRequest, readRestResponse } from "./request.js"
 import {
     inputFailure,
@@ -112,6 +112,13 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
 /** Longest single timer delay, and the largest accepted timeoutMs */
 const maximumTimerMs = 2_147_483_647
+
+/** An attempt that a confirmed rate limit ended */
+type RetryAttempt = Extract<AttemptResult<unknown>, { readonly kind: "retry" }>
+
+function operationTimeout(value: unknown): value is number {
+    return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= maximumTimerMs
+}
 // JSON.stringify writes a lone surrogate as an escape and a valid pair as its own characters, so in the JSON the SDK
 // encodes, such an escape after an even run of backslashes is a lone surrogate
 const loneSurrogateEscape = /(?<!\\)(?:\\\\)*\\ud[89a-f][0-9a-f]{2}/
@@ -1035,6 +1042,105 @@ export class RestOwner<M extends MessageCore = Message> {
             let retries = 0
             let attempts = 0
             let until = 0
+            /** Log a failed attempt that the application should hear about whether or not the request retries */
+            const logAttemptFailure = (error: unknown) => {
+                // Admission fails a request whose learned wait outlasts its deadline. That is the only rate-limit
+                // failure without an HTTP status, and it is logged like a 429 whose wait passes the deadline
+                if (
+                    error instanceof RestFailure &&
+                    error.reason === "rateLimit" &&
+                    error.status === null &&
+                    error.retryAfterMs !== null
+                )
+                    runtime.logging?.log(
+                        {
+                            level: deadlineLevel(template, error.retryAfterMs),
+                            category: "ratelimit",
+                            code: "ratelimit.deadline",
+                            message: `${request.method} ${template} is rate-limited for another ${error.retryAfterMs} ms, which is past its timeout, so it fails without waiting`,
+                            route: template,
+                            delayMs: error.retryAfterMs,
+                            fields: { method: request.method },
+                        },
+                        fiber.context,
+                    )
+                // An unusable success response usually means a Fluxer schema change or a wrong test fixture,
+                // so it is logged once per route and field, mirroring gateway.dispatchRejected. A caller-described
+                // route has no expected shape, so its failure is only returned to the caller
+                if (error instanceof RestFailure && error.reason === "response" && !request.callerDescribed)
+                    runtime.logging?.log(
+                        {
+                            level: "warn",
+                            category: "rest",
+                            code: "rest.responseRejected",
+                            message: `${request.method} ${template} returned an answer in an unexpected format${error.responseField === null ? "" : `: ${responseFieldText(error.responseField)}`}`,
+                            route: template,
+                            ...(error.status === null ? {} : { status: error.status }),
+                            fields: { method: request.method, field: error.responseField ?? undefined },
+                        },
+                        fiber.context,
+                    )
+            }
+            /** The failure of a rate-limited request that cannot wait and send again */
+            const rateLimitFailure = (response: RetryAttempt) =>
+                new RestFailure({
+                    reason: "rateLimit",
+                    outcome: progress.outcome,
+                    status: 429,
+                    retryAfterMs: response.retry,
+                    apiError: response.apiError,
+                    providerCode: response.providerCode ?? null,
+                })
+            /** Report a 429 whose wait passes the deadline. No wait happens, so this is not counted as a rate-limit wait */
+            const logRateLimitDeadline = (response: RetryAttempt) =>
+                runtime.logging?.log(
+                    {
+                        level: response.retry >= longRateLimitWaitMs ? "warn" : "debug",
+                        category: "ratelimit",
+                        code: "ratelimit.deadline",
+                        message: `${request.method} ${template} was rate-limited${response.global ? " globally" : ""} for ${response.retry} ms, which is past its timeout, so it fails without waiting`,
+                        route: template,
+                        status: 429,
+                        delayMs: response.retry,
+                        attempt: attempts,
+                        fields: { method: request.method, global: response.global, ...response.details },
+                    },
+                    fiber.context,
+                )
+            /** Count, observe and log a 429 that the request waits out before sending again */
+            const reportRateLimitWait = (response: RetryAttempt) => {
+                metrics.rateLimitWait(response.retry, fiber.context)
+                emitObservation(runtime.logging, {
+                    type: "rateLimit",
+                    method: request.method,
+                    route: template,
+                    waitMs: response.retry,
+                    global: response.global,
+                    ...response.details,
+                    // Log fields are masked by the logger, while observations go straight to the application
+                    ...(response.details.scope === undefined
+                        ? {}
+                        : { scope: maskText(response.details.scope, runtime.logging?.secrets) }),
+                    ...(response.details.bucket === undefined
+                        ? {}
+                        : { bucket: maskText(response.details.bucket, runtime.logging?.secrets) }),
+                })
+                runtime.logging?.drop(
+                    "rateLimitWaits",
+                    {
+                        level: response.retry >= longRateLimitWaitMs ? "warn" : "debug",
+                        category: "ratelimit",
+                        code: "ratelimit.wait",
+                        message: `${request.method} ${template} was rate-limited${response.global ? " globally" : ""}, so it waits ${response.retry} ms before retrying`,
+                        route: template,
+                        status: 429,
+                        delayMs: response.retry,
+                        attempt: attempts,
+                        fields: { method: request.method, global: response.global, ...response.details },
+                    },
+                    fiber.context,
+                )
+            }
             while (true) {
                 const retryCount = attempts++
                 const attempt = yield* Effect.uninterruptibleMask((restore) =>
@@ -1077,42 +1183,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     if (reason?._tag !== "Fail")
                         return yield* Effect.die(new Error("REST request failed without a cause"))
                     const error = reason.error
-                    // Admission fails a request whose learned wait outlasts its deadline. That is the only rate-limit
-                    // failure without an HTTP status, and it is logged like a 429 whose wait passes the deadline
-                    if (
-                        error instanceof RestFailure &&
-                        error.reason === "rateLimit" &&
-                        error.status === null &&
-                        error.retryAfterMs !== null
-                    )
-                        runtime.logging?.log(
-                            {
-                                level: deadlineLevel(template, error.retryAfterMs),
-                                category: "ratelimit",
-                                code: "ratelimit.deadline",
-                                message: `${request.method} ${template} is rate-limited for another ${error.retryAfterMs} ms, which is past its timeout, so it fails without waiting`,
-                                route: template,
-                                delayMs: error.retryAfterMs,
-                                fields: { method: request.method },
-                            },
-                            fiber.context,
-                        )
-                    // An unusable success response usually means a Fluxer schema change or a wrong test fixture,
-                    // so it is logged once per route and field, mirroring gateway.dispatchRejected. A caller-described
-                    // route has no expected shape, so its failure is only returned to the caller
-                    if (error instanceof RestFailure && error.reason === "response" && !request.callerDescribed)
-                        runtime.logging?.log(
-                            {
-                                level: "warn",
-                                category: "rest",
-                                code: "rest.responseRejected",
-                                message: `${request.method} ${template} returned an answer in an unexpected format${error.responseField === null ? "" : `: ${responseFieldText(error.responseField)}`}`,
-                                route: template,
-                                ...(error.status === null ? {} : { status: error.status }),
-                                fields: { method: request.method, field: error.responseField ?? undefined },
-                            },
-                            fiber.context,
-                        )
+                    logAttemptFailure(error)
                     if (
                         request.method !== "GET" ||
                         !(error instanceof RestFailure) ||
@@ -1148,75 +1219,13 @@ export class RestOwner<M extends MessageCore = Message> {
                     (request.inlineAttachments || request.webhookId) &&
                     request.sources?.some((source) => !source.replayable)
                 )
-                    return yield* Effect.fail(
-                        new RestFailure({
-                            reason: "rateLimit",
-                            outcome: progress.outcome,
-                            status: 429,
-                            retryAfterMs: response.retry,
-                            apiError: response.apiError,
-                            providerCode: response.providerCode ?? null,
-                        }),
-                    )
+                    return yield* Effect.fail(rateLimitFailure(response))
                 until = runtime.logical.now() + response.retry
                 if (until >= deadline) {
-                    // No wait happens: The request fails now, so this is not counted as a rate-limit wait
-                    runtime.logging?.log(
-                        {
-                            level: response.retry >= longRateLimitWaitMs ? "warn" : "debug",
-                            category: "ratelimit",
-                            code: "ratelimit.deadline",
-                            message: `${request.method} ${template} was rate-limited${response.global ? " globally" : ""} for ${response.retry} ms, which is past its timeout, so it fails without waiting`,
-                            route: template,
-                            status: 429,
-                            delayMs: response.retry,
-                            attempt: attempts,
-                            fields: { method: request.method, global: response.global, ...response.details },
-                        },
-                        fiber.context,
-                    )
-                    return yield* Effect.fail(
-                        new RestFailure({
-                            reason: "rateLimit",
-                            outcome: progress.outcome,
-                            status: 429,
-                            retryAfterMs: response.retry,
-                            apiError: response.apiError,
-                            providerCode: response.providerCode ?? null,
-                        }),
-                    )
+                    logRateLimitDeadline(response)
+                    return yield* Effect.fail(rateLimitFailure(response))
                 }
-                metrics.rateLimitWait(response.retry, fiber.context)
-                emitObservation(runtime.logging, {
-                    type: "rateLimit",
-                    method: request.method,
-                    route: template,
-                    waitMs: response.retry,
-                    global: response.global,
-                    ...response.details,
-                    // Log fields are masked by the logger, while observations go straight to the application
-                    ...(response.details.scope === undefined
-                        ? {}
-                        : { scope: maskText(response.details.scope, runtime.logging?.secrets) }),
-                    ...(response.details.bucket === undefined
-                        ? {}
-                        : { bucket: maskText(response.details.bucket, runtime.logging?.secrets) }),
-                })
-                runtime.logging?.drop(
-                    "rateLimitWaits",
-                    {
-                        level: response.retry >= longRateLimitWaitMs ? "warn" : "debug",
-                        category: "ratelimit",
-                        code: "ratelimit.wait",
-                        message: `${request.method} ${template} was rate-limited${response.global ? " globally" : ""}, so it waits ${response.retry} ms before retrying`,
-                        route: template,
-                        status: 429,
-                        delayMs: response.retry,
-                        attempt: attempts,
-                        fields: { method: request.method, global: response.global, ...response.details },
-                    },
-                    fiber.context,
-                )
+                reportRateLimitWait(response)
             }
         })
     }
@@ -1611,12 +1620,7 @@ export class RestOwner<M extends MessageCore = Message> {
                 return Effect.fail(localInputFailure("options", "type", "Operation options must be an object"))
             if (unsupported) return Effect.fail(unsupported)
             const timeout = requested.timeoutMs === undefined ? runtime.settings.defaultTimeoutMs : requested.timeoutMs
-            if (
-                typeof timeout !== "number" ||
-                !Number.isSafeInteger(timeout) ||
-                timeout <= 0 ||
-                timeout > maximumTimerMs
-            )
+            if (!operationTimeout(timeout))
                 return Effect.fail(
                     localInputFailure(
                         "options.timeoutMs",

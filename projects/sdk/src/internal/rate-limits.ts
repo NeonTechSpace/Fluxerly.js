@@ -67,6 +67,69 @@ export function rateRoute(
     return { key: `${route}|${fallback}`, parameters }
 }
 
+/** The values one response reports for a bucket */
+type BucketObservation = {
+    readonly remaining: number
+    readonly until: number
+    readonly sequence: number
+    readonly limit: number | undefined
+    readonly next: number | undefined
+}
+
+/** How an observation relates to the live bucket it updates */
+function compareObservation(active: Bucket | undefined, observation: BucketObservation) {
+    const { remaining, sequence, limit } = observation
+    const newest = !active || sequence >= active.sequence
+    const changedLimit = active?.limit !== undefined && limit !== undefined && active.limit !== limit
+    const refreshedProbe = active?.probeSequence !== undefined && sequence === active.probeSequence
+    const observedProbeRemaining =
+        active?.probeRoute === undefined ? undefined : Math.min(active.probeRemaining ?? remaining, remaining)
+    const conservativeProbe = active?.probeIncomplete === true || (active?.probeRoute !== undefined && changedLimit)
+    const refreshesSchedule = newest || refreshedProbe
+    const retainedLimit = newest
+        ? changedLimit
+            ? Math.min(active!.limit!, limit!)
+            : (limit ?? active?.limit)
+        : active?.limit
+    return { changedLimit, refreshedProbe, observedProbeRemaining, conservativeProbe, refreshesSchedule, retainedLimit }
+}
+
+/** The bucket after one observation, which can only tighten a live bucket's remaining requests and pause */
+function mergedBucket(active: Bucket | undefined, observation: BucketObservation): Bucket {
+    const { remaining, until, sequence, next } = observation
+    const {
+        changedLimit,
+        refreshedProbe,
+        observedProbeRemaining,
+        conservativeProbe,
+        refreshesSchedule,
+        retainedLimit,
+    } = compareObservation(active, observation)
+    return {
+        remaining: refreshedProbe
+            ? conservativeProbe
+                ? 0
+                : (observedProbeRemaining ?? remaining)
+            : Math.min(active?.remaining ?? remaining, remaining),
+        until: Math.max(active?.until ?? 0, until),
+        ...(refreshesSchedule && !changedLimit && !conservativeProbe && next !== undefined
+            ? { next: Math.max(active?.next ?? 0, next) }
+            : !refreshesSchedule && active?.next !== undefined
+              ? { next: active.next }
+              : {}),
+        ...(retainedLimit === undefined ? {} : { limit: retainedLimit }),
+        sequence: Math.max(active?.sequence ?? 0, sequence),
+        ...(!refreshedProbe && active?.probeRoute !== undefined
+            ? {
+                  probeRoute: active.probeRoute,
+                  ...(active.probeSequence === undefined ? {} : { probeSequence: active.probeSequence }),
+                  ...(observedProbeRemaining === undefined ? {} : { probeRemaining: observedProbeRemaining }),
+                  ...(conservativeProbe ? { probeIncomplete: true as const } : {}),
+              }
+            : {}),
+    }
+}
+
 /** Per-client bucket learning. Eviction cannot discard an unexpired denial */
 export class RateLimits {
     #aliases = new Map<string, Alias>()
@@ -149,58 +212,64 @@ export class RateLimits {
         next?: number,
     ) {
         const previous = this.#buckets.get(key)
-        if (!previous || previous.until <= now) {
-            for (const [candidate, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(candidate)
-            if (!this.#buckets.has(key) && this.#buckets.size >= capacity) {
-                for (const [candidate, bucket] of this.#buckets) {
-                    if (bucket.remaining > 0) {
-                        this.#buckets.delete(candidate)
+        if ((!previous || previous.until <= now) && !this.#roomFor(key, until, now)) return
+        const active = previous && previous.until > now ? previous : undefined
+        this.#buckets.set(key, mergedBucket(active, { remaining, until, sequence, limit, next }))
+    }
+
+    /**
+     * Make room for a bucket with no live entry, dropping expired buckets and then one bucket with requests left. Without
+     * room this returns false and pauses conservatively rather than forgetting a known limit
+     */
+    #roomFor(key: string, until: number, now: number): boolean {
+        for (const [candidate, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(candidate)
+        if (!this.#buckets.has(key) && this.#buckets.size >= capacity) {
+            for (const [candidate, bucket] of this.#buckets) {
+                if (bucket.remaining > 0) {
+                    this.#buckets.delete(candidate)
+                    break
+                }
+            }
+        }
+        if (!this.#buckets.has(key) && this.#buckets.size >= capacity) {
+            // At capacity, pause conservatively rather than forgetting a known limit
+            this.#overflowUntil = Math.max(this.#overflowUntil, until)
+            return false
+        }
+        return true
+    }
+
+    /** Map a route to the bucket a valid header names, returning the key and whether conservative overflow must apply */
+    #learnBucket(attempt: RateAttempt, header: string, previous: Alias | undefined, now: number) {
+        const { route, sequence } = attempt
+        const parameters = rateLimitParameters.get(header) ?? []
+        let missingParameters = parameters.some((name) => route.parameters[name] === undefined)
+        const key = `b:${header}:${digest(JSON.stringify(parameters.map((name) => route.parameters[name] ?? "")))}`
+        // A response from an older dispatched attempt must not undo a newer mapping
+        if (!previous || sequence >= previous.sequence) {
+            if (!previous && this.#aliases.size >= capacity) {
+                for (const [candidate, alias] of this.#aliases) {
+                    if (!this.#protected(alias.key, now) && alias.carryUntil <= now) {
+                        this.#aliases.delete(candidate)
                         break
                     }
                 }
             }
-            if (!this.#buckets.has(key) && this.#buckets.size >= capacity) {
-                // At capacity, pause conservatively rather than forgetting a known limit
-                this.#overflowUntil = Math.max(this.#overflowUntil, until)
-                return
-            }
+            if (previous || this.#aliases.size < capacity) {
+                this.#aliases.delete(route.key)
+                this.#aliases.set(route.key, {
+                    key,
+                    sequence,
+                    expires: now + aliasIdleMs,
+                    carryUntil: Math.max(
+                        previous?.carryUntil ?? 0,
+                        previous && previous.key !== key ? this.#wait(previous.key, now) : 0,
+                        this.#wait(provisional(route.key), now),
+                    ),
+                })
+            } else missingParameters = true
         }
-        const active = previous && previous.until > now ? previous : undefined
-        const newest = !active || sequence >= active.sequence
-        const changedLimit = active?.limit !== undefined && limit !== undefined && active.limit !== limit
-        const refreshedProbe = active?.probeSequence !== undefined && sequence === active.probeSequence
-        const observedProbeRemaining =
-            active?.probeRoute === undefined ? undefined : Math.min(active.probeRemaining ?? remaining, remaining)
-        const conservativeProbe = active?.probeIncomplete === true || (active?.probeRoute !== undefined && changedLimit)
-        const refreshesSchedule = newest || refreshedProbe
-        const retainedLimit = newest
-            ? changedLimit
-                ? Math.min(active!.limit!, limit!)
-                : (limit ?? active?.limit)
-            : active?.limit
-        this.#buckets.set(key, {
-            remaining: refreshedProbe
-                ? conservativeProbe
-                    ? 0
-                    : (observedProbeRemaining ?? remaining)
-                : Math.min(active?.remaining ?? remaining, remaining),
-            until: Math.max(active?.until ?? 0, until),
-            ...(refreshesSchedule && !changedLimit && !conservativeProbe && next !== undefined
-                ? { next: Math.max(active?.next ?? 0, next) }
-                : !refreshesSchedule && active?.next !== undefined
-                  ? { next: active.next }
-                  : {}),
-            ...(retainedLimit === undefined ? {} : { limit: retainedLimit }),
-            sequence: Math.max(active?.sequence ?? 0, sequence),
-            ...(!refreshedProbe && active?.probeRoute !== undefined
-                ? {
-                      probeRoute: active.probeRoute,
-                      ...(active.probeSequence === undefined ? {} : { probeSequence: active.probeSequence }),
-                      ...(observedProbeRemaining === undefined ? {} : { probeRemaining: observedProbeRemaining }),
-                      ...(conservativeProbe ? { probeIncomplete: true as const } : {}),
-                  }
-                : {}),
-        })
+        return { key, missingParameters }
     }
 
     observe(attempt: RateAttempt, response: Response, now: number): string {
@@ -209,35 +278,8 @@ export class RateLimits {
         const header = response.headers.get("x-ratelimit-bucket")
         let key = previous?.key ?? provisional(route.key)
         let missingParameters = false
-        if (header !== null && /^[a-zA-Z0-9_-]{1,128}$/.test(header)) {
-            const parameters = rateLimitParameters.get(header) ?? []
-            missingParameters = parameters.some((name) => route.parameters[name] === undefined)
-            key = `b:${header}:${digest(JSON.stringify(parameters.map((name) => route.parameters[name] ?? "")))}`
-            // A response from an older dispatched attempt must not undo a newer mapping
-            if (!previous || sequence >= previous.sequence) {
-                if (!previous && this.#aliases.size >= capacity) {
-                    for (const [candidate, alias] of this.#aliases) {
-                        if (!this.#protected(alias.key, now) && alias.carryUntil <= now) {
-                            this.#aliases.delete(candidate)
-                            break
-                        }
-                    }
-                }
-                if (previous || this.#aliases.size < capacity) {
-                    this.#aliases.delete(route.key)
-                    this.#aliases.set(route.key, {
-                        key,
-                        sequence,
-                        expires: now + aliasIdleMs,
-                        carryUntil: Math.max(
-                            previous?.carryUntil ?? 0,
-                            previous && previous.key !== key ? this.#wait(previous.key, now) : 0,
-                            this.#wait(provisional(route.key), now),
-                        ),
-                    })
-                } else missingParameters = true
-            }
-        }
+        if (header !== null && /^[a-zA-Z0-9_-]{1,128}$/.test(header))
+            ({ key, missingParameters } = this.#learnBucket(attempt, header, previous, now))
         const remainingText = response.headers.get("x-ratelimit-remaining")
         const resetText = response.headers.get("x-ratelimit-reset-after")
         const limitText = response.headers.get("x-ratelimit-limit")

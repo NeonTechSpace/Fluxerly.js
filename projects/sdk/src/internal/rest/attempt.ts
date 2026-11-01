@@ -349,6 +349,31 @@ export function runAttempt<A, M extends MessageCore>(
         const target = /^\/(channels|guilds)\/(\d{1,20})(?:[/?]|$)/.exec(path)
         return target === null ? "" : ` for ${target[1] === "channels" ? "channel" : "community"} ${target[2]}`
     }
+    /** The record of a rejected token or permission */
+    const rejectedRecord = (rejection: RestFailure, status: number, apiError: string | undefined): LogInput => ({
+        level: "warn",
+        category: "rest",
+        code: "rest.rejected",
+        message: `${request.method} ${template} was rejected${targetText(request.path)}: ${
+            rejection.apiError?.explanation ??
+            (apiError === undefined
+                ? "Fluxer refused the request"
+                : `Fluxer returned ${apiError}, a code this SDK version does not describe yet`)
+        } (${rejection.apiError === null || apiError === undefined ? "" : `${apiError}, `}HTTP ${status})`,
+        route: template,
+        status,
+        fields: {
+            method: request.method,
+            apiError,
+            // Token-authenticated webhook routes send the webhook token, not the bot token
+            hint: apiErrorHint(
+                rejection.apiError,
+                status,
+                request.webhookId === undefined ? "bot" : "webhook",
+                routeAction(template, request.method),
+            ),
+        },
+    })
     /** Log one attempt after its response was classified. The duration covers the request until response headers */
     const logRequest = (state: AttemptState, exit: Exit.Exit<unknown, unknown>) =>
         Effect.sync(() => {
@@ -370,30 +395,7 @@ export function runAttempt<A, M extends MessageCore>(
                 (status === 401 || status === 403) &&
                 request.put === undefined
             ) {
-                const rejected: LogInput = {
-                    level: "warn",
-                    category: "rest",
-                    code: "rest.rejected",
-                    message: `${request.method} ${template} was rejected${targetText(request.path)}: ${
-                        rejection.apiError?.explanation ??
-                        (apiError === undefined
-                            ? "Fluxer refused the request"
-                            : `Fluxer returned ${apiError}, a code this SDK version does not describe yet`)
-                    } (${rejection.apiError === null || apiError === undefined ? "" : `${apiError}, `}HTTP ${status})`,
-                    route: template,
-                    status,
-                    fields: {
-                        method: request.method,
-                        apiError,
-                        // Token-authenticated webhook routes send the webhook token, not the bot token
-                        hint: apiErrorHint(
-                            rejection.apiError,
-                            status,
-                            request.webhookId === undefined ? "bot" : "webhook",
-                            routeAction(template, request.method),
-                        ),
-                    },
-                }
+                const rejected = rejectedRecord(rejection, status, apiError)
                 if (!fiberRejectionScope(fiber.context)?.hold(runtime.logging, rejected, fiber.context, rejection))
                     runtime.logging.log(rejected, fiber.context)
             }

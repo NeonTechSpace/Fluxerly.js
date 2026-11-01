@@ -192,6 +192,7 @@ export function decodeGuildSnapshot(value: unknown): Guild | undefined {
     return decodeGuild(value.properties)
 }
 
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per voice state field
 export function decodeVoiceState(value: unknown, expectedGuildId?: string): VoiceState | undefined {
     if (
         !record(value) ||
@@ -265,6 +266,7 @@ export function decodeVoiceStateSnapshot(value: unknown): VoiceStateSnapshot | u
     return Object.freeze({ guildId: value.id, voiceStates: Object.freeze(voiceStates) })
 }
 
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per guild field
 export function decodeGuild(value: unknown): Guild | undefined {
     if (
         !record(value) ||
@@ -347,6 +349,7 @@ export function decodeGuild(value: unknown): Guild | undefined {
     })
 }
 
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per member field
 export function decodeMember(value: unknown, guildId: string): GuildMember | undefined {
     if (
         !record(value) ||
@@ -525,6 +528,7 @@ export function memberSelf(guildId: string): GuildValidationResult<GuildMember> 
     }
 }
 
+// oxlint-disable-next-line complexity -- a flat validator, one check per member profile field
 export function memberEditSelf(guildId: string, input: MemberProfileEdit): GuildValidationResult<GuildMember> {
     if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
     if (!record(input)) return inputValidationFailure("input", "type", "Member profile input must be an object")

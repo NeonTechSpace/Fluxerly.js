@@ -328,57 +328,9 @@ export function validateConfiguration<F extends MessageFields | undefined = unde
         const onError = option("onError")
         if (onError !== undefined && typeof onError !== "function")
             return Effect.fail(new ConfigurationError("onError", 'The option "onError" must be a function'))
-        const connection = option("connection")
-        if (
-            connection !== undefined &&
-            (typeof connection !== "object" || connection === null || Array.isArray(connection))
-        ) {
-            return Effect.fail(new ConfigurationError("connection", "Connection settings must be an object"))
-        }
-        const connectionField = (key: string): unknown =>
-            readCaller(() =>
-                connection && key in connection ? (connection as Record<string, unknown>)[key] : undefined,
-            )
-        const timeout = connectionField("startupTimeoutMs")
-        const attempts = connectionField("maxStartupAttempts")
-        const connectionKeys = ["startupTimeoutMs", "maxStartupAttempts", "recovery"]
-        const unsupportedConnection =
-            connection === undefined
-                ? undefined
-                : readCaller(() => Object.keys(connection)).find((key) => !connectionKeys.includes(key))
-        if (unsupportedConnection !== undefined)
-            return Effect.fail(
-                new ConfigurationError(
-                    "connection",
-                    `Unsupported connection setting ${JSON.stringify(unsupportedConnection)}`,
-                    { hint: unsupportedKeyHint(unsupportedConnection, connectionKeys, "settings") },
-                ),
-            )
-        const recoveryInput = connectionField("recovery")
-        const recovery = readCaller(() => recoveryConfiguration(recoveryInput, native))
-        if (recovery instanceof ConfigurationError) return Effect.fail(recovery)
-        if (
-            timeout !== undefined &&
-            (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
-        ) {
-            return Effect.fail(
-                new ConfigurationError(
-                    "startupTimeoutMs",
-                    'The option "connection.startupTimeoutMs" must be an integer from 1 through 2,147,483,647 milliseconds',
-                ),
-            )
-        }
-        if (
-            attempts !== undefined &&
-            (typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts <= 0)
-        ) {
-            return Effect.fail(
-                new ConfigurationError(
-                    "maxStartupAttempts",
-                    'The option "connection.maxStartupAttempts" must be a positive safe integer',
-                ),
-            )
-        }
+        const connectionInput = readConnection(option, native)
+        if (connectionInput instanceof ConfigurationError) return Effect.fail(connectionInput)
+        const { timeout, attempts, recovery } = connectionInput
         let selectedFields: ReturnType<typeof snapshotMessageFields>
         const messageFields = option("messageFields")
         try {
@@ -390,43 +342,14 @@ export function validateConfiguration<F extends MessageFields | undefined = unde
         // Read the cache settings once for both the message and the resource caches
         const cacheInput = option("cache")
         const cache = readCaller(() => cacheConfiguration<SelectedMessage<F>>(cacheInput))
-        const uploads = option("uploads")
-        if (uploads !== undefined && !record(uploads))
-            return Effect.fail(new ConfigurationError("uploads", "Upload settings must be an object"))
-        const unsupportedUpload =
-            uploads === undefined ? undefined : readCaller(() => Object.keys(uploads)).find((key) => key !== "maxBytes")
-        if (unsupportedUpload !== undefined)
-            return Effect.fail(
-                new ConfigurationError("uploads", `Unsupported uploads setting ${JSON.stringify(unsupportedUpload)}`, {
-                    hint: unsupportedKeyHint(unsupportedUpload, ["maxBytes"], "settings"),
-                }),
-            )
-        const maxBytesInput = readCaller(() => uploads?.maxBytes)
-        const uploadMaxBytes = maxBytesInput ?? 104_857_600
-        if (
-            typeof uploadMaxBytes !== "number" ||
-            !Number.isSafeInteger(uploadMaxBytes) ||
-            uploadMaxBytes <= 0 ||
-            maxBytesInput === null
-        )
-            return Effect.fail(
-                new ConfigurationError(
-                    "maxBytes",
-                    'The option "uploads.maxBytes" must be a positive safe integer of bytes',
-                ),
-            )
+        const uploadMaxBytes = readUploadMaxBytes(option)
+        if (uploadMaxBytes instanceof ConfigurationError) return Effect.fail(uploadMaxBytes)
         if (cache instanceof ConfigurationError) return Effect.fail(cache)
         const resourceCache = readCaller(() => resourceConfiguration(cacheInput))
         if (resourceCache instanceof ConfigurationError) return Effect.fail(resourceCache)
         const { channels: channelCache, users, directMessages, ...guildResourceCache } = resourceCache
-        // The logger marks its own reads of the caller settings
-        const logging = loggingConfiguration(option("logging"), native)
+        const logging = readLogging(option, token, native)
         if (logging instanceof ConfigurationError) return Effect.fail(logging)
-        logging.addSecret(token)
-        const observer = option("observe")
-        if (observer !== undefined && typeof observer !== "function")
-            return Effect.fail(new ConfigurationError("observe", 'The option "observe" must be a function'))
-        if (observer !== undefined) setObserver(logging, observer as Observer)
         const shardingInput = option("sharding")
         const sharding = readCaller(() => parseSharding(shardingInput))
         if (sharding instanceof ConfigurationError) return Effect.fail(sharding)
@@ -475,6 +398,90 @@ export function validateConfiguration<F extends MessageFields | undefined = unde
             transport,
         })
     })
+}
+
+/** Validate the connection settings, reading each caller field once */
+function readConnection(option: (key: string) => unknown, native: boolean) {
+    const connection = option("connection")
+    if (
+        connection !== undefined &&
+        (typeof connection !== "object" || connection === null || Array.isArray(connection))
+    ) {
+        return new ConfigurationError("connection", "Connection settings must be an object")
+    }
+    const connectionField = (key: string): unknown =>
+        readCaller(() => (connection && key in connection ? (connection as Record<string, unknown>)[key] : undefined))
+    const timeout = connectionField("startupTimeoutMs")
+    const attempts = connectionField("maxStartupAttempts")
+    const connectionKeys = ["startupTimeoutMs", "maxStartupAttempts", "recovery"]
+    const unsupportedConnection =
+        connection === undefined
+            ? undefined
+            : readCaller(() => Object.keys(connection)).find((key) => !connectionKeys.includes(key))
+    if (unsupportedConnection !== undefined)
+        return new ConfigurationError(
+            "connection",
+            `Unsupported connection setting ${JSON.stringify(unsupportedConnection)}`,
+            { hint: unsupportedKeyHint(unsupportedConnection, connectionKeys, "settings") },
+        )
+    const recoveryInput = connectionField("recovery")
+    const recovery = readCaller(() => recoveryConfiguration(recoveryInput, native))
+    if (recovery instanceof ConfigurationError) return recovery
+    if (
+        timeout !== undefined &&
+        (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
+    ) {
+        return new ConfigurationError(
+            "startupTimeoutMs",
+            'The option "connection.startupTimeoutMs" must be an integer from 1 through 2,147,483,647 milliseconds',
+        )
+    }
+    if (attempts !== undefined && (typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts <= 0)) {
+        return new ConfigurationError(
+            "maxStartupAttempts",
+            'The option "connection.maxStartupAttempts" must be a positive safe integer',
+        )
+    }
+    return { timeout, attempts, recovery }
+}
+
+/** Validate the upload settings, reading each caller field once */
+function readUploadMaxBytes(option: (key: string) => unknown): number | ConfigurationError {
+    const uploads = option("uploads")
+    if (uploads !== undefined && !record(uploads))
+        return new ConfigurationError("uploads", "Upload settings must be an object")
+    const unsupportedUpload =
+        uploads === undefined ? undefined : readCaller(() => Object.keys(uploads)).find((key) => key !== "maxBytes")
+    if (unsupportedUpload !== undefined)
+        return new ConfigurationError("uploads", `Unsupported uploads setting ${JSON.stringify(unsupportedUpload)}`, {
+            hint: unsupportedKeyHint(unsupportedUpload, ["maxBytes"], "settings"),
+        })
+    const maxBytesInput = readCaller(() => uploads?.maxBytes)
+    const uploadMaxBytes = maxBytesInput ?? 104_857_600
+    if (
+        typeof uploadMaxBytes !== "number" ||
+        !Number.isSafeInteger(uploadMaxBytes) ||
+        uploadMaxBytes <= 0 ||
+        maxBytesInput === null
+    )
+        return new ConfigurationError(
+            "maxBytes",
+            'The option "uploads.maxBytes" must be a positive safe integer of bytes',
+        )
+    return uploadMaxBytes
+}
+
+/** Create the logger with the token as a secret and the caller's observer attached */
+function readLogging(option: (key: string) => unknown, token: string, native: boolean) {
+    // The logger marks its own reads of the caller settings
+    const logging = loggingConfiguration(option("logging"), native)
+    if (logging instanceof ConfigurationError) return logging
+    logging.addSecret(token)
+    const observer = option("observe")
+    if (observer !== undefined && typeof observer !== "function")
+        return new ConfigurationError("observe", 'The option "observe" must be a function')
+    if (observer !== undefined) setObserver(logging, observer as Observer)
+    return logging
 }
 
 const timerMaximumMs = 2_147_483_647

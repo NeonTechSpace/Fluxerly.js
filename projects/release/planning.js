@@ -93,6 +93,33 @@ export function releaseBaseFor(current, releaseBase) {
 }
 
 /**
+ * Selects the numeric target of a release: An explicit epoch, the initial 1000.0.0, or the next version after the base
+ * @param {{ current: ReturnType<typeof parseVersion>, base: ReturnType<typeof parseVersion> | null, epoch?: number, bump?: string, cycleBump?: string, allowNoChanges: boolean }} options
+ * @returns {string}
+ */
+function selectCore({ current, base, epoch, bump, cycleBump, allowNoChanges }) {
+    if (epoch !== undefined) {
+        if (base === null) throw new Error("The initial release cycle targets Epoch 1 at 1000.0.0")
+        if (!Number.isSafeInteger(epoch) || epoch < 1000 || epoch % 1000 !== 0 || epoch <= current.major)
+            throw new Error("An explicit epoch must be a higher multiple of 1000")
+        if (bump !== "major")
+            throw new Error("An epoch transition requires a major Changesets fragment")
+        return `${epoch}.0.0`
+    }
+    if (base === null) return "1000.0.0"
+    if (current.channel === "stable" && !bump && !allowNoChanges)
+        throw new Error("A stable source version needs a Changesets fragment before another release")
+    const core =
+        cycleBump === "major"
+            ? `${base.major + 1}.0.0`
+            : cycleBump === "minor"
+              ? `${base.major}.${base.minor + 1}.0`
+              : `${base.major}.${base.minor}.${base.patch + 1}`
+    // Preserve an already selected target, including an explicit epoch, if notes are later reduced
+    return current.channel !== "stable" && compareVersions(core, current.core) < 0 ? current.core : core
+}
+
+/**
  * @param {{ currentVersion: string, channel: string, pendingTypes?: string[], releaseTypes?: string[], releaseBase?: string | null, epoch?: number, allowNoChanges?: boolean }} options
  */
 export function planVersion({
@@ -111,28 +138,7 @@ export function planVersion({
     if (current.major < 1000) throw new Error("Public releases must use Epoch Semantic Versioning")
     const baseVersion = releaseBaseFor(current, releaseBase)
     const base = baseVersion === null ? null : parseVersion(baseVersion)
-    let core
-    if (epoch !== undefined) {
-        if (base === null) throw new Error("The initial release cycle targets Epoch 1 at 1000.0.0")
-        if (!Number.isSafeInteger(epoch) || epoch < 1000 || epoch % 1000 !== 0 || epoch <= current.major)
-            throw new Error("An explicit epoch must be a higher multiple of 1000")
-        if (bump !== "major")
-            throw new Error("An epoch transition requires a major Changesets fragment")
-        core = `${epoch}.0.0`
-    } else if (base === null) {
-        core = "1000.0.0"
-    } else {
-        if (current.channel === "stable" && !bump && !allowNoChanges)
-            throw new Error("A stable source version needs a Changesets fragment before another release")
-        core =
-            cycleBump === "major"
-                ? `${base.major + 1}.0.0`
-                : cycleBump === "minor"
-                  ? `${base.major}.${base.minor + 1}.0`
-                  : `${base.major}.${base.minor}.${base.patch + 1}`
-        // Preserve an already selected target, including an explicit epoch, if notes are later reduced
-        if (current.channel !== "stable" && compareVersions(core, current.core) < 0) core = current.core
-    }
+    const core = selectCore({ current, base, epoch, bump, cycleBump, allowNoChanges })
     const targetCore = parseVersion(core)
     if (
         Math.floor(targetCore.major / 1000) > Math.floor(current.major / 1000) &&

@@ -72,6 +72,29 @@ export function decodeUser(value: unknown): User | undefined {
     })
 }
 
+function decodeRecipients(values: readonly unknown[]): User[] | undefined {
+    const recipients: User[] = []
+    const ids = new Set<string>()
+    for (const input of values) {
+        const user = decodeUser(input)
+        if (!user || ids.has(user.id)) return undefined
+        ids.add(user.id)
+        recipients.push(user)
+    }
+    return recipients
+}
+
+function decodeNicknames(value: unknown): Record<string, string> | undefined {
+    const nicknames: Record<string, string> = {}
+    if (value === undefined) return nicknames
+    if (!record(value)) return undefined
+    for (const [id, nick] of Object.entries(value)) {
+        if (!identifier(id) || !text(nick, 1, 32)) return undefined
+        nicknames[id] = nick
+    }
+    return nicknames
+}
+
 export function decodeDirectMessage(value: unknown): DirectMessageChannel | undefined {
     if (
         !record(value) ||
@@ -85,22 +108,10 @@ export function decodeDirectMessage(value: unknown): DirectMessageChannel | unde
         (value.last_message_id !== undefined && value.last_message_id !== null && !identifier(value.last_message_id))
     )
         return undefined
-    const recipients: User[] = []
-    const ids = new Set<string>()
-    for (const input of (value.recipients ?? []) as unknown[]) {
-        const user = decodeUser(input)
-        if (!user || ids.has(user.id)) return undefined
-        ids.add(user.id)
-        recipients.push(user)
-    }
-    const nicknames: Record<string, string> = {}
-    if (value.nicks !== undefined) {
-        if (!record(value.nicks)) return undefined
-        for (const [id, nick] of Object.entries(value.nicks)) {
-            if (!identifier(id) || !text(nick, 1, 32)) return undefined
-            nicknames[id] = nick
-        }
-    }
+    const recipients = decodeRecipients((value.recipients ?? []) as unknown[])
+    if (!recipients) return undefined
+    const nicknames = decodeNicknames(value.nicks)
+    if (!nicknames) return undefined
     return Object.freeze({
         id: value.id,
         type: value.type === 1 ? "dm" : "group",

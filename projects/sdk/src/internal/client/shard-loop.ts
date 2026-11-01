@@ -213,6 +213,11 @@ function retryableDiscovery(error: unknown): boolean {
     return error instanceof RateLimitError || (error instanceof ConnectionError && retryableConnection(error))
 }
 
+/** The failure kind that log records name */
+function failureClassification(failure: AttemptFailure): string {
+    return failure.failure instanceof ConnectionError ? failure.failure.reason : failure.failure._tag
+}
+
 /** Run one shard until its connection fails permanently. The loop never succeeds */
 export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>) {
     const { host, configuration, startup, shard, plan, deadline, startupTimeoutMs } = options
@@ -315,6 +320,69 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     message: `Shard ${shard.shardId} is resuming the session saved ${formatDuration(Date.now() - checked.snapshot.savedAt)} ago`,
                 })
             })
+        /** Log the end of the shard's connection with the reason it stopped retrying */
+        const logConnectionEnded = (failure: AttemptFailure, message: string, error: AttemptFailure["failure"]) =>
+            log({
+                level: "error",
+                code: "lifecycle.connectionEnded",
+                message,
+                attempt: attempts,
+                ...closeFields(failure),
+                fields: { reason: failure.end, classification: failureClassification(failure) },
+                error,
+            })
+        /** Update the session and the protocol failure count for an attempt that ended */
+        const recordAttemptEnd = (failure: AttemptFailure) => {
+            if (failure.resetSession) {
+                shard.session = { id: undefined, sequence: null }
+                log({
+                    level: "warn",
+                    code: "lifecycle.sessionReset",
+                    message: `Shard ${shard.shardId}'s session can no longer be resumed, so its next connection starts a new session`,
+                    fields: { reason: failure.end },
+                })
+            }
+            if ((established || restoredSession) && nextHandshake(failure, shard.session) === "identify")
+                host.newSession?.(shard.shardId)
+            // A connection that stayed healthy between anomalies starts the count again
+            if (
+                connectedAt !== undefined &&
+                stayedHealthy(connectedAt, disconnectedAt ?? now(), recovery.healthyResetMs)
+            )
+                protocolFailures = 0
+            if (failure.end === "protocol") protocolFailures += 1
+        }
+        /** Stop when this failure allows no retry, logging why unless a larger plan replaces the shard. Returns whether it stopped */
+        const stopRetrying = (failure: AttemptFailure, outcome: string, reported: AttemptFailure["failure"]) => {
+            const protocolLimited = failure.retry && protocolFailures >= protocolFailureLimit
+            if (failure.retry && !protocolLimited && (established || attempts < configuration.maxStartupAttempts))
+                return false
+            shard.recovery = null
+            // Automatic sharding answers sharding required with a larger plan, which the client logs itself
+            const reshard =
+                !failure.retry && closeFields(failure).closeCode === CloseCode.shardingRequired
+                    ? host.reshard?.(shard.shardId)
+                    : undefined
+            if (reshard === true) return true
+            logConnectionEnded(
+                failure,
+                `${outcome}. ${protocolLimited ? `The SDK stops retrying after ${protocolFailures} connections in a row ended with invalid gateway data` : failure.retry ? `The SDK stops retrying after ${attempts} attempts (connection.maxStartupAttempts)` : reshard === undefined ? "The SDK does not retry this failure" : `Automatic sharding does not move to a larger plan, because ${reshard}`}`,
+                reported,
+            )
+            return true
+        }
+        /** Move an established shard into recovery, restarting the recovery sequence after a healthy connection */
+        const enterRecovery = () => {
+            host.setShardState(shard, "Recovering")
+            if (
+                connectedAt !== undefined &&
+                stayedHealthy(connectedAt, disconnectedAt ?? now(), recovery.healthyResetMs)
+            ) {
+                recoveryStep = 0
+                scheduleStep = undefined
+            }
+            connectedAt = undefined
+        }
         while (true) {
             attempts += 1
             const phase = established ? "recovery" : "startup"
@@ -505,61 +573,13 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             const failure = reason.error
             const lost = established && connectedAt !== undefined
             const outcome = `Shard ${shard.shardId} ${lost ? "lost its connection" : "could not connect"}. ${attemptExplanation(failure)}`
-            if (failure.resetSession) {
-                shard.session = { id: undefined, sequence: null }
-                log({
-                    level: "warn",
-                    code: "lifecycle.sessionReset",
-                    message: `Shard ${shard.shardId}'s session can no longer be resumed, so its next connection starts a new session`,
-                    fields: { reason: failure.end },
-                })
-            }
-            if ((established || restoredSession) && nextHandshake(failure, shard.session) === "identify")
-                host.newSession?.(shard.shardId)
-            // A connection that stayed healthy between anomalies starts the count again
-            if (
-                connectedAt !== undefined &&
-                stayedHealthy(connectedAt, disconnectedAt ?? now(), recovery.healthyResetMs)
-            )
-                protocolFailures = 0
-            if (failure.end === "protocol") protocolFailures += 1
-            const protocolLimited = failure.retry && protocolFailures >= protocolFailureLimit
+            recordAttemptEnd(failure)
             const reported =
                 !established && failure.failure instanceof ConnectionTimeoutError
                     ? new ConnectionTimeoutError(startupTimeoutMs)
                     : failure.failure
-            const classification =
-                failure.failure instanceof ConnectionError ? failure.failure.reason : failure.failure._tag
-            if (!failure.retry || protocolLimited || (!established && attempts >= configuration.maxStartupAttempts)) {
-                shard.recovery = null
-                // Automatic sharding answers sharding required with a larger plan, which the client logs itself
-                const reshard =
-                    !failure.retry && closeFields(failure).closeCode === CloseCode.shardingRequired
-                        ? host.reshard?.(shard.shardId)
-                        : undefined
-                if (reshard === true) return yield* Effect.fail(reported)
-                log({
-                    level: "error",
-                    code: "lifecycle.connectionEnded",
-                    message: `${outcome}. ${protocolLimited ? `The SDK stops retrying after ${protocolFailures} connections in a row ended with invalid gateway data` : failure.retry ? `The SDK stops retrying after ${attempts} attempts (connection.maxStartupAttempts)` : reshard === undefined ? "The SDK does not retry this failure" : `Automatic sharding does not move to a larger plan, because ${reshard}`}`,
-                    attempt: attempts,
-                    ...closeFields(failure),
-                    fields: { reason: failure.end, classification },
-                    error: reported,
-                })
-                return yield* Effect.fail(reported)
-            }
-            if (established) {
-                host.setShardState(shard, "Recovering")
-                if (
-                    connectedAt !== undefined &&
-                    stayedHealthy(connectedAt, disconnectedAt ?? now(), recovery.healthyResetMs)
-                ) {
-                    recoveryStep = 0
-                    scheduleStep = undefined
-                }
-                connectedAt = undefined
-            }
+            if (stopRetrying(failure, outcome, reported)) return yield* Effect.fail(reported)
+            if (established) enterRecovery()
             const requiredWait = failure.failure instanceof RateLimitError ? (failure.failure.retryAfterMs ?? 0) : 0
             let delay: number
             if (established && recovery.schedule) {
@@ -567,15 +587,11 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                 const decided = yield* scheduledDelay(recovery.schedule, failure.failure)
                 if (decided === undefined) {
                     shard.recovery = null
-                    log({
-                        level: "error",
-                        code: "lifecycle.connectionEnded",
-                        message: `${outcome}. The recovery schedule (connection.recovery.schedule) ended, so the SDK stops retrying`,
-                        attempt: attempts,
-                        ...closeFields(failure),
-                        fields: { reason: failure.end, classification },
-                        error: reported,
-                    })
+                    logConnectionEnded(
+                        failure,
+                        `${outcome}. The recovery schedule (connection.recovery.schedule) ended, so the SDK stops retrying`,
+                        reported,
+                    )
                     return yield* Effect.fail(reported)
                 }
                 delay = Math.max(decided, requiredWait)
@@ -585,15 +601,11 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             }
             if (!established && delay >= deadline - now()) {
                 const ended = requiredWait > 0 ? failure.failure : new ConnectionTimeoutError(startupTimeoutMs)
-                log({
-                    level: "error",
-                    code: "lifecycle.connectionEnded",
-                    message: `${outcome}. The startup deadline of ${formatDuration(startupTimeoutMs)} leaves no time for another attempt`,
-                    attempt: attempts,
-                    ...closeFields(failure),
-                    fields: { reason: failure.end, classification },
-                    error: ended,
-                })
+                logConnectionEnded(
+                    failure,
+                    `${outcome}. The startup deadline of ${formatDuration(startupTimeoutMs)} leaves no time for another attempt`,
+                    ended,
+                )
                 return yield* Effect.fail(ended)
             }
             log({
@@ -603,7 +615,11 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                 attempt: attempts,
                 delayMs: Math.round(delay),
                 ...closeFields(failure),
-                fields: { reason: failure.end, classification, next: nextHandshake(failure, shard.session) },
+                fields: {
+                    reason: failure.end,
+                    classification: failureClassification(failure),
+                    next: nextHandshake(failure, shard.session),
+                },
             })
             shard.recovery = { phase: established ? "recovery" : "startup", attempt: attempts, retryDelayMs: delay }
             yield* Effect.sleep(delay)

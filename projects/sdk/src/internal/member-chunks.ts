@@ -66,6 +66,64 @@ interface Settings {
     readonly payload: Readonly<Record<string, unknown>>
 }
 
+interface MemberSelection {
+    readonly userIds?: readonly string[]
+    readonly maximumMembers: number
+    readonly selection: Record<string, unknown>
+}
+
+/** Validate which members a request selects: Every member, listed user IDs or a text query */
+function memberSelection(
+    all: unknown,
+    userIdsInput: unknown,
+    text: unknown,
+    limitInput: unknown,
+): MemberSelection | InputValidationFailure {
+    if (all !== undefined && all !== true)
+        return inputValidationFailure("query.all", "allowedValue", "Must be true when supplied")
+    if (all === true) {
+        if (userIdsInput !== undefined || text !== undefined || limitInput !== undefined)
+            return inputValidationFailure("query", "relationship", "Use all or one explicit selection, not both")
+        return { maximumMembers: 100_000, selection: { query: "", limit: 0 } }
+    }
+    if (userIdsInput !== undefined) {
+        if (text !== undefined || limitInput !== undefined)
+            return inputValidationFailure("query", "relationship", "Use userIds or a text query, not both")
+        if (!Array.isArray(userIdsInput))
+            return inputValidationFailure("query.userIds", "type", "Must be an array of canonical user IDs")
+        // Copy once and validate the copy, so the validated IDs are the ones requested
+        const copied = snapshotArray(userIdsInput, 100)
+        if (copied === undefined || copied.length < 1)
+            return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
+        if (!copied.every(gatewayIdentifier))
+            return inputValidationFailure(
+                "query.userIds",
+                "format",
+                "Each ID must be a canonical positive decimal string no greater than 9223372036854775807",
+            )
+        const userIds = copied as readonly string[]
+        if (new Set(userIds).size !== userIds.length)
+            return inputValidationFailure("query.userIds", "unique", "Must not contain duplicate user IDs")
+        return { userIds, maximumMembers: userIds.length, selection: { user_ids: userIds } }
+    }
+    if (text !== undefined) {
+        if (typeof text !== "string")
+            return inputValidationFailure("query.query", "type", "Must be a string when supplied")
+        if (text.length > 4_096)
+            return inputValidationFailure("query.query", "length", "Must contain at most 4096 UTF-16 code units")
+        if (!text.isWellFormed())
+            return inputValidationFailure("query.query", "format", "Must be a well-formed Unicode string")
+        const limit = limitInput === undefined ? 25 : limitInput
+        if (typeof limit !== "number")
+            return inputValidationFailure("query.limit", "type", "Must be an integer when supplied")
+        if (!positive(limit) || limit > 100)
+            return inputValidationFailure("query.limit", "range", "Must be an integer from 1 through 100")
+        return { maximumMembers: limit, selection: { query: text, limit } }
+    }
+    if (limitInput !== undefined) return inputValidationFailure("query", "relationship", "limit requires a text query")
+    return inputValidationFailure("query", "required", "Must select all members, user IDs, or a text query")
+}
+
 /** Validate one request, reading each caller query and option field once so the validated value is the one sent */
 function settings(guildId: unknown, query: unknown, options: unknown): Settings | InputValidationFailure {
     if (!gatewayIdentifier(guildId))
@@ -124,55 +182,9 @@ function settings(guildId: unknown, query: unknown, options: unknown): Settings 
     const userIdsInput = field("userIds")
     const text = field("query")
     const limitInput = field("limit")
-    let userIds: readonly string[] | undefined
-    let maximumMembers: number
-    let selection: Record<string, unknown>
-    if (all !== undefined && all !== true)
-        return inputValidationFailure("query.all", "allowedValue", "Must be true when supplied")
-    if (all === true) {
-        if (userIdsInput !== undefined || text !== undefined || limitInput !== undefined)
-            return inputValidationFailure("query", "relationship", "Use all or one explicit selection, not both")
-        maximumMembers = 100_000
-        selection = { query: "", limit: 0 }
-    } else if (userIdsInput !== undefined) {
-        if (text !== undefined || limitInput !== undefined)
-            return inputValidationFailure("query", "relationship", "Use userIds or a text query, not both")
-        if (!Array.isArray(userIdsInput))
-            return inputValidationFailure("query.userIds", "type", "Must be an array of canonical user IDs")
-        // Copy once and validate the copy, so the validated IDs are the ones requested
-        const copied = snapshotArray(userIdsInput, 100)
-        if (copied === undefined || copied.length < 1)
-            return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
-        if (!copied.every(gatewayIdentifier))
-            return inputValidationFailure(
-                "query.userIds",
-                "format",
-                "Each ID must be a canonical positive decimal string no greater than 9223372036854775807",
-            )
-        userIds = copied as readonly string[]
-        if (new Set(userIds).size !== userIds.length)
-            return inputValidationFailure("query.userIds", "unique", "Must not contain duplicate user IDs")
-        maximumMembers = userIds.length
-        selection = { user_ids: userIds }
-    } else if (text !== undefined) {
-        if (typeof text !== "string")
-            return inputValidationFailure("query.query", "type", "Must be a string when supplied")
-        if (text.length > 4_096)
-            return inputValidationFailure("query.query", "length", "Must contain at most 4096 UTF-16 code units")
-        if (!text.isWellFormed())
-            return inputValidationFailure("query.query", "format", "Must be a well-formed Unicode string")
-        const limit = limitInput === undefined ? 25 : limitInput
-        if (typeof limit !== "number")
-            return inputValidationFailure("query.limit", "type", "Must be an integer when supplied")
-        if (!positive(limit) || limit > 100)
-            return inputValidationFailure("query.limit", "range", "Must be an integer from 1 through 100")
-        maximumMembers = limit
-        selection = { query: text, limit }
-    } else {
-        if (limitInput !== undefined)
-            return inputValidationFailure("query", "relationship", "limit requires a text query")
-        return inputValidationFailure("query", "required", "Must select all members, user IDs, or a text query")
-    }
+    const selected = memberSelection(all, userIdsInput, text, limitInput)
+    if (selected instanceof InputValidationFailure) return selected
+    const { userIds, maximumMembers, selection } = selected
     const payload = Object.freeze({ guild_id: guildId, ...selection, presences })
     // Op8 nonces are at most 32 bytes, unlike count nonces. Reject frames the gateway would close as oversized
     if (
@@ -182,6 +194,41 @@ function settings(guildId: unknown, query: unknown, options: unknown): Settings 
     )
         return inputValidationFailure("query", "size", "The encoded gateway request must not exceed 4096 bytes")
     return { guildId, presences, ...(userIds ? { userIds } : {}), maximumMembers, timeoutMs, maxPendingBytes, payload }
+}
+
+/** The fields of a member chunk frame that receive checked before reading its members */
+type ChunkFrame = Record<string, unknown> & {
+    readonly chunk_index: number
+    readonly chunk_count: number
+    readonly members: readonly unknown[]
+}
+
+/** Validate a chunk's presences against its members, returning undefined when any presence is invalid */
+function chunkPresences(
+    raw: unknown,
+    config: Settings,
+    memberCount: number,
+    batchIds: ReadonlySet<string>,
+): import("#sdk/events").PresenceUpdate[] | undefined {
+    const presences: import("#sdk/events").PresenceUpdate[] = []
+    if (!Array.isArray(raw)) return presences
+    const presenceIds = new Set<string>()
+    if (!config.presences || raw.length > memberCount) return undefined
+    for (const item of raw) {
+        if (!record(item) || (item.guild_id !== undefined && item.guild_id !== config.guildId)) return undefined
+        const presence = decodePresenceUpdate({ ...item, guild_id: config.guildId })
+        if (
+            !presence ||
+            !batchIds.has(presence.userId) ||
+            presenceIds.has(presence.userId) ||
+            presence.status === "offline" ||
+            presence.status === "invisible"
+        )
+            return undefined
+        presenceIds.add(presence.userId)
+        presences.push(presence)
+    }
+    return presences
 }
 
 /** One stream's local intake, bounded unread batches and completion proof. No cache or event publication */
@@ -323,11 +370,9 @@ export class MemberChunkSource {
         }),
     )
 
-    receive(value: unknown, bytes: number) {
-        const config = this.#settings
-        if (!config || this.#received || this.#expired()) return
-        const invalid = () => this.fail(new MemberChunkError({ reason: "response" }))
-        if (
+    /** Whether a frame is the next chunk of this stream, before its members are read */
+    #validFrame(value: unknown, config: Settings): value is ChunkFrame {
+        return !(
             !record(value) ||
             value.guild_id !== config.guildId ||
             !Number.isInteger(value.chunk_index) ||
@@ -341,13 +386,14 @@ export class MemberChunkSource {
             (value.members.length === 0 && (value.chunk_count !== 1 || value.chunk_index !== 0)) ||
             (value.presences !== undefined && !Array.isArray(value.presences))
         )
-            return invalid()
-        if (!positive(bytes) || bytes > config.maxPendingBytes - this.#bytes)
-            return this.fail(new MemberChunkError({ reason: "overflow" }))
+    }
+
+    /** Decode a chunk's members, returning undefined when any member is invalid or was already delivered */
+    #chunkMembers(raw: readonly unknown[], config: Settings) {
         const members: import("#sdk/guilds").GuildMember[] = []
         const batchIds = new Set<string>()
-        for (const raw of value.members) {
-            const member = decodeMember(raw, config.guildId)
+        for (const item of raw) {
+            const member = decodeMember(item, config.guildId)
             if (
                 !member ||
                 !gatewayIdentifier(member.userId) ||
@@ -355,30 +401,26 @@ export class MemberChunkSource {
                 batchIds.has(member.userId) ||
                 (config.userIds && !config.userIds.includes(member.userId))
             )
-                return invalid()
+                return undefined
             batchIds.add(member.userId)
             members.push(member)
         }
+        return { members, batchIds }
+    }
+
+    receive(value: unknown, bytes: number) {
+        const config = this.#settings
+        if (!config || this.#received || this.#expired()) return
+        const invalid = () => this.fail(new MemberChunkError({ reason: "response" }))
+        if (!this.#validFrame(value, config)) return invalid()
+        if (!positive(bytes) || bytes > config.maxPendingBytes - this.#bytes)
+            return this.fail(new MemberChunkError({ reason: "overflow" }))
+        const batch = this.#chunkMembers(value.members, config)
+        if (!batch) return invalid()
+        const { members, batchIds } = batch
         if (this.#seen.size + members.length > config.maximumMembers) return invalid()
-        const presences: import("#sdk/events").PresenceUpdate[] = []
-        const presenceIds = new Set<string>()
-        if (Array.isArray(value.presences)) {
-            if (!config.presences || value.presences.length > members.length) return invalid()
-            for (const raw of value.presences) {
-                if (!record(raw) || (raw.guild_id !== undefined && raw.guild_id !== config.guildId)) return invalid()
-                const presence = decodePresenceUpdate({ ...raw, guild_id: config.guildId })
-                if (
-                    !presence ||
-                    !batchIds.has(presence.userId) ||
-                    presenceIds.has(presence.userId) ||
-                    presence.status === "offline" ||
-                    presence.status === "invisible"
-                )
-                    return invalid()
-                presenceIds.add(presence.userId)
-                presences.push(presence)
-            }
-        }
+        const presences = chunkPresences(value.presences, config, members.length, batchIds)
+        if (!presences) return invalid()
         for (const id of batchIds) this.#seen.add(id)
         this.#count = value.chunk_count
         this.#nextIndex++
@@ -389,7 +431,7 @@ export class MemberChunkSource {
         }
         const chunk: MemberChunk = Object.freeze({
             guildId: config.guildId,
-            index: value.chunk_index as number,
+            index: value.chunk_index,
             count: value.chunk_count,
             members: Object.freeze(members),
             ...(config.presences ? { presences: Object.freeze(presences) } : {}),

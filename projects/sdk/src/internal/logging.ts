@@ -905,6 +905,56 @@ function debugSetting(debug: unknown): LogCategory[] | ConfigurationError {
     return categories
 }
 
+function sinkSetting(sink: unknown): LogSink[] | undefined | ConfigurationError {
+    if (sink === undefined) return undefined
+    const list = Array.isArray(sink) ? [...(sink as unknown[])] : [sink]
+    if (list.length === 0 || list.some((entry) => typeof entry !== "function"))
+        return new ConfigurationError(
+            "sink",
+            'The option "logging.sink" must be a function or a non-empty array of functions',
+        )
+    return list as LogSink[]
+}
+
+function dedupeSetting(dedupe: unknown): number | undefined | ConfigurationError {
+    if (dedupe === false) return undefined
+    if (dedupe === undefined) return 60_000
+    if (!record(dedupe) || Object.keys(dedupe).some((key) => key !== "windowMs"))
+        return new ConfigurationError("dedupe", 'The option "logging.dedupe" must be false or an object with windowMs')
+    const windowMs = dedupe.windowMs
+    if (windowMs !== undefined && (typeof windowMs !== "number" || !Number.isSafeInteger(windowMs) || windowMs < 0))
+        return new ConfigurationError(
+            "dedupe",
+            'The option "logging.dedupe.windowMs" must be a nonnegative safe integer of milliseconds',
+        )
+    return windowMs === 0 ? undefined : (windowMs ?? 60_000)
+}
+
+function unsafeSetting(option: unknown): Set<LogCategory> | undefined | ConfigurationError {
+    if (option === undefined) return undefined
+    if (
+        !record(option) ||
+        option.payloads !== true ||
+        Object.keys(option).some((key) => key !== "payloads" && key !== "categories")
+    )
+        return new ConfigurationError(
+            "unsafe",
+            'The option "logging.unsafe" must be { payloads: true }, with optional categories',
+        )
+    const unsafeCategories = option.categories
+    if (unsafeCategories === undefined) return new Set(logCategories)
+    if (
+        !Array.isArray(unsafeCategories) ||
+        unsafeCategories.some((category) => !(logCategories as readonly unknown[]).includes(category))
+    )
+        return new ConfigurationError(
+            "unsafe",
+            'The option "logging.unsafe.categories" must be an array of log category names',
+            { hint: `Known categories are ${logCategories.join(", ")}` },
+        )
+    return new Set(unsafeCategories as LogCategory[])
+}
+
 /** Validate caller logging settings, reading each setting once so the validated value is the one used */
 function loggingInput(value: unknown): LoggingInput | ConfigurationError {
     if (value !== undefined && !record(value))
@@ -926,59 +976,12 @@ function loggingInput(value: unknown): LoggingInput | ConfigurationError {
     const format = settings.format
     if (format !== undefined && format !== "pretty" && format !== "json")
         return new ConfigurationError("format", 'The option "logging.format" must be "pretty" or "json"')
-    let sinks: LogSink[] | undefined
-    const sink = settings.sink
-    if (sink !== undefined) {
-        const list = Array.isArray(sink) ? [...(sink as unknown[])] : [sink]
-        if (list.length === 0 || list.some((entry) => typeof entry !== "function"))
-            return new ConfigurationError(
-                "sink",
-                'The option "logging.sink" must be a function or a non-empty array of functions',
-            )
-        sinks = list as LogSink[]
-    }
-    let dedupeMs: number | undefined = 60_000
-    const dedupe = settings.dedupe
-    if (dedupe === false) dedupeMs = undefined
-    else if (dedupe !== undefined) {
-        if (!record(dedupe) || Object.keys(dedupe).some((key) => key !== "windowMs"))
-            return new ConfigurationError(
-                "dedupe",
-                'The option "logging.dedupe" must be false or an object with windowMs',
-            )
-        const windowMs = dedupe.windowMs
-        if (windowMs !== undefined && (typeof windowMs !== "number" || !Number.isSafeInteger(windowMs) || windowMs < 0))
-            return new ConfigurationError(
-                "dedupe",
-                'The option "logging.dedupe.windowMs" must be a nonnegative safe integer of milliseconds',
-            )
-        dedupeMs = windowMs === 0 ? undefined : (windowMs ?? 60_000)
-    }
-    let unsafe: Set<LogCategory> | undefined
-    const option = settings.unsafe
-    if (option !== undefined) {
-        if (
-            !record(option) ||
-            option.payloads !== true ||
-            Object.keys(option).some((key) => key !== "payloads" && key !== "categories")
-        )
-            return new ConfigurationError(
-                "unsafe",
-                'The option "logging.unsafe" must be { payloads: true }, with optional categories',
-            )
-        const unsafeCategories = option.categories
-        if (unsafeCategories === undefined) unsafe = new Set(logCategories)
-        else if (
-            !Array.isArray(unsafeCategories) ||
-            unsafeCategories.some((category) => !(logCategories as readonly unknown[]).includes(category))
-        )
-            return new ConfigurationError(
-                "unsafe",
-                'The option "logging.unsafe.categories" must be an array of log category names',
-                { hint: `Known categories are ${logCategories.join(", ")}` },
-            )
-        else unsafe = new Set(unsafeCategories as LogCategory[])
-    }
+    const sinks = sinkSetting(settings.sink)
+    if (sinks instanceof ConfigurationError) return sinks
+    const dedupeMs = dedupeSetting(settings.dedupe)
+    if (dedupeMs instanceof ConfigurationError) return dedupeMs
+    const unsafe = unsafeSetting(settings.unsafe)
+    if (unsafe instanceof ConfigurationError) return unsafe
     return { thresholds, debugCategories, format, sinks, dedupeMs, unsafe }
 }
 

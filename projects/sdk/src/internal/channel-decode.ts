@@ -95,6 +95,7 @@ function decodeOverwrites(value: unknown): readonly PermissionOverwrite[] | unde
 }
 
 /** Fields any community channel can carry, validated whatever its type */
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per common channel field
 function decodeCommonFields(value: Record<string, unknown>): Record<string, unknown> | undefined {
     if (
         !identifier(value.id) ||
@@ -250,6 +251,7 @@ function decodeThreadMembership(value: unknown): ThreadMembership | undefined {
 }
 
 /** Thread metadata and counters, flattened onto the thread shape */
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per thread field
 function decodeThreadFields(value: Record<string, unknown>, type: number): Record<string, unknown> | undefined {
     const metadata = value.thread_metadata
     if (

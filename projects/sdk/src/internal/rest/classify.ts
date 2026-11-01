@@ -372,6 +372,23 @@ function collect(context: ClassifyContext, read: ApiErrorRead) {
         context.cleanupDefects.push(read.cleanupDefect)
 }
 
+/** The wait a 429 asks for in its Retry-After header, in seconds or as a date. NaN when it has none or it is unreadable */
+function retryAfterHeaderDelay(response: Response): number {
+    const header = response.headers.get("retry-after")
+    const delay = header === null ? NaN : Number(header) * 1000
+    return header !== null && !Number.isFinite(delay) ? Date.parse(header) - Date.now() : delay
+}
+
+/** The longer of the waits a rejection asks for in its headers and in its body */
+function rejectionRetryAfter(response: Response, apiRead: ApiErrorRead): number | null {
+    const headerRetryAfterMs = retryAfter(response, Date.now())
+    return headerRetryAfterMs === null
+        ? apiRead.retryAfterMs
+        : apiRead.retryAfterMs === null
+          ? headerRetryAfterMs
+          : Math.max(headerRetryAfterMs, apiRead.retryAfterMs)
+}
+
 /** Classify a received response. Rejections throw a RestFailure with the outcome Fluxer established */
 export async function classifyResponse(response: Response, context: ClassifyContext): Promise<ResponseClass> {
     const { progress } = context
@@ -387,9 +404,7 @@ export async function classifyResponse(response: Response, context: ClassifyCont
                 apiError: apiRead.detail,
             })
         }
-        const header = response.headers.get("retry-after")
-        let delay = header === null ? NaN : Number(header) * 1000
-        if (header !== null && !Number.isFinite(delay)) delay = Date.parse(header) - Date.now()
+        let delay = retryAfterHeaderDelay(response)
         const headerGlobal = globalRateLimit(response)
         // Protect other routes before bounded body inspection, including
         // when the request is interrupted while waiting for that body
@@ -434,13 +449,7 @@ export async function classifyResponse(response: Response, context: ClassifyCont
     const retryableRead = context.method === "GET" && [500, 502, 503, 504].includes(response.status)
     apiRead ??= await readApiError(response, context.signal, context.upload ? "upload" : "fluxer")
     collect(context, apiRead)
-    const headerRetryAfterMs = retryAfter(response, Date.now())
-    const retryAfterMs =
-        headerRetryAfterMs === null
-            ? apiRead.retryAfterMs
-            : apiRead.retryAfterMs === null
-              ? headerRetryAfterMs
-              : Math.max(headerRetryAfterMs, apiRead.retryAfterMs)
+    const retryAfterMs = rejectionRetryAfter(response, apiRead)
     throw new RestFailure({
         reason: response.status === 404 && !context.preparation ? "notFound" : "rejected",
         outcome: progress.outcome,

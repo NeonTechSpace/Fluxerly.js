@@ -83,6 +83,7 @@ function changes(value: unknown): readonly AuditLogChange[] | undefined {
     return Object.freeze(result)
 }
 
+// oxlint-disable-next-line complexity -- a flat decoder, one optional field check and one field mapping per audit option
 function options(value: unknown): AuditLogOptions | undefined {
     if (!record(value)) return undefined
     if (
