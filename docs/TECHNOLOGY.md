@@ -39,39 +39,36 @@ Use current security updates within a supported Node.js release line. The develo
 The SDK uses [Epoch Semantic Versioning](https://antfu.me/posts/epoch-semver), with this SemVer-compatible package version format:
 
 ```text
-(EPOCH * 1000 + MAJOR).MINOR.PATCH[-STAGE.NUMBER]
+(EPOCH * 1000 + MAJOR).MINOR.PATCH[-nightly.YYYYMMDD.N]
 ```
 
 The epoch identifies a major project generation.
 Within an epoch, MAJOR increases for breaking public API changes, MINOR for backward-compatible features and PATCH for backward-compatible fixes.
 MAJOR ranges from 0 to 999 with this mapping.
-The release suffix describes readiness, independently of compatibility changes
+The ending says what kind of release it is, separately from the numbers
 
 | Suffix | Meaning |
 | --- | --- |
-| `-nightly.YYYYMMDD.N` | Automatic build of `main`, published every six hours when the SDK changed. It can include breaking changes at any time |
-| `-rc.N` | Release candidate for the next Stable, with no known release blockers, under final validation. It can still include breaking changes |
+| `-nightly.YYYYMMDD.N` | Automatic build of `main`, published twice a day when the SDK changed. It can include breaking changes at any time |
 | No suffix | Stable release supported for public use |
 
 There is no literal `-none` suffix.
-Release targets reflect compatibility with the preceding stable release, not the preceding preview.
-The initial release cycle targets `1000.0.0`, including breaking changes between its previews.
+The next version is measured against the last Stable, not the last nightly.
+The first Stable is `1000.0.0`, whatever breaking changes its nightlies had along the way.
 Later cycles accumulate compatibility changes against their stable starting version, so repeated major notes do not repeatedly increase the target major.
-An increased compatibility impact can raise the target, but an already selected target never decreases. Preview-to-preview breaking changes still require migration notes
+A bigger change can raise the target, but an epoch chosen on purpose never drops. Breaking changes between nightlies still need release notes
 
-Nightly and RC releases can always include breaking changes against any earlier preview, including after the first stable release. Only between Stable releases does the version tell what kind of change a release contains: MAJOR for breaking changes, MINOR for compatible features and PATCH for compatible fixes.
-A patch or minor release can go straight to Stable. A new major version or epoch is published as an RC first, and Stable then publishes that RC's package content unchanged.
-While an RC is waiting for Stable, no other Stable at or above its version can be published.
-[Release stages](/docs/RELEASING.md#release-stages) lists the exact rules
+Nightlies can always include breaking changes against any earlier nightly, including after the first Stable. Only between Stable releases does the version tell what kind of change a release contains: MAJOR for breaking changes, MINOR for compatible features and PATCH for compatible fixes.
+Every Stable ships the same code as the newest nightly of its version.
+[Stable and nightly](/docs/RELEASING.md#stable-and-nightly) has the exact rules
 
-A nightly version is never committed. Its core is the version the next RC would target, and the rest is the UTC date of its preparation followed by the preparing run's number, such as `1000.1.0-nightly.20261019.57`. The date comes first so builds sort by day, and run numbers only grow but can skip values. A nightly's core can still drop, for example when a pending minor note is removed. Nightly versions from before this format use `-nightly.N` and sort below every dated nightly of their core.
-Nightly builds sit outside the RC and Stable rules, so they never block or wait for another release
+A nightly version is never committed. Its first part is the version the next Stable would have, and the rest is the UTC date of its preparation followed by the preparing run's number, such as `1000.1.0-nightly.20261019.57`. The date comes first so builds sort by day, and run numbers only grow but can skip values. A nightly's core can still drop, for example when a pending minor note is removed. Nightly versions from before this format use `-nightly.N` and sort below every dated nightly of their core.
+Nightlies never wait for another release
 
 The first stable public generation is called Epoch 1 and starts at `1000.0.0`, not `1.0.0`
 
 | Example release | Package version |
 | --- | --- |
-| First release candidate | `1000.0.0-rc.0` |
 | First stable release | `1000.0.0` |
 | Nightly build after the first stable release | `1000.0.1-nightly.20261019.57` |
 | Compatible bug fix | `1000.0.1` |
@@ -81,12 +78,12 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 
 These examples illustrate versioning, not the current release inventory.
 Use the [SDK source manifest](/projects/sdk/package.json) for the checkout's version and [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions.
-The release channels are Nightly, RC and Stable, with the npm distribution tags `nightly`, `rc` and `latest`.
-Until the first Stable release, `latest` points to a release candidate that the maintainer moves there by hand.
-Release tooling moves only the published channel's tag, so previews never move `latest`.
+The two release channels are Nightly and Stable, with the npm tags `nightly` and `latest`.
+Until the first Stable, `latest` is pointed at a nightly by hand.
+Release tooling moves only the published channel's tag, so nightlies never move `latest`.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
 
-Canary was the earlier preview channel. Its `-canary.N` versions were removed from npm and GitHub, and no new Canary is published
+Canary and RC were earlier channels and are retired. No new versions of them are published
 
 ### Effect and diagnostics
 
@@ -157,16 +154,15 @@ Only the [socket transport](/projects/sdk/src/internal/transport/socket.ts) impo
 | Area | Selected choice |
 | --- | --- |
 | Framework | Astro |
-| Documentation UI | React and Fumadocs, integrated into Astro routes |
+| Interactive parts | React islands, with three and gsap for the homepage's live scene |
+| Search | Pagefind, one index per served version |
 | Hosting | Cloudflare Pages |
 | Tooling compiler | TypeScript 6 until the website toolchain supports TypeScript 7 and migration is approved |
-| SDK reference generator | TypeDoc with typedoc-plugin-markdown, reading TypeScript 7-generated declarations |
+| SDK reference generator | TypeDoc JSON, reading TypeScript 7-generated declarations |
 
 TypeScript 6 is a compatibility exception for the website and reference-generation tooling, not SDK consumer support.
 The website is separate from the SDK's npm package.
-The implemented documentation UI uses a dark, cozy theme with a 20px reading body.
-Temporary public delivery is Preview only, with no SEO or sitemap and explicit noindex controls.
-The permanent cinematic website remains deferred until the first stable SDK release.
+The site's character and rules are in [its AGENTS.md](/projects/web/AGENTS.md).
 Use [documentation maintenance](/docs/DOCUMENTATION.md) for generation, exact-version snapshots and delivery setup
 
 ### SDK reference generation
@@ -175,7 +171,7 @@ TypeScript 7 builds the SDK and emits its public declarations with authored docu
 TypeDoc runs with TypeScript 6 in the documentation tooling to read those declarations.
 This keeps the SDK compiler and TypeScript consumer policy on TypeScript 7
 
-Generated Markdown provides the API reference in Astro, alongside handwritten guides and examples.
+Generated JSON provides the API reference rendered by Astro, alongside handwritten guides and examples.
 The website must explicitly map generated reference links to its page routes and preserve fragment targets.
 Generated reference files must not require manual link edits
 
@@ -230,7 +226,7 @@ Other formatting options use Prettier's stable defaults, without plugins or expe
 The [development checks](/docs/REPOSITORY.md#development-checks) include SDK formatting validation and linting.
 Oxlint lints SDK source, scripts, examples and tests, release tooling and website scripts with type-aware rules through oxlint-tsgolint.
 Knip reports unused SDK files and exports, and CSpell checks SDK source comments, website guides and repository documents against the [project word list](/projects/cspell-words.txt).
-Two source scans complete the lint. The [em-dash check](/projects/scripts/em-dashes.mjs) fails on any em dash in a tracked or new SDK or website file, except fixtures that copy Fluxer's text exactly. The [failure-mapping check](/projects/sdk/scripts/failure-mapping.js) fails when SDK source maps failures with `Effect.mapError` or `Cause.map` instead of the helpers that also map failures Effect turned into defects.
+Source scans complete the lint. The [em-dash check](/projects/scripts/em-dashes.mjs) fails on any em dash in a tracked or new SDK or website file, except fixtures that copy Fluxer's text exactly. The [failure-mapping check](/projects/sdk/scripts/failure-mapping.js) fails when SDK source maps failures with `Effect.mapError` or `Cause.map` instead of the helpers that also map failures Effect turned into defects.
 These tools are exact workspace development dependencies configured in [projects/](/projects/).
 In CI, actionlint lints the workflow files and zizmor audits them.
 Website formatting has not been selected.
@@ -248,8 +244,8 @@ The SDK build and test tools are installed and configured.
 The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
-Check, version PR, candidate preparation, publication, Preview and daily upstream and Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
-Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a schedule every six hours prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
+Check, version PR, candidate preparation, publication, Website and daily upstream and Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
+Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a schedule twice a day prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
 [Releasing](/docs/RELEASING.md) describes each trigger and when a nightly is skipped.
-Preview releases are published to npm, and the Preview documentation website is live.
+Nightlies are published to npm.
 Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for the published versions

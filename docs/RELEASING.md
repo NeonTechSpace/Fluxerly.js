@@ -3,42 +3,54 @@
 This guide covers cutting an SDK release from reviewed `main` source, recovering from failures and the rules the release tooling enforces.
 Use [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions and distribution tags
 
-## Cut a release
+## Releases in short
 
-1. Record SDK changes with `pnpm changeset` from [projects/](/projects/) while developing them.
-   Select the public package and compatibility bump, and write caller-relevant notes rather than an edited-file list
-2. Run [Release version PR](/.github/workflows/release-version.yml) with `source_ref: main` and the readiness `channel`.
-   It opens a `release/version-VERSION` pull request and dispatches [Check](/.github/workflows/ci.yml) on that branch.
-   Review the SDK version, changelog and consumed fragments, then merge after Check passes
-3. After the merge, Check runs on `main`. When it passes and the push changed the SDK version to one npm lacks, it dispatches [Release prepare](/.github/workflows/release-prepare.yml) for that exact commit.
-   Review the version, channel, release notes and candidate SHA256 in the preparation summary
-4. Run the `gh workflow run release-publish.yml` command printed in that summary, or dispatch [Release publish](/.github/workflows/release-publish.yml) from `main` with the same preparation run ID and checksum.
-   It publishes the retained tarball, installs it from npm on both supported Node versions, announces the GitHub release and deploys the Docs preview
-5. Confirm the result in the run summaries.
-   For a downloaded candidate, `pnpm release:status` reports whether npm serves the reviewed bytes and the current distribution tags
+There are two kinds of release: Nightly and Stable.
+
+- **Nightly** happens by itself twice a day when the SDK changed. It's how new work reaches people first, and it can break things
+- **Stable** is a nightly that's ready. You choose when, and it ships the same code that nightly already shipped
+
+## Release a Stable version
+
+Stable can only ship what a nightly already shipped. The tooling compares the two, and stops if the code differs or there's no nightly of that version.
+
+1. Check that the newest nightly has what you want to ship. If `main` has changes the nightly lacks, [run a nightly](/docs/RELEASING.md#nightly-builds) first
+2. Run [Release version PR](/.github/workflows/release-version.yml) with `source_ref: main`.
+   It opens a `release/version-VERSION` pull request with the new version and changelog, and starts [Check](/.github/workflows/ci.yml) on it. The version number comes from the release notes, so there's nothing to type
+3. Review the version and changelog, then merge after Check passes
+4. Check runs again on `main`. When it passes, it starts [Release prepare](/.github/workflows/release-prepare.yml) for that commit.
+   Review the version, the release notes and the candidate SHA256 in its summary
+5. Run the `gh workflow run release-publish.yml` command printed in that summary, or start [Release publish](/.github/workflows/release-publish.yml) from `main` with the same preparation run ID and checksum.
+   It publishes the retained package, installs it from npm on both supported Node versions, announces the GitHub release and deploys the website
+6. Confirm the result in the run summaries.
+   For a downloaded candidate, `pnpm release:status` reports whether npm serves the reviewed bytes and the current tags
+
+If new SDK code lands on `main` before you merge, don't merge. Close the pull request, let a nightly publish the new code, then run Release version PR again. If it's already merged, revert the new code before the next nightly, because that nightly would otherwise move on to the following version. Then start Release prepare from `main` by hand, because a revert doesn't start it.
 
 Every step can be rerun with the same inputs. Publication reads npm before uploading and never uploads a version twice
 
 Keep `.github/workflows/` unchanged on `main` from preparation until Release publish has announced the GitHub release.
 GitHub refuses to create a release whose source commit has workflow files that differ from `main` unless the token has the Workflows permission, and the release App does not have it
 
+Record SDK changes with `pnpm changeset` from [projects/](/projects/) while developing them. Select the public package and the size of the change, and write what changes for callers, not a list of edited files
+
 ## Nightly builds
 
-Nightly builds need no manual step.
-Every six hours, at 00:00, 06:00, 12:00 and 18:00 Berlin time, [Release prepare](/.github/workflows/release-prepare.yml) builds `main` as the next nightly version and starts [Release publish](/.github/workflows/release-publish.yml) itself, without a checksum review.
+Nightly builds need no manual step, and they don't change the repository.
+Twice a day, at midnight and midday Berlin time, [Release prepare](/.github/workflows/release-prepare.yml) builds `main` as the next nightly version and starts [Release publish](/.github/workflows/release-publish.yml) itself, without a checksum review.
 Publication then runs the same checks as any release and announces a GitHub prerelease that carries the docs snapshot
 
 A run whose SDK content matches the previous nightly publishes nothing.
-It also publishes nothing when the content matches the published RC or Stable of the source version and no nightly on that line was published after it.
-Pending Changesets notes appear as unreleased changes in the nightly's release notes and docs changelog, and they stay pending for the next RC or Stable.
+It also publishes nothing when the content matches the Stable it follows and no nightly on that line was published after it.
+Pending Changesets notes appear as unreleased changes in the nightly's release notes and docs changelog, and they stay pending for the next Stable.
 To publish a nightly sooner, dispatch Release prepare from `main` with `nightly` selected. A nightly always builds the commit the workflow runs from and ignores `source_ref`
 
 A nightly version is `CORE-nightly.YYYYMMDD.N`, such as `1000.0.0-nightly.20261019.16`.
 The `YYYYMMDD` part is the UTC date of the Release prepare run's preparation step and `N` is that run's number.
 The date comes first so builds sort by day, and the run number then keeps them from ever repeating.
 Overlapping nightly runs get different versions, because each run number is different.
-Nightly versions published before this format use `CORE-nightly.N`. They stay valid and sort below every dated nightly of the same core, and every nightly sorts below the RC of its core.
-A nightly run is superseded when the newest nightly on its line, published after its preparation, has the same content. When a higher nightly on its line already exists, any nightly published after its preparation with the same content supersedes it, and the newest matching one is reported. The run's Release publish step succeeds without publishing, prints the superseding version and skips the registry install, announcement and docs preview jobs. This covers overlapping runs on one commit, such as the scheduled run and a manual dispatch. The fingerprint reads share a one-minute budget that is checked between reads, and each read can take longer.
+Nightly versions published before this format use `CORE-nightly.N`. They stay valid and sort below every dated nightly of the same core.
+A nightly run is superseded when the newest nightly on its line, published after its preparation, has the same content. When a higher nightly on its line already exists, any nightly published after its preparation with the same content supersedes it, and the newest matching one is reported. The run's Release publish step succeeds without publishing, prints the superseding version and skips the registry install, announcement and website jobs. This covers overlapping runs on one commit, such as the scheduled run and a manual dispatch. The fingerprint reads share a one-minute budget that is checked between reads, and each read can take longer.
 When no such nightly matches and a later one exists, the run fails with the newer version error. When only earlier ones exist, the run publishes. A candidate whose own version is already on npm is confirmed instead.
 When a pending major or minor note is removed, the next nightly's version can drop below the newest nightly. It then publishes under a staging tag such as `nightly-1000-1`, while the `nightly` tag and `/docs/nightly/` keep the higher build until a later nightly passes it. The [dist-tag runbook](/docs/RELEASING.md#npm-distribution-tags) can point `nightly` at the newer build
 
@@ -60,16 +72,16 @@ When a pending major or minor note is removed, the next nightly's version can dr
 | `Preparation is not a successful manual or scheduled run of this repository's release-prepare workflow` | The run ID is wrong, or the run failed or was still running after 5 minutes | Use the ID of a successful Release prepare run |
 | `GitHub rejected the OPERATION with HTTP 4xx` | GitHub refused the request, so nothing changed. A 403 on release creation can also mean workflow files changed on `main` after preparation | Fix the cause, such as App permissions or tag rules, then rerun Release publish. For workflow changes, revert them on `main`, rerun Release publish, then push them again |
 | `GitHub release creation is unconfirmed`, `asset deletion is unconfirmed` or `asset contents are unconfirmed` | A network or server failure left the outcome uncertain | Rerun Release publish. Reconciliation reads back after uncertain writes and replaces incomplete expected assets |
-| `Publish pending changes as a release candidate before stable` | Stable was selected from an RC source that has new changes | Run Release version PR with `channel: rc`, publish that RC, then select Stable |
-| `VERSION is a new major version or epoch` | A big release was selected for Stable without a published RC | Run Release version PR with `channel: rc`, publish that RC, then select Stable. See [release stages](/docs/RELEASING.md#release-stages) |
-| `Release candidate VERSION is pending` | An unreleased RC blocks every other Stable at or above its version | Publish that RC as Stable first, or release a fix below it |
-| `Stable content differs from VERSION` | An RC of this version is published, and the source changed after the newest one | Publish the current content as a new RC first. See [release baselines](/docs/RELEASING.md#release-baselines) |
-| `No pending Changesets fragments or readiness promotion` | Nothing describes a new release | Add a fragment or select a promoting channel |
+| `No nightly of VERSION is published` | No nightly of this version exists yet, so [run a nightly](/docs/RELEASING.md#nightly-builds) and rerun. If nothing changed since the last Stable, the nightly skips too, because there's nothing to release, so stop there | See the meaning |
+| `Stable content differs from VERSION` | The code changed after the newest nightly of this version | [Run a nightly](/docs/RELEASING.md#nightly-builds), then run Release version PR again. If the version PR is already merged, see [Release a Stable version](/docs/RELEASING.md#release-a-stable-version) |
+| `A public build needs at least one published version` | Website ran before any nightly with a current docs snapshot was published | Wait for the next nightly, or [run one](/docs/RELEASING.md#nightly-builds). It deploys the site itself |
+| `The source holds a nightly target, not a release` | Release prepare was started before the Stable version PR was merged | Run Release version PR, merge it, then prepare |
+| `No pending Changesets fragments or readiness promotion` or `Publishable SDK bytes changed` | Nothing describes this release | Add a release note |
 | `The source branch moved after version preparation` | New commits arrived during Release version PR | Rerun Release version PR |
-| `Check run N did not pass` or `The exact-source Check gate timed out` | Release prepare or Docs preview found no passing Check for the source | Fix or rerun Check, then rerun the blocked workflow |
+| `Check run N did not pass` or `The exact-source Check gate timed out` | Release prepare or Website found no passing Check for the source | Fix or rerun Check, then rerun the blocked workflow |
 | `GitHub OIDC configuration is incomplete, refusing token fallback` | The publisher has no OIDC token | Confirm `id-token: write`, the `package` environment and npm trusted publishing |
 
-Unchanged publishable content on a nightly or RC is not a failure. Release version PR opens no pull request and Release prepare retains no candidate in that case
+Unchanged publishable content on a nightly is not a failure. Release prepare retains no candidate in that case
 
 ## Reference
 
@@ -88,14 +100,14 @@ The workflow does not version or publish the SDK
 
 ### Registry publication contract
 
-The canonical SDK manifest remains `private`. The `stageRelease` package script creates a separate public npm package directory and `sdk.tgz` tarball. Never publish from the SDK checkout
+The canonical SDK manifest remains `private`. The `packages:prepare` package script creates a separate public npm package directory and `sdk.tgz` tarball. Never publish from the SDK checkout
 
 [Package preparation](/projects/sdk/scripts/packages.js) copies compiled JavaScript, declarations, maps, sources, license and consumer guidance into a new directory.
 It creates the public npm package directory and verifies the matching `sdk.tgz` inventory
 
 The staged npm manifest receives the reviewed release version and retains Effect as a required peer range.
 [The prerequisite check](/projects/release/support.js) requires a caret range of a stable version and an exact stable development dependency in the same major, at or above the range's lowest version, and rejects an exact, prerelease or optional peer.
-Release commands that read or change registries enforce it, and the release tooling tests run it in `pnpm check`
+Versioning, preparation, publication, verification and status commands enforce it, and the release tooling tests run it in `pnpm check`
 
 Candidate schema 1 binds the package inventory, staged manifest and tarball checksums, source commit and checked documentation snapshot checksum into one reviewed candidate.
 Validation rereads the staged directory and tarball before publication.
@@ -103,64 +115,46 @@ Publication, verification, status and the GitHub announcement download the tarba
 
 ### Version and content rules
 
-[Epoch Semantic Versioning](/docs/TECHNOLOGY.md#versioning-and-release-stages) defines compatibility and readiness separately.
-A version PR selects RC or Stable. Nightly versions exist only in their candidates and are never committed. Each new RC counter starts at zero, while a nightly uses its run number.
-The release wrapper retains the cycle's stable starting version in `projects/.changeset/pre.json` as `releaseBase`, with `null` for the initial `1000.0.0` cycle.
-Pending and archived Changesets together determine the target's compatibility impact, while only pending notes enter a new preview's changelog. Stable collects the complete cycle's notes.
-Before the Stable version PR, edit or delete archived notes in `projects/.changeset/pre/` that later changes in the cycle superseded, so the Stable changelog never announces an API that the same release removes.
-Make packaged text changes for a Stable that follows an RC, such as the README release status or the `homepage` URL, before the final RC
+[Epoch Semantic Versioning](/docs/TECHNOLOGY.md#versioning-and-release-stages) sets the numbers. The release notes on `main` decide the next version:
 
-Source versioning is not atomic. After an interruption, reconcile the manifest, prerelease state, archived notes and changelog before retrying.
-Missing or invalid prerelease state fails closed
+| Notes since the last Stable | Next version after `1000.0.0` |
+| --- | --- |
+| Only patch notes | `1000.0.1` |
+| A minor note | `1000.1.0` |
+| A major note | `1001.0.0` |
 
-An explicit higher epoch is a multiple of 1000 and requires a major fragment.
-There are no permanent readiness branches. Occasional other release lines use an explicitly selected source branch
+Nightlies carry that next number, such as `1000.1.0-nightly.20261101.5`, and Stable then uses it without the suffix. Nightly versions exist only in their packages and are never committed. Only a Stable release changes the version stored in the repository.
 
-[Content fingerprints](/projects/release/content.js) ignore package-version fields and changelog bookkeeping, not arbitrary SDK bytes.
-Changed publishable bytes on the RC channel require a pending fragment. Promotion to RC alone does not bypass the unchanged-content guard. Stable instead follows the [release stages](/docs/RELEASING.md#release-stages)
+A new epoch is a deliberate choice. Run Release version PR with `epoch`, such as `2000`, with a major release note. It stores a target like `2000.0.0-nightly.0` on `main`, and nightlies then build toward it. A target never drops, even if notes are removed later.
 
-Changesets owns `projects/sdk/CHANGELOG.md`. The website renders it, and GitHub uses its exact version section for RC and Stable release notes. Nightly release notes list the pending notes instead.
+Before the first Stable, the stored version is the target `1000.0.0-nightly.0`, and `projects/.changeset/pre/` holds the notes of the releases so far. The first Stable collects all of them. `projects/.changeset/pre.json` keeps the last Stable as `releaseBase`, with `null` before the first one. Before the Stable version PR, edit or delete notes that later changes replaced, so the changelog never announces something the same release removes.
+
+Source versioning is not atomic. After an interruption, reconcile the manifest, release state, notes and changelog before retrying. Missing or invalid state fails closed
+
+There are no permanent release branches. Occasional other release lines use an explicitly selected source branch
+
+[Content fingerprints](/projects/release/content.js) compare the code two packages ship. They ignore the version fields and changelog bookkeeping, nothing else
+
+Changesets owns `projects/sdk/CHANGELOG.md`. The website renders it, and GitHub uses its exact version section for Stable release notes. Nightly release notes list the pending notes instead.
 Website, test and release-tooling changes that do not alter the published SDK need no fragment
 
-### Release stages
+### Stable and nightly
 
-The size of a release decides whether Stable needs an RC first:
+Any Stable, small or big, comes from a nightly. The newest published nightly of that version is its checkpoint: The two must ship the same code, or the release stops. You decide when a nightly is ready, and there is no waiting period.
 
-- **Small release:** A patch or minor release within the same epoch and major version.
-  It can go straight to Stable from a Stable source version, with no RC
-- **Big release:** A new major version, which is a breaking change, or a new epoch.
-  It must be published as an RC first. Stable then promotes that RC from an RC source version with no pending notes
+Nightlies never wait for anything. A nightly must sort above every published nightly of its version. If a higher one publishes first, the lower run succeeds without publishing when a newer nightly has the same code, and otherwise fails with the newer version error. A nightly publishes under the `nightly` tag and never moves `latest`.
 
-A maintainer decides when a published RC is ready to become Stable. There is no fixed waiting period
-
-A pending RC is the newest published RC above the newest published Stable.
-While one exists, the only Stable at or above its version that can be published is the RC's own version.
-Stables below it stay free, such as a fix on an older line.
-Whenever an RC of the same version is published, Stable must match the newest one byte for byte by content fingerprint
-
-Nightly builds are exempt from these rules.
-A nightly needs no RC, is never blocked by a pending RC and has no content to match.
-A nightly version carries the UTC date of its preparation step and the run number, and it must sort above every published nightly of its core in either form.
-Release version PR and RC or Stable preparation read every published version with the selected source's release tooling, so once a dated nightly is published, the source must include dated nightly support.
-If a higher nightly on the same line publishes first, the lower run is superseded and succeeds without publishing when any nightly of its line published after its preparation has the same content. Otherwise the lower run fails with the newer version error.
-A nightly publishes under the `nightly` tag without moving `latest` or `rc`
-
-### Release baselines
-
-Each nightly and RC compares against the previous npm version on the same channel and `major.minor` line.
-The first one on a channel and line has none. The tooling reads that from the registry version list, so it needs no extra input.
-Stable compares against the newest published RC of the same version and must match its content. A small Stable with no RC of its version has no baseline.
-A failed registry lookup, including a missing package, always stops the release
+Each nightly compares against the previous nightly on the same `major.minor` line, and the first one on a line has nothing to compare against. A failed registry lookup, including a missing package, always stops the release.
 
 ### Workflows
 
 | Workflow | Trigger | Inputs and result |
 | --- | --- | --- |
 | [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The `check` job requires all of them, or reuses an earlier passing run for identical content |
-| [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref`, `channel` and optional `epoch` and `line`. Opens the version pull request |
-| [Release prepare](/.github/workflows/release-prepare.yml) | Every six hours for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
-| [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the Preview |
-| [Docs preview](/.github/workflows/docs-preview.yml) | Called by Release publish, or manual | Always builds `main` and deploys only the Preview target |
+| [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref` and optional `line`. Opens the Stable version pull request, or with `epoch`, a pull request that sets a new epoch as the nightly target |
+| [Release prepare](/.github/workflows/release-prepare.yml) | Twice a day for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
+| [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the website |
+| [Website](/.github/workflows/website.yml) | Called by Release publish, or manual | Always builds `main` from the published versions' snapshots and deploys it to `https://fluxerly.neontechspace.com` |
 | [Effect drift](/.github/workflows/effect-drift.yml) | Daily, or manual | No inputs. Checks the SDK with the newest Effect release in its peer range and fails when the SDK breaks with it. It does not publish |
 
 Only Release publish writes to npm, and no push or tag publishes a package.
@@ -202,12 +196,12 @@ Provider output is logged with token-like values redacted
 
 ### npm distribution tags
 
-The channel tags are `nightly`, `rc` and `latest` for Stable.
+The tags are `nightly` and `latest`, which is Stable.
 Recovery accepts a newer channel-tag version on the same `major.minor` line only when npm still serves the candidate's reviewed bytes. It never moves the channel tag backward.
 Older release lines publish under a line-specific staging tag, such as `nightly-1000-0`, and still require that tag for recovery
 
-No stable version exists yet, so `latest` points to a release candidate that the maintainer moved there by hand. Release publish never moves it for previews.
-The first stable release moves it to `1000.0.0`
+No Stable exists yet, so `latest` is pointed at a nightly by hand. Nightlies never move it.
+The first Stable moves it to `1000.0.0`
 
 Trusted publishing cannot change tags, so tag corrections need an interactive npm login with two-factor authentication:
 
@@ -250,5 +244,5 @@ Permit only `main` to enter `package` and keep administrator bypass disabled
 For `v*` tags, use a creation-restriction ruleset whose only bypass actor is the release App, and a separate update and deletion ruleset with no bypass actors.
 These rules constrain credentials, not one workflow. Administrators who can edit rules, workflows or environments can change the boundary
 
-Use [documentation maintenance](/docs/DOCUMENTATION.md#preview-setup) for the Preview hostname, Cloudflare access and `website` environment.
+Use [documentation maintenance](/docs/DOCUMENTATION.md#deployment) for Cloudflare access and the `website` environment.
 Local tests establish the checked planning, staging and recovery boundaries, not live provider success

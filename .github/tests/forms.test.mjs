@@ -41,7 +41,7 @@ test("both issue forms require the agreed version scope first and allow optional
         assert.equal(fields[0].type, "checkboxes")
         const scope = fields[0].attributes.options[0]
         assert.equal(scope.required, true)
-        assert.match(scope.label, /current major.*RC.*next release.*previous major.*nightly/)
+        assert.match(scope.label, /current major.*newest nightly.*first Stable.*previous major/)
         const upload = fields.find((field) => field.type === "upload")
         assert.ok(upload, "Report evidence must have an upload field")
         assert.equal(upload.validations.required, false)
@@ -49,7 +49,7 @@ test("both issue forms require the agreed version scope first and allow optional
 })
 
 test("issue forms and the PR template produce the section the model check reads", () => {
-    const line = "- Model: example-model-1 | Reasoning: high | Harness: example-cli"
+    const line = "- Model: example-model-1 | Harness: example-cli"
     for (const path of forms.slice(0, 2)) {
         const field = parse(read(path)).body.find((entry) => entry.id === "models-used")
         // GitHub cannot know vouch status, so the workflow enforces the field instead of the form
@@ -59,7 +59,7 @@ test("issue forms and the PR template produce the section the model check reads"
     }
     const template = read(".github/pull_request_template.md")
     assert.equal(parseModels(template).error, "malformed")
-    const filled = template.replace("- Model: (model id) | Reasoning: (setting) | Harness: (harness)", line)
+    const filled = template.replace("- Model: (model id) | Harness: (harness)", line)
     assert.notEqual(filled, template)
     assert.equal(parseModels(filled).models.length, 1)
 })

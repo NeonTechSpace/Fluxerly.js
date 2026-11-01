@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Security fixes go to the newest stable release, not to older releases or previews.
-Until the first stable release, they go to the newest release candidate, the version under the `rc` tag. Nightly builds receive fixes only through later nightly builds.
+Security fixes go to the newest stable release, not to older releases or nightlies.
+Until the first Stable release, they go out in the next nightly. After it, nightlies receive fixes only through later nightlies.
 The [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) lists the published versions
 
 ## Reporting a vulnerability

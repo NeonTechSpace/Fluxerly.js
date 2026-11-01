@@ -215,15 +215,14 @@ export function parseModels(body) {
     if (section.length === 1 && /^(?:[-*+][ \t]+)?None$/i.test(section[0])) return { models: [] }
     const models = []
     for (const line of section) {
-        const match = /^[-*+][ \t]+Model:[ \t]*(.*?)[ \t]*\|[ \t]*Reasoning:[ \t]*(.*?)[ \t]*\|[ \t]*Harness:[ \t]*(.*)$/i.exec(
-            line,
-        )
+        // A reasoning level isn't required, and one that's written anyway is ignored
+        const match = /^[-*+][ \t]+Model:[ \t]*(.*?)[ \t]*\|(?:[ \t]*Reasoning:[^|]*\|)?[ \t]*Harness:[ \t]*(.*)$/i.exec(line)
         const values = match?.slice(1) ?? []
         // Unfilled template placeholders such as (model id) do not declare anything
-        if (!match || values.some((value) => !value || /^\(.*\)$/.test(value)) || /^unknown$/i.test(values[1])) {
+        if (!match || values.some((value) => !value || /^\(.*\)$/.test(value))) {
             return { error: "malformed" }
         }
-        models.push({ model: values[0], reasoning: values[1], harness: values[2] })
+        models.push({ model: values[0], harness: values[1] })
     }
     return { models }
 }
@@ -243,7 +242,7 @@ function modelProblem(item, policy, trusted, today) {
 }
 
 function modelComment(kind) {
-    return `${modelMarker}\nThis ${kind} needs a "Models used" section, because its author does not have general vouch status. The section is missing or malformed, or names a model that is not in the allowed model list\n\nUse one line per main model in the form \`- Model: (model id) | Reasoning: (setting) | Harness: (harness)\`, or write \`None\` if no model was used. Edit the ${kind} to correct the section, and it reopens automatically\n\nSee [disclose models used](https://github.com/${repository}/blob/main/docs/CONTRIBUTING.md#disclose-models-used)`
+    return `${modelMarker}\nThis ${kind} needs a "Models used" section, because its author does not have general vouch status. The section is missing or malformed, or names a model that is not in the allowed model list\n\nUse one line per main model in the form \`- Model: (model id) | Harness: (harness)\`, or write \`None\` if no model was used. Edit the ${kind} to correct the section, and it reopens automatically\n\nSee [disclose models used](https://github.com/${repository}/blob/main/docs/CONTRIBUTING.md#disclose-models-used)`
 }
 
 function generallyTrusted(user, policy, trust) {

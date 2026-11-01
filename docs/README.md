@@ -1,8 +1,5 @@
 <h1 align="center">
-  <a href="https://fluxerly.neontechspace.com">Fluxerly.js</a>
-  <br>
-  <br>
-  <img src="/docs/assets/mascot.png" width="220" alt="Fluxerly mascot">
+  <a href="https://fluxerly.neontechspace.com"><img src="/docs/assets/banner.jpg" width="720" alt="Fluxerly.js, a Fluxer-native bot SDK. A few lines of bot code and the conductor mascot answering Pong!"></a>
 </h1>
 
 <h3 align="center">From your first reply to the bot of your dreams</h3>
@@ -24,17 +21,43 @@
   <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=dark"><img src="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=light" alt="Fluxer: Public community invite coming soon"></picture>
 </p>
 
-> [!NOTE]
-> Fluxerly is a prerelease SDK. Start with the [temporary docs](https://preview.fluxerly.neontechspace.com/) and review the changelog before upgrading
->
-> Issues and pull requests are maintainer-only until the first Stable release. The [contribution guide](/docs/CONTRIBUTING.md) and submission templates are prepared for that release, without opening public access now
+<p align="center">
+  <a href="https://fluxerly.neontechspace.com/docs/">Docs</a> ·
+  <a href="https://fluxerly.neontechspace.com/docs/quick-start/">Quick start</a> ·
+  <a href="https://fluxerly.neontechspace.com/docs/api/">API reference</a> ·
+  <a href="https://fluxerly.neontechspace.com/docs/changelog/">Changelog</a> ·
+  <a href="https://fluxerly.neontechspace.com/docs/examples/">Examples</a> ·
+  <a href="https://github.com/NeonTechSpace/NeonFlux">NeonFlux</a>
+</p>
+
+```sh
+npm install @neontechspace/fluxerly
+```
+
+```js
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: { ping: { execute: ({ reply }) => reply("Pong!") } },
+    },
+})
+```
+
+<p align="center">
+  <img src="/docs/assets/demo.webp" width="720" alt="A terminal runs fluxerly init and npm start, then in a chat !ping gets the reply Pong!">
+</p>
+
+The same SDK runs large bots. [NeonFlux](https://github.com/NeonTechSpace/NeonFlux) is a real Fluxer bot being rebuilt with it
 
 ## What Fluxerly includes
 
 Fluxerly is built for developers at every skill level, from a first bot in one file to large bots that need full control
 
 - **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
-- **Visible errors:** Network calls return a Result instead of throwing, and logs show every failure in full without the token. `FLUXERLY_DEBUG=1` or the `logging` option changes what the logs show
+- **Visible errors:** In the default API, network calls return a Result for expected failures. Check it or return it from a handler so the SDK reports the failure. Logs never contain the token, and `FLUXERLY_DEBUG=1` or the `logging` option changes what they show
 - **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
 - **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server
 - **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
@@ -65,13 +88,13 @@ pnpm add @neontechspace/fluxerly
 bun add @neontechspace/fluxerly
 ```
 
-> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly or RC that breaks the API
+> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API
 
 ## Getting started
 
 A bot needs a Fluxer application, its bot token and an invite to a community
 
-Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://preview.fluxerly.neontechspace.com/docs/latest/quick-start/) also sets up the same project by hand
+Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) also sets up the same project by hand
 
 The generated `bot.js` replies **Pong!** to **!ping**:
 

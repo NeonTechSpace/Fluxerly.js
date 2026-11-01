@@ -14,7 +14,7 @@ const fileSha = "c".repeat(40)
 const repo = { full_name: repository, id: 1370449818, default_branch: "main" }
 const permissionMarker = "<!-- fluxerly-contribution-permissions:v1 -->"
 const modelMarker = "<!-- fluxerly-contribution-model-result:v1 -->"
-const allowedLine = "- Model: example-model-1 | Reasoning: high | Harness: example-cli"
+const allowedLine = "- Model: example-model-1 | Harness: example-cli"
 const clone = (value) => structuredClone(value)
 const file = (value) => ({
     sha: fileSha,
@@ -699,13 +699,13 @@ const issueEvent = (f, action, number = 50, options = {}) =>
 const authoredIssue = (f, body, user = contributor, number = 50) =>
     f.state.issues.set(number, { ...issue(number), user, body })
 
-test("model declarations need visible, filled lines with a known reasoning setting", () => {
+test("model declarations need visible, filled lines, and a reasoning level is optional", () => {
     const parsed = parseModels(
-        `${models(allowedLine, "* Model: Model One | Reasoning: low | Harness: other")}\n\n## Contributor confirmation\n\n- unrelated`,
+        `${models(allowedLine, "* Model: Model One | Reasoning: low | Harness: other", "- Model: Model Two | Reasoning: Unknown | Harness: other")}\n\n## Contributor confirmation\n\n- unrelated`,
     )
     assert.deepEqual(
         parsed.models.map((entry) => entry.model),
-        ["example-model-1", "Model One"],
+        ["example-model-1", "Model One", "Model Two"],
     )
     assert.deepEqual(parseModels("### Models used\n\nNone"), { models: [] })
     assert.deepEqual(parseModels(models("- None")), { models: [] })
@@ -715,10 +715,10 @@ test("model declarations need visible, filled lines with a known reasoning setti
         [models(`<!--\n${allowedLine}\n-->`), "missing"],
         [models("```text", allowedLine, "```"), "missing"],
         [`> ## Models used\n> ${allowedLine}`, "missing"],
-        [models("- Model: (model id) | Reasoning: (setting) | Harness: (harness)"), "malformed"],
-        [models("- Model: example-model-1 | Reasoning: Unknown | Harness: example-cli"), "malformed"],
+        [models("- Model: (model id) | Harness: (harness)"), "malformed"],
         [models("- Model: example-model-1 | Reasoning: high"), "malformed"],
-        [models("Model: example-model-1 | Reasoning: high | Harness: example-cli"), "malformed"],
+        [models("- Model: example-model-1"), "malformed"],
+        [models("Model: example-model-1 | Harness: example-cli"), "malformed"],
         [models("None", allowedLine), "malformed"],
     ]) {
         assert.equal(parseModels(body).error, error, body)
@@ -728,8 +728,8 @@ test("model declarations need visible, filled lines with a known reasoning setti
 test("an unvouched PR's own event closes a missing, malformed, or unlisted model declaration", async () => {
     for (const section of [
         "",
-        models("- Model: (model id) | Reasoning: (setting) | Harness: (harness)"),
-        models(allowedLine, "- Model: unlisted-model | Reasoning: high | Harness: example-cli"),
+        models("- Model: (model id) | Harness: (harness)"),
+        models(allowedLine, "- Model: unlisted-model | Harness: example-cli"),
     ]) {
         const f = fixture()
         grantedPr(f, section)
@@ -751,7 +751,7 @@ test("an unvouched PR's own event closes a missing, malformed, or unlisted model
 test("allowed models match by id, name, or alias regardless of case and separators", async () => {
     for (const declared of ["example-model-1", "Example Model 1", "model_one", "EXAMPLE MODEL-1"]) {
         const f = fixture()
-        grantedPr(f, models(`- Model: ${declared} | Reasoning: high | Harness: example-cli`))
+        grantedPr(f, models(`- Model: ${declared} | Harness: example-cli`))
         await f.check({ event: prEvent("edited") })
         assert.equal(f.state.pr.state, "open", declared)
         assert.deepEqual(modelComments(f.state, 81), [])
@@ -768,7 +768,7 @@ test("a replaced model keeps passing through its allowedUntil date and fails aft
         ["2026-10-12", "closed"],
     ]) {
         const f = fixture()
-        grantedPr(f, models("- Model: example-model-0 | Reasoning: high | Harness: example-cli"))
+        grantedPr(f, models("- Model: example-model-0 | Harness: example-cli"))
         await f.check({ event: prEvent("ready_for_review"), today })
         assert.equal(f.state.pr.state, state, today)
     }

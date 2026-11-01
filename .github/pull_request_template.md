@@ -1,16 +1,21 @@
 <!--
-Issues and PRs remain maintainer-only until the first Stable release
-This template prepares the contribution process without opening public access
 Contributor policy: /docs/CONTRIBUTING.md
 
-Model-written prose that has not been edited by a human must include this note
-outside this comment, replacing the placeholders with actual values:
+Model-written prose must include one of these notes outside this comment,
+replacing the placeholders with actual values
+
+Text a model wrote on its own:
 
 > [!NOTE]
-> This was posted by (model + reasoning) on behalf of (username)
+> Sent by (model) on behalf of (username)
 
-Human-edited text and human-written text do not require the note, even when a
-model posts them. Model use is disclosed in "Models used" as described there
+Text the author edited:
+
+> [!NOTE]
+> Reviewed by author, aided by (model)
+
+Only human-written text does not require a note, even when a model posts it.
+Model use is disclosed in "Models used" as described there
 -->
 
 ## Problem
@@ -95,11 +100,11 @@ Remove this section if there is nothing additional to flag
 <!--
 Required without general vouch status, optional for vouched contributors and maintainers
 Use one line per main model from /.github/contribution-policy.json, with its
-exact version, reasoning setting, and harness. "unknown" reasoning is not accepted
+exact version and harness
 Do not list subagents. If no model was used, replace the line with None
 -->
 
-- Model: (model id) | Reasoning: (setting) | Harness: (harness)
+- Model: (model id) | Harness: (harness)
 
 ## Contributor confirmation
 

@@ -1,11 +1,5 @@
 # Contributing
 
-## Before the first Stable release
-
-Issues and pull requests remain maintainer-only until the first Stable release.
-Discussions remain disabled. These guidelines and submission forms are prepared
-for opening contributions at that release, without opening access now
-
 ## Read this first
 
 Fluxerly.js is provided as is and maintained in spare time. Work happens when
@@ -21,6 +15,16 @@ opinionated rewrites, and unrelated cleanup are not
 Establish the problem before investing in an implementation. Acceptance of a
 problem does not automatically approve a proposed solution
 
+## Your first contribution
+
+1. Find or open an issue. Those labeled `good first issue` are a good place to start
+2. Say on the issue that you'd like to work on it, and wait for a maintainer to give you permission
+3. Follow the [repository guide](/docs/REPOSITORY.md) to set up, make the change, and run its checks
+4. Open a PR with `Issue: #123` in its body, using your issue's number, and fill in its template
+5. Answer review questions. A maintainer decides whether the change is merged
+
+The rest of this guide explains each step
+
 ## Community standards
 
 Respectful, constructive contributions are welcome. The following are not:
@@ -35,8 +39,6 @@ without prior warning
 
 ## Report the right thing in the right place
 
-Once public contributions open:
-
 - Issues are for SDK bugs and problems with existing documentation
 - Ideas discussions are for feature requests and proposals
 - Q&A discussions are for usage questions
@@ -48,13 +50,12 @@ Keep each report focused on one underlying problem
 
 ### Versions in scope
 
-Issues are accepted only for Stable releases in the current major and the RC
-for the next release. Before the first Stable release, the active RC is in scope
-for maintainer reports
+Issues are accepted only for Stable releases in the current major. Before the
+first Stable release, the newest nightly is in scope for maintainer reports
 
 Previous majors and all nightly releases are out of scope. Before reporting a
 problem found on an excluded version, reproduce it on an in-scope version and
-report that exact version, including the full RC suffix where applicable
+report that exact version
 
 Documentation reports must concern documentation for an in-scope version.
 Use documentation matching the installed SDK version
@@ -64,7 +65,7 @@ Security reports follow the separate supported-version policy in
 
 ## Permission to submit a PR
 
-Once public contributions open, external contributors need either general vouch
+External contributors need either general vouch
 status or explicit maintainer permission to submit a PR for a specific issue
 
 For issue-specific permission, the grant must name the contributor. The PR body
@@ -77,9 +78,7 @@ exempt a contribution from review, or guarantee acceptance
 
 PRs without the required permission are closed with an explanation of the
 missing permission or issue reference. After receiving permission, edit the PR
-body so it includes the issue reference, and the PR reopens automatically.
-Permission to submit a PR does not change the maintainer-only policy before the
-first Stable release
+body so it includes the issue reference, and the PR reopens automatically
 
 GitHub cannot reopen a PR whose branch was deleted or force-pushed after it was
 closed. Open a new PR in that case
@@ -89,7 +88,7 @@ closed. Open a new PR in that case
 Features and intentional changes to existing behavior require explicit maintainer
 approval of the direction and scope before implementation
 
-Start in Ideas discussions after public contributions open. Explain the user
+Start in Ideas discussions. Explain the user
 problem, existing approaches, desired outcome, and relevant tradeoffs. If accepted
 for implementation, the agreed scope is recorded in an issue and the approval
 linked in the PR
@@ -178,12 +177,11 @@ Without general vouch status, every PR and issue needs a "Models used" section
 with one line per main model:
 
 ```text
-- Model: (model id) | Reasoning: (setting) | Harness: (harness)
+- Model: (model id) | Harness: (harness)
 ```
 
-Use the exact model version, its reasoning setting, and the harness that ran it.
-A reasoning setting of "unknown" is not accepted. Do not list subagents. If no
-model was used, write `None`
+Use the exact model version and the harness that ran it. Do not list subagents.
+If no model was used, write `None`
 
 Vouched contributors and maintainers may include the section but are not
 required to
@@ -199,20 +197,27 @@ was used. An inaccurate declaration breaks this policy
 ### Identify model-written prose
 
 Model-written prose in PR bodies, issue bodies, discussions, comments, or other
-public contribution surfaces must include this note with the actual values:
+public contribution surfaces must include a note with the actual values
+
+Text a model wrote on its own:
 
 ```markdown
 > [!NOTE]
-> This was posted by (model + reasoning) on behalf of (username)
+> Sent by (model) on behalf of (username)
 ```
 
-For multiple models, identify the models and reasoning settings responsible for
-the prose. State "reasoning unknown" when a setting is unavailable
+Text the author edited:
 
-The note is not required when a human edited the generated text before
-publication, even if a model subsequently posts it. Posting human-written text
-through a model does not require the note either. These exceptions do not remove
-the PR's requirement to disclose models used where it applies
+```markdown
+> [!NOTE]
+> Reviewed by author, aided by (model)
+```
+
+For multiple models, name each one responsible for the prose
+
+Only human-written text does not need a note, even if a model posts it. This
+exception does not remove the PR's requirement to disclose models used where it
+applies
 
 ## Review and reconsideration
 
@@ -224,7 +229,7 @@ If a PR is closed for missing permission, scope, evidence, or model disclosure,
 address the stated reason and request reconsideration. Do not repeatedly reopen
 it without resolving the problem
 
-Repository maintainers can find access preparation and command operation in
+Repository maintainers can find access and command operation in
 [contribution administration](/docs/CONTRIBUTIONS.md)
 
 This is volunteer work. Be patient during the review process

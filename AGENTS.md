@@ -6,8 +6,9 @@
 | Deciding where documentation goes | [Documentation placement](/docs/DOCUMENTATION.md#documentation-placement) |
 | Testing and live sandbox checks | [Development checks](/docs/REPOSITORY.md#development-checks) and the [live check guide](/projects/sdk/tests/live/README.md) |
 | Releasing | [Releasing](/docs/RELEASING.md) |
-| Website documentation, reference generation and Preview delivery | [Documentation maintenance](/docs/DOCUMENTATION.md) |
-| Changing what coding agents read when they build bots with the SDK | [Agent guide](/projects/sdk/agents/AGENTS.md), the `fluxerly agents` command in [agents-section.ts](/projects/sdk/src/internal/agents-section.ts) and the website's [assistant files](/projects/web/src/lib/assistant-docs.ts) |
+| Reviewing Fluxer or compiler compatibility on request | [Compatibility reviews](/docs/COMPATIBILITY.md) |
+| Website, documentation, reference generation and deployment | [Documentation maintenance](/docs/DOCUMENTATION.md) |
+| Changing what coding agents read when they build bots with the SDK | [Agent guide](/projects/sdk/agents/AGENTS.md), the `fluxerly agents` command in [agents-section.ts](/projects/sdk/src/internal/agents-section.ts) and the website's [files for AI tools](/projects/web/src/lib/ai-docs.ts) |
 
 Run pnpm commands from [projects/](/projects/), the workspace root, and follow the AGENTS.md file of each edited folder, such as [projects/AGENTS.md](/projects/AGENTS.md) and [projects/sdk/AGENTS.md](/projects/sdk/AGENTS.md)
 
@@ -37,3 +38,7 @@ This repository rule overrides generic document-relative link guidance and does 
 Use impersonal wording in repository docs, website copy, public API comments and displayed example messages. Preserve exact code identifiers, protocol paths and third-party quotations. Taglines, such as the one in the [repository README](/docs/README.md), may address the reader directly
 
 Do not start prose sentences with lowercase identifiers or command flags. Rephrase around them rather than changing their spelling
+
+Keep public material Fluxer-native, without migration guides, mapping tables or comparisons with other SDKs, libraries or platforms
+
+Keep private infrastructure, account details, design sources and unapproved plans out of public files and history

@@ -4,11 +4,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Discussions remain disabled until the first Stable release. This form prepares future Ideas discussions
-
         Propose one idea per discussion and describe the problem before proposing a solution. Opening a discussion does not approve implementation or grant permission to submit a PR
 
-        Bug reports belong in Issues and usage questions belong in Q&A. Security vulnerabilities must be reported privately through the [security policy](/docs/SECURITY.md)
+        Bug reports belong in Issues and usage questions belong in Q&A. Security vulnerabilities must be reported privately through the [security policy](https://github.com/NeonTechSpace/Fluxerly.js/blob/main/docs/SECURITY.md)
   - type: checkboxes
     id: before-posting
     attributes:
@@ -94,10 +92,11 @@ body:
     id: prose-attribution
     attributes:
       label: Model-written prose note
-      description: Required when this discussion contains model-written prose that has not been edited by a human. Replace the placeholders with the model, reasoning setting, and username. Human-edited and human-written text are exempt even if a model posts them
+      description: Required when this discussion contains model-written prose. Use the first line for text a model wrote on its own, or the second line for text the author edited, with the actual values. Only human-written text is exempt, even if a model posts it
       placeholder: |
         > [!NOTE]
-        > This was posted by (model + reasoning) on behalf of (username)
+        > Sent by (model) on behalf of (username)
+        > Reviewed by author, aided by (model)
     validations:
       required: false
   - type: markdown

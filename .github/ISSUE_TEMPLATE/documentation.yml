@@ -6,17 +6,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        Issues remain maintainer-only until the first Stable release. This form prepares future public reporting
+        Report problems with existing documentation here. Requests for new SDK capabilities belong in Ideas discussions
 
-        Report problems with existing documentation here. Requests for new SDK capabilities belong in Ideas discussions once Discussions open
-
-        Security vulnerabilities must be reported privately through the [security policy](/docs/SECURITY.md). Reporting a problem does not grant permission to submit a PR
+        Security vulnerabilities must be reported privately through the [security policy](https://github.com/NeonTechSpace/Fluxerly.js/blob/main/docs/SECURITY.md). Reporting a problem does not grant permission to submit a PR
   - type: checkboxes
     id: before-submitting
     attributes:
       label: Before submitting
       options:
-        - label: This issue concerns a Stable release in the current major or the RC for the next release, not a previous major or a nightly
+        - label: This issue concerns a Stable release in the current major, or the newest nightly before the first Stable, not a previous major or any other nightly
           required: true
         - label: Existing issues have been searched for the same problem
           required: true
@@ -40,7 +38,7 @@ body:
     id: affected-page
     attributes:
       label: Affected page and documentation version
-      description: Include the page URL or repository file, heading, and exact documentation version. The active RC qualifies for maintainer reports before the first Stable release
+      description: Include the page URL or repository file, heading, and exact documentation version. Before the first Stable, the newest nightly qualifies for maintainer reports
       placeholder: |
         Page URL or repository file:
         Heading:
@@ -79,17 +77,18 @@ body:
     id: models-used
     attributes:
       label: Models used
-      description: Required without general vouch status, optional for vouched contributors and maintainers. Use one line per main model from the [allowed model list](/.github/contribution-policy.json), with its exact version, reasoning setting, and harness. Do not list subagents. Write None if no model was used
-      placeholder: "- Model: (model id) | Reasoning: (setting) | Harness: (harness)"
+      description: Required without general vouch status, optional for vouched contributors and maintainers. Use one line per main model from the [allowed model list](https://github.com/NeonTechSpace/Fluxerly.js/blob/main/.github/contribution-policy.json), with its exact version and harness. Do not list subagents. Write None if no model was used
+      placeholder: "- Model: (model id) | Harness: (harness)"
     validations:
       required: false
   - type: textarea
     id: prose-attribution
     attributes:
       label: Model-written prose note
-      description: Required when this report contains model-written prose that has not been edited by a human. Replace the placeholders with the model, reasoning setting, and username. Human-edited and human-written text are exempt even if a model posts them
+      description: Required when this report contains model-written prose. Use the first line for text a model wrote on its own, or the second line for text the author edited, with the actual values. Only human-written text is exempt, even if a model posts it
       placeholder: |
         > [!NOTE]
-        > This was posted by (model + reasoning) on behalf of (username)
+        > Sent by (model) on behalf of (username)
+        > Reviewed by author, aided by (model)
     validations:
       required: false
