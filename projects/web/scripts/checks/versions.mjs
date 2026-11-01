@@ -66,7 +66,7 @@ try {
     const shareImage = /property="og:image" content="https:\/\/fluxerly\.neontechspace\.com\/([^"]+)"/.exec(newest)?.[1] ?? ""
     expect(shareImage && (await readFile(join(out, shareImage))).length < 300_000, "the share picture must exist and stay under 300 KB")
     for (const [name, page] of [["the newest guide", newest], ["another version's guide", other], ["the homepage", await read("index.html")], ["the 404 page", await read("404.html")]]) {
-        expect(page.includes('<meta name="theme-color" content="#5b5ef2"'), `${name} must carry the blue-purple theme color`)
+        expect(page.includes('<meta name="theme-color" content="#191478"'), `${name} must carry the blue-purple theme color`)
     }
     // Every icon file must be one the site can load: Named in the built pages, or in the hero's sky, which builds its names as it runs
     const builtText = await Promise.all((await readdir(out, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile() && /\.(html|js|css|json)$/.test(entry.name)).map((entry) => readFile(join(entry.parentPath, entry.name), "utf8")))

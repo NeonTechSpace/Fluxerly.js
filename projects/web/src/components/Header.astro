@@ -45,7 +45,7 @@ import MotionTour from "./MotionTour.astro"
 <MotionTour />
 
 <script>
-    import { getExperience, prefersReducedMotion, subscribeExperience } from "../lib/experience"
+    import { getExperience, subscribeExperience } from "../lib/experience"
 
     const header = document.querySelector<HTMLElement>("[data-site-header]")
     if (header) watchHeader(header)
@@ -116,10 +116,9 @@ import MotionTour from "./MotionTour.astro"
         header.addEventListener("focusin", show)
         new MutationObserver(show).observe(header, { subtree: true, attributes: true, attributeFilter: ["aria-expanded"] })
 
-        const applyMotion = () => header.toggleAttribute("data-instant", getExperience() === "still" || prefersReducedMotion())
+        const applyMotion = () => header.toggleAttribute("data-instant", getExperience() === "still")
         applyMotion()
         subscribeExperience(applyMotion)
-        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", applyMotion)
         render(lastY)
     }
 </script>
@@ -222,11 +221,9 @@ import MotionTour from "./MotionTour.astro"
         overflow: visible;
     }
 
-    @media (prefers-reduced-motion: no-preference) {
-        .home-waves {
-            animation: home-roll 3s linear infinite;
-            will-change: transform;
-        }
+    :global(html:not([data-still])) .home-waves {
+        animation: home-roll 3s linear infinite;
+        will-change: transform;
     }
 
     /* Lit like the signal line, a soft halo in its own light */

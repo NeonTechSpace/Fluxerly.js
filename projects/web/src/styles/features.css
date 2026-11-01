@@ -90,13 +90,6 @@
     animation: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .feature-hero .arrival::before,
-    .feature-hero .arrival::after {
-        animation: none;
-    }
-}
-
 /* Narrower screens draw no stations on the homepage, so the ring keeps 15 px from the screen's edge instead */
 @media (max-width: 1279px) {
     .feature-hero .arrival {
@@ -244,12 +237,6 @@
 
 .space[data-still] .feature-hero .scope-bead {
     display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .feature-hero .scope-bead {
-        display: none;
-    }
 }
 
 @media (max-width: 1023px) {

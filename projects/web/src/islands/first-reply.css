@@ -421,7 +421,7 @@
     }
 }
 
-/* Still mode and reduced motion: nothing animates, results appear at once */
+/* Still mode: nothing animates, results appear at once */
 .fr[data-still] .fr-bubble,
 .fr[data-still] .fr-signal path,
 .fr[data-still] .fr-signal-end {
@@ -451,18 +451,6 @@
 .fr[data-still] .fr-tab,
 .fr[data-still] .fr-send {
     transition: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .fr-bubble,
-    .fr-signal path,
-    .fr-signal-end {
-        animation: none;
-    }
-
-    .fr-pre .ln {
-        transition: none;
-    }
 }
 
 @media (max-width: 899px) {

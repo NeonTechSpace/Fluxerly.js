@@ -339,15 +339,9 @@ const npmMark =
         transform: none;
     }
 
-    /* Still and reduced motion turn the caret and swap the copy icons at once */
+    /* Still turns the caret and swaps the copy icons at once */
     .row[data-still] :is(.pick, .copy) :global(svg) {
         transition: none;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        :is(.pick, .copy) :global(svg) {
-            transition: none;
-        }
     }
 
     /* The menu continues the chip to the right along the water, the same height, the same surface.

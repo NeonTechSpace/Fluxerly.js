@@ -144,13 +144,13 @@ const bubbles = columns.map((x, index) => ({
 </footer>
 
 <script>
-    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+    import { getExperience, subscribeExperience } from "../../lib/experience"
 
     // The conductor's living parts come when the site is moving and the end of the page is near, and show once they're all decoded
     const endingBox = document.querySelector<HTMLElement>("[data-ending-alive]")
     if (endingBox) {
         const wake = () => {
-            if (endingBox.dataset.loading !== undefined || getExperience() === "still" || prefersReducedMotion()) return
+            if (endingBox.dataset.loading !== undefined || getExperience() === "still") return
             endingBox.dataset.loading = ""
             const pictures = [...endingBox.querySelectorAll<HTMLImageElement>("img[data-src]")]
             for (const picture of pictures) picture.src = picture.dataset.src ?? ""
@@ -263,28 +263,26 @@ const bubbles = columns.map((x, index) => ({
         height: 100%;
     }
 
-    @media (prefers-reduced-motion: no-preference) {
-        :global(html:not([data-still])) .bubble {
-            bottom: 0;
-            display: block;
-            opacity: 0;
-            filter: none;
-            animation: bubble-rise var(--rise-for) linear var(--wait) infinite paused;
-        }
+    :global(html:not([data-still])) .bubble {
+        bottom: 0;
+        display: block;
+        opacity: 0;
+        filter: none;
+        animation: bubble-rise var(--rise-for) linear var(--wait) infinite paused;
+    }
 
-        :global(html:not([data-still])) .abyss[data-on] .bubble {
-            animation-play-state: running;
-            will-change: transform, opacity;
-        }
+    :global(html:not([data-still])) .abyss[data-on] .bubble {
+        animation-play-state: running;
+        will-change: transform, opacity;
+    }
 
-        :global(html:not([data-still])) .beam {
-            will-change: transform, opacity;
-            animation: beam-sway var(--beat) ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .beam {
+        will-change: transform, opacity;
+        animation: beam-sway var(--beat) ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .beams[data-on] .beam {
-            animation-play-state: running;
-        }
+    :global(html:not([data-still])) .beams[data-on] .beam {
+        animation-play-state: running;
     }
 
     /* On a narrow screen the bubbles rise as far as the beams do, and the floor's own glow stays low */
@@ -452,85 +450,82 @@ const bubbles = columns.map((x, index) => ({
         transform-origin: 49.7% 33.5%;
     }
 
-    @media (prefers-reduced-motion: no-preference) {
-        :global(html:not([data-still])) .conductor {
-            animation-name: ending-rise;
-            animation-duration: auto;
-            animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
-            animation-fill-mode: both;
-            animation-timeline: view();
-            animation-range: entry 0% entry 100%;
-        }
+    :global(html:not([data-still])) .conductor {
+        animation-name: ending-rise;
+        animation-duration: auto;
+        animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+        animation-fill-mode: both;
+        animation-timeline: view();
+        animation-range: entry 0% entry 100%;
+    }
 
-        :global(html:not([data-still])) .afloat {
-            animation: ending-float 6.1s ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .afloat {
+        animation: ending-float 6.1s ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .cap {
-            animation: cap-fill 4.3s ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .cap {
+        animation: cap-fill 4.3s ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .conductor .fan {
-            animation: cap-fan-fill 3.1s ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .conductor .fan {
+        animation: cap-fan-fill 3.1s ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .conductor .fold {
-            animation: cap-fold-fill 3.7s ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .conductor .fold {
+        animation: cap-fold-fill 3.7s ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .looks {
-            animation: ending-look 11s steps(1) infinite paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .looks {
+        animation: ending-look 11s steps(1) infinite paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .eye {
-            animation: ending-blink 5.3s linear infinite paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .eye {
+        animation: ending-blink 5.3s linear infinite paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .brow {
-            animation: ending-brow 7.3s ease-in-out infinite paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .brow {
+        animation: ending-brow 7.3s ease-in-out infinite paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .brow-right {
-            animation-duration: 9.1s;
-            animation-delay: -3s;
-        }
+    :global(html:not([data-still])) .alive[data-live] .brow-right {
+        animation-duration: 9.1s;
+        animation-delay: -3s;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .cheek {
-            animation: ending-cheek 4.7s ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .cheek {
+        animation: ending-cheek 4.7s ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .cheek-right {
-            animation-duration: 5.9s;
-            animation-direction: alternate-reverse;
-        }
+    :global(html:not([data-still])) .alive[data-live] .cheek-right {
+        animation-duration: 5.9s;
+        animation-direction: alternate-reverse;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .hole-flow {
-            animation: ending-disk 4.9s ease-in-out infinite alternate paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .hole-flow {
+        animation: ending-disk 4.9s ease-in-out infinite alternate paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .hole-violet {
-            animation: ending-disk 6.3s ease-in-out infinite alternate-reverse paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .hole-violet {
+        animation: ending-disk 6.3s ease-in-out infinite alternate-reverse paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .hole-ring {
-            opacity: 1;
-            animation: ending-spin 5.3s linear infinite paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .hole-ring {
+        opacity: 1;
+        animation: ending-spin 5.3s linear infinite paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .charge {
-            animation: ending-charge-show 8s linear infinite paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .charge {
+        animation: ending-charge-show 8s linear infinite paused;
+    }
 
-        :global(html:not([data-still])) .alive[data-live] .charge i {
-            animation: ending-charge-run 8s cubic-bezier(0.3, 0.1, 0.4, 1) infinite paused;
-        }
+    :global(html:not([data-still])) .alive[data-live] .charge i {
+        animation: ending-charge-run 8s cubic-bezier(0.3, 0.1, 0.4, 1) infinite paused;
+    }
 
-        /* Only while it can be seen */
-        :global(html:not([data-still])) .ending[data-on] :is(.afloat, .cap, .fan, .fold, .looks, .eye, .brow, .cheek, .hole-flow, .hole-violet, .hole-ring, .charge, .charge i) {
-            animation-play-state: running;
-            will-change: transform;
-        }
-
+    /* Only while it can be seen */
+    :global(html:not([data-still])) .ending[data-on] :is(.afloat, .cap, .fan, .fold, .looks, .eye, .brow, .cheek, .hole-flow, .hole-violet, .hole-ring, .charge, .charge i) {
+        animation-play-state: running;
+        will-change: transform;
     }
 
     @keyframes ending-rise {

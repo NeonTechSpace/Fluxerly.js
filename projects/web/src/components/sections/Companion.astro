@@ -60,11 +60,11 @@ const place = (piece: IconPartSet["pieces"][number]) => {
 </figure>
 
 <script>
-    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+    import { getExperience, subscribeExperience } from "../../lib/experience"
 
     // The parts come when a multi-part icon nears the screen and only show once they are all decoded, so it is never seen in pieces.
     // They move only while it is on screen
-    const moving = () => getExperience() !== "still" && !prefersReducedMotion()
+    const moving = () => getExperience() !== "still"
     const near = new Set<HTMLElement>()
     const wake = (figure: HTMLElement) => {
         if (figure.dataset.partsLoading !== undefined || !moving()) return
@@ -321,7 +321,7 @@ const place = (piece: IconPartSet["pieces"][number]) => {
     :global(.night[data-still]) .companion,
     :global(.night[data-still]) .float,
     :global(.night[data-still]) .glow,
-    :global(html[data-still]) .part {
+    :global(html[data-still]) .companion[data-live] .part[data-move] {
         animation: none;
     }
 
@@ -329,15 +329,6 @@ const place = (piece: IconPartSet["pieces"][number]) => {
     :global(.night[data-still]) .glow {
         opacity: 1;
         transition: none;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .companion,
-        .float,
-        .glow,
-        .part {
-            animation: none;
-        }
     }
 
     @media (max-width: 899px) {

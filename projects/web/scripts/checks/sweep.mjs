@@ -2,11 +2,11 @@ import { globSync } from "node:fs"
 import os from "node:os"
 import { resolve } from "node:path"
 import { titleCase } from "../../src/lib/title-case.ts"
-import { experienceKey, launchBrowser, screens, serveSite, tourKey } from "./lib.mjs"
+import { experienceKey, launchBrowser, screens, serveSite, skyIconsKey, tourKey } from "./lib.mjs"
 
 // The whole site at every screen in lib.mjs: layout on each kind of page, the first visit's spotlight, menus, titles on
 // every page, and icons over text while scrolling. Fails with a list of what it found. Usage:
-// node scripts/checks/sweep.mjs [--quick] [--only=layout,tour,parts,install,menus,titles,scroll,alive,questions]
+// node scripts/checks/sweep.mjs [--quick] [--only=layout,tour,parts,install,menus,titles,scroll,alive,questions,choice,sky,noscript]
 // --quick covers a few screens of each kind. Reads the built site, so run it after a build
 const flags = process.argv.slice(2)
 const quick = flags.includes("--quick")
@@ -802,6 +802,229 @@ if (runs("questions")) {
         if (result.lineMoved) report("opening an answer deep in the list moved the signal line above it", `${size.width}x${size.height}`)
         if (result.lineRemade) report("opening an answer remade the line's markers and beads above it", `${size.width}x${size.height}`)
         if (result.scrolled < 60) report(`scrolling after pressing a question moved only ${Math.round(result.scrolled)} px`, `${size.width}x${size.height}`)
+        await context.close()
+    })
+}
+
+if (runs("choice")) {
+    // A press of the switch wins over the system asking for less motion: still with nothing saved, moving after a press and after a reload,
+    // on each kind of page, with no moment of the other mode, and still again after a second press
+    const { width, height } = sizes.find((candidate) => !candidate.touch && candidate.width >= 1280) ?? sizes[0]
+    const pages = ["/", "/commands/", "/docs/commands/"]
+    const open = async (extra) => {
+        const context = await browser.newContext({ viewport: { width, height }, reducedMotion: "reduce" })
+        const page = await context.newPage()
+        page.on("pageerror", (error) => report(`page error: ${error.message.slice(0, 120)}`, "choice"))
+        // Every mode this page load has shown, from the first moment the body exists
+        await page.addInitScript(() => {
+            const seen = (window.seenStill = [])
+            let started = false
+            new MutationObserver(() => {
+                if (!document.body) return
+                if (!started) seen.push(document.documentElement.hasAttribute("data-still"))
+                started = true
+                for (const element of document.querySelectorAll("[data-still]:not(.peek-card)")) if (!seen.includes(element.tagName)) seen.push(element.tagName)
+            }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-still"] })
+        })
+        if (extra) await page.addInitScript(extra)
+        return { context, page }
+    }
+    // Whether each moving thing on the page is running, once the header's switch knows the state
+    const reading = async (page) => {
+        await page.waitForSelector(".motion[data-ready]", { timeout: 30000 })
+        return page.evaluate(() => {
+            const running = (element, subtree = false) => element.getAnimations({ subtree }).filter((animation) => animation.playState === "running").length > 0
+            const world = document.querySelector(".night, .docs-night")
+            return {
+                still: document.documentElement.hasAttribute("data-still"),
+                held: document.querySelectorAll("[data-still]:not(html):not(.peek-card)").length > 0,
+                checked: document.querySelector(".motion").getAttribute("aria-checked") === "true",
+                logo: running(document.querySelector(".home-waves")),
+                wave: running(document.querySelector(".motion-wave")),
+                world: running(world, true),
+                seen: window.seenStill,
+            }
+        })
+    }
+    const expectMode = (state, moving, where) => {
+        if (state.still === moving) report(`<html> has the wrong mode for ${moving ? "a saved press to run" : "still"}`, where)
+        if (state.held === moving) report(`a page part has the wrong mode for ${moving ? "a saved press to run" : "still"}`, where)
+        if (state.checked !== moving) report(`the switch reads ${state.checked ? "on" : "off"}`, where)
+        if (state.logo !== moving) report(`the logo's waves ${moving ? "stand still" : "move"}`, where)
+        if (state.wave !== moving) report(`the switch's waves ${moving ? "stand still" : "move"}`, where)
+        if (state.world !== moving) report(`the page's world ${moving ? "stands still" : "moves"}`, where)
+    }
+    // On the homepage, whether the sky has reached the state asked for. The live scene takes over from the frozen frame in its own time
+    const skyIs = (page, mode) => page.waitForFunction((want) => (document.querySelector("[data-hero]").dataset.scene === "live") === (want === "immersive"), mode, { timeout: 60000 }).then(() => true, () => false)
+
+    const { context, page } = await open()
+    for (const route of pages) {
+        await page.goto(site.url + route, { waitUntil: "load" })
+        expectMode(await reading(page), false, `nothing saved ${route}`)
+    }
+    await page.goto(`${site.url}/`, { waitUntil: "load" })
+    await reading(page)
+    await page.click(".motion")
+    expectMode(await reading(page), true, "after a press /")
+    if (!(await skyIs(page, "immersive"))) report("the hero's sky stays frozen after a press", "/")
+    if ((await page.evaluate((key) => localStorage.getItem(key), experienceKey)) !== "immersive") report("a press isn't saved", "/")
+    for (const route of pages) {
+        await page.goto(site.url + route, { waitUntil: "load" })
+        const state = await reading(page)
+        expectMode(state, true, `after a reload ${route}`)
+        if (state.seen.some(Boolean)) report(`a saved press to run shows still for a moment: ${state.seen.filter(Boolean).join(",")}`, route)
+    }
+    await page.goto(`${site.url}/`, { waitUntil: "load" })
+    if (!(await skyIs(page, "immersive"))) report("the hero's sky stays frozen after a reload with a saved press", "/")
+    await page.click(".motion[data-ready]")
+    expectMode(await reading(page), false, "after a second press /")
+    if (!(await skyIs(page, "still"))) report("the hero's sky keeps moving after a second press", "/")
+    for (const route of pages) {
+        await page.goto(site.url + route, { waitUntil: "load" })
+        const state = await reading(page)
+        expectMode(state, false, `after a second press and a reload ${route}`)
+        if (state.seen[0] !== true) report("a saved still shows motion for a moment", route)
+    }
+    await context.close()
+
+    // With storage blocked a press lasts for the page, and the system decides again on the next
+    const blocked = await open(() => Object.defineProperty(window, "localStorage", { get: () => { throw new DOMException("blocked", "SecurityError") } }))
+    await blocked.page.goto(`${site.url}/`, { waitUntil: "load" })
+    expectMode(await reading(blocked.page), false, "storage blocked")
+    await blocked.page.click(".motion")
+    expectMode(await reading(blocked.page), true, "storage blocked, after a press")
+    await blocked.page.reload({ waitUntil: "load" })
+    expectMode(await reading(blocked.page), false, "storage blocked, after a reload")
+    await blocked.context.close()
+
+    // Nothing is left turning once a page goes still, whichever way it got there. Moving icons are the ones to watch, so each case waits for them
+    const forever = (page) => page.evaluate(() => document.getAnimations().filter((animation) => animation.playState === "running" && animation.effect.getTiming().iterations === Infinity).map((animation) => `${animation.animationName} on ${animation.effect.target.getAttribute("class")?.split(" ")[0]}`))
+    const iconMoving = (page) => page.waitForSelector(".motion[data-ready]", { timeout: 30000 }).then(() => page.waitForFunction(() => document.querySelector(".companion[data-live] .part[data-move]")?.getAnimations().length > 0, null, { timeout: 30000 })).then(() => true, () => false)
+    const expectStopped = async (page, how) => {
+        await page.waitForFunction(() => document.documentElement.hasAttribute("data-still"), null, { timeout: 15000 }).catch(() => report(`<html> isn't still ${how}`, "/commands/"))
+        // A frame for the styles to apply, and asked of the animations themselves
+        await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+        for (const left of await forever(page)) report(`${left} keeps running ${how}`, "/commands/")
+    }
+    {
+        const pressed = await open()
+        await pressed.page.goto(`${site.url}/commands/`, { waitUntil: "load" })
+        await pressed.page.waitForSelector(".motion[data-ready]", { timeout: 30000 })
+        await pressed.page.click(".motion")
+        if (!(await iconMoving(pressed.page))) report("a moving icon never moved after a press", "/commands/")
+        await pressed.page.click(".motion")
+        await expectStopped(pressed.page, "after a press to run and a press to still")
+        await pressed.context.close()
+    }
+    {
+        const context = await browser.newContext({ viewport: { width, height } })
+        const page = await context.newPage()
+        await page.goto(`${site.url}/commands/`, { waitUntil: "load" })
+        if (!(await iconMoving(page))) report("a moving icon never moved", "/commands/")
+        await page.emulateMedia({ reducedMotion: "reduce" })
+        await expectStopped(page, "after the system asks for less motion")
+        await context.close()
+    }
+    {
+        // The system's setting changes while the page's scripts are still on their way
+        const context = await browser.newContext({ viewport: { width, height } })
+        const page = await context.newPage()
+        let letThrough = () => {}
+        const held = new Promise((done) => (letThrough = done))
+        await context.route(/\/_astro\/.*\.js$/, async (route) => {
+            await held
+            await route.continue()
+        })
+        // Waiting modules hold up DOMContentLoaded, so this waits for the page's markup instead
+        await page.goto(`${site.url}/commands/`, { waitUntil: "commit" })
+        await page.waitForSelector(".motion", { state: "attached", timeout: 30000 })
+        await page.emulateMedia({ reducedMotion: "reduce" })
+        letThrough()
+        await page.waitForSelector(".motion[data-ready]", { timeout: 30000 })
+        await expectStopped(page, "after the system asks for less motion while the scripts load")
+        await context.close()
+    }
+}
+
+if (runs("sky")) {
+    // With time stopped the sky's icons and the frozen frame appear without a fade
+    {
+        const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, reducedMotion: "reduce" })
+        const page = await context.newPage()
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        // The frozen frame arrives after the page has loaded, and a missing one would pass unchecked
+        await page.waitForSelector("canvas[data-scene-frame]", { state: "attached", timeout: 30000 })
+        // Once the frame shows, another rule hides the icons with no fade, so they're read without it
+        const fades = await page.evaluate(() => {
+            document.querySelector(".hero").removeAttribute("data-scene")
+            return [".sky-icons", "canvas[data-scene-frame]"].filter((selector) => getComputedStyle(document.querySelector(selector)).transitionDuration !== "0s")
+        })
+        for (const selector of fades) report(`${selector} still fades with time stopped`, "sky")
+        await context.close()
+    }
+    // A screen this size picks the small file of each, which nothing else on the page asks for
+    const screen = { width: 1366, height: 768 }
+
+    // A first visit asks for the sky's icons only once the conductor is whole. With its picture held back the hero's script has run and placed
+    // them, and none is asked for. Each then comes once it is let through
+    {
+        const { context, page } = await openPage(screen, "immersive")
+        const asked = []
+        page.on("request", (request) => asked.push(request.url()))
+        let letThrough = () => {}
+        const held = new Promise((done) => (letThrough = done))
+        await context.route(/\/art\/mascot-/, async (route) => {
+            await held
+            await route.continue()
+        })
+        await page.goto(`${site.url}/`, { waitUntil: "domcontentloaded" })
+        await page.waitForFunction(() => [...document.querySelectorAll("[data-sky-icon]")].some((icon) => !icon.hidden), null, { timeout: 30000 })
+        await page.waitForTimeout(600)
+        const small = await page.evaluate(() => [...document.querySelectorAll("[data-sky-icon]")].map((icon) => icon.getAttribute("src")))
+        const early = asked.filter((url) => small.includes(new URL(url).pathname))
+        if (early.length) report(`${early.length} of the sky's icons are asked for before the conductor is whole`, "/")
+        letThrough()
+        const shown = await page.waitForFunction(() => [...document.querySelectorAll("[data-sky-icon]")].filter((icon) => !icon.hidden).every((icon) => icon.complete && icon.naturalWidth > 0), null, { timeout: 30000 }).then(() => true, () => false)
+        if (!shown) report("the sky's icons never come after the conductor is whole", "/")
+        await context.close()
+    }
+
+    // A return shows them at once: no fade, and the head knows it before the first paint
+    {
+        const { context, page } = await openPage(screen, "immersive")
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        const known = await page.waitForFunction((key) => localStorage.getItem(key) !== null, skyIconsKey, { timeout: 30000 }).then(() => true, () => false)
+        if (!known) report("a visit never records that the sky's icons have arrived", "/")
+        await page.goto(`${site.url}/docs/`, { waitUntil: "load" })
+        await page.addInitScript(() => new MutationObserver((changes, watch) => {
+            if (!document.querySelector("[data-hero]")) return
+            window.artKnownBeforeHero = document.documentElement.hasAttribute("data-art-here")
+            watch.disconnect()
+        }).observe(document, { subtree: true, childList: true }))
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        const back = await page.evaluate(() => ({ known: window.artKnownBeforeHero, fade: parseFloat(getComputedStyle(document.querySelector(".sky-icons")).transitionDuration), mascotFade: parseFloat(getComputedStyle(document.querySelector("[data-mascot]")).transitionDuration), held: document.documentElement.hasAttribute("data-icons-held") }))
+        if (!back.known) report("a return to the homepage doesn't know the sky's icons are cached before the first paint", "/")
+        if (back.held) report("a return to the homepage holds the sky's icons back", "/")
+        if (back.fade > 0) report("the sky's icons fade in on a return to the homepage", "/")
+        if (back.mascotFade > 0) report("the conductor fades in on a return to the homepage", "/")
+        await context.close()
+    }
+}
+
+if (runs("noscript")) {
+    // Without script nothing can read a saved choice, so the system asking for less motion stops everything, and that includes what a * rule can't reach
+    await inParallel(routes, async (route) => {
+        const context = await browser.newContext({ viewport: { width: 1366, height: 768 }, reducedMotion: "reduce", javaScriptEnabled: false })
+        const page = await context.newPage()
+        await page.goto(site.url + route, { waitUntil: "load" })
+        const moving = await page.evaluate(() => ({
+            running: document.getAnimations().filter((animation) => animation.playState === "running").map((animation) => animation.animationName ?? animation.transitionProperty),
+            drawn: [...document.querySelectorAll("animate,animateMotion,animateTransform")].filter((animation) => getComputedStyle(animation.parentElement).display !== "none").length,
+            gliding: [...document.querySelectorAll("details")].filter((details) => getComputedStyle(details, "::details-content").transitionDuration.split(", ").some((time) => parseFloat(time) > 0)).length,
+        }))
+        for (const name of new Set(moving.running)) report(`without script ${name} runs under reduced motion`, route)
+        if (moving.drawn) report(`without script ${moving.drawn} SVG animations stay on screen under reduced motion`, route)
+        if (moving.gliding) report(`without script ${moving.gliding} folding sections glide open under reduced motion`, route)
         await context.close()
     })
 }

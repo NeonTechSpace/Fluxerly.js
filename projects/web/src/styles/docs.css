@@ -2351,19 +2351,6 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .docs-side,
-    .side-scrim,
-    .station-caret,
-    .course-station::details-content {
-        transition: none;
-    }
-
-    .course-list a[data-pending]::before {
-        animation: none;
-    }
-}
-
 /* Moving between docs pages. The browser's own page transitions went blank for their whole length about one time in three, so a
    page simply replaces the last. Inside the sidebar the bead travels to the new page while the article arrives along the course:
    from below when the reader moves on, from above when they go back. CourseState sets data-arrive for the length of the arrival */

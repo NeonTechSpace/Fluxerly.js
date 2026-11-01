@@ -51,10 +51,8 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
         transition: scale var(--speed-normal) ease;
     }
 
-    @media (prefers-reduced-motion: no-preference) {
-        :global(html:not([data-still])) .next-link:hover .next-mark {
-            scale: 1.1;
-        }
+    :global(html:not([data-still])) .next-link:hover .next-mark {
+        scale: 1.1;
     }
 
     .next {
@@ -136,10 +134,8 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
         transform: translateX(3px);
     }
 
-    @media (prefers-reduced-motion: reduce) {
-        .next-link :global(.next-arrow) {
-            transition: none;
-        }
+    :global(html[data-still]) .next-link :global(.next-arrow) {
+        transition: none;
     }
 
     @media (max-width: 1279px) {

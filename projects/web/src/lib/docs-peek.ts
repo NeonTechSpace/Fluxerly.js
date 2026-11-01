@@ -3,7 +3,7 @@
 // and at once on keyboard focus, and it stays open while the pointer moves into it, so its link can be followed.
 // Escape, leaving or losing focus closes it. A touch only follows the link. The card's data is one JSON file built
 // with the site, fetched on the first hover, so a page carries nothing extra until then
-import { getExperience, prefersReducedMotion } from "./experience"
+import { getExperience } from "./experience"
 import type { PeekEntry } from "./peek-index"
 
 // A published version's pages are built under their own address, and read that version's meanings
@@ -29,7 +29,7 @@ function load() {
     return entries
 }
 
-const still = () => getExperience() === "still" || prefersReducedMotion()
+const still = () => getExperience() === "still"
 
 function keyOf(link: HTMLAnchorElement): string | undefined {
     if (link.dataset.peek) return link.dataset.peek

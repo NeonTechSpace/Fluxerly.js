@@ -400,17 +400,9 @@ a.peek-level[data-level="fatal"],
     flex: none;
 }
 
-/* Still and the system's reduced motion show the card and the marks without any motion */
+/* Still shows the card and the marks without any motion */
 .peek-card[data-still],
-html[data-experience="still"] a.peek {
+html[data-still] a.peek {
     transition: none;
     transform: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .peek-card,
-    a.peek {
-        transition: none;
-        transform: none;
-    }
 }

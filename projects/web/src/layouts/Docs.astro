@@ -17,7 +17,6 @@ import { completeDescription, docsPageTitle, openingParagraphs } from "../lib/do
 import { docsIcons, iconSrc } from "../lib/art"
 import { docsCourse, guideGroup, type NavItem, type TocItem } from "../lib/docs-nav"
 import { docsTitleQualifier } from "../lib/docs-titles"
-import { experienceKey } from "../lib/experience"
 import { breadcrumbs } from "../lib/seo"
 import { seededRandom } from "../lib/stars"
 import { identifierHtml } from "../../scripts/docs/code-breaks.mjs"
@@ -130,18 +129,10 @@ const trail = breadcrumbs([
         <a class="skip-link" href="#main">Skip to Content</a>
         <!-- The night: deep water, painted, and in Animated moving -->
         <div class="docs-night" aria-hidden="true" data-night>
-            <!-- Still, or the system asking for less motion, before the night is first drawn: the body carries the state for the stylesheet -->
-            <script is:inline define:vars={{ key: experienceKey }}>
+            <!-- Still, chosen or asked for by the system, before the night is first drawn: the body carries the state for the stylesheet -->
+            <script is:inline>
                 {
-                    let mode = document.documentElement.dataset.experience
-                    if (mode !== "immersive" && mode !== "still") {
-                        try {
-                            mode = localStorage.getItem(key)
-                        } catch {
-                            // Storage is blocked, so nothing was chosen
-                        }
-                    }
-                    if (mode === "still" || matchMedia("(prefers-reduced-motion: reduce)").matches) document.body.setAttribute("data-still", "")
+                    if (document.documentElement.hasAttribute("data-still")) document.body.setAttribute("data-still", "")
                     // The water's phase comes from the clock, so it carries on across pages instead of starting over. A page
                     // rendered ahead of time reads the clock again when the reader arrives
                     const night = document.currentScript.parentElement

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
-import { getExperience, prefersReducedMotion, subscribeExperience } from "../lib/experience"
+import { getExperience, subscribeExperience } from "../lib/experience"
 import CodeLines from "./CodeLines"
 import { CommandChip } from "./CopyButton"
 import { lineOf, starterSamples } from "./samples"
@@ -67,7 +67,7 @@ function firstGlyph(line: HTMLElement): DOMRect | null {
 }
 
 function isStill() {
-    return getExperience() === "still" || prefersReducedMotion()
+    return getExperience() === "still"
 }
 
 export default function FirstReply() {
@@ -118,13 +118,7 @@ export default function FirstReply() {
             }
         }
         update()
-        const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)")
-        motionQuery.addEventListener("change", update)
-        const unsubscribe = subscribeExperience(update)
-        return () => {
-            motionQuery.removeEventListener("change", update)
-            unsubscribe()
-        }
+        return subscribeExperience(update)
     }, [])
 
     useEffect(() => () => timers.current.forEach((timer) => window.clearTimeout(timer)), [])

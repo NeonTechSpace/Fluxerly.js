@@ -3,7 +3,7 @@
 // and the sidebar's reach above the footer. How the course carries over from page to page lives in
 // CourseState, which has to run before the first frame
 import { reportCopyFailed } from "./copy-failed"
-import { getExperience, prefersReducedMotion, subscribeExperience } from "./experience"
+import { getExperience, subscribeExperience } from "./experience"
 import { packageManagers, type PackageManager } from "./links"
 
 const pmKey = "fluxerly.pm.v1"
@@ -11,7 +11,7 @@ const langKey = "fluxerly.lang.v1"
 type Language = "js" | "ts"
 
 const root = document.documentElement
-const still = () => getExperience() === "still" || prefersReducedMotion()
+const still = () => getExperience() === "still"
 const isManager = (value: unknown): value is PackageManager => packageManagers.some((item) => item.id === value)
 // The page zoom on wide screens: positions read from the viewport are in the root's pixels, the layout's own
 // pixels are smaller by this much
@@ -25,12 +25,11 @@ function store(key: string, value: string) {
     }
 }
 
-// Still, or the system asking for less motion, on the body: the night's inline script set it before the first
+// Still, chosen or asked for by the system, on the body: the night's inline script set it before the first
 // paint, this keeps it in step with the switch. The stylesheet stops every slide and drift while it is set
 const applyStill = () => document.body.toggleAttribute("data-still", still())
 applyStill()
 subscribeExperience(applyStill)
-window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", applyStill)
 
 // The head script already set the stored choices on <html>. These keep the switches and file names in step
 function applyManager(pm: PackageManager) {

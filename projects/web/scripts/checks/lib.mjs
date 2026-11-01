@@ -56,6 +56,7 @@ export async function launchBrowser(siteUrl) {
 
 export const experienceKey = "fluxerly.experience.v1"
 export const tourKey = "fluxerly.tour.v1"
+export const skyIconsKey = "fluxerly.sky-icons.v1"
 
 // The screens every check covers. Browser bars are taken off the heights. The folding phones' sizes come from reported
 // specs and are approximate

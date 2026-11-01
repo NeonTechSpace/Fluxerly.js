@@ -71,3 +71,10 @@ test("no new color appears outside the named ones", () => {
     const raw = offenders((css) => [...css.matchAll(/#[0-9a-fA-F]{6}\b/g)].map((match) => match[0].toLowerCase()).filter((color) => !known.has(color)))
     assert.deepEqual(raw, [])
 })
+
+// A media query can't know about a saved choice, and it would overrule one. <html data-still> carries the answer, see src/lib/experience.ts
+test("motion follows data-still, not the system's setting directly", () => {
+    const raw = offenders((css) => css.match(/@media[^{]*prefers-reduced-motion/g) ?? [])
+    // Without script nothing can read a saved choice, so the fallback for that case is the one place
+    assert.deepEqual(raw.filter((line) => !line.startsWith("src/components/PageTransitions.astro")), [])
+})

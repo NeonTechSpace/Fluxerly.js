@@ -429,16 +429,14 @@ const marks = {
             0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
     }
 
-    @media (prefers-reduced-motion: reduce) {
-        .panel {
-            --shut: var(--shown);
-            --lift: none;
-            --fade: 0;
-        }
+    :global(html[data-still]) .panel {
+        --shut: var(--shown);
+        --lift: none;
+        --fade: 0;
+    }
 
-        .trigger :global(.caret) {
-            transition: none;
-        }
+    :global(html[data-still]) .trigger :global(.caret) {
+        transition: none;
     }
 
     /* On a phone the button shows its compass with the word kept for assistive technology, and the panel becomes a

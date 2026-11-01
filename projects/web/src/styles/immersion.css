@@ -1,5 +1,5 @@
 /* The site's depth beyond what each section draws for itself. Everything here moves on the compositor, follows the page's
-   own scroll where it can and stands still in the Still mode and under reduced motion. <html data-still> is set before
+   own scroll where it can and stands still in the Still mode, which reduced motion asks for until a choice is saved. <html data-still> is set before
    the first paint, see PageTransitions.astro. The docs keep only the calm parts */
 
 /* An arrow link's underline turns into the conductor's wave when pointed at */
@@ -10,152 +10,150 @@
     }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    /* The feature pages: a slow ring of the page's own light turns behind its icon, painted once and only turned */
-    html:not([data-still]) .feature-hero figure.hero-companion::before {
-        content: "";
-        position: absolute;
-        inset: -22%;
-        z-index: -1;
-        border-radius: 50%;
-        background: conic-gradient(from 0deg, transparent 0 18%, color-mix(in srgb, var(--accent, var(--color-cyan)) 34%, transparent) 30%, transparent 46% 62%, color-mix(in srgb, var(--color-violet) 26%, transparent) 76%, transparent 90%);
-        mask-image: radial-gradient(closest-side, transparent 58%, #000 72%, transparent 100%);
-        pointer-events: none;
-        animation:
-            halo-turn 26s linear infinite,
-            halo-on 1400ms ease-out both;
+/* The feature pages: a slow ring of the page's own light turns behind its icon, painted once and only turned */
+html:not([data-still]) .feature-hero figure.hero-companion::before {
+    content: "";
+    position: absolute;
+    inset: -22%;
+    z-index: -1;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0 18%, color-mix(in srgb, var(--accent, var(--color-cyan)) 34%, transparent) 30%, transparent 46% 62%, color-mix(in srgb, var(--color-violet) 26%, transparent) 76%, transparent 90%);
+    mask-image: radial-gradient(closest-side, transparent 58%, #000 72%, transparent 100%);
+    pointer-events: none;
+    animation:
+        halo-turn 26s linear infinite,
+        halo-on 1400ms ease-out both;
+}
+
+/* A station's name catches the light once as the signal line reaches it */
+html:not([data-still]) .night section[data-reached] .section-title .hi {
+    background: linear-gradient(100deg, var(--accent, var(--color-cyan)) 40%, #fff 50%, var(--accent, var(--color-cyan)) 60%) 100% 0 / 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: name-catches-light 1500ms ease-out both;
+}
+
+/* Whatever follows the page's scroll needs a browser with scroll timelines. Others show the settled page */
+@supports (animation-timeline: scroll()) {
+    /* Leaving the hero: the words lift away and the conductor sinks toward its reflection, so scrolling reads as going
+       under the water into space. Only where the hero stands wide */
+    @media (min-width: 900px) and (min-height: 481px) and (min-aspect-ratio: 4/5) {
+        html:not([data-still]) [data-hero] .stage > .copy {
+            animation-name: hero-words-leave;
+            animation-duration: auto;
+            animation-timing-function: linear;
+            animation-fill-mode: both;
+            animation-timeline: scroll(root);
+            animation-range: 0px 70vh;
+        }
+
+        html:not([data-still]) [data-hero] [data-conductor] {
+            animation-name: hero-conductor-sink;
+            animation-duration: auto;
+            animation-timing-function: linear;
+            animation-fill-mode: both;
+            animation-timeline: scroll(root);
+            animation-range: 0px 100vh;
+        }
+
+        html:not([data-still]) [data-hero]::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+            background: radial-gradient(120% 90% at 70% 60%, rgb(5 8 32 / 0.2), #050820 78%);
+            opacity: 0;
+            animation-name: hero-depth-close;
+            animation-duration: auto;
+            animation-timing-function: linear;
+            animation-fill-mode: both;
+            animation-timeline: scroll(root);
+            animation-range: 8vh 92vh;
+        }
     }
 
-    /* A station's name catches the light once as the signal line reaches it */
-    html:not([data-still]) .night section[data-reached] .section-title .hi {
-        background: linear-gradient(100deg, var(--accent, var(--color-cyan)) 40%, #fff 50%, var(--accent, var(--color-cyan)) 60%) 100% 0 / 300% 100%;
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-        animation: name-catches-light 1500ms ease-out both;
-    }
-
-    /* Whatever follows the page's scroll needs a browser with scroll timelines. Others show the settled page */
-    @supports (animation-timeline: scroll()) {
-        /* Leaving the hero: the words lift away and the conductor sinks toward its reflection, so scrolling reads as going
-           under the water into space. Only where the hero stands wide */
-        @media (min-width: 900px) and (min-height: 481px) and (min-aspect-ratio: 4/5) {
-            html:not([data-still]) [data-hero] .stage > .copy {
-                animation-name: hero-words-leave;
-                animation-duration: auto;
-                animation-timing-function: linear;
-                animation-fill-mode: both;
-                animation-timeline: scroll(root);
-                animation-range: 0px 70vh;
-            }
-
-            html:not([data-still]) [data-hero] [data-conductor] {
-                animation-name: hero-conductor-sink;
-                animation-duration: auto;
-                animation-timing-function: linear;
-                animation-fill-mode: both;
-                animation-timeline: scroll(root);
-                animation-range: 0px 100vh;
-            }
-
-            html:not([data-still]) [data-hero]::before {
-                content: "";
-                position: absolute;
-                inset: 0;
-                z-index: 2;
-                pointer-events: none;
-                background: radial-gradient(120% 90% at 70% 60%, rgb(5 8 32 / 0.2), #050820 78%);
-                opacity: 0;
-                animation-name: hero-depth-close;
-                animation-duration: auto;
-                animation-timing-function: linear;
-                animation-fill-mode: both;
-                animation-timeline: scroll(root);
-                animation-range: 8vh 92vh;
-            }
-        }
-
-        /* A feature page's scenes hang from one line of its light, which draws down from the page's arrival as they come
-           into view. Only where the page's margin holds it */
-        @media (min-width: 1280px) {
-            html:not([data-still]) .scene .split {
-                position: relative;
-            }
-
-            html:not([data-still]) .scene .split::before {
-                content: "";
-                position: absolute;
-                top: -40px;
-                bottom: calc(-1 * var(--section-gap, 120px));
-                left: calc(var(--page-margin) - var(--station-reach));
-                width: 1px;
-                pointer-events: none;
-                background: color-mix(in srgb, var(--accent, var(--color-cyan)) 46%, transparent);
-                transform-origin: top;
-                animation-name: line-draws;
-                animation-duration: auto;
-                animation-timing-function: linear;
-                animation-fill-mode: both;
-                animation-timeline: view();
-                animation-range: entry 0% cover 55%;
-            }
-        }
-
-        /* The first scene's stretch reaches back up to the page's arrival, and the last one ends at its own scene */
-        @media (min-width: 1280px) {
-            html:not([data-still]) .feature-hero + .scene .split::before {
-                top: -300px;
-            }
-
-            html:not([data-still]) .scene:has(+ .next) .split::before {
-                bottom: 0;
-            }
-
-            /* Each scene's number sits on the line as a lit ring */
-            html:not([data-still]) .scene .split::after {
-                content: "";
-                position: absolute;
-                top: 2px;
-                left: calc(var(--page-margin) - var(--station-reach) - 5px);
-                width: 11px;
-                height: 11px;
-                box-sizing: border-box;
-                pointer-events: none;
-                background: var(--color-night);
-                border: 1.5px solid var(--accent, var(--color-cyan));
-                border-radius: 50%;
-                box-shadow: 0 0 12px color-mix(in srgb, var(--accent, var(--color-cyan)) 60%, transparent);
-            }
-        }
-
-        /* The docs' outline fills like the signal line as the page is read */
-        html:not([data-still]) .docs-outline .toc-list {
+    /* A feature page's scenes hang from one line of its light, which draws down from the page's arrival as they come
+       into view. Only where the page's margin holds it */
+    @media (min-width: 1280px) {
+        html:not([data-still]) .scene .split {
             position: relative;
         }
 
-        html:not([data-still]) .docs-outline .toc-list::before {
+        html:not([data-still]) .scene .split::before {
             content: "";
             position: absolute;
-            inset: 0 auto 0 -1px;
+            top: -40px;
+            bottom: calc(-1 * var(--section-gap, 120px));
+            left: calc(var(--page-margin) - var(--station-reach));
             width: 1px;
-            background: linear-gradient(180deg, var(--color-cyan), var(--color-cyan-light));
+            pointer-events: none;
+            background: color-mix(in srgb, var(--accent, var(--color-cyan)) 46%, transparent);
             transform-origin: top;
             animation-name: line-draws;
             animation-duration: auto;
             animation-timing-function: linear;
             animation-fill-mode: both;
-            animation-timeline: scroll(root);
+            animation-timeline: view();
+            animation-range: entry 0% cover 55%;
+        }
+    }
+
+    /* The first scene's stretch reaches back up to the page's arrival, and the last one ends at its own scene */
+    @media (min-width: 1280px) {
+        html:not([data-still]) .feature-hero + .scene .split::before {
+            top: -300px;
         }
 
-        /* A guide's headings draw a hairline of its tone as they come up */
-        html:not([data-still]) .docs-prose > h2::after {
-            animation-name: hairline-draws;
-            animation-duration: auto;
-            animation-timing-function: ease-out;
-            animation-fill-mode: both;
-            animation-timeline: view();
-            animation-range: entry 0% cover 28%;
+        html:not([data-still]) .scene:has(+ .next) .split::before {
+            bottom: 0;
         }
+
+        /* Each scene's number sits on the line as a lit ring */
+        html:not([data-still]) .scene .split::after {
+            content: "";
+            position: absolute;
+            top: 2px;
+            left: calc(var(--page-margin) - var(--station-reach) - 5px);
+            width: 11px;
+            height: 11px;
+            box-sizing: border-box;
+            pointer-events: none;
+            background: var(--color-night);
+            border: 1.5px solid var(--accent, var(--color-cyan));
+            border-radius: 50%;
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent, var(--color-cyan)) 60%, transparent);
+        }
+    }
+
+    /* The docs' outline fills like the signal line as the page is read */
+    html:not([data-still]) .docs-outline .toc-list {
+        position: relative;
+    }
+
+    html:not([data-still]) .docs-outline .toc-list::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 -1px;
+        width: 1px;
+        background: linear-gradient(180deg, var(--color-cyan), var(--color-cyan-light));
+        transform-origin: top;
+        animation-name: line-draws;
+        animation-duration: auto;
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+        animation-timeline: scroll(root);
+    }
+
+    /* A guide's headings draw a hairline of its tone as they come up */
+    html:not([data-still]) .docs-prose > h2::after {
+        animation-name: hairline-draws;
+        animation-duration: auto;
+        animation-timing-function: ease-out;
+        animation-fill-mode: both;
+        animation-timeline: view();
+        animation-range: entry 0% cover 28%;
     }
 }
 

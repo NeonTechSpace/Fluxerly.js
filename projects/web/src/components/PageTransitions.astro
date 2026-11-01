@@ -16,18 +16,40 @@ const speculation = {
 ---
 
 <script is:inline type="speculationrules" set:html={JSON.stringify(speculation)} />
-<script is:inline define:vars={{ key: experienceKey }}>
-    // Still, or the system asking for less motion. Read here because the page's modules have not run yet
-    const isStill = () => {
-        let stored = null
-        try {
-            stored = localStorage.getItem(key)
-        } catch {
-            // Storage is blocked, the system setting decides
+<!-- Without script nothing can read a saved choice or set data-still, so the system setting stops everything here -->
+<noscript>
+    <style is:inline>
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation: none !important;
+                transition: none !important;
+            }
+
+            /* Its own rule, since a browser that doesn't know this name would drop every selector listed with it */
+            ::details-content {
+                transition: none !important;
+            }
+
+            /* Drawn by SVG's own animation, which no stylesheet can stop */
+            .scope-bead {
+                display: none !important;
+            }
         }
-        return stored === "still" || matchMedia("(prefers-reduced-motion: reduce)").matches
+    </style>
+</noscript>
+<script is:inline define:vars={{ key: experienceKey }}>
+    // A saved choice decides, in either direction. With none, or with storage blocked, the system setting does. Read here
+    // because the page's modules have not run yet. "ambient" is an earlier build's word for moving
+    let stored = null
+    try {
+        stored = localStorage.getItem(key)
+    } catch {
+        // Storage is blocked, so nothing was chosen
     }
-    document.documentElement.toggleAttribute("data-still", isStill())
+    const moving = stored === "immersive" || stored === "ambient"
+    document.documentElement.toggleAttribute("data-still", stored === "still" || (!moving && matchMedia("(prefers-reduced-motion: reduce)").matches))
     // A link to a section of another page lands there from its first frame. Without this the page paints at its top and then
     // snaps. The first paint waits until the section has been read, and it is brought into place before anything is drawn
     const arriving = location.hash.length > 1 && ["push", "replace"].includes(window.navigation?.activation?.navigationType ?? "")
@@ -53,7 +75,7 @@ const speculation = {
         const url = new URL(event.destination.url)
         if (event.destination.sameDocument || event.downloadRequest !== null || url.origin !== location.origin) return
         clearTimeout(waiting)
-        waiting = setTimeout(() => (document.documentElement.dataset.navigating = isStill() ? "still" : "moving"), 140)
+        waiting = setTimeout(() => (document.documentElement.dataset.navigating = document.documentElement.hasAttribute("data-still") ? "still" : "moving"), 140)
     })
     // A page that answered quickly but is still loading its parts shows the old page held still. The held page carries
     // a steady signal, so even that wait reads as on its way

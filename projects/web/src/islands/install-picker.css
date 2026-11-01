@@ -81,10 +81,8 @@
     color: var(--color-ink);
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .pm-option {
-        transition: none;
-    }
+html[data-still] .pm-option {
+    transition: none;
 }
 
 @media (max-width: 899px), (any-pointer: coarse) {

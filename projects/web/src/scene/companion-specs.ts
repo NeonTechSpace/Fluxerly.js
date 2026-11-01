@@ -4,6 +4,9 @@
 import type { IconName } from "../lib/art"
 import type { HeroLayout } from "./layout"
 
+// Saved once the sky's icons have all arrived on a visit, so later visits know they are in the browser's cache
+export const skyIconsKey = "fluxerly.sky-icons.v1"
+
 export type CompanionDepth = "far" | "mid" | "near"
 
 export interface Spec {

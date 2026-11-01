@@ -7,7 +7,6 @@ import { BookOpenIcon } from "@phosphor-icons/react/ssr"
 import Depth from "../components/sections/Depth.astro"
 import Site from "../layouts/Site.astro"
 import { iconSrc } from "../lib/art"
-import { experienceKey } from "../lib/experience"
 import { links } from "../lib/links"
 
 // The picture is drawn in a 560 by 660 box. The parts that move while the world is alive sit over the drawing as
@@ -25,21 +24,8 @@ const place = (x: number, y: number, size: number) =>
 <Site title="Page Not Found · Fluxerly.js" description="This page does not exist. Go to the Home Page or open the docs" noindex>
     <section class="lost" aria-labelledby="lost-title" data-lost>
         <!-- Still stops time before space is first drawn, as on the homepage -->
-        <script is:inline define:vars={{ key: experienceKey }}>
-            {
-                let mode = document.documentElement.dataset.experience
-                if (mode !== "immersive" && mode !== "still") {
-                    let stored = null
-                    try {
-                        stored = window.localStorage.getItem(key)
-                    } catch {
-                        // Storage is blocked, so nothing was chosen
-                    }
-                    mode = stored === "still" ? "still" : null
-                }
-                const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-                if (mode === "still" || reduce) document.currentScript.parentElement.setAttribute("data-still", "")
-            }
+        <script is:inline>
+            if (document.documentElement.hasAttribute("data-still")) document.currentScript.parentElement.setAttribute("data-still", "")
         </script>
         <!-- The same space as the rest of the site, with its depth: the star fields behind everything, and far
              behind the words, in the open space above them, a world the line never reached either -->
@@ -164,15 +150,14 @@ const place = (x: number, y: number, size: number) =>
 
 <script>
     import { anchorDepth, markSpaceTop } from "../lib/depth"
-    import { getExperience, prefersReducedMotion, subscribeExperience } from "../lib/experience"
+    import { getExperience, subscribeExperience } from "../lib/experience"
 
     const lost = document.querySelector<HTMLElement>("[data-lost]")
     if (lost) {
         // Still, chosen or asked for by the system, stops everything in the picture
-        const update = () => lost.toggleAttribute("data-still", getExperience() === "still" || prefersReducedMotion())
+        const update = () => lost.toggleAttribute("data-still", getExperience() === "still")
         update()
         subscribeExperience(update)
-        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", update)
 
         // The star fields and the far crescent follow the little scroll there is in CSS, anchored once the page is laid out
         const measure = () => {
@@ -456,12 +441,6 @@ const place = (x: number, y: number, size: number) =>
         display: none;
     }
 
-    @media (prefers-reduced-motion: reduce) {
-        .adrift-pulse {
-            display: none;
-        }
-    }
-
     @keyframes lost-ripple {
         from {
             opacity: 0.9;
@@ -530,17 +509,6 @@ const place = (x: number, y: number, size: number) =>
     .lost[data-still] .adrift,
     .lost[data-still] .signpost {
         animation: none;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .beads {
-            display: none;
-        }
-
-        .adrift,
-        .signpost {
-            animation: none;
-        }
     }
 
     /* Portrait screens and phones: one centered column that reads in order, first what happened (the title and its

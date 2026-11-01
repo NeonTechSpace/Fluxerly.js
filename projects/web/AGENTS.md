@@ -47,7 +47,7 @@ They are named once, at the top of `src/styles/global.css`
 
 ## Motion
 
-Every page should feel captivating and immersive, the docs calmer, and reading always comes first. Move only transforms and opacity, follow the page's scroll with scroll timelines where you can, and switch everything off under `html[data-still]` and reduced motion. Shared effects live in `src/styles/immersion.css`.
+Every page should feel captivating and immersive, the docs calmer, and reading always comes first. Move only transforms and opacity, follow the page's scroll with scroll timelines where you can, and switch everything off under `html[data-still]`. It already counts reduced motion when no choice is saved, and a media query would overrule a visitor's saved choice. Shared effects live in `src/styles/immersion.css`.
 
 ## Visual changes
 

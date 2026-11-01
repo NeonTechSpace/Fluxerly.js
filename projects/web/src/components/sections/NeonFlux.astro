@@ -543,33 +543,31 @@ const proofs = [
         left: 0;
     }
 
-    @media (prefers-reduced-motion: no-preference) {
-        :global(html:not([data-still])) .orbit {
-            animation: nf-orbit 54s linear infinite;
-        }
+    :global(html:not([data-still])) .orbit {
+        animation: nf-orbit 54s linear infinite;
+    }
 
-        :global(html:not([data-still])) .orbit img {
-            animation: nf-orbit 54s linear infinite reverse;
-        }
+    :global(html:not([data-still])) .orbit img {
+        animation: nf-orbit 54s linear infinite reverse;
+    }
 
-        /* Each message arrives in turn, whenever its channel is chosen */
-        :global(html:not([data-still])) .deck[data-waiting] .message {
-            opacity: 0;
-        }
+    /* Each message arrives in turn, whenever its channel is chosen */
+    :global(html:not([data-still])) .deck[data-waiting] .message {
+        opacity: 0;
+    }
 
-        :global(html:not([data-still])) .deck:not([data-waiting]) .panel[data-active] .message {
-            animation: nf-message 380ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
-            animation-delay: calc(var(--order) * 520ms + 80ms);
-        }
+    :global(html:not([data-still])) .deck:not([data-waiting]) .panel[data-active] .message {
+        animation: nf-message 380ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+        animation-delay: calc(var(--order) * 520ms + 80ms);
+    }
 
-        .tab img {
-            transition: scale var(--speed-normal) ease;
-        }
+    :global(html:not([data-still])) .tab img {
+        transition: scale var(--speed-normal) ease;
+    }
 
-        :global(html:not([data-still])) .tab:hover img,
-        :global(html:not([data-still])) .tab[aria-selected="true"] img {
-            scale: 1.1;
-        }
+    :global(html:not([data-still])) .tab:hover img,
+    :global(html:not([data-still])) .tab[aria-selected="true"] img {
+        scale: 1.1;
     }
 
     @keyframes nf-orbit {
@@ -1109,9 +1107,7 @@ const proofs = [
         }
     }
 
-    @media (prefers-reduced-motion: reduce) {
-        .tab {
-            transition: none;
-        }
+    :global(html[data-still]) .tab {
+        transition: none;
     }
 </style>

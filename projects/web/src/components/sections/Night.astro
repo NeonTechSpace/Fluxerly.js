@@ -4,7 +4,6 @@
 // line on alternating sides, and a course log on the right edge shows where the reader is
 
 import Near from "./Near.astro"
-import { experienceKey } from "../../lib/experience"
 
 interface Props {
     stops: { id: string; label: string }[]
@@ -15,22 +14,9 @@ const { stops } = Astro.props
 
 <div class="night" data-night>
     <!-- Still stops time before space is first drawn: this runs as the page is read, before anything below
-         it exists, and mirrors isStill in the script further down, which keeps the state from then on -->
-    <script is:inline define:vars={{ key: experienceKey }}>
-        {
-            let mode = document.documentElement.dataset.experience
-            if (mode !== "immersive" && mode !== "still") {
-                let stored = null
-                try {
-                    stored = window.localStorage.getItem(key)
-                } catch {
-                    // Storage is blocked, so nothing was chosen
-                }
-                mode = stored === "still" ? "still" : null
-            }
-            const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-            if (mode === "still" || reduce) document.currentScript.parentElement.setAttribute("data-still", "")
-        }
+         it exists, from the state the head set, and the script further down keeps it from then on -->
+    <script is:inline>
+        if (document.documentElement.hasAttribute("data-still")) document.currentScript.parentElement.setAttribute("data-still", "")
     </script>
     <!-- Stars at two depths, the farthest things in space. The scroll moves them least, the far ones least of all.
          The bodies of the conductor's universe sit in the sections, far behind them, and the near plane passes in
@@ -91,15 +77,14 @@ const { stops } = Astro.props
 
 <script>
     import { anchorDepth, fitPinnedIntros } from "../../lib/depth"
-    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+    import { getExperience, subscribeExperience } from "../../lib/experience"
 
     const night = document.querySelector<HTMLElement>("[data-night]")
     if (night) {
-        const isStill = () => getExperience() === "still" || prefersReducedMotion()
+        const isStill = () => getExperience() === "still"
         const update = () => night.toggleAttribute("data-still", isStill())
         update()
         subscribeExperience(update)
-        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", update)
         night.classList.add("js")
 
         // Content rises into view once, the first time the visitor sees it
@@ -960,7 +945,6 @@ const { stops } = Astro.props
             wakeSignal()
         }
         subscribeExperience(onTimeChange)
-        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", onTimeChange)
         build()
     }
 </script>
@@ -1593,23 +1577,6 @@ const { stops } = Astro.props
     .night[data-still] .log-label,
     .night[data-still] .thread-stations :global(*) {
         transition: none;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .rays,
-        .mote {
-            animation: none;
-        }
-
-        .motes {
-            display: none;
-        }
-
-        .night.js :global([data-rise]) {
-            opacity: 1;
-            transform: none;
-            transition: none;
-        }
     }
 
     /* Every later section, even with a helper layer between two of them */

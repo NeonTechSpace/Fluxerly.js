@@ -115,9 +115,3 @@ html[data-still] .motion:not([data-ready]) .motion-next {
     background: rgb(195 200 230 / 0.09);
     border-color: rgb(195 200 230 / 0.42);
 }
-
-@media (prefers-reduced-motion: reduce) {
-    .motion-wave {
-        animation: none;
-    }
-}

@@ -5,7 +5,6 @@
 // companions rest when the world stands still, as they do on the homepage
 
 import Near from "../sections/Near.astro"
-import { experienceKey } from "../../lib/experience"
 
 interface Props {
     accent: "cyan" | "violet"
@@ -16,22 +15,9 @@ const { accent } = Astro.props
 
 <div class="night space" data-space data-accent={accent}>
     <!-- Still stops time before space is first drawn: this runs as the page is read, before anything below
-         it exists, and mirrors the script further down, which keeps the state from then on -->
-    <script is:inline define:vars={{ key: experienceKey }}>
-        {
-            let mode = document.documentElement.dataset.experience
-            if (mode !== "immersive" && mode !== "still") {
-                let stored = null
-                try {
-                    stored = window.localStorage.getItem(key)
-                } catch {
-                    // Storage is blocked, so nothing was chosen
-                }
-                mode = stored === "still" ? "still" : null
-            }
-            const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-            if (mode === "still" || reduce) document.currentScript.parentElement.setAttribute("data-still", "")
-        }
+         it exists, from the state the head set, and the script further down keeps it from then on -->
+    <script is:inline>
+        if (document.documentElement.hasAttribute("data-still")) document.currentScript.parentElement.setAttribute("data-still", "")
     </script>
     <div class="field field-far" aria-hidden="true"></div>
     <div class="field field-near" aria-hidden="true"></div>
@@ -44,14 +30,13 @@ const { accent } = Astro.props
 
 <script>
     import { anchorDepth, fitPinnedIntros, markSpaceTop } from "../../lib/depth"
-    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+    import { getExperience, subscribeExperience } from "../../lib/experience"
 
     const space = document.querySelector<HTMLElement>("[data-space]")
     if (space) {
-        const update = () => space.toggleAttribute("data-still", getExperience() === "still" || prefersReducedMotion())
+        const update = () => space.toggleAttribute("data-still", getExperience() === "still")
         update()
         subscribeExperience(update)
-        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", update)
         space.classList.add("js")
 
         // Content rises into view once, the first time the visitor sees it
@@ -182,21 +167,5 @@ const { accent } = Astro.props
 
     .space[data-still] .motes {
         display: none;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .mote {
-            animation: none;
-        }
-
-        .motes {
-            display: none;
-        }
-
-        .space.js :global([data-rise]) {
-            opacity: 1;
-            transform: none;
-            transition: none;
-        }
     }
 </style>

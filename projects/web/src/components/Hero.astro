@@ -4,7 +4,7 @@ import HeroControls from "./HeroControls.astro"
 import NpmWaterline from "./NpmWaterline.astro"
 import { createStars } from "../lib/stars"
 import { faceArt, iconSrc, mascotArt, mascotSizes, mascotSrcset } from "../lib/art"
-import { looks, specs } from "../scene/companion-specs"
+import { looks, skyIconsKey, specs } from "../scene/companion-specs"
 
 const stars = createStars()
 const pct = (value: number) => `${(value * 100).toFixed(2)}%`
@@ -18,9 +18,18 @@ const place = (b: ArtBox) =>
 
 <!-- The conductor's picture is not drawn until it is decoded, set here before the hero's markup so it never paints top down as it
      arrives. The hero's script lifts it once the sky's icons are ready too, and they all fade in together -->
-<script is:inline>
+<script is:inline define:vars={{ skyIconsKey }}>
     document.documentElement.dataset.mascotWait = ""
     document.documentElement.dataset.iconsWait = ""
+    // On a return the sky's icons come from the cache and are simply there. On a first visit they are held back until the conductor is
+    // whole, since on a slow connection they slow that picture and the stylesheets
+    let iconsKnown = false
+    try {
+        iconsKnown = localStorage.getItem(skyIconsKey) !== null
+    } catch {
+        // Storage is blocked, so this counts as a first visit
+    }
+    document.documentElement.dataset[iconsKnown ? "artHere" : "iconsHeld"] = ""
 </script>
 <section class="hero" data-hero aria-labelledby="hero-title">
     <div class="stage" style={`--eye-line: ${mascotArt.eyeLine}; --art-ratio: ${mascotArt.height / mascotArt.width}`}>
@@ -96,7 +105,12 @@ const place = (b: ArtBox) =>
                      conductor is there in the first frame with the words -->
                 <script is:inline>
                     {
-                        const show = () => delete document.documentElement.dataset.mascotWait
+                        const show = () => {
+                            delete document.documentElement.dataset.mascotWait
+                            delete document.documentElement.dataset.iconsHeld
+                        }
+                        // A return doesn't wait for the conductor or for the hero's script, so the cached icons are ready as early as they can be
+                        if (document.documentElement.dataset.iconsHeld === undefined) for (const icon of document.querySelectorAll("[data-sky-icon]")) icon.loading = "eager"
                         document.currentScript.previousElementSibling.decode().then(show, (reason) => {
                             console.warn("The conductor's picture didn't load:", reason)
                             show()
@@ -124,7 +138,10 @@ const place = (b: ArtBox) =>
     // The sky's icons show when src/lib/hero-runtime.ts has them, and the conductor when its picture is whole, and a slow or failed
     // picture or script never keeps them hidden for long
     setTimeout(() => delete document.documentElement.dataset.iconsWait, 1000)
-    setTimeout(() => delete document.documentElement.dataset.mascotWait, 4000)
+    setTimeout(() => {
+        delete document.documentElement.dataset.mascotWait
+        delete document.documentElement.dataset.iconsHeld
+    }, 4000)
 </script>
 
 <script>
@@ -171,11 +188,8 @@ const place = (b: ArtBox) =>
         opacity: 0;
     }
 
-    @media (prefers-reduced-motion: reduce) {
-        .mascot,
-        .conductor-reflection img {
-            transition: none;
-        }
+    :global(html[data-still]) :is(.mascot, .conductor-reflection img) {
+        transition: none;
     }
 
     /* The water deepens into the sections below. Nothing below the surface keeps its light for long */
@@ -367,8 +381,19 @@ const place = (b: ArtBox) =>
         transition: opacity var(--speed-normal) ease-out;
     }
 
+    /* Still has no fades, so the icons and the frozen frame simply appear */
+    :global(html[data-still]) .sky-icons,
+    :global(html[data-still]) .scene :global(canvas[data-scene-frame]) {
+        transition: none;
+    }
+
     :global(html[data-icons-wait]) .sky-icons {
         opacity: 0;
+    }
+
+    /* Out of the layout a lazy picture is not asked for, and the hero's script unhides the ones that fit as soon as it runs */
+    :global(html[data-icons-held]) .sky-icons {
+        display: none;
     }
 
     :global(html[data-art-here]) :is(.mascot, .conductor-reflection img, .sky-icons) {

@@ -194,8 +194,8 @@ body {
 }
 
 /* A control answers a mouse press with a short press in. Under a finger it would only look like it shrank */
-@media (prefers-reduced-motion: no-preference) and (hover: hover) and (pointer: fine) {
-    :is(button, .control, .pager-link, .next-link):not(:disabled):active {
+@media (hover: hover) and (pointer: fine) {
+    html:not([data-still]) :is(button, .control, .pager-link, .next-link):not(:disabled):active {
         scale: 0.98;
     }
 }
@@ -513,13 +513,6 @@ section[data-accent="violet"] {
     translate: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-    [data-depth] {
-        animation: none;
-        translate: none;
-    }
-}
-
 /* Two star fields behind everything, each a repeating tile of faint points at its own density. Each slides
    by its depth's share of the scroll past the top of its space, the far one most. The space sets --night-top,
    where it starts on the page, once it is laid out */
@@ -621,14 +614,6 @@ section[data-accent="violet"] {
 [data-still] .field {
     animation: none;
     transform: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .depth,
-    .field {
-        animation: none;
-        transform: none;
-    }
 }
 
 .lead {
@@ -893,17 +878,6 @@ section[id] {
 
 [data-still] .go-link:hover svg {
     transform: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .go-link svg,
-    .copy-button svg {
-        transition: none;
-    }
-
-    .go-link:hover svg {
-        transform: none;
-    }
 }
 
 /* Phones get targets of 44 points. Where a control can't grow without changing how it looks, a clear layer around it

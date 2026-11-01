@@ -3,7 +3,7 @@
 // holds no WebGL. GSAP comes only with the live scene.
 
 import { getExperience, subscribeExperience, type Experience } from "./experience"
-import { specs } from "../scene/companion-specs"
+import { skyIconsKey, specs } from "../scene/companion-specs"
 import { findHeroParts, measureHero } from "../scene/layout"
 import type { HeroFrame } from "../scene/hero-frame"
 import type { HeroScene } from "../scene/hero-scene"
@@ -51,9 +51,18 @@ function placeSkyIcons(hero: HTMLElement): Promise<unknown> {
     // Not longer than a slow network's patience: the scene doesn't wait for a picture that never comes
     const mascot = hero.querySelector<HTMLImageElement>("[data-mascot]")
     const pictures = [...icons.filter((icon) => !icon.hidden), ...(mascot ? [mascot] : [])]
-    // Already here, as on a return to the page, they are simply there. Only pictures that had to arrive fade in
+    // Already here, as on a return to a phone's page, they are simply there. Only pictures that had to arrive fade in. Where the sky has icons the head decides this, see Hero.astro
     if (pictures.every((picture) => picture.complete && picture.naturalWidth > 0)) document.documentElement.dataset.artHere = ""
     const decoded = Promise.all(pictures.map((picture) => picture.decode().catch(() => {})))
+    decoded.then(() => {
+        const shown = icons.filter((icon) => !icon.hidden)
+        if (!shown.length || !shown.every((icon) => icon.complete && icon.naturalWidth > 0)) return
+        try {
+            localStorage.setItem(skyIconsKey, "1")
+        } catch {
+            // Storage is blocked, so the next visit counts as a first one
+        }
+    })
     return Promise.race([decoded, new Promise((done) => window.setTimeout(done, iconLimit))]).then(lift)
 }
 
