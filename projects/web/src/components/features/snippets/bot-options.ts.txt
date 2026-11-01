@@ -1,0 +1,15 @@
+import type { BotOptions } from "@neontechspace/fluxerly"
+
+// The bot's runBot options, shared by bot.ts and the tests
+export const botOptions: BotOptions = {
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: {
+            ping: {
+                description: "Check that the bot replies",
+                execute: ({ reply }) => reply("Pong!"),
+            },
+        },
+    },
+}

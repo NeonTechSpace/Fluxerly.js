@@ -1,0 +1,176 @@
+---
+// A category page, with every function, variable, type alias and interface of the category in full,
+// or the own page of a class or of an entry point's Client interface
+import "../../../../styles/reference.css"
+import Docs from "../../../../layouts/Docs.astro"
+import Code from "../../../../components/docs/Code.astro"
+import Callable from "../../../../components/docs/reference/Callable.astro"
+import Declaration from "../../../../components/docs/reference/Declaration.astro"
+import DocText from "../../../../components/docs/reference/DocText.astro"
+import Heading from "../../../../components/docs/reference/Heading.astro"
+import Md from "../../../../components/docs/reference/Md.astro"
+import Members from "../../../../components/docs/reference/Members.astro"
+import {
+    categoryPages,
+    endpointsUrl,
+    entryByKey,
+    firstSentence,
+    groupByKind,
+    isReexport,
+    kindTitles,
+    pageSlug,
+    referenceUrl,
+    symbolPages,
+    type Category,
+    type Declaration as DeclarationModel,
+    type Entry,
+    type TocItem,
+} from "../../../../lib/reference"
+import { declarationHtml, fitted } from "../../../../lib/reference-format"
+import { plainText } from "../../../../lib/seo"
+
+export function getStaticPaths() {
+    return [
+        ...categoryPages().map(({ entry, category }) => ({ params: { entry: entry.key, page: category.slug }, props: { entry, category } })),
+        ...symbolPages().map(({ entry, category, declaration }) => ({ params: { entry: entry.key, page: pageSlug(declaration.url) }, props: { entry, category, declaration } })),
+    ]
+}
+
+interface Props {
+    entry: Entry
+    category?: Category
+    declaration?: DeclarationModel
+}
+
+const { entry, category, declaration } = Astro.props
+const current = Astro.url.pathname.endsWith("/") ? Astro.url.pathname : `${Astro.url.pathname}/`
+const crumbs = [
+    { title: "Reference", href: referenceUrl },
+    { title: entry.title, href: entry.url },
+    ...(declaration && category ? [{ title: category.title, href: category.url }] : []),
+]
+
+// Category page
+const groups = category && !declaration ? groupByKind(category.items) : []
+
+// Entry points that this category's re-exports come from
+const homes = [...new Set((category?.items ?? []).filter(isReexport).map((item) => item.home))].map(entryByKey)
+
+// The Client's raw request member leads to the map of Fluxer routes, which shows the routes that have no method
+const memberLinks = declaration?.name === "Client" ? { rest: { href: endpointsUrl, text: "Find which Fluxer routes have no SDK method" } } : undefined
+
+// Symbol page: members grouped as constructor, properties and methods
+const members = declaration?.members ?? []
+const sections = [
+    { id: "constructor", title: "Constructor", members: members.filter((member) => member.kind === "constructor") },
+    { id: "section-properties", title: "Properties", members: members.filter((member) => member.kind !== "constructor" && !member.signatures?.length) },
+    { id: "section-methods", title: "Methods", members: members.filter((member) => member.kind !== "constructor" && !!member.signatures?.length) },
+].filter((section) => section.members.length)
+
+const toc: TocItem[] = declaration
+    ? [
+          ...sections.flatMap((section) => [
+              { depth: 2 as const, text: section.title, id: section.id },
+              ...(section.id === "constructor" ? [] : section.members.map((member) => ({ depth: 3 as const, text: member.name, id: member.anchor ?? member.name }))),
+          ]),
+          ...(declaration.inherited?.length ? [{ depth: 2 as const, text: "Inherited", id: "section-inherited" }] : []),
+      ]
+    : groups.flatMap((group) => [
+          { depth: 2 as const, text: kindTitles[group.kind], id: `kind-${group.kind}` },
+          ...(group.kind === "class" || group.kind === "reexport" ? [] : group.items.map((item) => ({ depth: 3 as const, text: item.name, id: item.anchor }))),
+      ])
+
+const kindLabel = declaration?.kind === "class" ? "Class" : "Interface"
+const description = declaration
+    ? `${kindLabel}${category ? ` in ${category.title}` : ""} · ${entry.title}`
+    : `${category!.items.length} ${category!.items.length === 1 ? "symbol" : "symbols"} from ${entry.importPath}`
+// Search shows what the entry does, its own first sentence, and for a category the names it holds
+const searchDescription = declaration
+    ? plainText(firstSentence(declaration.doc?.summary))
+    : `${category!.title} in the Fluxerly.js API for ${entry.title}, including ${category!.top.slice(0, 3).join(", ")}`
+---
+
+<Docs title={declaration?.name ?? category!.title} description={description} searchDescription={searchDescription} section="reference" current={current} toc={toc} crumbs={crumbs}>
+    <div class="ref">
+        {
+            declaration && (
+                <>
+                    <DocText doc={declaration.doc} part="lead" self={declaration.url} />
+                    <pre class="ref-sig"><code set:html={fitted((width) => declarationHtml(declaration.kind === "class" ? "class" : "interface", declaration.name, { tp: declaration.tp, extends: declaration.extends, implements: declaration.implements }, width))} /></pre>
+                    <DocText doc={declaration.doc} part="body" self={declaration.url} />
+                    <DocText doc={declaration.doc} part="rest" self={declaration.url} />
+                    {sections.map((section) => (
+                        <section class="ref-group">
+                            <Heading level={2} id={section.id}>{section.title}</Heading>
+                            {section.id === "constructor" ? (
+                                section.members.flatMap((member) => member.signatures ?? []).map((signature) => <Callable signature={signature} name={declaration.name} isConstructor self={declaration.url} />)
+                            ) : (
+                                <Members members={section.members} level={3} sections links={memberLinks} />
+                            )}
+                        </section>
+                    ))}
+                    {!!declaration.inherited?.length && (
+                        <section class="ref-group">
+                            <Heading level={2} id="section-inherited">Inherited</Heading>
+                            <Members members={[]} inherited={declaration.inherited} />
+                        </section>
+                    )}
+                </>
+            )
+        }
+        {
+            groups.map((group) => (
+                <section class="ref-group">
+                    <Heading level={2} id={`kind-${group.kind}`}>{kindTitles[group.kind]}</Heading>
+                    {group.kind === "reexport" ? (
+                        <>
+                            <p class="ref-intro">
+                                Declared in {homes.map((home, index) => <>{index > 0 && " and "}<a href={home.url}>{home.title}</a></>)} and documented there. Import them from {entry.importPath} as well
+                            </p>
+                            <dl class="ref-list ref-index">
+                                {group.items.filter(isReexport).map((item) => (
+                                    <div class="ref-row" id={item.anchor}>
+                                        <dt>
+                                            <a href={item.url}><Code text={item.name} /></a>
+                                            <a class="ref-mark" href={`#${item.anchor}`} data-pagefind-ignore aria-label={`Link to ${item.name}`}>#</a>
+                                        </dt>
+                                        <dd>
+                                            {" "}
+                                            <Md md={item.summary} inline />
+                                            {homes.length > 1 && <span class="ref-from"> From {entryByKey(item.home).title}</span>}
+                                        </dd>
+                                    </div>
+                                ))}
+                            </dl>
+                        </>
+                    ) : group.kind === "class" ? (
+                        <dl class="ref-list ref-index">
+                            {group.items.map((item) => !isReexport(item) && (
+                                <div class="ref-row" id={item.anchor}>
+                                    <dt>
+                                        <a href={item.url}><Code text={item.name} /></a>
+                                    </dt>
+                                    <dd>
+                                        {" "}
+                                        <Md md={firstSentence(item.doc?.summary)} inline />
+                                    </dd>
+                                </div>
+                            ))}
+                        </dl>
+                    ) : (
+                        group.items.map((item) => !isReexport(item) && (item.page ? (
+                            <dl class="ref-list ref-index">
+                                <div class="ref-row" id={item.anchor}>
+                                    <dt><a href={item.url}><Code text={item.name} /></a></dt>
+                                    <dd>{" "}<Md md={firstSentence(item.doc?.summary)} inline /></dd>
+                                </div>
+                            </dl>
+                        ) : (
+                            <Declaration item={item} />
+                        )))
+                    )}
+                </section>
+            ))
+        }
+    </div>
+</Docs>

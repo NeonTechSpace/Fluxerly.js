@@ -1,0 +1,8 @@
+import { commands, type Client } from "@neontechspace/fluxerly"
+export function commandGroupExample(client: Client) {
+    return commands
+        .create({ prefix: "!" })
+        .registerGroup({ name: "tools", aliases: ["t"] })
+        .register({ name: "ping", execute: ({ reply }) => reply("Pong") }, { group: ["tools"] })
+        .attach(client)
+}

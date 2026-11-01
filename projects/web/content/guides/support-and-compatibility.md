@@ -4,7 +4,7 @@ navTitle: Support and compatibility
 description: Separate SDK support, instance availability and account permissions before deploying a bot
 ---
 
-Fluxerly is prerelease software intended for testing. It does not yet promise stable support or service availability. Before production use, check how the application handles failures, restarts and deployment with the exact SDK version installed
+Before production use, check how the application handles failures, restarts and deployment with the exact SDK version installed
 
 ## Runtime and upgrade requirements
 
@@ -14,34 +14,18 @@ Fluxerly is prerelease software intended for testing. It does not yet promise st
 | Modules           | ESM only, with `"type": "module"` in `package.json` or `.mjs` files                              |
 | JavaScript        | No TypeScript compiler requirement                                                               |
 | TypeScript        | TypeScript 7, not TypeScript 6 or earlier, with `@types/node` for the Node.js types              |
-| Native Effect     | Tested against Effect {{effect-version}}. Later Effect 4 releases are accepted                   |
+| Native Effect     | Effect 4, in the range the installed package lists|
 | Web browsers      | Not supported. A bot runs as a Node.js program, not inside a web page                            |
 | Operating systems | Hosted CI uses Ubuntu. A passing Ubuntu run does not qualify every operating system or container |
 
 Check the installed package's manifest for its Node.js and Effect requirements. The default API needs Effect internally, and npm or pnpm normally installs that dependency automatically. Native Effect code must use a version within the Effect range listed there, not Effect 3 or an Effect 4 prerelease
 
-## Version numbers and release channels
-
-A Stable version such as `1000.2.3` has three numbers, and the first one holds two parts. Its thousands are the epoch and the rest is the major version, so `1000` means epoch 1, major 0, and `2003` would mean epoch 2, major 3. That gives four parts. Each Stable release increases one of them, depending on what it changes, and resets the parts after it to 0:
-
-| Part                                     | Increases when the release                                                                                                                                   | Example                 |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| Epoch, the thousands of the first number | Starts a new generation of the project. Like a major release, it can break existing code                                                                     | `1004.2.3` → `2000.0.0` |
-| Major, the rest of the first number      | Can break existing code, for example by removing or renaming an API or by raising the minimum Node.js or Effect version. Read the changelog before upgrading | `1000.2.3` → `1001.0.0` |
-| Minor, the second number                 | Adds features and keeps existing code working                                                                                                                | `1000.2.3` → `1000.3.0` |
-| Patch, the third number                  | Only fixes bugs and keeps existing code working                                                                                                              | `1000.2.3` → `1000.2.4` |
-
-A version ending in `-nightly.DATE.N` or `-rc.N`, such as `1001.0.0-rc.2`, is a preview of that Stable version. A nightly is an automatic build of the latest source, published on days when the SDK changed, and an RC is the last check before the Stable release. Any preview can break existing code, even after the first Stable release, so the table above applies only to Stable releases
-
-The lockfile records the exact installed SDK version and keeps installs reproducible. For a nightly or RC, install with `--save-exact` in npm and pnpm, or `--exact` in Bun, so a fresh install without a lockfile cannot pick up a newer nightly or RC that may break the API. A nightly built during an RC cycle sorts below that cycle's RCs, so a nightly version range can resolve to an RC with older code. Read the matching [changelog](/docs/{{version}}/changelog/) and rerun application tests before upgrading
-
-No long-term maintenance window, response-time guarantee or deprecation notice period is promised for prerelease versions. A green SDK check covers its named tests, not every bot workload, provider deployment or recovery scenario
 
 ## Check SDK, instance and account support
 
 Before relying on an operation, check three separate things:
 
-1. **Does the SDK implement the operation?** Consult the installed version's [API reference](/docs/{{version}}/api/). A method available in newer documentation may not exist in an older package
+1. **Does the SDK implement the operation?** Consult the installed version's [API reference](/docs/api/). A method available in newer documentation may not exist in an older package
 2. **Does the selected instance implement and enable it?** Discovery exposes reviewed endpoint and upload metadata, not a complete endpoint capability registry
 3. **May this account perform it on this resource?** Account type, OAuth scope, community membership and permissions remain provider decisions at request time
 
@@ -56,7 +40,7 @@ The existing presigned-upload flag is an advertised Boolean used for attachment 
 
 ## Get help
 
-Issues and pull requests are maintainer-only until the first stable release, so there is no public help channel before then. Use [troubleshooting](/docs/{{version}}/troubleshooting/) and the [FAQ](/docs/{{version}}/faq/) to diagnose a problem
+Use [troubleshooting](/docs/troubleshooting/) and the [FAQ](/docs/faq/) to diagnose a problem. Ask usage questions in [Q&A](https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/q-a), propose features in [Ideas](https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/ideas), and report reproducible SDK problems with the [bug-report form](https://github.com/NeonTechSpace/Fluxerly.js/issues/new?template=bug_report.yml)
 
 Report a security vulnerability privately, as the [repository security policy](https://github.com/NeonTechSpace/Fluxerly.js/security/policy) describes, through GitHub's private vulnerability reporting. Do not post vulnerabilities in public issues, pull requests or discussions
 

@@ -1,0 +1,13 @@
+import { createClient } from "@neontechspace/fluxerly"
+
+export function createCachedClient(token: string, watched: ReadonlySet<string>) {
+    return createClient({
+        token,
+        cache: {
+            guilds: true,
+            // Keep channels of watched communities with no age limit, skip all others
+            channels: { maxAgeMs: (channel) => (watched.has(channel.guildId) ? null : 0) },
+            messages: { maxEntries: 500, maxBytes: 2_000_000, maxAgeMs: 60_000 },
+        },
+    })
+}

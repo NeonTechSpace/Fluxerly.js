@@ -1,0 +1,15 @@
+import assert from "node:assert/strict"
+import { test } from "node:test"
+import { createTestBot } from "@neontechspace/fluxerly/testing"
+import { botOptions } from "./bot-options.ts"
+
+test("!ping replies Pong!", async () => {
+    await using bot = createTestBot(botOptions)
+    await bot.ready()
+
+    const replies = await bot.say("!ping")
+    assert.deepEqual(
+        replies.map((message) => message.content),
+        ["Pong!"],
+    )
+})

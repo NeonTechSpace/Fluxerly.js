@@ -1,0 +1,8 @@
+import { orThrow, type Client, type MessageReference } from "@neontechspace/fluxerly"
+
+export async function readCachedOrFetch(client: Client, message: MessageReference) {
+    const cached = client.messages.get(message)
+    if (cached !== undefined) return cached
+
+    return orThrow(await client.messages.fetch(message, { timeoutMs: 5_000 }))
+}

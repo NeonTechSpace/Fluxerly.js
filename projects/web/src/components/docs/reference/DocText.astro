@@ -1,0 +1,54 @@
+---
+// A comment's parts. The lead is the summary's first paragraph, so a signature can follow it closely. Its first
+// sentence is the summary and the further sentences one quieter paragraph after it.
+// The body is the rest of the summary, and the rest is the default value, remarks, examples and links
+import type { Doc } from "../../../lib/reference"
+import { leadParagraphs } from "../../../lib/markdown"
+import Md from "./Md.astro"
+
+interface Props {
+    doc?: Doc
+    part: "lead" | "body" | "rest"
+    /** The reference URL of the symbol the comment documents */
+    self?: string
+}
+
+const { doc, part, self } = Astro.props
+// Split at the first blank line, unless the first block opens a code fence
+const summary = doc?.summary ?? ""
+const split = summary.search(/\n\s*\n/)
+const head = split < 0 || summary.slice(0, split).includes("```") ? summary : summary.slice(0, split)
+const body = summary.slice(head.length).trim()
+---
+
+{
+    doc && part === "lead" && (
+        <>
+            {doc.deprecated && (
+                <p class="ref-deprecated">
+                    <strong>Deprecated.</strong> <Md md={doc.deprecated} inline self={self} />
+                </p>
+            )}
+            <Md md={leadParagraphs(head)} class="ref-summary" self={self} />
+        </>
+    )
+}
+{doc && part === "body" && <Md md={body} self={self} />}
+{
+    doc && part === "rest" && (
+        <>
+            {doc.defaultValue && (
+                <p class="ref-note">
+                    Default <Md md={doc.defaultValue} inline self={self} />
+                </p>
+            )}
+            <Md md={doc.remarks} self={self} />
+            {doc.examples?.map((example) => <Md md={example} class="ref-example" self={self} />)}
+            {!!doc.see?.length && (
+                <p class="ref-note">
+                    See {doc.see.map((see, index) => <>{index > 0 && ", "}<Md md={see} inline self={self} /></>)}
+                </p>
+            )}
+        </>
+    )
+}

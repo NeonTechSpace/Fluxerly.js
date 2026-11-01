@@ -1,0 +1,156 @@
+---
+import { featureIcons, iconSrc } from "../../lib/art"
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import { featurePages, type FeatureSlug } from "../../lib/links"
+
+interface Props {
+    current: FeatureSlug
+    // Pages to list first, before the rest in menu order
+    lead?: FeatureSlug[]
+}
+
+const { current, lead = [] } = Astro.props
+const page = featurePages.find((entry) => entry.slug === current)
+const rank = (slug: FeatureSlug) => (lead.includes(slug) ? lead.indexOf(slug) : lead.length)
+const others = featurePages.filter((entry) => entry.slug !== current).toSorted((a, b) => rank(a.slug) - rank(b.slug))
+---
+
+<section class="next" aria-labelledby="next-title" data-accent={page?.accent ?? "cyan"}>
+    <div class="page-grid">
+        <h2 class="section-title" id="next-title" data-rise>Next</h2>
+        <ul class="next-list" data-rise>
+            {
+                others.map((entry) => (
+                    <li>
+                        <a class="next-link" href={`/${entry.slug}`} data-accent={entry.accent}>
+                            <img class="next-mark" src={iconSrc(featureIcons[entry.slug], 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                            <span class="next-title">{entry.title}</span>
+                            <span class="next-summary">{entry.summary}</span>
+                            <ArrowRightIcon className="next-arrow" size={18} weight="bold" aria-hidden="true" />
+                        </a>
+                    </li>
+                ))
+            }
+            <li>
+                <a class="next-link" href="/#install" data-accent="cyan">
+                    <img class="next-mark" src={iconSrc("sdk-package", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                    <span class="next-title">Install It</span>
+                    <span class="next-summary">Add the SDK with npm, pnpm or Bun</span>
+                    <ArrowRightIcon className="next-arrow" size={18} weight="bold" aria-hidden="true" />
+                </a>
+            </li>
+        </ul>
+    </div>
+</section>
+
+<style>
+    .next-mark {
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+        transition: scale var(--speed-normal) ease;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        :global(html:not([data-still])) .next-link:hover .next-mark {
+            scale: 1.1;
+        }
+    }
+
+    .next {
+        margin-top: var(--section-gap);
+    }
+
+    .section-title {
+        grid-column: 1 / -1;
+    }
+
+    .next-list {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: var(--page-gutter);
+        margin: 32px 0 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .next-link {
+        position: relative;
+        display: grid;
+        align-content: start;
+        gap: 10px;
+        height: 100%;
+        box-sizing: border-box;
+        padding: 26px 26px 28px;
+        color: inherit;
+        text-decoration: none;
+        background: rgb(160 190 255 / 0.04);
+        border: 1px solid rgb(160 190 255 / 0.14);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        transition:
+            background-color var(--speed-fast) ease,
+            border-color var(--speed-fast) ease;
+    }
+
+    .next-link[data-accent="cyan"] {
+        --accent: var(--color-cyan);
+    }
+
+    .next-link[data-accent="violet"] {
+        --accent: var(--color-violet);
+    }
+
+    .next-link:hover {
+        background: rgb(160 190 255 / 0.08);
+        border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+
+    /* Room for the arrow beside the title only, so the summary has the card's whole width */
+    .next-title {
+        padding-right: 36px;
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        line-height: 1.3;
+        color: var(--color-ink);
+        text-wrap: balance;
+    }
+
+    .next-summary {
+        font-size: var(--type-body);
+        line-height: 1.5;
+        color: var(--color-muted);
+        text-wrap: pretty;
+    }
+
+    .next-link :global(.next-arrow) {
+        position: absolute;
+        top: 28px;
+        right: 24px;
+        color: var(--accent);
+        transition: transform var(--speed-fast) ease;
+    }
+
+    .next-link:hover :global(.next-arrow) {
+        transform: translateX(3px);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .next-link :global(.next-arrow) {
+            transition: none;
+        }
+    }
+
+    @media (max-width: 1279px) {
+        .next-list {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (max-width: 640px) {
+        .next-list {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+</style>

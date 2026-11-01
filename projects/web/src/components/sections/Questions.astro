@@ -1,0 +1,402 @@
+---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import Companion from "./Companion.astro"
+import Depth from "./Depth.astro"
+import { guide } from "../../lib/links"
+
+interface Question {
+    // The anchor after #question-, named for the topic so a link keeps its question when the list is reordered
+    id: string
+    question: string
+    // Static HTML, for inline code
+    answer: string
+    href: string
+    link: string
+}
+
+const code = (text: string) => `<code class="inline-code">${text}</code>`
+
+// Fourteen questions read better as three short lists. The order of the list below decides nothing else
+const groups = [
+    { title: "Using Fluxerly", ids: ["slash-commands", "effect", "intents", "node", "voice", "rate-limits"] },
+    { title: "How It Behaves", ids: ["stable", "results", "testing", "message-methods"] },
+    { title: "Fluxerly and AI", ids: ["built-with-ai", "trust-ai-code", "avoid-ai", "hand-written"] },
+]
+
+const questions: Question[] = [
+    {
+        id: "slash-commands",
+        question: "Where Are Slash Commands?",
+        answer: `Fluxer does not let bots register slash commands yet. Fluxerly will add them as soon as Fluxer supports them. Until then, Fluxerly commands are prefix commands, messages such as ${code("!ping")} that start with a chosen prefix, with typed arguments, guards, cooldowns, groups and generated help`,
+        href: guide("commands"),
+        link: "Commands Guide",
+    },
+    {
+        id: "effect",
+        question: "Do I Have to Learn Effect?",
+        answer: `No. The default entry point uses ${code("async")} and ${code("await")} with Results. The SDK uses Effect inside, and npm, pnpm and Bun install it automatically, while the Effect entry point is there for applications that already use it`,
+        href: guide("effect-first-bot"),
+        link: "First Effect Bot",
+    },
+    {
+        id: "stable",
+        question: "Is It Stable?",
+        answer: "Yes. Releases follow Epoch Semantic Versioning, so only a new major version or epoch can break existing code. Minor and patch releases are safe to take",
+        href: guide("support-and-compatibility"),
+        link: "Support and Compatibility",
+    },
+    {
+        id: "intents",
+        question: "Do I Have to Enable Intents or Events?",
+        answer: `No. Nothing needs to be switched on to receive events. A ${code("messageCreate")} handler gets messages as soon as the bot can read the channel`,
+        href: guide("core-concepts", "events-and-handlers"),
+        link: "Events and Handlers",
+    },
+    {
+        id: "node",
+        question: "Which Node.js and Module System?",
+        answer: `Node.js with ES modules only. JavaScript needs no compiler, and TypeScript projects add TypeScript with ${code("@types/node")}. The supported Node.js and TypeScript versions are listed in the support guide`,
+        href: guide("support-and-compatibility"),
+        link: "Support and Compatibility",
+    },
+    {
+        id: "results",
+        question: "Why Do Calls Return a Result Instead of Throwing?",
+        answer: `Expected failures such as a missing permission, a network error or a rate limit stay visible in the return type, so they are handled where they happen. Programming mistakes still throw at once, and ${code("orThrow")} is there for code that prefers exceptions`,
+        href: guide("reliability"),
+        link: "Reliability Guide",
+    },
+    {
+        id: "voice",
+        question: "Can It Join Voice?",
+        answer: "Not yet. Voice connections and audio are deferred until after Fluxer's voice update. Voice state updates and member controls such as move, mute, deafen and disconnect work today",
+        href: guide("guilds-and-permissions", "voice-controls-versus-a-voice-connection"),
+        link: "Voice Controls",
+    },
+    {
+        id: "built-with-ai",
+        question: "Is Fluxerly Built with AI?",
+        answer: "Yes. AI helps write the code, and the maintainer decides what goes in. Code written with AI goes through the same check as every other change, and nothing is published unless that check passed",
+        href: "#quality",
+        link: "Quality, Speed and Security",
+    },
+    {
+        id: "trust-ai-code",
+        question: "Can Code Written with AI Be Trusted?",
+        answer: `It can, when the person using AI knows what to check. Tests and scanning look at the code itself, whoever typed it. Here the full check runs the whole test suite, and code scanning looks for security flaws`,
+        href: "#quality",
+        link: "What the Full Check Covers",
+    },
+    {
+        id: "avoid-ai",
+        question: "Is Fluxerly for Me if I Avoid AI?",
+        answer: "Yes. Nothing in the SDK needs an AI tool, and every bot can be written by hand. The SDK itself is built with AI, so it suits you best if you see the value in that, or are willing to give it a fair look",
+        href: guide("quick-start"),
+        link: "Quick Start",
+    },
+    {
+        id: "hand-written",
+        question: "Is Code Written by Hand Safer?",
+        answer: "Not when the person using AI knows what good code looks like. With that knowledge, AI-assisted code is more secure than code written by hand, because the time AI saves goes into more tests",
+        href: "#quality",
+        link: "How Security Is Checked",
+    },
+    {
+        id: "rate-limits",
+        question: "What About Rate Limits?",
+        answer: `The SDK handles them. When Fluxer answers with HTTP 429, it waits the required delay and sends again within the request's deadline. Waits of a second or more are logged as warnings with the code ${code("ratelimit.wait")}`,
+        href: guide("reliability", "limits-and-retry-rules"),
+        link: "Limits and Retry Rules",
+    },
+    {
+        id: "testing",
+        question: "How Do I Test Without a Token?",
+        answer: "The testing entry point creates a real client connected to an in-memory Fluxer. Tests deliver events, answer requests and check what the bot sent, with no network and no account",
+        href: guide("testing"),
+        link: "Testing Guide",
+    },
+    {
+        id: "message-methods",
+        question: "Why Do Messages Have No Methods?",
+        answer: `Messages are plain, read-only data, so no network call hides behind a property. A handler receives a ${code("reply")} function, and ${code("client.messages.send")} sends to any channel`,
+        href: guide("messages"),
+        link: "Messages Guide",
+    },
+]
+
+---
+
+<section class="questions" id="questions" aria-labelledby="questions-title" data-accent="violet">
+    <!-- The violet crescent of the conductor's face, far out in the left margin -->
+    <Depth name="crescent-violet" side="left" top="68%" width={156} depth={0.9} />
+    <div class="split">
+        <div class="intro" data-rise>
+            <h2 class="section-title" id="questions-title"><span class="station" data-station="questions" aria-hidden="true"></span>The Questions That <span class="hi">Come Up First</span></h2>
+            <p class="lead">Short answers to common questions, each with a link that goes deeper</p>
+            <p class="more">
+                <a class="prose-link" href={guide("faq")}>More Answers in the FAQ</a>
+                <a class="prose-link" href={guide("where-do-i")}>Where Do I…?</a>
+            </p>
+            <Companion class="keepsake" name="support-lifebuoy" alt="A lifebuoy ring with rope" size={240} />
+        </div>
+        {
+            <div class="body list" data-rise>
+                {groups.map((group) => (
+                    <div class="group">
+                    <h3 class="group-title">{group.title}</h3>
+                    {group.ids.map((id) => questions.find((question) => question.id === id)!).map((item) => (
+                        <details class="item" name="question" id={`question-${item.id}`}>
+                            <summary>
+                                <span class="question">{item.question}</span>
+                                <svg class="mark" viewBox="0 0 20 14" aria-hidden="true" focusable="false">
+                                    <path d="M1.5 7c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4" />
+                                </svg>
+                            </summary>
+                            <div class="answer">
+                                <p set:html={item.answer} />
+                                <a class="prose-link go-link" href={item.href}>
+                                    {item.link}
+                                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                                </a>
+                            </div>
+                        </details>
+                    ))}
+                    </div>
+                ))}
+            </div>
+        }
+    </div>
+</section>
+
+<script>
+    // A link to one question opens its answer and brings it into view
+    const openQuestion = (id: string) => {
+        const item = document.getElementById(id)
+        if (!(item instanceof HTMLDetailsElement)) return
+        item.open = true
+        item.scrollIntoView({ behavior: "instant", block: "start" })
+        item.querySelector("summary")?.focus({ preventScroll: true })
+    }
+
+    if (location.hash.startsWith("#question-")) openQuestion(location.hash.slice(1))
+
+    // Opening a question closes the one before it, and answers glide open and shut. When the closing one sits above, the pressed
+    // question rises with it, so its own answer has room on screen and the page stays where the reader left it. The page only
+    // follows if the question would otherwise slide under the header. Any scrolling by the reader ends this at once
+    const settling = 460
+    const clearOfHeader = 96
+    // A second press takes over from the first, so only one of them ever moves the page
+    let latestPress = 0
+    for (const summary of document.querySelectorAll<HTMLElement>(".item summary")) {
+        summary.addEventListener("click", () => {
+            const started = performance.now()
+            const press = ++latestPress
+            let expected = window.scrollY
+            let calmFrames = 0
+            // The browser's own scroll anchoring would scroll the page up to hold what's on screen
+            const root = document.documentElement
+            root.style.overflowAnchor = "none"
+            const follow = () => {
+                if (press !== latestPress) return
+                // Phones round the scroll position to their pixels, so a small difference is not the reader scrolling
+                const stillHere = Math.abs(window.scrollY - expected) <= 1.5
+                const under = summary.getBoundingClientRect().top - clearOfHeader
+                if (stillHere && under < -0.5) {
+                    window.scrollBy({ top: under, behavior: "instant" })
+                    expected = window.scrollY
+                }
+                // On a slow device the answers can start and finish late, so this also waits for several calm frames
+                calmFrames = under < -0.5 ? 0 : calmFrames + 1
+                if (stillHere && (performance.now() - started < settling || calmFrames < 8)) requestAnimationFrame(follow)
+                else root.style.overflowAnchor = ""
+            }
+            requestAnimationFrame(follow)
+        })
+    }
+</script>
+
+<style>
+    .group + .group {
+        margin-top: 36px;
+    }
+
+    .group-title {
+        margin: 0;
+        padding: 0 16px 10px;
+        font-size: var(--type-small);
+        font-weight: var(--weight-semibold);
+        letter-spacing: var(--tracking-wide);
+        color: var(--accent, var(--color-violet));
+        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    /* The rows reach a little past the column on both sides, so an open row's highlight has room around its text
+       and the row keeps its edges whether open or closed */
+    .list {
+        margin-inline: -16px;
+    }
+
+
+    .item {
+        padding-inline: 16px;
+        scroll-margin-top: 120px;
+        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .item[open] {
+        background: linear-gradient(90deg, var(--accent-soft), transparent 60%);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+    }
+
+    @media (max-width: 899px) {
+        .list {
+            margin-inline: -12px;
+        }
+
+        .item {
+            padding-inline: 12px;
+        }
+
+        .group-title {
+            padding-inline: 12px;
+        }
+    }
+
+    summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 20px 4px 20px 0;
+        font-size: var(--type-lead);
+        font-weight: var(--weight-medium);
+        line-height: 1.4;
+        color: var(--color-ink);
+        list-style: none;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        cursor: pointer;
+    }
+
+    summary::-webkit-details-marker {
+        display: none;
+    }
+
+    summary:hover .question {
+        color: #ffffff;
+    }
+
+    /* An open question is a wave. Answered, it settles into a flat line */
+    .mark {
+        flex: none;
+        width: 20px;
+        height: 14px;
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 1.7;
+        stroke-linecap: round;
+    }
+
+    .mark path {
+        d: path("M1.5 7c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4");
+        transition: d var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .item[open] .mark path {
+        d: path("M1.5 7c2.3 0 4.6 0 6.9 0s4.6 0 6.9 0 2.5 0 3.2 0");
+    }
+
+    /* An answer glides open and shut, so nothing around it jumps. Where a browser can't, it opens at once */
+    .item {
+        interpolate-size: allow-keywords;
+    }
+
+    .item::details-content {
+        height: 0;
+        overflow: clip;
+        opacity: 0;
+        transition:
+            height var(--speed-slow) cubic-bezier(0.3, 0, 0.2, 1),
+            opacity var(--speed-normal) ease,
+            content-visibility var(--speed-slow) allow-discrete;
+    }
+
+    .item[open]::details-content {
+        height: auto;
+        opacity: 1;
+    }
+
+    /* Opening sends one ripple along the row from the wave mark */
+    .item[open] summary::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        background: linear-gradient(90deg, var(--accent-soft), transparent 55%);
+        animation: question-ripple 700ms ease-out forwards;
+        pointer-events: none;
+    }
+
+    summary {
+        position: relative;
+    }
+
+    @keyframes question-ripple {
+        from {
+            opacity: 1;
+            transform: scaleX(0);
+            transform-origin: right;
+        }
+        to {
+            opacity: 0;
+            transform: scaleX(1);
+            transform-origin: right;
+        }
+    }
+
+    :global(.night[data-still]) .item[open] summary::after {
+        animation: none;
+        opacity: 0;
+    }
+
+    .answer {
+        max-width: 60ch;
+        padding: 0 32px 24px 0;
+    }
+
+    .answer p {
+        margin: 0;
+        font-size: var(--type-lead);
+        line-height: 1.6;
+        color: var(--color-muted);
+        text-wrap: pretty;
+    }
+
+    .answer .go-link {
+        margin-top: 12px;
+    }
+
+    .more {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 28px;
+        margin: 28px 0 0;
+        font-size: var(--type-body);
+        font-weight: var(--weight-medium);
+    }
+
+    :global(.night[data-still]) .item::details-content,
+    :global(.night[data-still]) .mark path {
+        transition: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .item::details-content,
+        .mark path {
+            transition: none;
+        }
+    }
+
+</style>

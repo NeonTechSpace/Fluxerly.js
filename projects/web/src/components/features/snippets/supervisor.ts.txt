@@ -1,0 +1,26 @@
+import { describeError, supervisor } from "@neontechspace/fluxerly"
+
+const workers = supervisor.create({
+    entry: new URL("./shard-worker.js", import.meta.url),
+    token: process.env.FLUXER_BOT_TOKEN,
+    totalShards: "auto",
+    processes: 2,
+})
+
+const stop = () => {
+    workers.shutdown().then(undefined, (defect: unknown) => {
+        console.error(describeError(defect))
+        process.exitCode = 1
+    })
+}
+process.once("SIGINT", stop)
+process.once("SIGTERM", stop)
+
+const started = await workers.start()
+const closed = started.isOk() ? await workers.waitForClose() : started
+process.removeListener("SIGINT", stop)
+process.removeListener("SIGTERM", stop)
+if (closed.isErr()) {
+    console.error(describeError(closed.error))
+    process.exitCode = 1
+}

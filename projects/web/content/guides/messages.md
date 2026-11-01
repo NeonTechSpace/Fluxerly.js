@@ -4,11 +4,11 @@ navTitle: Messages
 description: Reply, send and edit messages, build embeds, attach files and send direct messages
 ---
 
-Start with a bot that can reply to `!ping`. Add these helpers to the [first bot example](/docs/{{version}}/quick-start/) and call them from a command or message [handler](/docs/{{version}}/glossary/#handler). They use the bot's existing `client` rather than opening another connection. The [last section](/docs/{{version}}/messages/#wire-it-up) shows where they plug into `runBot`
+Start with a bot that can reply to `!ping`. Add these helpers to the [first bot example](/docs/quick-start/) and call them from a command or message [handler](/docs/glossary/#handler). They use the bot's existing `client` rather than opening another connection. The [last section](/docs/messages/#wire-it-up) shows where they plug into `runBot`
 
 ## Reply to a message and check what happened
 
-Use `reply` when the answer belongs to an incoming message. Awaiting an operation in the default API gives a [Result](/docs/{{version}}/glossary/#result): Check `isErr()` first, then read `value`
+Use `reply` when the answer belongs to an incoming message. Awaiting an operation in the default API gives a [Result](/docs/glossary/#result): Check `isErr()` first, then read `value`
 
 ```ts
 import { describeError, type Client, type Message } from "@neontechspace/fluxerly"
@@ -33,7 +33,9 @@ A plain string sends a text-only message. On success, `value` is the message Flu
 The error message names the operation and Fluxer's answer, then Fluxer's code and the HTTP status, for example `Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)`.
 The error's `hint` suggests a next step. For a missing permission, `details.requiredPermissions` lists the permissions Fluxer checks for the operation, such as `["ViewChannel", "SendMessages"]` for a send, and the hint names them. Fluxer does not report which one is missing, so the bot may already have some of them. When Fluxer answers with a code this SDK version does not know yet, `details.providerCode` holds it. When Fluxer's answer does not have the expected shape, `details.responseField` names the field that failed
 
-A rejection with HTTP 401 or 403 that the application handles also logs a Warn record with the code `rest.rejected`, because it usually points at a lasting token or permission problem. When a handler fails with the rejection instead, the handler's failure record is the only one. [Identical repeats collapse](/docs/{{version}}/logging/#collapse-repeated-errors) into one record per minute by default. The [error and log codes](/docs/{{version}}/error-and-log-codes/) page lists every code with its meaning
+A rejection with HTTP 401 or 403 that the application handles also logs a Warn record with the code `rest.rejected`, because it usually points at a lasting token or permission problem. The SDK holds that Warn for up to one second. A handler's failure record replaces it only if the handler fails with the same rejection while the Warn is held and no `onError` hook is configured for that failure
+
+[Identical repeats collapse](/docs/logging/#collapse-repeated-errors) into one record per minute by default. The [error and log codes](/docs/codes/) page lists every code with its meaning
 
 </details>
 
@@ -48,7 +50,7 @@ A `messageCreate` or `messageUpdate` event for a community message can carry `me
 
 A `messageCreate` event, and no other message event, can also carry `message.channelType`, the numeric type of the channel, with 1 for a direct message and 3 for a group direct message, `message.mentionedHere`, which Fluxer sends only as `true` for a here mention, and `message.nicknames`, the nicknames of a group direct message keyed by user ID. REST reads and `messageUpdate` events never carry them, and the message cache does not keep them. A `messageDelete` event can carry `deletion.member`, the author's community membership without a username or bot flag, because Fluxer removes the member's user from it. The member cache does not store it
 
-Received messages can carry `message.messageReference`, which points at a replied-to or forwarded message, or at the source of an announcement copy or follow notice. Its `channelId` is always present, but `id` is optional. Check `id`, then build a `MessageReference` from both fields for a fetch or reply. A follow notice identifies only the source channel. See [announcement channels](/docs/{{version}}/announcement-channels/) for publishing messages and handling their copies
+Received messages can carry `message.messageReference`, which points at a replied-to or forwarded message, or at the source of an announcement copy or follow notice. Its `channelId` is always present, but `id` is optional. Check `id`, then build a `MessageReference` from both fields for a fetch or reply. A follow notice identifies only the source channel. See [announcement channels](/docs/announcement-channels/) for publishing messages and handling their copies
 
 Sends and edits accept only `MessageFlags.SuppressEmbeds` and `MessageFlags.SuppressNotifications`. The SDK rejects any other flag before sending the request. Fluxer sets `Crossposted`, `IsCrosspost` and `SourceMessageDeleted` itself
 
@@ -67,7 +69,7 @@ export async function notifyParticipant(client: Client, channelId: string, userI
 }
 ```
 
-Methods that take a user, role or channel ID expect the decimal ID. To read a mention typed by a user, use `format.tryParseMention`, which returns a Result instead of throwing on invalid text. [Command arguments](/docs/{{version}}/commands/) can also accept either an ID or a mention
+Methods that take a user, role or channel ID expect the decimal ID. To read a mention typed by a user, use `format.tryParseMention`, which returns a Result instead of throwing on invalid text. [Command arguments](/docs/commands/) can also accept either an ID or a mention
 
 <details>
 <summary>Send a text-to-speech message</summary>
@@ -101,13 +103,13 @@ The helper posts a message, then edits it, and returns the edit's Result or the 
 <summary>What if the send or the edit fails?</summary>
 
 If the edit fails, the first message stays posted. If the connection fails after a send or edit was dispatched, the change may still have reached Fluxer. Check the returned Result before deciding whether to try again, and avoid repeating a write whose outcome is unknown.
-The [reliability guide](/docs/{{version}}/reliability/) explains these uncertain writes and when a retry is safe
+The [reliability guide](/docs/reliability/) explains these uncertain writes and when a retry is safe
 
 </details>
 
 ## Build an embed
 
-An [embed](/docs/{{version}}/glossary/#embed) is a formatted card with a title, description, color and fields. The embed builder assembles one step by step. Pass the builder in the message's `embeds` list
+An [embed](/docs/glossary/#embed) is a formatted card with a title, description, color and fields. The embed builder assembles one step by step. Pass the builder in the message's `embeds` list
 
 ```ts
 import { builders, type Client } from "@neontechspace/fluxerly"
@@ -149,7 +151,7 @@ export async function sendChecklist(client: Client, channelId: string) {
 }
 ```
 
-The builder keeps a reference to the bytes, and the send copies them when it is called. For larger files, pass a `file` source such as a `Blob`, or a `stream` with its exact `size`, instead of `data`. The [attachment input reference](/docs/{{version}}/api/modules/js-ts/#attachmentinput) lists these forms, which avoid loading everything into memory
+The builder keeps a reference to the bytes, and the send copies them when it is called. For larger files, pass a `file` source such as a `Blob`, or a `stream` with its exact `size`, instead of `data`. The [attachment input reference](/docs/api/js-ts/messages/#attachmentinput) lists these forms, which avoid loading everything into memory
 
 ## Send a file from disk
 
@@ -209,7 +211,7 @@ export async function sendRequestedDm(client: Client, recipientId: string) {
 }
 ```
 
-A send can still fail when the recipient's privacy settings block it. To reuse the conversation, `directMessages.open` returns its channel, and existing group conversations use the normal message methods with their channel ID. Creating groups is outside the SDK's supported operations. See [private conversations](/docs/{{version}}/api/interfaces/js-ts.DirectMessages/) for reads and permitted management actions
+A send can still fail when the recipient's privacy settings block it. To reuse the conversation, `directMessages.open` returns its channel, and existing group conversations use the normal message methods with their channel ID. Creating groups is outside the SDK's supported operations. See [private conversations](/docs/api/js-ts/users-and-dms/#directmessages) for reads and permitted management actions
 
 ## Wire it up
 
@@ -238,8 +240,8 @@ await runBot({
 })
 ```
 
-Returning the reply's Result lets the [command router](/docs/{{version}}/glossary/#command-router) report a failed reply with the command name. If the bot itself stops with a failure, such as a rejected token, `runBot` logs it once and sets `process.exitCode` to 1, so the file needs no error handling of its own
+Returning the reply's Result lets the [command router](/docs/glossary/#command-router) report a failed reply with the command name. If the bot itself stops with a failure, such as a rejected token, `runBot` logs it once and sets `process.exitCode` to 1, so the file needs no error handling of its own
 
 Helpers that take a `client`, such as `postSchedule` above, receive it from the command context, for example with `execute: ({ client, message }) => postSchedule(client, message.channelId)`
 
-Continue with [prefix commands](/docs/{{version}}/commands/) to turn these helpers into named bot actions, or see the [Effect workflow examples](/docs/{{version}}/effect-workflows/) for the same operations inside an Effect program
+Continue with [prefix commands](/docs/commands/) to turn these helpers into named bot actions, or see the [Effect workflow examples](/docs/effect-workflows/) for the same operations inside an Effect program

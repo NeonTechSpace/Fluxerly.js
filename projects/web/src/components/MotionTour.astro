@@ -1,0 +1,238 @@
+---
+// The first visit's one tip, on whichever page the visit starts: the page dims around the header's motion switch and one
+// short line points at it. It shows once and only while the site is moving, since a visitor who has it still has found the
+// switch or asked their system for less motion. Any press, Escape or a scroll puts it away and the page goes on as usual
+---
+
+<div class="tour" popover="manual" data-tour>
+    <div class="tour-catch" data-tour-catch></div>
+    <div class="tour-light"></div>
+    <div class="tour-card" role="dialog" aria-labelledby="tour-words" tabindex="-1" data-tour-card>
+        <p class="tour-words" id="tour-words">Prefer it still? Press here</p>
+    </div>
+</div>
+
+<script>
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../lib/experience"
+
+    const seenKey = "fluxerly.tour.v1"
+    // The page has a moment to arrive before it darkens
+    const openDelay = 1100
+    const closeTime = 260
+    // How far a scroll goes before the reader has clearly moved on
+    const scrollAway = 24
+    const pad = 4
+    const edge = 12
+    const gap = 12
+
+    const tour = document.querySelector<HTMLElement>("[data-tour]")
+    const toggle = document.querySelector<HTMLElement>(".motion")
+    const header = document.querySelector<HTMLElement>("[data-site-header]")
+
+    // Blocked storage can't remember the tip, so it counts as seen rather than coming back on every page
+    const seen = () => {
+        try {
+            return localStorage.getItem(seenKey) !== null
+        } catch {
+            return true
+        }
+    }
+
+    if (tour && toggle && header && "showPopover" in tour && !seen() && getExperience() !== "still" && !prefersReducedMotion()) start(tour, toggle, header)
+
+    function start(tour: HTMLElement, toggle: HTMLElement, header: HTMLElement) {
+        const catcher = tour.querySelector<HTMLElement>("[data-tour-catch]")!
+        const card = tour.querySelector<HTMLElement>("[data-tour-card]")!
+        let open = false
+        let timer = 0
+        let fromY = 0
+        let before: Element | null = null
+
+        const remember = () => {
+            try {
+                localStorage.setItem(seenKey, "1")
+            } catch {
+                // Blocked between the two reads: it stays on this page only
+            }
+        }
+
+        // Places everything around the switch. The page's zoom on wide screens also scales what is placed here, so
+        // screen pixels are divided back out of it
+        const place = () => {
+            const zoom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--page-zoom")) || 1
+            const box = toggle.getBoundingClientRect()
+            const x = box.left / zoom
+            const y = box.top / zoom
+            const w = box.width / zoom
+            const h = box.height / zoom
+            const screen = window.innerWidth / zoom
+            tour.style.setProperty("--x", `${x - pad}px`)
+            tour.style.setProperty("--y", `${y - pad}px`)
+            tour.style.setProperty("--w", `${w + pad * 2}px`)
+            tour.style.setProperty("--h", `${h + pad * 2}px`)
+            const left = Math.max(edge, Math.min(screen - edge - card.offsetWidth, x + w + pad - card.offsetWidth))
+            card.style.left = `${left}px`
+            card.style.top = `${y + h + pad + gap}px`
+            card.style.setProperty("--caret", `${x + w / 2 - left}px`)
+            // The switch's own place is left open, so it can be pressed through the dark
+            const [x1, y1, x2, y2] = [x - pad, y - pad, x + w + pad, y + h + pad]
+            catcher.style.clipPath = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${x1}px ${y1}px, ${x1}px ${y2}px, ${x2}px ${y2}px, ${x2}px ${y1}px, ${x1}px ${y1}px)`
+        }
+
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === "Escape") close()
+        }
+        const onScroll = () => {
+            if (Math.abs(window.scrollY - fromY) > scrollAway) close()
+        }
+
+        const close = () => {
+            if (!open) return
+            open = false
+            window.removeEventListener("resize", place)
+            window.removeEventListener("scroll", onScroll)
+            document.removeEventListener("keydown", onKey)
+            tour.removeAttribute("data-on")
+            if (tour.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
+            if (before instanceof HTMLElement && before !== document.body) before.focus({ preventScroll: true })
+            window.setTimeout(() => tour.hidePopover(), closeTime)
+        }
+
+        const show = () => {
+            // Read down the page already, the header has gone, and the switch with it. The tip waits for it to come back
+            if (header.hasAttribute("data-hidden") || toggle.getBoundingClientRect().width === 0) {
+                window.addEventListener("scroll", wait, { passive: true })
+                return
+            }
+            remember()
+            open = true
+            before = document.activeElement
+            fromY = window.scrollY
+            tour.showPopover()
+            place()
+            // A frame in the closed state first, so the dark and the card have somewhere to come from
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    tour.setAttribute("data-on", "")
+                    card.focus({ preventScroll: true })
+                })
+            })
+            window.addEventListener("resize", place)
+            window.addEventListener("scroll", onScroll, { passive: true })
+            document.addEventListener("keydown", onKey)
+        }
+        const wait = () => {
+            if (header.hasAttribute("data-hidden")) return
+            window.removeEventListener("scroll", wait)
+            show()
+        }
+
+        catcher.addEventListener("click", close)
+        card.addEventListener("click", close)
+        // Pressing the switch does what the tip says. There is nothing more to tell, before or after it shows
+        subscribeExperience(() => {
+            window.clearTimeout(timer)
+            window.removeEventListener("scroll", wait)
+            if (open) close()
+            else remember()
+        })
+
+        const begin = () => (timer = window.setTimeout(show, openDelay))
+        if (document.readyState === "complete") begin()
+        else window.addEventListener("load", begin, { once: true })
+    }
+</script>
+
+<style>
+    .tour {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+        max-height: none;
+        margin: 0;
+        padding: 0;
+        overflow: clip;
+        color: var(--color-ink);
+        background: none;
+        border: 0;
+        pointer-events: none;
+    }
+
+    .tour:not(:popover-open) {
+        display: none;
+    }
+
+    /* Takes a press anywhere but on the switch */
+    .tour-catch {
+        position: absolute;
+        inset: 0;
+        pointer-events: auto;
+    }
+
+    /* The dark is the shadow of the switch's own lit place, so the hole has the switch's corners */
+    .tour-light {
+        position: absolute;
+        left: var(--x);
+        top: var(--y);
+        width: var(--w);
+        height: var(--h);
+        border-radius: calc(var(--corner-medium) + 4px);
+        corner-shape: squircle;
+        box-shadow:
+            0 0 0 1px rgb(70 227 239 / 0.7),
+            0 0 0 200vmax rgb(2 3 18 / 0.62);
+        opacity: 0;
+        transition: opacity var(--speed-slow) ease-out;
+    }
+
+    /* The look of the header's own tooltips, with the same notch pointing up at the switch */
+    .tour-card {
+        position: absolute;
+        width: max-content;
+        padding: 7px 12px;
+        cursor: pointer;
+        background: rgb(8 11 40 / 0.96);
+        border: 1px solid rgb(160 190 255 / 0.24);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        outline: none;
+        pointer-events: auto;
+        opacity: 0;
+        transform: translate3d(0, -4px, 0);
+        transition:
+            opacity var(--speed-normal) ease-out,
+            transform var(--speed-normal) ease-out;
+    }
+
+    .tour-card::before {
+        content: "";
+        position: absolute;
+        top: -5px;
+        left: calc(var(--caret, 50%) - 4.5px);
+        width: 9px;
+        height: 9px;
+        background: rgb(8 11 40);
+        border: 1px solid rgb(160 190 255 / 0.24);
+        border-width: 1px 0 0 1px;
+        transform: rotate(45deg);
+    }
+
+    .tour-words {
+        margin: 0;
+        font-size: var(--type-small);
+        font-weight: var(--weight-medium);
+        line-height: 1.3;
+        color: var(--color-ink);
+    }
+
+    .tour[data-on] .tour-light {
+        opacity: 1;
+    }
+
+    .tour[data-on] .tour-card {
+        opacity: 1;
+        transform: none;
+    }
+</style>

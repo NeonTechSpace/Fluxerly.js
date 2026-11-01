@@ -1,0 +1,65 @@
+---
+import Code from "../components/docs/Code.astro"
+import CommandChip from "../components/sections/CommandChip.astro"
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import botOptions from "../components/features/snippets/bot-options.ts.txt?raw"
+import firstTest from "../components/features/snippets/first-test.ts.txt?raw"
+import throwingTest from "../components/features/snippets/throwing-test.ts.txt?raw"
+import restRespond from "../components/features/snippets/rest-respond.ts.txt?raw"
+import effectTest from "../components/features/snippets/effect-test.ts.txt?raw"
+
+const accent = "violet"
+---
+
+<FeaturePage slug="testing" companion="testing-flask" companionAlt="A lab flask with a large checkmark on it">
+    <Fragment slot="title">Tests <span class="hi">Without a Token</span></Fragment>
+
+    <Scene id="options" step={1} side="left" {accent} guide={guide("testing", "share-the-bots-options-with-its-tests")} guideLabel="Share Options with Tests">
+        <Fragment slot="title">One Set of Options for the Bot and Its Tests</Fragment>
+        <Fragment slot="text">
+            <p>The testing entry point, <Code class="inline-code" text="@neontechspace/fluxerly/testing" />, ships with the SDK. Its <code class="inline-code">createTestBot</code> takes the same options object as <code class="inline-code">runBot</code>, except <code class="inline-code">instance</code> and <code class="inline-code">transport</code>, which the test client owns</p>
+            <p>Keep that object in a module of its own, so the bot and its tests run the same events and commands. The token can stay unset in a test</p>
+        </Fragment>
+        <CodePanel file="bot-options.ts" label="The bot's options in their own module" code={botOptions} />
+    </Scene>
+
+    <Scene id="first-test" step={2} side="right" {accent} guide={guide("testing", "write-a-first-test")} guideLabel="The First Test in the Testing Guide">
+        <Fragment slot="title">A First Test with Say</Fragment>
+        <Fragment slot="text">
+            <p>The test client is a real client connected to an in-memory Fluxer. <code class="inline-code">say</code> sends a message as a fake user, waits until the bot has finished and returns what it sent</p>
+            <p>The message goes through the SDK's own decoding and handlers, as a real one would. <code class="inline-code">node:test</code> is the runner built into Node.js, so there is nothing else to install</p>
+        </Fragment>
+        <CodePanel file="bot.test.ts" label="A first test" code={firstTest} />
+        <CommandChip command="node --test" />
+    </Scene>
+
+    <Scene id="failures" icon="errors-beacon" iconAlt="A beacon that lights on failure" step={3} side="left" {accent} guide={guide("testing", "what-the-test-does")} guideLabel="What the Test Does">
+        <Fragment slot="title">A Broken Handler Fails the Test</Fragment>
+        <Fragment slot="text">
+            <p>A command that throws is recorded as <code class="inline-code">commands.failed</code>, and <code class="inline-code">failures()</code> returns it so the test can expect it</p>
+            <p>A failure that no test reads makes the shutdown reject. A broken handler fails the test even when no assertion looks at it</p>
+        </Fragment>
+        <CodePanel file="bot.test.ts" label="A test for a command that throws" code={throwingTest} />
+    </Scene>
+
+    <Scene id="respond" step={4} side="right" {accent} guide={guide("testing", "test-handlers-registered-with-clienton")} guideLabel="Test client.on Handlers">
+        <Fragment slot="title">Answer as the API Would</Fragment>
+        <Fragment slot="text">
+            <p><code class="inline-code">rest.respond</code> tells the in-memory Fluxer how to answer a request, and returns a route whose <code class="inline-code">next()</code> waits for the request it answered</p>
+            <p>Code that registers handlers with <code class="inline-code">client.on</code> instead of <code class="inline-code">runBot</code> is tested with <code class="inline-code">createTestClient</code>, the same test client without bot options</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="A test with a fake API answer" code={restRespond} />
+    </Scene>
+
+    <Scene id="effect" step={5} side="left" {accent} guide={guide("effect-application-testing", "test-a-runbot-bot-against-an-in-memory-fluxer")} guideLabel="The Effect Application Testing Guide">
+        <Fragment slot="title">The Same for Effect</Fragment>
+        <Fragment slot="text">
+            <p>Applications built with Effect, a TypeScript library for typed failures and scoped cleanup, test with <Code class="inline-code" text="@neontechspace/fluxerly/effect/testing" /></p>
+            <p>It has the same <code class="inline-code">createTestBot</code>. Its controls are Effects, and the test bot shuts down when the surrounding <code class="inline-code">Effect.scoped</code> ends</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="An Effect test" code={effectTest} />
+    </Scene>
+</FeaturePage>

@@ -1,0 +1,4 @@
+ERROR events     [events.handlerFailed] The messageCreate handler failed: Cannot read properties of undefined (reading 'content') event=messageCreate subscriptionId=messageCreate#1 messageId=1456074443980800005 channelId=1456074443980800002 guildId=1456074443980800001
+    TypeError: Cannot read properties of undefined (reading 'content')
+      at messageCreate (file:///srv/bot/bot.js:3:78)
+      ... 9 SDK and Effect frames hidden

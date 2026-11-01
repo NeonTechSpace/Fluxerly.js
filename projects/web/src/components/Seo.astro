@@ -1,0 +1,49 @@
+---
+// The part of every page's head that search engines and link previews read: title, description, the page's one
+// true address, preview text, the share picture, the site's icons and structured data
+import { shareImage, siteName } from "../lib/seo"
+
+interface Props {
+    title: string
+    description: string
+    // Pages that should never show up in search, such as the 404 page
+    noindex?: boolean
+    type?: "website" | "article"
+    graph?: Record<string, unknown>[]
+}
+
+const { title, description, noindex = false, type = "website", graph = [] } = Astro.props
+
+// Every page lives at an address ending in a slash, so the canonical address does too, whichever way it was reached
+const path = Astro.url.pathname.endsWith("/") ? Astro.url.pathname : `${Astro.url.pathname}/`
+const canonical = new URL(path, Astro.site).href
+// Kept from closing the script element early, whatever text the graph holds
+const structured = graph.length ? JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(/</g, "\\u003c") : ""
+---
+
+<title>{title}</title>
+<meta name="description" content={description} />
+{noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
+<meta property="og:type" content={type} />
+<meta property="og:site_name" content={siteName} />
+<meta property="og:locale" content="en_US" />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+{!noindex && <meta property="og:url" content={canonical} />}
+<meta property="og:image" content={shareImage.url} />
+<meta property="og:image:type" content="image/jpeg" />
+<meta property="og:image:width" content={String(shareImage.width)} />
+<meta property="og:image:height" content={String(shareImage.height)} />
+<meta property="og:image:alt" content={shareImage.alt} />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={shareImage.url} />
+<meta name="twitter:image:alt" content={shareImage.alt} />
+<!-- The middle of the logo's blue to purple. Shown as the stripe on link previews and the browser bar on phones -->
+<meta name="theme-color" content="#5b5ef2" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="manifest" href="/site.webmanifest" />
+{structured && <script type="application/ld+json" set:html={structured} />}

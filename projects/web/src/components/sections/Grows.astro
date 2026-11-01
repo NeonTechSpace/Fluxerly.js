@@ -1,0 +1,214 @@
+---
+import CodeBlock from "./CodeBlock.astro"
+import Companion from "./Companion.astro"
+import Depth from "./Depth.astro"
+import { clientApp, effectLayer, firstBot } from "../../islands/samples"
+import { guide } from "../../lib/links"
+
+const columns = [
+    {
+        title: "A First Bot",
+        text: "One options object in a plain JavaScript file, which Node.js runs without a build step",
+        filename: "bot.js",
+        code: firstBot,
+    },
+    {
+        title: "A Real Application",
+        text: "Own the connection and the shutdown when you need to. <code class=\"inline-code\">createClient</code> leaves connecting, running and stopping to your code",
+        filename: "app.js",
+        code: clientApp,
+    },
+    {
+        title: "Effect, When You Want It",
+        text: "Effect is a TypeScript library for structured programs. The native entry point has the same features with typed failures and scoped cleanup, and it is never required",
+        filename: "app.ts",
+        code: effectLayer,
+    },
+]
+---
+
+<section class="grows" id="grows" aria-labelledby="grows-title" data-accent="cyan">
+    <!-- The violet light of the conductor's galaxy, far behind the balloon, out in the right margin -->
+    <div class="page-grid">
+        <div class="intro" data-rise>
+            <h2 class="section-title" id="grows-title"><span class="station" data-station="grows" aria-hidden="true"></span><span class="keep">From One File</span> <span class="keep">to a <span class="hi">Full Application</span></span></h2>
+            <p class="lead">The same SDK at three sizes. Each step keeps everything from the one before it</p>
+        </div>
+        <!-- What grows lifts off: the balloon watches over the steps -->
+        <Companion class="keepsake" name="deploy-balloon" alt="A hot-air balloon lifting a small parcel upward" size={200} />
+        <div class="columns" data-rise>
+            {
+                columns.map((column, index) => (
+                    <article class="column" style={`--step: ${index}`}>
+                        <div class="step">
+                            <h3>{column.title}</h3>
+                            <p class="text" set:html={column.text} />
+                        </div>
+                        <div class="panel glass">
+                            <div class="panel-head">{column.filename}</div>
+                            <CodeBlock code={column.code} label={`${column.title}, ${column.filename}`} />
+                        </div>
+                    </article>
+                ))
+            }
+        </div>
+        <p class="footnote">
+            JavaScript needs no TypeScript. TypeScript projects add TypeScript and <code class="inline-code">@types/node</code>. ES modules only, on the Node.js
+            versions in the <a class="prose-link" href={guide("support-and-compatibility")}>support guide</a>
+        </p>
+    </div>
+</section>
+
+<style>
+    .intro {
+        grid-column: 1 / span 7;
+    }
+
+    .section-title {
+        position: relative;
+    }
+
+    .grows :global(.keepsake) {
+        grid-column: 10 / span 3;
+        grid-row: 1;
+        justify-self: end;
+        align-self: start;
+        margin-top: -24px;
+    }
+
+    .columns {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        column-gap: var(--page-gutter);
+        margin-top: clamp(48px, 3.8vw, 72px);
+    }
+
+    /* Floor and ceiling, literally: the three steps rise from left to right */
+    .column {
+        display: grid;
+        grid-template-rows: subgrid;
+        grid-row: span 2;
+        row-gap: 0;
+        min-width: 0;
+    }
+
+    @media (min-width: 1600px) {
+        .columns {
+            align-items: start;
+        }
+
+        /* Each step is one piece, and the steps rise left to right by the same amount. They are lined up by
+           their titles, so the code panels' different lengths cannot flatten the stairs */
+        .column {
+            grid-template-rows: auto;
+            grid-row: auto;
+            margin-top: calc((2 - var(--step)) * 96px);
+        }
+    }
+
+    h3 {
+        margin: 0;
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        line-height: 1.3;
+        color: var(--color-ink);
+    }
+
+    .text {
+        max-width: 46ch;
+        margin: 12px 0 0;
+        font-size: var(--type-lead);
+        line-height: 1.6;
+        color: var(--color-muted);
+        text-wrap: pretty;
+    }
+
+    .panel {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        margin-top: 24px;
+        overflow: hidden;
+    }
+
+    .panel-head {
+        padding: 12px 22px;
+        font-family: var(--font-mono);
+        font-size: var(--type-small);
+        color: rgb(195 200 230 / 0.66);
+        border-bottom: 1px solid rgb(160 190 255 / 0.12);
+    }
+
+    .panel :global(.code) {
+        flex: 1;
+        padding-block: 16px 20px;
+        font-size: var(--code-size);
+    }
+
+    .footnote {
+        grid-column: 1 / span 8;
+        max-width: var(--text-max);
+        margin: 32px 0 0;
+        font-size: var(--type-body);
+        line-height: 1.6;
+        color: rgb(195 200 230 / 0.78);
+    }
+
+    /* A third of the page is too narrow for these lines below 1600px, so each column becomes a row */
+    @media (min-width: 900px) and (max-width: 1599px) {
+        .columns {
+            grid-template-columns: repeat(12, minmax(0, 1fr));
+            row-gap: clamp(48px, 4vw, 64px);
+        }
+
+        .column {
+            grid-column: 1 / -1;
+            grid-row: auto;
+            grid-template-columns: subgrid;
+            grid-template-rows: auto;
+        }
+
+        /* The step's words sit level with its code and follow it as it scrolls, so each row reads as one piece */
+        .step {
+            position: sticky;
+            top: 104px;
+            grid-column: 1 / span 4;
+            align-self: center;
+        }
+
+        .panel {
+            grid-column: 6 / -1;
+            margin-top: 0;
+        }
+
+        .panel :global(.code) {
+            font-size: var(--code-size);
+        }
+
+        .footnote {
+            grid-column: 6 / -1;
+        }
+    }
+
+    @media (max-width: 899px) {
+        .intro,
+        .footnote {
+            grid-column: 1 / -1;
+        }
+
+        .grows :global(.keepsake) {
+            display: none;
+        }
+
+        .columns {
+            grid-template-columns: minmax(0, 1fr);
+            row-gap: 56px;
+        }
+
+        .column {
+            grid-template-rows: auto;
+            grid-row: auto;
+        }
+    }
+</style>

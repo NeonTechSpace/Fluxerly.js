@@ -1,0 +1,68 @@
+---
+// Moving between pages. A page simply replaces the last, the pages a reader is about to open are fetched ahead,
+// and a slow navigation shows that the next page is on its way. Every layout includes this in its head
+import "../styles/transitions.css"
+import { experienceKey } from "../lib/experience"
+
+// Docs pages are light, so the one under the pointer renders ahead in full. Other pages carry live scenes and are only
+// fetched. The previous and next guide are fetched as soon as the page opens
+const speculation = {
+    prerender: [{ where: { href_matches: "/docs/*" }, eagerness: "moderate" }],
+    prefetch: [
+        { where: { href_matches: "/*" }, eagerness: "moderate" },
+        { where: { selector_matches: ".pager-link" }, eagerness: "eager" },
+    ],
+}
+---
+
+<script is:inline type="speculationrules" set:html={JSON.stringify(speculation)} />
+<script is:inline define:vars={{ key: experienceKey }}>
+    // Still, or the system asking for less motion. Read here because the page's modules have not run yet
+    const isStill = () => {
+        let stored = null
+        try {
+            stored = localStorage.getItem(key)
+        } catch {
+            // Storage is blocked, the system setting decides
+        }
+        return stored === "still" || matchMedia("(prefers-reduced-motion: reduce)").matches
+    }
+    document.documentElement.toggleAttribute("data-still", isStill())
+    // A link to a section of another page lands there from its first frame. Without this the page paints at its top and then
+    // snaps. The first paint waits until the section has been read, and it is brought into place before anything is drawn
+    const arriving = location.hash.length > 1 && ["push", "replace"].includes(window.navigation?.activation?.navigationType ?? "")
+    if (arriving) {
+        const waitFor = document.createElement("link")
+        waitFor.rel = "expect"
+        waitFor.href = location.hash
+        waitFor.setAttribute("blocking", "render")
+        document.head.append(waitFor)
+    }
+    addEventListener("pagereveal", () => {
+        delete document.documentElement.dataset.navigating
+        if (arriving) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ behavior: "instant" })
+    })
+
+    // The signal along the top edge, only after a short wait so fast navigations stay clean
+    let waiting = 0
+    const settle = () => {
+        clearTimeout(waiting)
+        delete document.documentElement.dataset.navigating
+    }
+    window.navigation?.addEventListener("navigate", (event) => {
+        const url = new URL(event.destination.url)
+        if (event.destination.sameDocument || event.downloadRequest !== null || url.origin !== location.origin) return
+        clearTimeout(waiting)
+        waiting = setTimeout(() => (document.documentElement.dataset.navigating = isStill() ? "still" : "moving"), 140)
+    })
+    // A page that answered quickly but is still loading its parts shows the old page held still. The held page carries
+    // a steady signal, so even that wait reads as on its way
+    addEventListener("pageswap", () => {
+        if (document.documentElement.dataset.navigating) return
+        clearTimeout(waiting)
+        document.documentElement.dataset.navigating = "held"
+    })
+    window.navigation?.addEventListener("navigateerror", settle)
+    addEventListener("pageshow", settle)
+    addEventListener("keydown", (event) => event.key === "Escape" && settle())
+</script>

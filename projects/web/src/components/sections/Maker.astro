@@ -1,0 +1,716 @@
+---
+import Companion from "./Companion.astro"
+import snapshot from "../../data/npm-downloads.json"
+import { chartView, downloadHistory, packageUrl } from "../../lib/downloads"
+import { packageName } from "../../lib/npm-history"
+
+// The chart is drawn here from the snapshot, which is the first paint and the fallback. The script below draws
+// it again with the same function when the edge endpoint has a newer history
+const view = chartView(downloadHistory(snapshot.days))
+---
+
+<section class="maker" id="why" aria-labelledby="why-title" data-accent="gold">
+    <div class="page-grid">
+        <div class="note" data-rise>
+            <h2 class="section-title" id="why-title"><span class="station" data-station="why" aria-hidden="true"></span>Why <span class="hi">Fluxerly</span> <span class="keep">Was Built</span></h2>
+            <p class="lead">I write software both as my job and for the love of it. I had wanted to build my own bot SDK for a while, and at some point I stopped playing with the thought and started doing it</p>
+            <p class="lead">
+                Over the years, software I used and libraries I built on kept changing under me. Sooner or later an update lowered the quality or the work slowed down, and I paid for it
+                along with everyone else who used them
+            </p>
+            <p class="lead">I wanted something for myself that I know I can rely on. With the knowledge to build it, it felt like the right moment to start realizing my dreams</p>
+            <p class="lead">
+                Since AI has made code cheap and I strive for quality, I chose to make it usable for everybody. So Fluxerly is a Fluxer-native SDK instead of a Discord-compatible layer. It
+                follows modern developer standards and is made for developers of every size, whether you code with or without AI
+            </p>
+            <div class="signature">
+                <!-- The maker's mark is the badge on the conductor's cap: a gold star around a cyan stone. Its
+                     light is baked from these paths, see writeBadgeGlow in scripts/prepare-art.mjs -->
+                <span class="badge" aria-hidden="true">
+                    <svg viewBox="-20 -20 40 40" focusable="false">
+                        <path class="badge-light" d="M0-17 3.9-5.4 0 0ZM16.2-5.3 6.3 2 0 0ZM10 13.8 0 6.6 0 0ZM-10 13.8-6.3 2 0 0ZM-16.2-5.3-3.9-5.4 0 0Z" />
+                        <path class="badge-dark" d="M0-17-3.9-5.4 0 0ZM16.2-5.3 3.9-5.4 0 0ZM10 13.8 6.3 2 0 0ZM-10 13.8 0 6.6 0 0ZM-16.2-5.3-6.3 2 0 0Z" />
+                        <path class="badge-stone" d="M0-4.6 3.4 0 0 4.6-3.4 0Z" />
+                    </svg>
+                </span>
+                <div class="who">
+                    <p class="where">
+                        <a class="name-link" href="https://github.com/Neonsy">Neonsy</a><span class="sep" aria-hidden="true">|</span><a
+                            class="org-link"
+                            href="https://github.com/NeonTechSpace">NeonTechSpace</a
+                        >
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- The mark of it all, between the why and how far it has come -->
+        <Companion class="keepsake" name="star-drop" alt="A glass water drop holding a star above two waves, the Fluxerly mark" size={150} />
+
+        <figure class="downloads glass" data-rise data-downloads data-points={JSON.stringify(view.readings)}>
+            <figcaption>
+                <span class="total"><span class="count" data-total>{view.total}</span> <span data-total-word>{view.word}</span></span>
+                <span class="caption">
+                    All npm downloads of <a class="prose-link package" href={packageUrl}>{packageName}</a>, added up <span data-unit>{view.unit}</span> by <span data-unit>{view.unit}</span>
+                </span>
+            </figcaption>
+            <div class="chart">
+                <div class="plot" tabindex="0" role="group" aria-label={view.plotLabel} data-plot>
+                    <svg class="grid" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true" focusable="false" data-grid>
+                        {view.gridlines.map((at) => <line x1="0" x2="1000" y1={at} y2={at} />)}
+                        <line class="base" x1="0" x2="1000" y1="1000" y2="1000" />
+                    </svg>
+                    {
+                        view.ticks.map((tick) => (
+                            <span class="tick" style={`top: ${tick.top}`} aria-hidden="true" data-tick>
+                                {tick.label}
+                            </span>
+                        ))
+                    }
+                    <svg class="growth" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true" focusable="false" data-growth>
+                        <defs>
+                            <linearGradient id="downloads-wash" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0" stop-color="#46e3ef" stop-opacity="0.2" />
+                                <stop offset="1" stop-color="#46e3ef" stop-opacity="0.02" />
+                            </linearGradient>
+                        </defs>
+                        <path class="area" d={view.area} fill="url(#downloads-wash)" data-area />
+                        <path class="line" d={view.line} data-line />
+                    </svg>
+                    <!-- The newest total is a bead of light, like the messages that ride the signal line -->
+                    <span class="bead" style={`left: ${view.bead.left}; top: ${view.bead.top}`} aria-hidden="true" data-bead></span>
+                    <span class="cross" aria-hidden="true" data-cross></span>
+                    <span class="marker" aria-hidden="true" data-marker></span>
+                    <p class="readout" aria-live="polite" data-readout>
+                        <span class="readout-label" data-readout-label></span>
+                        <span class="readout-count" data-readout-count></span>
+                        <span class="readout-total" data-readout-total></span>
+                    </p>
+                </div>
+                <div class="months" aria-hidden="true" data-months>
+                    {view.months.map((month) => <span style={`left: ${month.left}`}>{month.label}</span>)}
+                </div>
+            </div>
+            <table class="sr-only">
+                <caption>npm downloads of {packageName} by <span data-unit>{view.unit}</span></caption>
+                <thead>
+                    <tr>
+                        <th scope="col" data-first-column>{view.firstColumn}</th>
+                        <th scope="col">Downloads</th>
+                        <th scope="col">Running total</th>
+                    </tr>
+                </thead>
+                <tbody data-rows>
+                    {
+                        view.rows.map((row) => (
+                            <tr>
+                                <th scope="row">{row.label}</th>
+                                <td>{row.count}</td>
+                                <td>{row.total}</td>
+                            </tr>
+                        ))
+                    }
+                </tbody>
+            </table>
+        </figure>
+    </div>
+</section>
+
+<script>
+    import { chartView, downloadHistory, type ChartView, type Reading } from "../../lib/downloads"
+    import { isNpmHistory } from "../../lib/npm-history"
+
+    for (const figure of document.querySelectorAll<HTMLElement>("[data-downloads]")) {
+        const plot = figure.querySelector<HTMLElement>("[data-plot]")
+        const cross = figure.querySelector<HTMLElement>("[data-cross]")
+        const marker = figure.querySelector<HTMLElement>("[data-marker]")
+        const readout = figure.querySelector<HTMLElement>("[data-readout]")
+        const parts = {
+            label: figure.querySelector<HTMLElement>("[data-readout-label]"),
+            count: figure.querySelector<HTMLElement>("[data-readout-count]"),
+            total: figure.querySelector<HTMLElement>("[data-readout-total]"),
+        }
+        let readings: Reading[] = JSON.parse(figure.dataset.points ?? "[]")
+        if (!plot || !cross || !marker || !readout || readings.length === 0) continue
+        let shown = -1
+
+        // The line as the readings draw it, from the first day's zero to the newest total
+        let line: { x: number; y: number }[] = []
+        const setReadings = (next: Reading[]) => {
+            readings = next
+            line = [{ x: 0, y: 100 }, ...next]
+        }
+        setReadings(readings)
+
+        // Where the line is at a point across the plot, in percent from the top. The line only rises, so
+        // over any stretch it runs between its height at the stretch's left end and at its right end
+        const lineAt = (x: number) => {
+            const after = line.findIndex((point) => point.x >= x)
+            if (after <= 0) return after === 0 ? line[0].y : line[line.length - 1].y
+            const before = line[after - 1]
+            const point = line[after]
+            return before.y + ((point.y - before.y) * (x - before.x)) / (point.x - before.x || 1)
+        }
+
+        // The readout goes beside the hairline, in the first corner the line leaves free: the side with more
+        // room first, the top before the bottom
+        const place = (reading: Reading) => {
+            const width = plot.clientWidth
+            const height = plot.clientHeight
+            const boxWidth = readout.offsetWidth
+            const boxHeight = readout.offsetHeight
+            const at = (reading.x / 100) * width
+            const gap = 14
+            const sides = reading.x > 50 ? [at - gap - boxWidth, at + gap] : [at + gap, at - gap - boxWidth]
+            const lefts = sides.filter((left) => left >= 0 && left + boxWidth <= width)
+            if (lefts.length === 0) lefts.push(Math.max(0, Math.min(width - boxWidth, at - boxWidth / 2)))
+            const corners = lefts.flatMap((left) => [0, height - boxHeight].map((top) => ({ left, top })))
+            const free = corners.find(({ left, top }) => {
+                const high = (lineAt(((left + boxWidth) / width) * 100) / 100) * height
+                const low = (lineAt((left / width) * 100) / 100) * height
+                return low < top - 8 || high > top + boxHeight + 8
+            })
+            const { left, top } = free ?? corners[0]
+            readout.style.transform = `translate(${left.toFixed(1)}px, ${top.toFixed(1)}px)`
+        }
+
+        // One reading at a time: a hairline at its step, a dot on the line and the numbers beside it
+        const show = (index: number) => {
+            shown = Math.max(0, Math.min(readings.length - 1, index))
+            const reading = readings[shown]
+            for (const element of [cross, marker]) element.style.left = `${reading.x}%`
+            marker.style.top = `${reading.y}%`
+            parts.label!.textContent = reading.label
+            parts.count!.textContent = reading.count
+            parts.total!.textContent = reading.total
+            plot.toggleAttribute("data-reading", true)
+            place(reading)
+        }
+        const hide = () => {
+            shown = -1
+            plot.toggleAttribute("data-reading", false)
+        }
+
+        // The nearest step to the pointer, so the reader aims at a moment and never at the thin line
+        const nearest = (clientX: number) => {
+            const box = plot.getBoundingClientRect()
+            const at = ((clientX - box.left) / box.width) * 100
+            let found = 0
+            for (let index = 1; index < readings.length; index++) {
+                if (Math.abs(readings[index].x - at) < Math.abs(readings[found].x - at)) found = index
+            }
+            return found
+        }
+        plot.addEventListener("pointermove", (event) => {
+            const index = nearest(event.clientX)
+            if (index !== shown) show(index)
+        })
+        // A tap shows its step and keeps it until the reader taps elsewhere
+        plot.addEventListener("pointerdown", (event) => show(nearest(event.clientX)))
+        plot.addEventListener("pointerleave", () => {
+            if (document.activeElement !== plot) hide()
+        })
+        plot.addEventListener("focus", () => {
+            if (shown < 0) show(readings.length - 1)
+        })
+        plot.addEventListener("blur", hide)
+        plot.addEventListener("keydown", (event) => {
+            const step = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[event.key]
+            if (step) show(shown + step)
+            else if (event.key === "Home") show(0)
+            else if (event.key === "End") show(readings.length - 1)
+            else return
+            event.preventDefault()
+        })
+
+        // The line draws itself once, the first time the visitor sees it. Still and reduced motion show it whole
+        const seen = new IntersectionObserver(
+            (entries) => {
+                if (!entries.some((entry) => entry.isIntersecting)) return
+                figure.classList.add("is-drawn")
+                seen.disconnect()
+            },
+            { threshold: 0.4 },
+        )
+        seen.observe(plot)
+
+        // A newer history replaces what the build drew, in place. Every part is set from the same view the
+        // build used. The chart keeps its box, so nothing around it moves. A line that has not drawn itself
+        // yet draws the new path, and one that has drawn is simply the new shape
+        const redraw = (view: ChartView) => {
+            const grid = figure.querySelector("[data-grid]")!
+            const base = grid.querySelector(".base")!
+            for (const old of grid.querySelectorAll("line:not(.base)")) old.remove()
+            for (const at of view.gridlines) {
+                const gridline = document.createElementNS("http://www.w3.org/2000/svg", "line")
+                for (const [name, value] of [["x1", "0"], ["x2", "1000"], ["y1", String(at)], ["y2", String(at)]]) gridline.setAttribute(name, value)
+                base.before(gridline)
+            }
+
+            // The value marks sit under the line in the stack, as the build puts them
+            const growth = figure.querySelector("[data-growth]")!
+            for (const old of plot.querySelectorAll("[data-tick]")) old.remove()
+            for (const tick of view.ticks) {
+                const mark = document.createElement("span")
+                mark.className = "tick"
+                mark.style.top = tick.top
+                mark.setAttribute("aria-hidden", "true")
+                mark.toggleAttribute("data-tick", true)
+                mark.textContent = tick.label
+                growth.before(mark)
+            }
+
+            figure.querySelector("[data-area]")!.setAttribute("d", view.area)
+            figure.querySelector("[data-line]")!.setAttribute("d", view.line)
+            const bead = figure.querySelector<HTMLElement>("[data-bead]")!
+            bead.style.left = view.bead.left
+            bead.style.top = view.bead.top
+
+            figure.querySelector("[data-months]")!.replaceChildren(
+                ...view.months.map((month) => {
+                    const mark = document.createElement("span")
+                    mark.style.left = month.left
+                    mark.textContent = month.label
+                    return mark
+                }),
+            )
+
+            figure.querySelector("[data-total]")!.textContent = view.total
+            figure.querySelector("[data-total-word]")!.textContent = view.word
+            for (const name of figure.querySelectorAll("[data-unit]")) name.textContent = view.unit
+            plot.setAttribute("aria-label", view.plotLabel)
+            figure.querySelector("[data-first-column]")!.textContent = view.firstColumn
+            figure.querySelector("[data-rows]")!.replaceChildren(
+                ...view.rows.map((row) => {
+                    const tr = document.createElement("tr")
+                    const th = document.createElement("th")
+                    th.scope = "row"
+                    th.textContent = row.label
+                    tr.append(th, ...[row.count, row.total].map((text) => Object.assign(document.createElement("td"), { textContent: text })))
+                    return tr
+                }),
+            )
+
+            setReadings(view.readings)
+            // A reading that is open follows its step into the new numbers
+            if (shown >= 0) show(shown)
+        }
+
+        // Once the section is within about a screen of the viewport, the page asks the edge for the newest
+        // history, once. Under astro dev and a plain static serve the same address answers with the build's
+        // own snapshot (src/pages/api/npm-downloads.ts), so nothing changes there
+        const update = async () => {
+            try {
+                const response = await fetch("/api/npm-downloads", { headers: { accept: "application/json" } })
+                if (!response.ok) {
+                    console.warn("The npm download history answered", response.status)
+                    return
+                }
+                const history: unknown = await response.json()
+                if (!isNpmHistory(history)) return
+                const view = chartView(downloadHistory(history.days))
+                if (JSON.stringify(view.readings) !== figure.dataset.points) redraw(view)
+            } catch (error) {
+                // Offline, or no endpoint here: the chart the build drew is still true as of its snapshot
+                console.warn("The npm download history did not load", error)
+            }
+        }
+        const near = new IntersectionObserver(
+            (entries) => {
+                if (!entries.some((entry) => entry.isIntersecting)) return
+                near.disconnect()
+                void update()
+            },
+            { rootMargin: "100% 0px" },
+        )
+        near.observe(figure)
+    }
+</script>
+
+<style>
+    /* The maker's voice is the gold of the badge on the conductor's cap, used sparingly */
+    .maker {
+        --accent: var(--color-gold);
+        --accent-soft: rgb(236 196 110 / 0.14);
+    }
+
+    .note {
+        grid-column: 1 / span 5;
+        grid-row: 1;
+    }
+
+    .section-title {
+        position: relative;
+    }
+
+    /* The mark floats in the gap between the note and the downloads, level with the heading */
+    /* Centred in the gap and a little smaller than the gap, so it floats between the two instead of
+       pressing on the panel's corner */
+    .maker :global(.keepsake) {
+        --companion-cap: clamp(76px, 6.4vw, 124px);
+
+        grid-column: 6;
+        grid-row: 1;
+        justify-self: center;
+        align-self: center;
+    }
+
+    .note .lead {
+        max-width: 58ch;
+    }
+
+    .note .lead:first-of-type {
+        margin-top: 28px;
+    }
+
+    .signature {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-top: 36px;
+    }
+
+    /* The badge's gold light is a baked picture under it, the same light a drop-shadow drew, so the
+       browser builds no filter for it as the note scrolls in. The picture has 32 px of room on each side */
+    .badge {
+        position: relative;
+        flex: none;
+        width: 44px;
+        height: 44px;
+    }
+
+    .badge::before {
+        content: "";
+        position: absolute;
+        inset: -32px;
+        background: url("/art/badge-glow.webp") center / 100% 100% no-repeat;
+    }
+
+    .badge svg {
+        position: relative;
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+
+    .badge-light {
+        fill: #f6d98f;
+    }
+
+    .badge-dark {
+        fill: #c99a48;
+    }
+
+    .badge-stone {
+        fill: var(--color-cyan);
+        stroke: #c8fbff;
+        stroke-width: 0.6;
+    }
+
+    .who p {
+        margin: 0;
+    }
+
+    .name {
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        line-height: 1.2;
+        letter-spacing: var(--tracking-snug);
+        color: var(--color-ink);
+    }
+
+    /* The signature is this one line now, so it reads at the size of the note */
+    .where {
+        margin-top: 0;
+        font-size: var(--type-lead);
+        line-height: 1.5;
+        color: var(--color-muted);
+    }
+
+    /* The maker in a violet blue, then the org in a deep, blue-leaning cyan. Both light enough to hold their contrast
+       on the night, and no underlines */
+    .name-link,
+    .org-link {
+        font-weight: var(--weight-semibold);
+        text-decoration: none;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        transition: color var(--speed-fast) ease;
+    }
+
+    .name-link {
+        color: #9ea2ff;
+    }
+
+    .name-link:hover {
+        color: #c4c7ff;
+    }
+
+    .org-link {
+        color: #3fb6f2;
+    }
+
+    .org-link:hover {
+        color: #86d2fa;
+    }
+
+    /* Readable on the night, and still quieter than the two names */
+    .sep {
+        margin-inline: 10px;
+        color: rgb(195 200 230 / 0.6);
+    }
+
+    .name-link:focus-visible {
+        outline: 2px solid #9ea2ff;
+        outline-offset: 3px;
+    }
+
+    .org-link:focus-visible {
+        outline: 2px solid #3fb6f2;
+        outline-offset: 3px;
+    }
+
+    /* The downloads beside the note: how far the work has travelled */
+    .downloads {
+        grid-column: 7 / -1;
+        grid-row: 1;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        padding: clamp(24px, 2vw, 36px) clamp(24px, 2.2vw, 40px) clamp(20px, 1.6vw, 28px);
+    }
+
+    figcaption {
+        display: grid;
+        gap: 8px;
+    }
+
+    .total {
+        font-size: var(--type-title);
+        font-weight: var(--weight-medium);
+        line-height: 1.1;
+        color: var(--color-muted);
+    }
+
+    .count {
+        margin-right: 4px;
+        font-size: clamp(52px, 3.6vw, 68px);
+        font-weight: var(--weight-semibold);
+        letter-spacing: -0.03em;
+        color: var(--color-ink);
+    }
+
+    .caption {
+        font-size: var(--type-body);
+        line-height: 1.55;
+        color: var(--color-muted);
+        text-wrap: pretty;
+    }
+
+    .package {
+        font-family: var(--font-mono);
+        font-size: var(--type-small);
+        overflow-wrap: anywhere;
+    }
+
+    /* The chart takes the height the note gives the panel, so the panel never ends in empty glass. The top
+       value mark sits above the plot, so the space over it leaves room for that mark */
+    .chart {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        margin-top: calc(clamp(24px, 2vw, 36px) + 20px);
+    }
+
+    .plot {
+        position: relative;
+        flex: 1;
+        min-height: clamp(200px, 14vw, 280px);
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        outline-offset: 6px;
+    }
+
+    .plot svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+    }
+
+    /* The gridlines, value marks and month marks are made again by the script when a newer history arrives, and
+       elements it makes do not carry the component's style scope, so these selectors reach them as :global */
+    .grid :global(line) {
+        stroke: rgb(160 190 255 / 0.12);
+        stroke-width: 1;
+        vector-effect: non-scaling-stroke;
+    }
+
+    .grid .base {
+        stroke: rgb(160 190 255 / 0.26);
+    }
+
+    /* Value marks sit just above their gridline at the left, where a growing line has not risen yet */
+    .plot :global(.tick) {
+        position: absolute;
+        left: 0;
+        transform: translateY(calc(-100% - 4px));
+        font-size: var(--type-small);
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+        color: rgb(195 200 230 / 0.66);
+    }
+
+    .line {
+        fill: none;
+        stroke: var(--color-cyan);
+        stroke-width: 2;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+        vector-effect: non-scaling-stroke;
+    }
+
+    .bead,
+    .marker {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        margin: -5px 0 0 -5px;
+        border-radius: 50%;
+        /* The ring in the panel's own dark keeps the dot clear of the line under it */
+        box-shadow: 0 0 0 2px #0b0e2a;
+    }
+
+    .bead {
+        background: #c8fbff;
+        box-shadow:
+            0 0 0 2px #0b0e2a,
+            0 0 12px 3px rgb(70 227 239 / 0.75);
+    }
+
+    .cross {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 1px;
+        margin-left: -0.5px;
+        background: rgb(195 200 230 / 0.32);
+    }
+
+    .marker {
+        background: var(--color-cyan);
+    }
+
+    .cross,
+    .marker,
+    .readout {
+        visibility: hidden;
+    }
+
+    .plot[data-reading] :is(.cross, .marker, .readout) {
+        visibility: visible;
+    }
+
+    .readout {
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: 1;
+        display: grid;
+        gap: 2px;
+        margin: 0;
+        padding: 10px 14px;
+        font-size: var(--type-small);
+        line-height: 1.35;
+        white-space: nowrap;
+        color: var(--color-muted);
+        background: rgb(8 10 30 / 0.94);
+        border: 1px solid rgb(160 190 255 / 0.2);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        pointer-events: none;
+    }
+
+    .readout-count {
+        font-size: var(--type-body);
+        font-weight: var(--weight-semibold);
+        color: var(--color-ink);
+    }
+
+    .months {
+        position: relative;
+        height: 28px;
+    }
+
+    .months :global(span) {
+        position: absolute;
+        top: 10px;
+        padding-left: 7px;
+        font-size: var(--type-small);
+        line-height: 1;
+        color: rgb(195 200 230 / 0.66);
+        border-left: 1px solid rgb(160 190 255 / 0.26);
+    }
+
+    /* The line draws itself from its first day to the newest, once, in the world that is alive. Without
+       script, in Still and under reduced motion it is simply there */
+    /* Both ends of the reveal are insets, so the browser can move between them. The margin keeps the line's
+       stroke whole at the plot's edges */
+    :global(.night.js:not([data-still])) .downloads:not(.is-drawn) .growth {
+        clip-path: inset(-8px calc(100% + 8px) -8px -8px);
+    }
+
+    :global(.night.js:not([data-still])) .downloads:not(.is-drawn) .bead {
+        opacity: 0;
+    }
+
+    :global(.night.js:not([data-still])) .growth {
+        clip-path: inset(-8px);
+        transition: clip-path 1600ms cubic-bezier(0.45, 0, 0.2, 1) 200ms;
+    }
+
+    :global(.night.js:not([data-still])) .bead {
+        transition: opacity 500ms ease 1650ms;
+    }
+
+    /* On a phone the note comes first with the mark beside its heading, the downloads under it */
+    @media (max-width: 899px) {
+        .note,
+        .downloads {
+            grid-column: 1 / -1;
+        }
+
+        .section-title {
+            min-height: calc(var(--shown-mark) - 6px);
+            padding-right: calc(var(--shown-mark) + 12px);
+        }
+
+        .maker {
+            --shown-mark: 108px;
+        }
+
+        .maker :global(.keepsake) {
+            --companion-cap: var(--shown-mark);
+
+            grid-column: 1 / -1;
+            justify-self: end;
+            /* Beside the heading, which keeps room for it, not centred on the note as on wide screens */
+            align-self: start;
+            margin-top: -14px;
+        }
+
+        .downloads {
+            grid-row: 2;
+            margin-top: 48px;
+        }
+
+        .count {
+            font-size: var(--type-display);
+        }
+
+        .plot {
+            min-height: 190px;
+        }
+    }
+</style>

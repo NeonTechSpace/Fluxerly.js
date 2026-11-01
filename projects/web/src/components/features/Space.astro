@@ -1,0 +1,202 @@
+---
+// The homepage's open space, carried onto a feature page: two star fields, the bodies of the conductor's universe
+// far behind the scenes, stardust rising through the dark, a faint nebula and the near plane passing in front of
+// the margins. The page is one station of its own, its scenes hanging from one straight line of its light, see immersion.css. The class name "night" lets the
+// companions rest when the world stands still, as they do on the homepage
+
+import Near from "../sections/Near.astro"
+import { experienceKey } from "../../lib/experience"
+
+interface Props {
+    accent: "cyan" | "violet"
+}
+
+const { accent } = Astro.props
+---
+
+<div class="night space" data-space data-accent={accent}>
+    <!-- Still stops time before space is first drawn: this runs as the page is read, before anything below
+         it exists, and mirrors the script further down, which keeps the state from then on -->
+    <script is:inline define:vars={{ key: experienceKey }}>
+        {
+            let mode = document.documentElement.dataset.experience
+            if (mode !== "immersive" && mode !== "still") {
+                let stored = null
+                try {
+                    stored = window.localStorage.getItem(key)
+                } catch {
+                    // Storage is blocked, so nothing was chosen
+                }
+                mode = stored === "still" ? "still" : null
+            }
+            const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            if (mode === "still" || reduce) document.currentScript.parentElement.setAttribute("data-still", "")
+        }
+    </script>
+    <div class="field field-far" aria-hidden="true"></div>
+    <div class="field field-near" aria-hidden="true"></div>
+    <Near seeds={9} />
+    <div class="motes" aria-hidden="true">
+        {Array.from({ length: 14 }, (_, i) => <span class="mote" style={`--x: ${(7 + i * 6.6 + (i % 3) * 2.1) % 96}%; --d: ${34 + (i * 7) % 23}s; --w: ${-(i * 13) % 34}s; --s: ${2 + (i % 4) * 0.8}px; --sway: ${(i % 2 ? 1 : -1) * (18 + (i % 5) * 9)}px`} />)}
+    </div>
+    <slot />
+</div>
+
+<script>
+    import { anchorDepth, fitPinnedIntros, markSpaceTop } from "../../lib/depth"
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+
+    const space = document.querySelector<HTMLElement>("[data-space]")
+    if (space) {
+        const update = () => space.toggleAttribute("data-still", getExperience() === "still" || prefersReducedMotion())
+        update()
+        subscribeExperience(update)
+        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", update)
+        space.classList.add("js")
+
+        // Content rises into view once, the first time the visitor sees it
+        const seen = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue
+                    entry.target.classList.add("is-in")
+                    seen.unobserve(entry.target)
+                }
+            },
+            { rootMargin: "0px 0px -8% 0px" },
+        )
+        for (const element of space.querySelectorAll("[data-rise]")) seen.observe(element)
+
+        // The star fields, the bodies of space and the near plane follow the scroll in CSS, on the page's own
+        // scroll timeline. They need only where the space starts and where each body is anchored, measured once
+        // the page is laid out and again whenever it or the screen changes size, never while it scrolls
+        const measure = () => {
+            markSpaceTop(space)
+            fitPinnedIntros(space)
+            anchorDepth(space)
+        }
+        new ResizeObserver(measure).observe(space)
+        window.addEventListener("resize", measure)
+        document.fonts?.ready.then(measure)
+        measure()
+    }
+</script>
+
+<style>
+    /* Clip, not hidden: hidden makes the page its own scroll container, which never scrolls, so the scenes' sticky
+       intros stayed at the top of a long scene and left their column empty beside the code */
+    .space {
+        position: relative;
+        isolation: isolate;
+        overflow: clip;
+        padding-bottom: clamp(96px, 6.6vw, 128px);
+        background: linear-gradient(to bottom, #060a24 0%, #04061c 26%, var(--color-night) 60%, #03040f 100%);
+    }
+
+    /* The page's voice glows faintly above its title, and the other voice answers further down */
+    .space::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        background:
+            radial-gradient(48vw 560px at 78% 120px, color-mix(in srgb, var(--accent) 11%, transparent), transparent 70%),
+            radial-gradient(38vw 480px at 6% 38%, rgb(61 112 204 / 0.07), transparent 72%),
+            radial-gradient(44vw 520px at 92% 72%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 72%);
+    }
+
+    .space[data-accent="cyan"] {
+        --accent: var(--color-cyan);
+    }
+
+    .space[data-accent="violet"] {
+        --accent: var(--color-violet);
+    }
+
+    .motes {
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        overflow: hidden;
+        pointer-events: none;
+    }
+
+    .mote {
+        position: absolute;
+        left: var(--x);
+        bottom: -20px;
+        width: var(--s);
+        height: var(--s);
+        border-radius: 50%;
+        background: rgb(190 240 255 / 0.9);
+        box-shadow: 0 0 6px 1px rgb(70 227 239 / 0.35);
+        opacity: 0;
+        animation: mote-rise var(--d) linear var(--w) infinite;
+        will-change: transform, opacity;
+    }
+
+    @keyframes mote-rise {
+        0% {
+            transform: translate3d(0, 0, 0);
+            opacity: 0;
+        }
+        12% {
+            opacity: 0.55;
+        }
+        50% {
+            transform: translate3d(var(--sway), -1400px, 0);
+        }
+        88% {
+            opacity: 0.35;
+        }
+        100% {
+            transform: translate3d(0, -2800px, 0);
+            opacity: 0;
+        }
+    }
+
+    /* Content rises into view once. Script adds .js, so without it nothing starts hidden */
+    .space.js :global([data-rise]) {
+        opacity: 0;
+        transform: translateY(16px);
+        transition:
+            opacity 700ms ease,
+            transform 700ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .space.js :global([data-rise].is-in) {
+        opacity: 1;
+        transform: none;
+    }
+
+    .space[data-still] :global([data-rise]) {
+        opacity: 1;
+        transform: none;
+        transition: none;
+    }
+
+    .space[data-still] .mote {
+        animation: none;
+    }
+
+    .space[data-still] .motes {
+        display: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .mote {
+            animation: none;
+        }
+
+        .motes {
+            display: none;
+        }
+
+        .space.js :global([data-rise]) {
+            opacity: 1;
+            transform: none;
+            transition: none;
+        }
+    }
+</style>

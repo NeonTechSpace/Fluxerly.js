@@ -1,0 +1,46 @@
+---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import FirstReplyScene from "../../islands/FirstReply"
+import { guide } from "../../lib/links"
+---
+
+<section class="first-reply" id="first-reply" aria-labelledby="first-reply-title" data-accent="cyan">
+    <div class="page-grid">
+        <div class="intro" data-rise>
+            <h2 class="section-title" id="first-reply-title"><span class="station" data-station="first-reply" aria-hidden="true"></span>Your <span class="hi">First Reply</span></h2>
+            <p class="lead">This is the whole bot, one file. Send <code class="inline-code">!ping</code> and watch the handler answer</p>
+            <a class="prose-link go-link" href={guide("quick-start")}>
+                Start a Bot in the Docs
+                <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
+            </a>
+        </div>
+        <div class="scene" data-rise>
+            <FirstReplyScene client:visible />
+        </div>
+    </div>
+</section>
+
+<style>
+    .intro {
+        grid-column: 1 / span 7;
+    }
+
+    .section-title {
+        position: relative;
+    }
+
+    .go-link {
+        margin-top: 22px;
+    }
+
+    .scene {
+        grid-column: 1 / -1;
+        margin-top: clamp(48px, 3.8vw, 72px);
+    }
+
+    @media (max-width: 899px) {
+        .intro {
+            grid-column: 1 / -1;
+        }
+    }
+</style>

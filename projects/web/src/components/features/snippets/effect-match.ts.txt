@@ -1,0 +1,11 @@
+import { Effect } from "effect"
+import type { Client } from "@neontechspace/fluxerly/effect"
+
+export function sendNotice(client: Client, channelId: string) {
+    return client.messages.send(channelId, "The event starts in ten minutes").pipe(
+        Effect.match({
+            onSuccess: message => ({ status: "confirmed" as const, messageId: message.id }),
+            onFailure: error => ({ status: "failed" as const, error }),
+        }),
+    )
+}

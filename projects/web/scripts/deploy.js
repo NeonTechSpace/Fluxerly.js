@@ -1,0 +1,408 @@
+import { spawn } from "node:child_process"
+import { appendFile, lstat, mkdtemp, readFile, readdir, rm } from "node:fs/promises"
+import { createRequire } from "node:module"
+import { dirname, join, resolve } from "node:path"
+import { tmpdir } from "node:os"
+import { pathToFileURL, fileURLToPath } from "node:url"
+
+// The website's one public address, on the Pages project's Production branch
+export const siteOrigin = "https://fluxerly.neontechspace.com"
+const productionBranch = "main"
+
+export function siteSettings(env) {
+    const account = env.CLOUDFLARE_ACCOUNT_ID
+    const project = env.CLOUDFLARE_PAGES_PROJECT
+    const token = env.CLOUDFLARE_API_TOKEN
+    if (!/^[a-f0-9]{32}$/.test(account ?? "") || !/^[a-z0-9][a-z0-9-]*$/.test(project ?? "") || !token)
+        throw new Error("Configure the Cloudflare account, Pages project and API token")
+    return { account, project, token, origin: siteOrigin, branch: productionBranch }
+}
+
+const webRoot = fileURLToPath(new URL("../", import.meta.url))
+const deploymentId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i
+const noindex = (value) => /(?:^|[\s,:])noindex(?:$|[\s,])/i.test(value ?? "")
+const elapsed = (milliseconds) => `${Math.max(0, Math.floor(milliseconds / 1_000))}s`
+
+// Count the checked local files, not bytes sent over the network or Wrangler's upload payload
+export async function measureLocalArtifact(root, io = {}) {
+    const list = io.readdir ?? readdir
+    const inspect = io.lstat ?? lstat
+    let fileCount = 0
+    let totalBytes = 0
+    let largestFileBytes = 0
+    async function walk(directory) {
+        for (const name of await list(directory)) {
+            if (typeof name !== "string" || !name || name === "." || name === ".." || /[\\/]/.test(name))
+                throw new Error("The local site artifact inventory is invalid")
+            const entry = await inspect(join(directory, name))
+            if (entry.isDirectory()) {
+                await walk(join(directory, name))
+            } else if (entry.isFile() && Number.isSafeInteger(entry.size) && entry.size >= 0 &&
+                Number.isSafeInteger(totalBytes + entry.size)) {
+                fileCount++
+                totalBytes += entry.size
+                largestFileBytes = Math.max(largestFileBytes, entry.size)
+            } else {
+                throw new Error("The local site artifact inventory contains an unsupported entry")
+            }
+        }
+    }
+    try { await walk(root) } catch { throw new Error("The local site artifact inventory is unavailable or unsafe") }
+    return { fileCount, totalBytes, largestFileBytes }
+}
+
+export function runSilentProcess(file, args, options, io = {}) {
+    const start = io.spawn ?? spawn
+    const now = io.now ?? Date.now
+    const schedule = io.setTimeout ?? setTimeout
+    const cancel = io.clearTimeout ?? clearTimeout
+    const repeat = io.setInterval ?? setInterval
+    const cancelRepeat = io.clearInterval ?? clearInterval
+    const progress = io.progress ?? (() => {})
+    const { timeout, progressEvery = 30_000, killGrace = 5_000, ...spawnOptions } = options
+    return new Promise((resolve) => {
+        let child
+        try {
+            child = start(file, args, { ...spawnOptions, stdio: "ignore" })
+        } catch {
+            resolve({ status: "spawn-error", timedOut: false })
+            return
+        }
+        const started = now()
+        let settled = false
+        let timedOut = false
+        let hadError = false
+        let forceKill
+        const heartbeat = repeat(
+            () => progress(
+                timedOut
+                    ? `Waiting for Wrangler child cleanup (${elapsed(now() - started)} elapsed)`
+                    : `Wrangler upload is still running (${elapsed(now() - started)} elapsed)`,
+            ),
+            progressEvery,
+        )
+        let deadline
+        const settle = (code, signal) => {
+            if (settled) return
+            settled = true
+            cancelRepeat(heartbeat)
+            cancel(deadline)
+            if (forceKill) cancel(forceKill)
+            resolve({ status: timedOut ? "timed-out" : hadError ? "spawn-error" : "exited", timedOut, code, signal })
+        }
+        child.on("error", () => { hadError = true })
+        child.once("close", (code, signal) => settle(code, signal))
+        deadline = schedule(() => {
+            if (settled) return
+            timedOut = true
+            progress(`Wrangler upload timed out (${elapsed(now() - started)} elapsed). Stopping the child process`)
+            forceKill = schedule(() => {
+                if (settled) return
+                progress(`Wrangler child is still stopping (${elapsed(now() - started)} elapsed). Forcing cleanup`)
+                try { child.kill("SIGKILL") } catch { /* Wait for the child close boundary */ }
+            }, killGrace)
+            try { child.kill("SIGTERM") } catch { /* Wait for the child close boundary */ }
+        }, timeout)
+    })
+}
+
+export function deploymentOrigin(project, deployment) {
+    let url
+    try { url = new URL(deployment.url) } catch { throw new Error("The uploaded deployment URL is not verified") }
+    const domain = project.subdomain
+    if (!/^[a-z0-9][a-z0-9-]*\.pages\.dev$/.test(domain ?? "") ||
+        url.protocol !== "https:" || url.username || url.password || url.port ||
+        url.pathname !== "/" || url.search || url.hash ||
+        !url.hostname.endsWith(`.${domain}`) ||
+        !/^[a-z0-9-]+$/.test(url.hostname.slice(0, -(domain.length + 1))))
+        throw new Error("The uploaded deployment URL is not verified")
+    return url.origin
+}
+
+async function upload(settings, source, progress) {
+    const require = createRequire(import.meta.url)
+    const manifestPath = require.resolve("wrangler/package.json")
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+    const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin.wrangler
+    const temporary = await mkdtemp(join(tmpdir(), "fluxerly-deploy-"))
+    if (dirname(temporary) !== resolve(tmpdir())) throw new Error("Unexpected temporary deploy directory")
+    const output = join(temporary, "output.ndjson")
+    try {
+        // Keep provider output and exception details out of CI logs, including on failure
+        await runSilentProcess(
+            process.execPath,
+            [
+                join(dirname(manifestPath), bin),
+                "pages",
+                "deploy",
+                "dist",
+                "--project-name",
+                settings.project,
+                "--branch",
+                settings.branch,
+                "--commit-hash",
+                source,
+                "--commit-dirty=false",
+            ],
+            {
+                cwd: webRoot,
+                timeout: 300_000,
+                windowsHide: true,
+                env: {
+                    ...process.env,
+                    CLOUDFLARE_ACCOUNT_ID: settings.account,
+                    CLOUDFLARE_API_TOKEN: settings.token,
+                    WRANGLER_OUTPUT_FILE_PATH: output,
+                    WRANGLER_SEND_METRICS: "false",
+                },
+            },
+            { progress },
+        )
+        let record
+        try {
+            record = (await readFile(output, "utf8"))
+                .trim()
+                .split("\n")
+                .map((line) => JSON.parse(line))
+                .find((item) => item.type === "pages-deploy" && item.version === 1)
+        } catch {
+            /* No recorded identity means the upload outcome is unknown */
+        }
+        if (record?.pages_project !== settings.project || !deploymentId.test(record?.deployment_id ?? "")) {
+            throw new Error(
+                "Upload outcome is unknown; reconcile this source and branch in Cloudflare before another upload",
+            )
+        }
+        return record.deployment_id
+    } finally {
+        await rm(temporary, { recursive: true, force: true })
+    }
+}
+
+class ReadUnavailable extends Error {}
+
+export async function deploySite(env = process.env, io = {}) {
+    const settings = siteSettings(env)
+    const source = env.DOCS_SOURCE_COMMIT
+    if (!/^[a-f0-9]{40}$/.test(source ?? "")) throw new Error("A verified source commit is required")
+    const read = io.readFile ?? readFile
+    const list = io.readdir ?? readdir
+    const inspect = io.lstat ?? lstat
+    const request = io.fetch ?? fetch
+    const publish = io.upload ?? upload
+    const now = io.now ?? Date.now
+    const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
+    const progress = io.progress ?? (() => {})
+    const localStarted = now()
+    progress("Checking the local site artifact")
+    let marker, headers
+    try {
+        marker = JSON.parse(await read(join(webRoot, "dist/deployment.json"), "utf8"))
+        headers = await read(join(webRoot, "dist/_headers"), "utf8")
+    } catch {
+        throw new Error("Build the checked site and record its source marker before upload")
+    }
+    if (marker?.sourceCommit !== source) throw new Error("The local source marker does not match the checked source")
+    if (/^\/\*\s*\r?\n(?:[ \t]+[^\r\n]*\r?\n?)*?[ \t]+x-robots-tag\s*:[^\r\n]*noindex/im.test(headers))
+        throw new Error("The site must not ask search engines to skip every page")
+    let docsEntries
+    try {
+        docsEntries = await list(join(webRoot, "dist/docs"))
+    } catch {
+        throw new Error("The built public documentation inventory is unavailable")
+    }
+    // /docs/latest/ is a redirect, so the build holds no page there. The build also has its sitemap, for search engines
+    if (!Array.isArray(docsEntries) || docsEntries.length === 0 || docsEntries.includes("latest"))
+        throw new Error("The upload requires published documentation")
+    try {
+        await read(join(webRoot, "dist/sitemap.xml"), "utf8")
+        await read(join(webRoot, "dist/_redirects"), "utf8")
+    } catch {
+        throw new Error("The upload requires the public build's sitemap and redirects")
+    }
+    const artifact = await measureLocalArtifact(join(webRoot, "dist"), { readdir: list, lstat: inspect })
+    progress(`Local site artifact: ${artifact.fileCount} files, ${artifact.totalBytes} bytes ` +
+        `(largest file ${artifact.largestFileBytes} bytes); local preflight ${elapsed(now() - localStarted)}`)
+    const base = `https://api.cloudflare.com/client/v4/accounts/${settings.account}/pages/projects/${settings.project}`
+    async function get(url, authenticated, timeout, redirect = "error") {
+        let response
+        try {
+            response = await request(url, {
+                headers: authenticated ? { Authorization: `Bearer ${settings.token}` } : {},
+                signal: AbortSignal.timeout(timeout),
+                redirect,
+                cache: "no-store",
+            })
+        } catch {
+            throw new ReadUnavailable("Cloudflare read is unavailable")
+        }
+        if ([408, 429].includes(response.status) || response.status >= 500) {
+            const error = new ReadUnavailable(`Cloudflare readback failed with HTTP ${response.status}`)
+            const retryAfter = response.headers.get("retry-after")
+            error.retryAfter =
+                retryAfter == null
+                    ? 0
+                    : /^\d+$/.test(retryAfter)
+                      ? Number(retryAfter) * 1_000
+                      : Math.max(0, Date.parse(retryAfter) - now())
+            await discard(response)
+            throw error
+        }
+        return response
+    }
+    async function discard(response) {
+        try {
+            await response.body?.cancel()
+        } catch {
+            throw new ReadUnavailable("Cloudflare response cleanup failed")
+        }
+    }
+    async function api(path = "", timeout = 30_000) {
+        const response = await get(base + path, true, timeout)
+        if (!response.ok) {
+            await discard(response)
+            throw new Error(`Cloudflare readback failed with HTTP ${response.status}`)
+        }
+        let data
+        try {
+            data = await response.json()
+        } catch {
+            throw new ReadUnavailable("Cloudflare readback returned invalid JSON")
+        }
+        if (data?.success !== true || !data.result) throw new Error("Cloudflare rejected the readback")
+        return data.result
+    }
+    async function verifyContent(origin, timeout, allowChallenge) {
+        // /docs/latest/ is a redirect to /docs/, which must be open to search engines
+        const entrance = await get(`${origin}/docs/latest/`, false, timeout(), "manual")
+        if (entrance.headers.get("cf-mitigated") === "challenge") {
+            await discard(entrance)
+            if (allowChallenge) return "challenged"
+            throw new Error("The documentation readback is not publicly accessible")
+        }
+        const location = entrance.headers.get("location")
+        await discard(entrance)
+        if ([401, 403].includes(entrance.status)) throw new Error("The documentation readback is not publicly accessible")
+        if (entrance.status !== 302 || location !== "/docs/") return null
+        const route = await get(`${origin}/docs/`, false, timeout())
+        const challenged = route.headers.get("cf-mitigated") === "challenge"
+        await discard(route)
+        if (challenged && allowChallenge) return "challenged"
+        if ([401, 403].includes(route.status) || challenged)
+            throw new Error("The documentation readback is not publicly accessible")
+        // Cloudflare can mark a deployment's own pages.dev address noindex, so only the public address is held to this
+        if (route.status !== 200 || (allowChallenge && noindex(route.headers.get("x-robots-tag"))) ||
+            !/^text\/html(?:;|$)/i.test(route.headers.get("content-type") ?? "")) return null
+
+        const response = await get(`${origin}/deployment.json`, false, timeout())
+        if (response.headers.get("cf-mitigated") === "challenge" && allowChallenge) {
+            await discard(response)
+            return "challenged"
+        }
+        if ([401, 403].includes(response.status) || response.headers.get("cf-mitigated") === "challenge") {
+            await discard(response)
+            throw new Error("The site's source marker is not publicly accessible")
+        }
+        if (!response.ok) { await discard(response); return null }
+        let served
+        try { served = await response.json() } catch { return null }
+        return served?.sourceCommit === source ? "verified" : null
+    }
+    const targetStarted = now()
+    progress("Verifying the Cloudflare Pages Production target")
+    const project = await api()
+    if (project.name !== settings.project || typeof project.id !== "string" || !project.id)
+        throw new Error("Cloudflare project identity was not verified")
+    if (!/^[a-z0-9][a-z0-9-]*\.pages\.dev$/.test(project.subdomain ?? ""))
+        throw new Error("Cloudflare project Pages subdomain was not verified")
+    if (typeof project.production_branch !== "string" || !project.production_branch)
+        throw new Error("Cloudflare Production branch was not verified")
+    if (project.production_branch !== settings.branch)
+        throw new Error("The Pages project's Production branch is not main")
+    if (project.source != null) {
+        if (project.source.config?.production_deployments_enabled !== false)
+            throw new Error("Disable Git-connected production deployments, so only checked builds reach the site")
+        if (project.source.config.production_branch !== project.production_branch)
+            throw new Error("Git-connected and Pages Production branches disagree")
+    }
+    if (!Array.isArray(project.domains) || !project.domains.includes(new URL(settings.origin).hostname))
+        throw new Error("The site's public hostname is not associated with the selected Pages project")
+    progress(`Cloudflare Pages Production target verified in ${elapsed(now() - targetStarted)}`)
+
+    // Never rerun Wrangler after an uncertain acknowledgement
+    // Wrangler itself may retry Cloudflare UNKNOWN_ERROR during deployment creation
+    // Pages has no conditional upload guard against concurrent project-setting changes
+    const wranglerStarted = now()
+    progress("Uploading the checked site artifact with Wrangler")
+    let id
+    try { id = await publish(settings, source, progress) } catch {
+        throw new Error("Upload outcome is unknown; reconcile this source and branch in Cloudflare before another upload")
+    }
+    if (!deploymentId.test(id ?? ""))
+        throw new Error("Upload identity is unknown; reconcile Cloudflare before another upload")
+    progress(`Wrangler completed in ${elapsed(now() - wranglerStarted)} (not a network transfer measurement)`)
+    progress("Upload acknowledged. Verifying the exact deployment")
+    const readbackStarted = now()
+    const deadline = now() + 120_000
+    for (let attempt = 0; attempt < 24 && now() < deadline; attempt++) {
+        let delay = 5_000
+        const timeout = () => Math.max(1, Math.min(10_000, Math.ceil(deadline - now())))
+        try {
+            const deployment = await api(`/deployments/${id}`, timeout())
+            const metadata = deployment.deployment_trigger?.metadata
+            if (
+                deployment.id !== id ||
+                deployment.project_id !== project.id ||
+                deployment.project_name !== settings.project ||
+                deployment.environment !== "production" ||
+                deployment.production_branch !== project.production_branch ||
+                metadata?.branch !== settings.branch ||
+                metadata?.commit_hash !== source ||
+                metadata?.commit_dirty !== false
+            )
+                throw new Error("Uploaded deployment identity does not match the checked Production target")
+            if (["failure", "canceled"].includes(deployment.latest_stage?.status))
+                throw new Error(
+                    "Cloudflare deployment failed or was canceled; inspect it before another upload",
+                )
+            if (deployment.latest_stage?.name === "deploy" && deployment.latest_stage.status === "success") {
+                const deploymentUrl = deploymentOrigin(project, deployment)
+                if (await verifyContent(deploymentUrl, timeout, false) === "verified") {
+                    const customDomainStatus = await verifyContent(settings.origin, timeout, true)
+                    if (customDomainStatus && now() < deadline) {
+                        progress(`Site readback verified in ${elapsed(now() - readbackStarted)}`)
+                        return { origin: settings.origin, deploymentId: id, sourceCommit: source, deploymentUrl, customDomainStatus }
+                    }
+                }
+            }
+        } catch (error) {
+            if (!(error instanceof ReadUnavailable)) throw error
+            if (Number.isFinite(error.retryAfter)) delay = Math.max(delay, error.retryAfter)
+        }
+        if (attempt < 23 && now() < deadline) {
+            progress(`Waiting for Site readback (${elapsed(now() - readbackStarted)} elapsed)`)
+            await sleep(Math.min(delay, deadline - now()))
+        }
+    }
+    throw new Error(
+        `Site readback did not converge for deployment ${id}; reconcile its status and custom-domain routing before another upload`,
+    )
+}
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    try {
+        const result = await deploySite(process.env, { progress: (message) => console.log(message) })
+        if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,
+            `deployment_url=${result.deploymentUrl}\ncustom_domain_status=${result.customDomainStatus}\n`)
+        console.log(`Verified exact deployment at ${result.deploymentUrl}`)
+        if (result.customDomainStatus === "challenged")
+            console.warn("::warning::The exact deployment is verified, but Cloudflare bot protection challenged the custom-domain check. Custom-domain content and public access are not verified by this run. No security setting was changed")
+        else console.log(`Verified custom-domain content at ${result.origin}`)
+    } catch (error) {
+        console.error(
+            error instanceof ReadUnavailable
+                ? "Cloudflare preflight is unavailable; no upload was started"
+                : error.message,
+        )
+        process.exitCode = 1
+    }
+}

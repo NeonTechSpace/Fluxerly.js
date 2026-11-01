@@ -43,7 +43,7 @@ Flag bits, sort orders, layouts and tag settings that this SDK version does not 
 
 ## Read posts
 
-Each post is a `GuildPublicThreadChannel` whose `parentId` is the forum or media channel. The `appliedTagIds` field lists the post's tags, and `ChannelFlags.Pinned` in `flags` marks the channel's pinned post. [Read threads](/docs/{{version}}/threads/) covers the fields every thread shares
+Each post is a `GuildPublicThreadChannel` whose `parentId` is the forum or media channel. The `appliedTagIds` field lists the post's tags, and `ChannelFlags.Pinned` in `flags` marks the channel's pinned post. [Read threads](/docs/threads/) covers the fields every thread shares
 
 ```ts
 import { ChannelType, type GuildForumChannel, type GuildThreadChannel } from "@neontechspace/fluxerly"
@@ -126,4 +126,4 @@ Fluxer assigns the ID of a new tag, so read it from the returned channel by name
 
 ## Start posts
 
-[Read threads](/docs/{{version}}/threads/) covers posts started with the bot. A webhook that belongs to a forum or media channel can start a post with `threadName`, as the [webhook guide](/docs/{{version}}/webhooks-and-oauth/#post-into-threads-and-forum-channels) shows
+[Read threads](/docs/threads/) covers posts started with the bot. A webhook that belongs to a forum or media channel can start a post with `threadName`, as the [webhook guide](/docs/webhooks-and-oauth/#post-into-threads-and-forum-channels) shows

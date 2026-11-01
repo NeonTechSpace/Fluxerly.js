@@ -1,0 +1,344 @@
+---
+// The chart room: the documentation's reading layout. Sidebar with search and the course, then the outline, then the
+// page. The sidebar holds both parts of the docs and opens on the part this page belongs to
+import "../styles/global.css"
+import "../styles/docs.css"
+import "../styles/peek.css"
+import Header from "../components/Header.astro"
+import PageTransitions from "../components/PageTransitions.astro"
+import Seo from "../components/Seo.astro"
+import { guides } from "../lib/ai-docs"
+import SiteFooter from "../components/sections/SiteFooter.astro"
+import Course from "../components/docs/Course.astro"
+import CrystalDefs from "../components/CrystalDefs.astro"
+import CourseState from "../components/docs/CourseState.astro"
+import DocsSearch from "../islands/DocsSearch"
+import { completeDescription, docsPageTitle, openingParagraphs } from "../lib/docs-meta"
+import { docsIcons, iconSrc } from "../lib/art"
+import { docsCourse, guideGroup, type NavItem, type TocItem } from "../lib/docs-nav"
+import { docsTitleQualifier } from "../lib/docs-titles"
+import { experienceKey } from "../lib/experience"
+import { breadcrumbs } from "../lib/seo"
+import { seededRandom } from "../lib/stars"
+import { identifierHtml } from "../../scripts/docs/code-breaks.mjs"
+// The one Outfit file the pages' Latin text needs, asked for with the page instead of after its stylesheet
+import outfitUrl from "@fontsource-variable/outfit/files/outfit-latin-wght-normal.woff2?url"
+
+interface Props {
+    title: string
+    description?: string
+    section: "guides" | "reference" | "codes"
+    current: string
+    toc: TocItem[]
+    crumbs?: { title: string; href: string }[]
+    // What search shows when it should differ from the visible lead, such as a reference entry's first sentence
+    searchDescription?: string
+}
+
+const { title, description, section, current, toc, crumbs, searchDescription } = Astro.props
+
+// Guides in cyan, reference in violet: what you do, then what the SDK knows
+const parts = await docsCourse(current, section)
+const tone = section === "guides" ? "cyan" : "violet"
+
+// Previous and next follow the page's own course: the guides in order, or the reference with the class pages of the
+// category the reader is inside
+const part = parts.find((candidate) => candidate.current) ?? parts[0]!
+const flatten = (items: NavItem[]): NavItem[] => items.flatMap((item) => [item, ...flatten(item.items ?? [])])
+const course = part.groups.flatMap((group) => flatten(group.items))
+const at = course.findIndex((item) => item.href === current)
+const previous = at > 0 ? course[at - 1] : undefined
+const next = at >= 0 && at < course.length - 1 ? course[at + 1] : undefined
+
+const slug = current.replace(/^\/docs\/|\/$/g, "") || "index"
+// The page's icon beside its title. Every page of the API reference shares the book
+const icon = docsIcons[slug] ?? (section === "reference" ? docsIcons.api : undefined)
+const searchGroup = section === "guides" ? (guideGroup(slug) ?? "Guides") : section === "codes" ? "Error and log codes" : "API reference"
+
+// Crystal bubbles drifting up through the water, the ones from the sea floor at the end of the main pages, slower and fainter. Each
+// takes a whole number of turns in the hour the night's clock runs on, so it has no seam
+const bubbleTones = ["cyan", "violet", "cyan", "gold", "violet", "cyan"] as const
+const bubbleDraw = seededRandom(5503)
+const bubbles = Array.from({ length: 14 }, (_, index) => {
+    const rise = [36, 40, 45, 48, 50, 60][Math.floor(bubbleDraw() * 6)]!
+    const side = index % 2 ? 1 : -1
+    return {
+        tone: bubbleTones[index % bubbleTones.length]!,
+        // On a wide screen they keep to the sides of the reading column, on a narrow one there are no sides to keep to
+        style: `--x: ${Math.round((index % 2 ? 78 + bubbleDraw() * 21 : 1 + bubbleDraw() * 20) * 10) / 10}%; --x-narrow: ${Math.round(((index + bubbleDraw()) / 14) * 1000) / 10}%; --size: ${12 + Math.round(bubbleDraw() * 24)}px; --rise-for: ${rise}s; --from-start: ${Math.round(bubbleDraw() * rise)}s; --sway: ${side * (14 + Math.round(bubbleDraw() * 34))}px; --turn: ${side * (40 + Math.round(bubbleDraw() * 120))}deg`,
+    }
+})
+
+// The published versions this site serves, from scripts/docs/build-public.mjs. A build of the working tree has none
+const docsVersions: { label: string; version: string; base: string }[] = JSON.parse(process.env.DOCS_VERSIONS ?? "[]")
+const docsBase = import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"
+const olderVersions: { label: string; version: string; base: string }[] = JSON.parse(process.env.DOCS_OLDER_VERSIONS ?? "[]")
+const allVersions = [...docsVersions, ...olderVersions]
+const currentVersion = allVersions.find((version) => version.base === docsBase)
+
+// The page renders first, so a short description can go on in the page's own words
+const article = await Astro.slots.render("default")
+// A guide also exists as Markdown in this version, which the page names for tools and copies for people
+const markdownUrl = guides.some((guide) => guide.slug === slug) ? `${import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"}${slug}.md` : undefined
+
+// A title another docs page shares takes the step that tells them apart, such as its entry point
+const pageTitle = slug === "index" ? "Fluxerly.js docs" : docsPageTitle(title, await docsTitleQualifier(current))
+// What search shows under the title. The overview describes the docs as a whole, every other page has its own
+// description or one made from its title, completed from its opening paragraphs, lead and sections when short
+const metaDescription =
+    slug === "index"
+        ? "Guides and API reference for Fluxerly.js, a Fluxer JS SDK for bots and applications in JavaScript, TypeScript and Effect"
+        : completeDescription(
+              searchDescription || description || `${title} in the Fluxerly.js docs`,
+              [...openingParagraphs(article), description ?? ""],
+              toc.filter((item) => item.depth === 2).map((item) => item.text),
+          )
+// The trail search engines show above a result: Docs, the reference's own steps where it has them, then this page
+const trail = breadcrumbs([
+    { name: "Docs", path: "/docs/" },
+    ...(crumbs ?? []).map((crumb) => ({ name: crumb.title, path: crumb.href })),
+    ...(slug === "index" ? [] : [{ name: title, path: current }]),
+])
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={[trail]} />
+        {markdownUrl && <link rel="alternate" type="text/markdown" href={markdownUrl} title="This page as Markdown" />}
+        <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
+        <!-- The package manager and code language chosen earlier apply before the first paint -->
+        <script is:inline>
+            try {
+                const pm = localStorage.getItem("fluxerly.pm.v1")
+                if (pm === "pnpm" || pm === "bun") document.documentElement.dataset.pm = pm
+                if (localStorage.getItem("fluxerly.lang.v1") === "ts") document.documentElement.dataset.lang = "ts"
+            } catch {
+                // Storage is blocked, npm and JavaScript stay selected
+            }
+        </script>
+        <PageTransitions />
+        <CourseState />
+        <!-- The first frame waits for the sidebar and the outline, so the course opens as the previous page left it
+             and the outline is whole, with its current entry marked -->
+        <link rel="expect" href="#docs-side-end" blocking="render" />
+        <link rel="expect" href="#docs-outline-end" blocking="render" />
+    </head>
+    <body class="docs" data-section={section}>
+        <a class="skip-link" href="#main">Skip to Content</a>
+        <!-- The night: deep water, painted, and in Animated moving -->
+        <div class="docs-night" aria-hidden="true" data-night>
+            <!-- Still, or the system asking for less motion, before the night is first drawn: the body carries the state for the stylesheet -->
+            <script is:inline define:vars={{ key: experienceKey }}>
+                {
+                    let mode = document.documentElement.dataset.experience
+                    if (mode !== "immersive" && mode !== "still") {
+                        try {
+                            mode = localStorage.getItem(key)
+                        } catch {
+                            // Storage is blocked, so nothing was chosen
+                        }
+                    }
+                    if (mode === "still" || matchMedia("(prefers-reduced-motion: reduce)").matches) document.body.setAttribute("data-still", "")
+                    // The water's phase comes from the clock, so it carries on across pages instead of starting over. A page
+                    // rendered ahead of time reads the clock again when the reader arrives
+                    const night = document.currentScript.parentElement
+                    const sync = () => night.style.setProperty("--water-t", `${Date.now() % 3600000}ms`)
+                    sync()
+                    addEventListener("pagereveal", sync)
+                }
+            </script>
+            <span class="ray ray-a"></span>
+            <span class="ray ray-b"></span>
+            <span class="ray ray-c"></span>
+            <span class="ray ray-d"></span>
+            <CrystalDefs />
+            {
+                bubbles.map((bubble) => (
+                    <span class="docs-bubble" style={bubble.style}>
+                        <svg viewBox="0 0 40 40" focusable="false">
+                            <use href={`#crystal-${bubble.tone}`} />
+                        </svg>
+                    </span>
+                ))
+            }
+        </div>
+        <Header />
+
+        <div class="docs-room">
+            <aside class="docs-side" id="docs-side" aria-label="Documentation" data-pagefind-ignore data-side>
+                <div class="side-top">
+                    <DocsSearch client:idle />
+                    <button class="side-close" type="button" aria-label="Close the docs menu" data-side-close>
+                        <svg viewBox="0 0 256 256" width="20" height="20" fill="currentColor" aria-hidden="true"
+                            ><path
+                                d="M205.66,194.34a8,8,0,0,1-11.32,11.32L128,139.31,61.66,205.66a8,8,0,0,1-11.32-11.32L116.69,128,50.34,61.66A8,8,0,0,1,61.66,50.34L128,116.69l66.34-66.35a8,8,0,0,1,11.32,11.32L139.31,128Z"
+                            ></path></svg
+                        >
+                    </button>
+                </div>
+                {
+                    allVersions.length > 1 && (
+                        <details class="version-menu" data-version-menu data-pagefind-ignore>
+                            <summary aria-label={`Documentation version: ${currentVersion?.label}`}>
+                                <span class="version-label">{currentVersion?.label}</span>
+                                <span class="version-number" title={currentVersion?.version}>{currentVersion?.version}</span>
+                                <svg class="version-caret" viewBox="0 0 256 256" width="14" height="14" fill="currentColor" aria-hidden="true"
+                                    ><path d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"
+                                    ></path></svg
+                                >
+                            </summary>
+                            <div class="version-list">
+                                {docsVersions.map((version) => (
+                                    <a href={version.base} data-docs-version={version.base} aria-current={version.base === docsBase ? "true" : undefined}>
+                                        <span class="version-label">{version.label}</span>
+                                        <span class="version-number" title={version.version}>{version.version}</span>
+                                    </a>
+                                ))}
+                                {olderVersions.length > 0 && <p class="version-group">Older Versions</p>}
+                                {olderVersions.map((version) => (
+                                    <a href={version.base} data-docs-version={version.base} aria-current={version.base === docsBase ? "true" : undefined}>
+                                        <span class="version-number" title={version.version}>{version.version}</span>
+                                    </a>
+                                ))}
+                            </div>
+                        </details>
+                    )
+                }
+                {
+                    allVersions.length === 1 && (
+                        <p class="version-menu version-single" data-pagefind-ignore>
+                            <span class="version-label">{currentVersion?.label}</span>
+                            <span class="version-number" title={currentVersion?.version}>{currentVersion?.version}</span>
+                        </p>
+                    )
+                }
+                <Course parts={parts} />
+                <span id="docs-side-end" hidden></span>
+            </aside>
+            <div class="side-scrim" data-side-close aria-hidden="true"></div>
+
+            <!-- The outline comes before the page, so it is whole when the first frame is drawn. The first entry is
+                 current until the page is scrolled, and a page opened at a heading marks that heading before the
+                 first paint -->
+            <aside class="docs-outline" aria-label="On This Page" data-pagefind-ignore data-outline-root>
+                {
+                    toc.length > 0 && (
+                        <>
+                            <p class="outline-title">On This Page</p>
+                            <ul class="toc-list" data-outline>
+                                {toc.map((item, index) => (
+                                    <li data-depth={item.depth}>
+                                        <a href={`#${item.id}`} data-outline-link aria-current={index === 0 ? "location" : undefined} set:html={identifierHtml(item.text)} />
+                                    </li>
+                                ))}
+                            </ul>
+                        </>
+                    )
+                }
+                <script is:inline>
+                    {
+                        const id = decodeURIComponent(location.hash.slice(1))
+                        const links = [...document.currentScript.parentElement.querySelectorAll("[data-outline-link]")]
+                        const here = id ? links.find((link) => decodeURIComponent(link.hash.slice(1)) === id) : null
+                        if (here) {
+                            for (const link of links) link.removeAttribute("aria-current")
+                            here.setAttribute("aria-current", "location")
+                        }
+                    }
+                </script>
+                <span id="docs-outline-end" hidden></span>
+            </aside>
+
+            <main id="main" class="docs-main" data-tone={tone}>
+                <button class="side-open" type="button" aria-controls="docs-side" aria-expanded="false" data-side-open>
+                    <svg viewBox="0 0 256 256" width="20" height="20" fill="currentColor" aria-hidden="true"
+                        ><path
+                            d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z"
+                        ></path></svg
+                    >
+                    Docs Menu
+                </button>
+
+                {
+                    toc.length > 0 && (
+                        <details class="toc-fold" data-pagefind-ignore>
+                            <summary>On This Page</summary>
+                            <ul class="toc-list">
+                                {toc.map((item) => (
+                                    <li data-depth={item.depth}>
+                                        <a href={`#${item.id}`} data-fold-link set:html={identifierHtml(item.text)} />
+                                    </li>
+                                ))}
+                            </ul>
+                        </details>
+                    )
+                }
+
+                <article class="docs-article" data-pagefind-body data-pagefind-meta={`group:${searchGroup}`}>
+                    {
+                        crumbs?.length ? (
+                            <nav class="crumbs" aria-label="Breadcrumbs" data-pagefind-ignore>
+                                {crumbs.map((crumb) => (
+                                    <a href={crumb.href}>{crumb.title}</a>
+                                ))}
+                            </nav>
+                        ) : null
+                    }
+                    <div class:list={["docs-heading", { "has-icon": icon }]}>
+                        <h1 class="docs-title" set:html={identifierHtml(title)} />
+                        {icon && <img class="docs-icon" src={iconSrc(icon, 160)} alt="" width="160" height="160" decoding="async" data-pagefind-ignore />}
+                    </div>
+                    {description && <p class="docs-lead">{description}</p>}
+                    {
+                        markdownUrl && (
+                            <p class="docs-copy-page" data-pagefind-ignore>
+                                <button class="docs-copy-markdown" type="button" data-copy-markdown={markdownUrl}>
+                                    <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">
+                                        <path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z" />
+                                    </svg>
+                                    <svg class="icon-done" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">
+                                        <path d="M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z" />
+                                    </svg>
+                                    Copy as Markdown
+                                </button>
+                                <span class="sr-only" aria-live="polite" data-copy-status />
+                            </p>
+                        )
+                    }
+                    <div class="docs-prose">
+                        <Fragment set:html={article} />
+                    </div>
+                </article>
+
+                {
+                    (previous || next) && (
+                        <nav class="pager" aria-label="Previous and next page" data-pagefind-ignore>
+                            {previous && (
+                                <a class="pager-link prev" href={previous.href}>
+                                    <span class="pager-dir">Previous</span>
+                                    <span class="pager-title">{previous.title}</span>
+                                </a>
+                            )}
+                            {next && (
+                                <a class="pager-link next" href={next.href}>
+                                    <span class="pager-dir">Next</span>
+                                    <span class="pager-title">{next.title}</span>
+                                </a>
+                            )}
+                        </nav>
+                    )
+                }
+            </main>
+        </div>
+
+        <SiteFooter />
+
+        <script>
+            import "../lib/docs-client"
+            import "../lib/docs-peek"
+        </script>
+    </body>
+</html>

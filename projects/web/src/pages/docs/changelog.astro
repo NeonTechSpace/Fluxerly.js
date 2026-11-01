@@ -1,0 +1,21 @@
+---
+// The SDK's release history, from the Changesets changelog that scripts/docs/generate.mjs copies into the content folder. A nightly's
+// snapshot also lists its pending notes
+import { readFileSync } from "node:fs"
+import { join, resolve } from "node:path"
+import Docs from "../../layouts/Docs.astro"
+import { renderMarkdown } from "../../lib/markdown"
+
+const source = readFileSync(join(resolve(process.env.DOCS_CONTENT ?? "content"), "changelog.md"), "utf8").replace(/^# .*\n+/, "")
+const html = await renderMarkdown(source)
+// The outline links to the headings as they were rendered, so their addresses always exist
+const toc = [...html.matchAll(/<h2 id="([^"]+)">([\s\S]*?)<\/h2>/g)].map((match) => ({
+    depth: 2 as const,
+    text: match[2]!.replace(/<[^>]+>/g, ""),
+    id: match[1]!,
+}))
+---
+
+<Docs title="Changelog" description="What changed in each release of the Fluxerly.js SDK, newest first" section="guides" current="/docs/changelog/" toc={toc}>
+    <Fragment set:html={html} />
+</Docs>

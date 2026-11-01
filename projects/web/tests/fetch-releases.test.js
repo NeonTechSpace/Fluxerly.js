@@ -9,10 +9,10 @@ import { fetchReleases } from "../scripts/fetch-releases.js"
 const repository = "NeonTechSpace/Fluxerly.js"
 const source = "a".repeat(40)
 const snapshot = (version = "1000.0.0") => ({
-    schemaVersion: 1,
+    schemaVersion: 3,
     version,
     sourceCommit: source,
-    files: ["index.md", "quick-start.md", "changelog.md"].map((path) => ({ path, content: `# ${path}\n` })),
+    files: ["guides/index.md", "guides/quick-start.md", "guides/meta.json", "guides/glossary.md", "changelog.md", "reference/model.json", "reference/codes.json", "reference/links.json", "reference/endpoints.json"].map((path) => ({ path, content: `# ${path}\n` })),
 })
 const encode = (value) => Buffer.from(JSON.stringify(value))
 function release(version = "1000.0.0", id = 1, value = snapshot(version)) {
@@ -95,7 +95,7 @@ test("Drafts are skipped without reading assets or source tags", async (t) => {
     assert.equal(f.calls.length, 1)
 })
 
-test("Imports retain Stable history and read only the newest published RC and Nightly snapshots", async (t) => {
+test("Imports retain Stable history and the newest Nightly while ignoring old rc versions", async (t) => {
     // Retired Canary releases must still parse, but their assets are never read. The dated nightly is newer than every
     // older numbered nightly of its core, whatever their numbers
     const items = [release("1000.0.0-nightly.9", 1), release("1000.0.0", 2), release("1000.0.0-rc.0", 3),
@@ -105,11 +105,11 @@ test("Imports retain Stable history and read only the newest published RC and Ni
     draft.metadata.draft = true
     const f = await fixture(t, [...items, draft], { pages: [items.slice(0, 3).map((item) => item.metadata),
         [...items.slice(3).map((item) => item.metadata), draft.metadata]] })
-    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-rc.1", "1000.0.0-nightly.20261019.2"])
-    for (const id of [1, 3, 5, 7, 8, 9]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
+    assert.deepEqual((await f.run()).imported, ["1000.0.0", "1000.0.1", "1000.0.0-nightly.20261019.2"])
+    for (const id of [1, 3, 5, 6, 7, 8, 9]) assert.ok(!f.calls.some((args) => args.includes(`repos/${repository}/releases/assets/${id}`)))
     assert.ok(!f.calls.some((args) => args.some((arg) => arg.includes("canary"))))
-    assert.deepEqual((await readdir(f.directory)).sort(), ["1000.0.0-nightly.20261019.2.json", "1000.0.0-rc.1.json", "1000.0.0.json", "1000.0.1.json"])
-    for (const item of [items[1], items[3], items[8], items[5]]) {
+    assert.deepEqual((await readdir(f.directory)).sort(), ["1000.0.0-nightly.20261019.2.json", "1000.0.0.json", "1000.0.1.json"])
+    for (const item of [items[1], items[3], items[8]]) {
         const version = item.metadata.tag_name.slice(1)
         assert.deepEqual(await readFile(join(f.directory, `${version}.json`)), item.bytes)
     }
@@ -123,8 +123,8 @@ test("An inventory of only retired Canary releases imports nothing and reads no 
 })
 
 test("A broken newest prerelease fails instead of falling back to an older release", async (t) => {
-    const previous = release("1000.0.0-rc.0", 1)
-    const newest = release("1000.0.0-rc.1", 2)
+    const previous = release("1000.0.0-nightly.0", 1)
+    const newest = release("1000.0.0-nightly.1", 2)
     newest.bytes = Buffer.from("Invalid newest snapshot")
     const f = await fixture(t, [previous, newest])
     await assert.rejects(f.run(), /checksum mismatch/)

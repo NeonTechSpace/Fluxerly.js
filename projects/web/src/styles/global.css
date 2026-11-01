@@ -1,409 +1,983 @@
 @import "tailwindcss";
-@import "fumadocs-ui/css/neutral.css";
-@import "fumadocs-ui/css/preset.css";
+@import "@fontsource-variable/outfit";
+@import "./immersion.css";
+
+/* A stand-in for Outfit while its file arrives: Arial, drawn at Outfit's measure and vertical metrics, so lines
+   break in the same places and nothing moves when Outfit takes over. Measured in Helium against Outfit's own
+   widths: its regular weights run at 99.4 percent of Arial's, its weights from 600 at 94 percent of Arial
+   Bold's, and its ascent, descent and line gap are 1, 0.26 and 0 of its em */
+@font-face {
+    font-family: "Outfit Fallback";
+    font-weight: 100 599;
+    src: local("Arial");
+    size-adjust: 99.4%;
+    ascent-override: 100.6%;
+    descent-override: 26.2%;
+    line-gap-override: 0%;
+}
+
+@font-face {
+    font-family: "Outfit Fallback";
+    font-weight: 600 900;
+    src: local("Arial Bold"), local("Arial");
+    size-adjust: 94%;
+    ascent-override: 106.4%;
+    descent-override: 27.7%;
+    line-gap-override: 0%;
+}
 
 @theme {
-    --font-sans: "Outfit Variable", sans-serif;
-    --color-fd-primary: #c4aeff;
-    --color-fd-primary-foreground: #15101e;
+    --color-night: #04051a;
+    --color-night-2: #070a26;
+    --color-cyan: #46e3ef;
+    --color-violet: #a57cff;
+    --color-gold: #ecc46e;
+    --color-ink: #eef0ff;
+    --color-muted: #c3c8e6;
+    --color-faint: #9aa1c6;
+    --color-ink-soft: #dfe6ff;
+    --color-cyan-light: #8ef1f7;
+    --color-cyan-pale: #c8fbff;
+    --color-violet-light: #b597ff;
+    --color-violet-pale: #c8b4ff;
+    --color-violet-mist: #dccdff;
+    --color-periwinkle: #b9c7ff;
+    --color-success: #7fe3a6;
+    --color-info: #7fb0ff;
+    --font-sans: "Outfit Variable", "Outfit Fallback", system-ui, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
+}
+
+/* The site's small design choices, each named once. Art keeps its own colors, and the sky keeps its
+   own timing */
+:root {
+    --type-micro: 12px;
+    --type-small: 15px;
+    --type-body: 17px;
+    --type-lead: 19px;
+    --type-title: 22px;
+    --type-heading: 28px;
+    --type-display: clamp(34px, 2.5vw, 48px);
+    --weight-regular: 400;
+    --weight-medium: 500;
+    --weight-semibold: 600;
+    --weight-display: 650;
+    --corner-small: 6px;
+    --corner-medium: 10px;
+    --corner-large: 16px;
+    --corner-round: 999px;
+    --speed-fast: 160ms;
+    --speed-normal: 220ms;
+    --speed-slow: 360ms;
+    --tracking-tight: -0.022em;
+    --tracking-snug: -0.012em;
+    --tracking-wide: 0.04em;
 }
 
 :root {
     color-scheme: dark;
-    font-size: 18px;
+    /* Page grid: 12 columns, 48px outer margins at 1920 */
+    --page-margin: clamp(20px, 2.5vw, 48px);
+    --page-gutter: clamp(14px, 1.25vw, 24px);
+    /* The frame the page's content sits in, which the header and footer line up with on wide screens: the 1720px
+       page grid with its own margin inside. The docs set their own frame */
+    --frame: 1720px;
+    --frame-pad: var(--page-margin);
+    --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
 }
-.dark {
-    --color-fd-background: #101014;
-    --color-fd-foreground: #ecebf2;
-    --color-fd-muted: #1d1b24;
-    --color-fd-muted-foreground: #b7b3c2;
-    --color-fd-card: #17151e;
-    --color-fd-border: #34303e;
-    --color-fd-accent: #272131;
-    --color-fd-accent-foreground: #f3eaff;
+
+/* Screens that draw the signal line but have no frame margin to spare: the page margin widens so a station sits
+   whole beside its heading with the line beside it, instead of 14 px from the screen's edge with its ring cut.
+   The docs draw no line and keep their own measure */
+@media (min-width: 1280px) and (max-width: 1919px) {
+    :root:not(:has(> .docs)) {
+        --page-margin: 56px;
+    }
 }
+
+/* Wide screens without operating system scaling get the page scaled up as a whole, so the type stays
+   readable without browser zoom. Checked in Chromium, the only target until the site is ready */
+:root {
+    --page-zoom: 1;
+}
+
+@media (min-width: 2400px) {
+    :root {
+        --page-zoom: 1.15;
+    }
+
+    body {
+        zoom: 1.15;
+    }
+}
+
+@media (min-width: 1800px) and (max-aspect-ratio: 4/5) {
+    :root {
+        --page-zoom: 1.5;
+    }
+
+    body {
+        zoom: 1.5;
+    }
+}
+
+@media (min-width: 3200px) {
+    :root {
+        --page-zoom: 1.5;
+    }
+
+    body {
+        zoom: 1.5;
+    }
+}
+
+html,
 body {
     margin: 0;
+    background: var(--color-night);
+    color: var(--color-ink);
     font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
 }
-h1 {
-    font-size: clamp(2rem, 4vw, 2.8rem);
-    font-weight: 600;
-    letter-spacing: -0.025em;
-    line-height: 1.15;
-    overflow-wrap: anywhere;
+
+:focus-visible {
+    outline: 2px solid var(--color-cyan);
+    outline-offset: 3px;
 }
-.docs-content {
-    font-size: 1.1112rem;
-    line-height: 1.75;
-    max-width: 76ch;
-}
-.docs-content h2 {
-    margin-top: 2.4em;
-}
-.docs-content p {
-    margin-block: 1.25em;
-}
-.docs-content pre {
-    padding: 1rem;
-    overflow-x: auto;
-    background: #17151e !important;
-    border: 1px solid var(--color-fd-border);
-    border-radius: 0.5rem;
-}
-.docs-content pre,
-.docs-content pre code {
-    font-size: 1rem;
-    line-height: 1.6;
-}
-.docs-content pre code {
-    padding: 0;
-    border: 0;
-    background: transparent;
-}
-/* GitHub Dark comment gray needs more contrast on both documentation code backgrounds */
-.docs-content span[style*="color:#6a737d" i] {
-    color: #9ba3ad !important;
-}
-.docs-content table {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
-    font-size: 0.95rem;
-}
-.docs-content :not(pre) > code {
-    font-size: 0.95em;
-    /* Break a long identifier only when it cannot fit on its own line, so table columns keep whole names */
-    overflow-wrap: break-word;
-}
-.docs-content blockquote {
-    font-style: normal;
-    font-weight: normal;
-}
-.docs-content blockquote p::before,
-.docs-content blockquote p::after {
-    content: none;
-}
-.docs-content a {
-    text-underline-offset: 0.22em;
-}
-.version-label {
-    color: #c4aeff;
-    font-size: 0.85rem;
-    margin-bottom: 0.85rem;
-}
-.description {
-    color: var(--color-fd-muted-foreground);
-    font-size: 1.1rem;
-    line-height: 1.65;
-}
-.reference-nav-link {
-    display: block;
-    padding: 0.5rem;
-    border-radius: 0.5rem;
-    color: var(--color-fd-muted-foreground);
-}
-.reference-nav-link:hover {
-    background: var(--color-fd-accent);
-    color: var(--color-fd-foreground);
-}
-.reference-nav-link[data-active="true"] {
-    color: var(--color-fd-primary);
-    background: color-mix(in srgb, var(--color-fd-primary) 10%, transparent);
-}
-.reference-nav-entry {
-    padding-inline-start: 1.1rem;
-    font-size: 0.85rem;
-}
-.reference-nav-category {
-    padding-block: 0.3rem;
-    padding-inline-start: 1.9rem;
-    font-size: 0.8rem;
-}
-.docs-content details {
-    margin-block: 0;
-    border-top: 1px solid var(--color-fd-border);
-    padding-block: 1rem;
-}
-.docs-content summary {
-    cursor: pointer;
-    font-weight: 500;
-    color: var(--color-fd-foreground);
-}
-.docs-content[data-api-reference] {
-    font-size: 1rem;
-    line-height: 1.65;
-}
-/* Entry point pages hold thousands of elements. Skipping layout for offscreen blocks keeps navigation responsive,
-   while find in page, anchors and the table of contents still reach them */
-.docs-content[data-api-reference] > * {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 120px;
-}
-.docs-content[data-api-reference] p {
-    margin-block: 1em;
-}
-.docs-content .prose-keyword {
-    color: #d3bdff;
-    font-weight: 500;
-}
-.docs-content .prose-number {
-    color: #efc887;
-    font-variant-numeric: tabular-nums;
-}
-.docs-content .prose-constant {
-    color: #9dd9c6;
-    font-family: monospace;
-    font-size: 0.95em;
-}
-.docs-content[data-api-reference] blockquote {
-    padding: 0.8rem 1rem;
-    border: 1px solid var(--color-fd-border);
-    border-radius: 0.5rem;
-    background: var(--color-fd-card);
-    font-family: monospace;
-    font-size: 0.95em;
-    line-height: 1.65;
-}
-.docs-content[data-api-reference] blockquote p {
-    margin: 0;
-    overflow-wrap: anywhere;
-}
-.docs-content[data-api-reference] blockquote code {
-    font-size: inherit;
-}
-.docs-content[data-api-reference] :not(pre) > code {
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    color: inherit;
-}
-.docs-content[data-api-reference] :not(pre) > code::before,
-.docs-content[data-api-reference] :not(pre) > code::after {
-    content: none;
-}
-.docs-content[data-api-reference] :is(h3, h4) {
-    margin-top: 1.7em;
-    margin-bottom: 0.65em;
-}
-.docs-content[data-api-reference] table {
-    width: 100%;
-    margin-block: 0.75rem 1.5rem;
-    font-size: 0.9em;
-    line-height: 1.55;
-}
-.docs-content[data-api-reference] :is(th, td) {
-    padding: 0.65rem 0.8rem;
-    min-width: 6rem;
-    vertical-align: top;
-}
-.docs-content[data-api-reference] td p {
-    margin: 0;
-}
-.docs-content[data-api-reference] td:first-child em {
-    margin-inline: 0.15em;
-    font-family: monospace;
-    font-style: normal;
-}
-.reference-preview {
-    position: fixed;
-    z-index: 100;
-    width: 23rem;
-    max-width: calc(100vw - 24px);
-    max-height: min(35rem, calc(100dvh - 24px));
-    overflow-y: auto;
-    padding: 1rem;
-    border: 1px solid var(--color-fd-border);
-    border-radius: 0.65rem;
-    background: var(--color-fd-card);
-    color: var(--color-fd-foreground);
-    box-shadow: 0 12px 40px #0008;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-}
-.reference-preview[hidden] {
-    display: none;
-}
-.reference-preview p {
-    margin: 0;
-}
-.reference-preview-kind {
-    color: var(--color-fd-muted-foreground);
-    font-size: 0.7rem;
-}
-.reference-preview-name {
-    padding-right: 1.8rem;
-    font-family: monospace;
-    font-size: 0.95rem;
-    font-weight: 600;
-}
-.reference-preview .reference-preview-description {
-    margin-top: 0.6rem;
-    color: var(--color-fd-muted-foreground);
-}
-.reference-preview-signature {
-    display: block;
-    margin-top: 0.6rem;
-}
-.reference-preview-members {
-    margin: 0.8rem 0;
-    padding: 0.6rem 0;
-    max-height: 14rem;
-    overflow-y: auto;
-    list-style: none;
-    border-block: 1px solid var(--color-fd-border);
-}
-.reference-preview-members li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-    gap: 0.6rem;
-    padding-block: 0.2rem;
-    font-size: 0.7rem;
-}
-.reference-preview-members span {
-    color: var(--color-fd-muted-foreground);
-}
-.reference-preview-open {
-    display: inline-block;
-    padding: 0.4rem 0;
-    color: var(--color-fd-primary);
-    text-underline-offset: 0.2em;
-}
-.reference-preview-close {
-    position: absolute;
-    top: 0.3rem;
-    right: 0.3rem;
-    width: 2rem;
-    height: 2rem;
-    border-radius: 0.3rem;
-    cursor: pointer;
-    font-size: 1.2rem;
-}
-.reference-preview-close:hover {
-    background: var(--color-fd-accent);
-}
-.reference-preview .reference-preview-hint {
-    color: var(--color-fd-muted-foreground);
-    font-size: 0.7rem;
-}
-.reference-preview-toggle {
-    display: none;
-}
-/* Code tokens that name public API keep their colour and layout, and show a preview cue only under the pointer */
-.reference-token:hover {
-    cursor: help;
-    text-decoration: underline dotted;
-    text-underline-offset: 0.2em;
-}
-/* Touch readers cannot hover, so one toggle switches type links between previewing and opening */
-@media (hover: none), (pointer: coarse) {
-    .reference-preview .reference-preview-hint {
-        display: none;
-    }
-    .reference-preview-toggle {
-        display: inline-flex;
-        align-items: center;
-        min-height: 2.75rem;
-        margin-block: 0.5rem 1rem;
-        padding: 0.4rem 0.8rem;
-        border: 1px solid var(--color-fd-border);
-        border-radius: 0.5rem;
-        background: var(--color-fd-muted);
-        color: var(--color-fd-foreground);
-        font-size: 0.9rem;
-        cursor: pointer;
-    }
-    .reference-preview-toggle[aria-pressed="true"] {
-        border-color: var(--color-fd-primary);
-        color: var(--color-fd-primary);
-    }
-}
+
+/* Hidden until a keyboard reaches it, the first stop on every page */
 .skip-link {
     position: fixed;
-    top: 0.5rem;
-    left: 0.5rem;
-    z-index: 200;
-    padding: 0.6rem 1rem;
-    border-radius: 0.5rem;
-    background: var(--color-fd-primary);
-    color: var(--color-fd-primary-foreground);
-    font-weight: 600;
+    top: 12px;
+    left: 12px;
+    z-index: 100;
+    padding: 10px 18px;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: var(--color-night);
+    background: var(--color-cyan);
+    border-radius: var(--corner-round);
     transform: translateY(-200%);
 }
-.skip-link:focus {
+
+.skip-link:focus-visible {
     transform: none;
 }
-.page-actions {
+
+/* What a copy button shows when the browser refuses the clipboard */
+.copy-failed {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    z-index: 100;
+    max-width: calc(100vw - 32px);
+    padding: 12px 18px;
+    font-size: var(--type-small);
+    color: var(--color-ink);
+    background: var(--color-night-2);
+    border: 1px solid rgb(255 143 156 / 0.5);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 8px);
+    transition:
+        opacity var(--speed-normal) ease,
+        transform var(--speed-normal) ease;
+}
+
+.copy-failed[data-shown] {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+/* A control answers a mouse press with a short press in. Under a finger it would only look like it shrank */
+@media (prefers-reduced-motion: no-preference) and (hover: hover) and (pointer: fine) {
+    :is(button, .control, .pager-link, .next-link):not(:disabled):active {
+        scale: 0.98;
+    }
+}
+
+/* Figures that change or stack line up */
+.station,
+.log-number {
+    font-variant-numeric: tabular-nums;
+}
+
+:root {
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Code keeps its exact characters. Font ligatures would draw !== and => as single symbols */
+code,
+pre {
+    font-variant-ligatures: none;
+    font-feature-settings:
+        "calt" 0,
+        "liga" 0;
+}
+
+/* Shared pieces of the sections below the hero. Astro sections and React islands both use them */
+
+:root {
+    --section-gap: clamp(104px, 8.4vw, 160px);
+    --text-max: 64ch;
+    --glass-fill: linear-gradient(180deg, rgb(16 20 50 / 0.74), rgb(8 10 28 / 0.8));
+    --glass-border: rgb(160 190 255 / 0.2);
+    --glass-highlight: inset 0 1px 0 rgb(255 255 255 / 0.07);
+    --code-size: 15px;
+}
+
+/* Two voices below the hero. Cyan is you and what you do, violet is the SDK and what it knows.
+   Each section picks one, and its heading, links and marks follow */
+section[data-accent="cyan"] {
+    --accent: var(--color-cyan);
+    --accent-soft: rgb(70 227 239 / 0.14);
+}
+
+section[data-accent="violet"] {
+    --accent: var(--color-violet);
+    --accent-soft: rgb(165 124 255 / 0.16);
+}
+
+/* The conductor's two waves, used as a list mark */
+.wave-mark {
+    display: inline-block;
+    flex: none;
+    width: 20px;
+    height: 14px;
+    background: var(--accent, var(--color-cyan));
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round'%3E%3Cpath d='M1.5 4.2c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4'/%3E%3Cpath d='M1.5 10.4c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.section-title {
+    max-width: 18em;
+    margin: 0;
+    font-size: var(--type-display);
+    font-weight: var(--weight-semibold);
+    line-height: 1.12;
+    letter-spacing: var(--tracking-tight);
+    color: var(--color-ink);
+    text-wrap: balance;
+}
+
+/* The one phrase of a heading that carries the section's meaning, in the section's voice */
+.section-title .hi {
+    color: var(--accent, var(--color-cyan));
+}
+
+/* The reading structure below the hero: each section hangs off the signal line. Its heading and keepsake sit on
+   one side of the page and its content on the other, and the sides alternate as the reader descends.
+   The heading stays in view while the content scrolls, so the reader always knows where they are */
+.split {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    column-gap: var(--page-gutter);
+    align-items: start;
+    padding-inline: var(--page-margin);
+}
+
+.split > .intro {
+    position: sticky;
+    top: 104px;
+    grid-column: 1 / span 4;
+    grid-row: 1;
+}
+
+.split > .body {
+    grid-column: 6 / -1;
+    grid-row: 1;
+    min-width: 0;
+}
+
+.split[data-side="right"] > .intro {
+    grid-column: 9 / -1;
+}
+
+.split[data-side="right"] > .body {
+    grid-column: 1 / span 7;
+}
+
+/* Where the signal line passes through a section, marked next to its heading. The station's center sits this far
+   outside the content's edge: 56 px in a wide screen's frame margin, and never nearer the screen's edge than 30 px,
+   so the ring and most of its halo stay in view. The feature pages' arrival ring uses the same reach */
+:root {
+    --station-reach: min(56px, max(var(--page-margin), calc((100vw - 1720px) / 2 + var(--page-margin))) - 30px);
+}
+
+.station {
+    position: absolute;
+    top: 0.3em;
+    left: calc(-1 * var(--station-reach));
+    width: 1px;
+    height: 1px;
+}
+
+.split[data-side="right"] .station {
+    left: auto;
+    right: calc(-1 * var(--station-reach));
+}
+
+.split > .intro {
+    position: sticky;
+}
+
+.split > .intro[data-unpinned] {
+    position: static;
+}
+
+.split > .intro > .section-title {
+    position: relative;
+}
+
+/* An icon stays in step with the heading it sits under: the intro follows the reader, and a drift of its own would
+   carry the icon up over the words above it */
+.split > .intro > .keepsake {
+    --depth: 0;
+}
+
+/* The gap between an intro's words and its icon */
+@media (min-width: 900px) {
+    .split > .intro > .keepsake {
+        margin-top: clamp(32px, 3vw, 56px);
+    }
+}
+
+/* A few short facts under a section's lead, quiet, each marked with the conductor's waves */
+.facts {
+    display: grid;
+    gap: 12px;
+    margin: 28px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.facts li {
     display: flex;
-    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+    font-size: var(--type-lead);
+    line-height: 1.45;
+    color: rgb(195 200 230 / 0.84);
+}
+
+.facts .wave-mark {
+    width: 18px;
+    height: 13px;
+    margin-top: 0.3em;
+}
+
+/* Companions never take more of a short screen than the reading leaves them, and on phones they sit beside a heading */
+:root {
+    --companion-cap: max(150px, 24vh);
+}
+
+@media (max-width: 899px) {
+    :root {
+        --companion-cap: min(160px, 34vw);
+    }
+
+    .split > .intro,
+    .split > .body,
+    .split[data-side="right"] > .intro,
+    .split[data-side="right"] > .body {
+        position: static;
+        grid-column: 1 / -1;
+        grid-row: auto;
+    }
+
+    .split > .body {
+        margin-top: 40px;
+    }
+
+    /* Heading on the left and companion on the right, the lead under both */
+    .split > .intro {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 16px;
+        align-items: center;
+    }
+
+    .split > .intro > * {
+        grid-column: 1 / -1;
+    }
+
+    .split > .intro > .section-title {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .split > .intro > .keepsake {
+        grid-column: 2;
+        grid-row: 1;
+        margin: 0;
+    }
+
+    /* The items follow right away on a phone, so the facts would only repeat them */
+    .facts {
+        display: none;
+    }
+}
+
+/* Keeps a sentence of a heading on one line when it fits */
+.section-title .keep {
+    display: inline-block;
+}
+
+/* Space has depth. Below the hero, layers keep different shares of the page's pace as it scrolls: the far ones
+   give up part of it and fall behind, the near ones take more and pass in front, and the reading keeps the
+   page's own pace between them. Every layer moves on the page's scroll timeline, which the compositor runs in
+   step with the scroll itself, and is painted once. Script sets each element's --anchor when the page is laid
+   out: the scroll position at which its layout box is centered on the screen, where it is drawn exactly where
+   it was placed. --depth is the share of the scroll a layer gives up, negative for a layer in front. Smaller
+   screens get less of it. The far and near shares are set here, the star fields have their own */
+:root {
+    --follow: 100000px;
+    --depth-far: 0.42;
+    --depth-near: -0.34;
+    --depth-stars-far: 0.5;
+    --depth-stars-near: 0.2;
+    /* The companions float a little nearer than the reading they keep company */
+    --depth-companion: -0.07;
+}
+
+@media (max-width: 1279px) {
+    :root {
+        --depth-far: 0.28;
+        --depth-near: -0.22;
+        --depth-stars-far: 0.36;
+        --depth-stars-near: 0.15;
+        --depth-companion: -0.05;
+    }
+}
+
+@media (max-width: 899px) {
+    :root {
+        --depth-far: 0.2;
+        --depth-near: -0.14;
+        --depth-stars-far: 0.26;
+        --depth-stars-near: 0.1;
+        --depth-companion: 0;
+    }
+}
+
+/* Sections are the frame the far bodies and the near lights are placed against */
+.night > section {
+    position: relative;
+}
+
+/* Longhands only: the build's CSS minifier folds a following animation-timeline into an animation shorthand,
+   which the browser then rejects whole */
+.depth {
+    --anchor: 0px;
+
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    will-change: transform;
+    animation-name: depth-plane;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(root);
+    animation-range: 0px var(--follow);
+}
+
+/* At the anchor the layer sits where it was placed. Away from it, it has moved by its share of the distance
+   scrolled since, in the page's own pixels inside the zoom */
+@keyframes depth-plane {
+    from {
+        transform: translate3d(0, calc(var(--anchor) * var(--depth) / var(--page-zoom) * -1), 0);
+    }
+    to {
+        transform: translate3d(0, calc(var(--follow) * var(--depth) - var(--anchor) * var(--depth) / var(--page-zoom)), 0);
+    }
+}
+
+/* The same movement as a translate of its own, for a layer whose transform is spoken for, such as a companion
+   the reader's light pulls. A view timeline would not do here: the space is clipped with overflow hidden,
+   which makes it the nearest scroll container, and a view timeline on it never moves */
+@keyframes depth-drift {
+    from {
+        translate: 0 calc(var(--anchor) * var(--depth) / var(--page-zoom) * -1);
+    }
+    to {
+        translate: 0 calc(var(--follow) * var(--depth) - var(--anchor) * var(--depth) / var(--page-zoom));
+    }
+}
+
+[data-still] [data-depth] {
+    animation: none;
+    translate: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    [data-depth] {
+        animation: none;
+        translate: none;
+    }
+}
+
+/* Two star fields behind everything, each a repeating tile of faint points at its own density. Each slides
+   by its depth's share of the scroll past the top of its space, the far one most. The space sets --night-top,
+   where it starts on the page, once it is laid out */
+.field {
+    position: absolute;
+    /* The top is a fixed reach above the space, not a share of its height: a share would move the field as the
+       space takes its final height, which counts as a layout shift */
+    inset: -20vh 0 -20%;
+    z-index: -2;
+    pointer-events: none;
+    will-change: transform;
+    animation-name: field-depth;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(root);
+    animation-range: 0px var(--follow);
+}
+
+@keyframes field-depth {
+    from {
+        transform: translate3d(0, calc(var(--night-top, 0px) * var(--depth) / var(--page-zoom) * -1), 0);
+    }
+    to {
+        transform: translate3d(0, calc(var(--follow) * var(--depth) - var(--night-top, 0px) * var(--depth) / var(--page-zoom)), 0);
+    }
+}
+
+.field-far {
+    --depth: var(--depth-stars-far);
+
+    background-image:
+        radial-gradient(circle 0.8px at 11% 23%, rgb(238 240 255 / 0.5), transparent),
+        radial-gradient(circle 0.7px at 37% 61%, rgb(238 240 255 / 0.4), transparent),
+        radial-gradient(circle 0.9px at 63% 12%, rgb(238 240 255 / 0.45), transparent),
+        radial-gradient(circle 0.7px at 81% 47%, rgb(238 240 255 / 0.38), transparent),
+        radial-gradient(circle 0.8px at 52% 86%, rgb(238 240 255 / 0.42), transparent),
+        radial-gradient(circle 0.6px at 24% 92%, rgb(238 240 255 / 0.3), transparent),
+        radial-gradient(circle 0.7px at 93% 78%, rgb(238 240 255 / 0.35), transparent);
+    background-size: 900px 700px;
+    opacity: 0.8;
+}
+
+.field-near {
+    --depth: var(--depth-stars-near);
+
+    background-image:
+        radial-gradient(circle 1.3px at 18% 34%, rgb(238 240 255 / 0.7), transparent),
+        radial-gradient(circle 1.1px at 71% 18%, rgb(200 240 255 / 0.6), transparent),
+        radial-gradient(circle 1.4px at 44% 72%, rgb(238 240 255 / 0.65), transparent),
+        radial-gradient(circle 1px at 88% 58%, rgb(238 240 255 / 0.5), transparent),
+        radial-gradient(circle 1.2px at 6% 80%, rgb(220 230 255 / 0.55), transparent);
+    background-size: 1300px 1000px;
+    opacity: 0.7;
+    animation-name: field-depth, field-twinkle;
+    animation-duration: auto, 9s;
+    animation-timing-function: linear, ease-in-out;
+    animation-iteration-count: 1, infinite;
+    animation-direction: normal, alternate;
+    animation-timeline: scroll(root), auto;
+    animation-range: 0px var(--follow), normal;
+}
+
+@keyframes field-twinkle {
+    from {
+        opacity: 0.55;
+    }
+    to {
+        opacity: 0.8;
+    }
+}
+
+/* On a touch screen the stars keep one screen's worth of layer and hold still behind the page, the way far stars do. As
+   layers as tall as the page, each sliding at its own pace, they were painted anew all through a fast flick, and a phone
+   fell behind */
+@media (any-pointer: coarse) {
+    .field {
+        position: sticky;
+        top: 0;
+        inset-inline: auto;
+        bottom: auto;
+        height: 100lvh;
+        margin-bottom: -100lvh;
+        animation: none;
+        transform: none;
+    }
+
+    .field-near {
+        animation: field-twinkle 9s ease-in-out infinite alternate;
+    }
+
+    .motes {
+        display: none;
+    }
+}
+
+/* With time stopped everything sits at its place */
+[data-still] .depth,
+[data-still] .field {
+    animation: none;
+    transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .depth,
+    .field {
+        animation: none;
+        transform: none;
+    }
+}
+
+.lead {
+    max-width: var(--text-max);
+    margin: 20px 0 0;
+    font-size: var(--type-lead);
+    line-height: 1.6;
+    color: var(--color-muted);
+    text-wrap: pretty;
+}
+
+.inline-code {
+    padding: 0.08em 0.38em;
+    font-family: var(--font-mono);
+    font-size: max(0.9em, 15px);
+    color: var(--color-ink);
+    background: rgb(160 190 255 / 0.1);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+/* Jumping to a section lands its heading below the fixed header */
+section[id] {
+    scroll-margin-top: 96px;
+}
+
+/* Page grid of the sections: the hero's 12 columns and margins. Reading content stops growing
+   past a comfortable width and centers on wide screens, while the world behind it stays full bleed */
+.page-grid,
+.split {
+    max-width: 1720px;
+    margin-inline: auto;
+}
+
+.page-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    column-gap: var(--page-gutter);
+    padding-inline: var(--page-margin);
+}
+
+.prose-link {
+    color: var(--accent, var(--color-cyan));
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--accent, var(--color-cyan)) 45%, transparent);
+    text-underline-offset: 4px;
+    border-radius: 3px;
+    transition: text-decoration-color var(--speed-fast) ease, color var(--speed-fast) ease;
+}
+
+.prose-link:hover {
+    color: color-mix(in srgb, var(--accent, var(--color-cyan)) 70%, white);
+    text-decoration-color: currentColor;
+}
+
+/* A text link that leads somewhere else, with a small arrow */
+.go-link {
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem 1rem;
-    margin-block: -0.25rem 1.25rem;
-    font-size: 0.85rem;
+    gap: 7px;
+    font-size: var(--type-body);
+    font-weight: var(--weight-medium);
 }
-.page-actions button {
-    min-height: 2rem;
-    padding: 0.25rem 0.7rem;
-    border: 1px solid var(--color-fd-border);
-    border-radius: 0.35rem;
-    background: var(--color-fd-muted);
-    color: var(--color-fd-foreground);
-    cursor: pointer;
+
+.go-link svg {
+    flex: none;
+    transition: transform var(--speed-fast) ease;
 }
-.page-actions a {
-    color: var(--color-fd-muted-foreground);
-    text-underline-offset: 0.2em;
+
+.go-link:hover svg {
+    transform: translateX(3px);
 }
-.page-actions [role="status"] {
-    color: var(--color-fd-muted-foreground);
+
+.glass {
+    background: var(--glass-fill);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow:
+        var(--glass-highlight),
+        0 24px 60px -36px rgb(0 0 0 / 0.9);
 }
-.search-excerpt > .min-w-0 {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    overflow: hidden;
+
+/* Code blocks. Each line is its own block so a line can be highlighted */
+.code {
+    --code-pad: 22px;
+
+    margin: 0;
+    padding: 18px 0;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--code-size);
+    line-height: 1.7;
+    color: var(--color-ink-soft);
+    tab-size: 4;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(160 190 255 / 0.25) transparent;
 }
-.search-excerpt code {
-    line-height: 1;
-}
-@media (max-width: 600px) {
-    .docs-content pre code {
-        font-size: 0.9rem;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-    }
-    .docs-content pre .line {
-        display: inline-block;
-        width: 100%;
-        padding-inline-start: 1.5rem;
-        text-indent: -1.5rem;
-        vertical-align: top;
-    }
-}
-#nd-sidebar a[data-active] {
+
+.code code {
     display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    min-width: 0;
+    font: inherit;
+}
+
+/* A line longer than its block wraps under its own text instead of being cut off: at a space, or at a seam inside
+   a long name such as a dot or a slash, never inside a word. The turned part hangs 4ch past the line's own indent,
+   which the block sets on each line */
+.code .ln {
+    --indent: 0ch;
+    --hang: calc(var(--indent) + 4ch);
+
+    display: block;
+    min-height: 1lh;
+    padding-inline: calc(var(--code-pad) + var(--hang)) var(--code-pad);
+    text-indent: calc(-1 * var(--hang));
+    white-space: pre-wrap;
+}
+
+/* Everything between two seams holds together */
+.code .tw {
     white-space: nowrap;
 }
-#nd-sidebar a[data-active]:is(:hover, :focus-visible) {
-    white-space: normal;
+
+/* A phone's line is short, so a deep indent hangs less, or a turned line would have no room left */
+@media (max-width: 599px) {
+    .code .ln {
+        --hang: min(calc(var(--indent) + 4ch), 10ch);
+    }
 }
-[data-toc-popover-trigger] {
-    color: var(--color-fd-foreground);
+
+.tk-keyword {
+    color: var(--color-violet-light);
 }
-:focus-visible {
-    outline: 2px solid #d3bdff;
-    outline-offset: 4px;
+
+.tk-string {
+    color: var(--color-gold);
 }
+
+.tk-call {
+    color: var(--color-cyan);
+}
+
+.tk-number {
+    color: #f0a8c8;
+}
+
+.tk-comment {
+    color: rgb(195 200 230 / 0.58);
+    font-style: italic;
+}
+
+/* The small files beside the code: a key in a .env file or a shell assignment, the equals sign and the slashes
+   between them, and a unit file's section, in the same hues the docs' code wells give them */
+.tk-key {
+    color: var(--color-periwinkle);
+}
+
+.tk-op {
+    color: var(--color-faint);
+}
+
+.tk-section {
+    color: var(--color-cyan);
+}
+
+/* Command chip with a copy button, the same look as the hero's npm chip */
+.cmd-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    height: 44px;
+    padding: 0 4px 0 16px;
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0) 50%), rgb(8 11 40 / 0.62);
+    border: 1px solid rgb(195 200 230 / 0.18);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.08),
+        0 10px 30px -18px rgb(0 0 0 / 0.9);
+}
+
+.cmd-chip code {
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    color: var(--color-ink);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.cmd-chip .cmd-tool {
+    color: var(--color-muted);
+}
+
+/* On a phone a long command breaks onto a second line instead of being cut off */
+@media (max-width: 599px) {
+    .cmd-chip {
+        height: auto;
+        min-height: 44px;
+        padding-block: 5px;
+    }
+
+    .cmd-chip code {
+        white-space: normal;
+    }
+}
+
+.copy-button {
+    position: relative;
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    color: var(--color-muted);
+    background: none;
+    border: 0;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
+}
+
+.copy-button:hover {
+    color: var(--color-ink);
+    background: rgb(195 200 230 / 0.08);
+}
+
+.copy-button svg {
+    grid-area: 1 / 1;
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-normal) ease;
+}
+
+.copy-button .icon-done {
+    color: var(--color-cyan);
+    opacity: 0;
+    transform: scale(0.7);
+}
+
+.copy-button[data-copied] .icon-copy {
+    opacity: 0;
+    transform: scale(0.7);
+}
+
+.copy-button[data-copied] .icon-done {
+    opacity: 1;
+    transform: none;
+}
+
+/* Time stopped: the arrow keeps still when pointed at, and the copy icons swap at once */
+[data-still] .go-link svg,
+[data-still] .copy-button svg {
+    transition: none;
+}
+
+[data-still] .go-link:hover svg {
+    transform: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        scroll-behavior: auto !important;
-        animation: none !important;
-        transition: none !important;
+    .go-link svg,
+    .copy-button svg {
+        transition: none;
+    }
+
+    .go-link:hover svg {
+        transform: none;
+    }
+}
+
+/* Phones get targets of 44 points. Where a control can't grow without changing how it looks, a clear layer around it
+   takes the touch */
+@media (max-width: 899px), (any-pointer: coarse) {
+    .go-link,
+    .home,
+    .fr-tab,
+    .copy-button,
+    [data-waterline] .coin,
+    [data-waterline] .tool-button,
+    [data-waterline] .copy {
+        position: relative;
+    }
+
+    .go-link::after,
+    .home::after,
+    .copy-button::after,
+    [data-waterline] .coin::after,
+    [data-waterline] .tool-button::after,
+    [data-waterline] .copy::after {
+        content: "";
+        position: absolute;
+        inset: -10px 0;
+    }
+
+    .copy-button::after {
+        inset: -5px;
+    }
+
+    [data-waterline] .coin::after {
+        inset: -2px;
+    }
+
+    .home::after {
+        inset: -14px 0;
+    }
+
+    /* The tab keeps its after layer for the selected underline */
+    .fr-tab::before {
+        content: "";
+        position: absolute;
+        inset: -5px 0;
+    }
+
+    .fr-send,
+    .fr-input {
+        min-height: 44px;
+    }
+
+    .links a,
+    .brand .name {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+    }
+
+    [data-waterline] .tool-button,
+    [data-waterline] .copy {
+        min-width: 26px;
+    }
+}
+
+/* The header keeps the site's frame on every page, also in the docs, which set a frame of their own. So it never shifts as
+   the reader moves between them */
+.site-header {
+    --page-margin: clamp(20px, 2.5vw, 48px);
+    --frame: 1720px;
+    --frame-pad: var(--page-margin);
+    --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
+}
+
+@media (min-width: 1280px) and (max-width: 1919px) {
+    .site-header {
+        --page-margin: 56px;
     }
 }

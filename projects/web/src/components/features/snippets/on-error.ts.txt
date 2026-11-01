@@ -1,0 +1,14 @@
+import { runBot } from "@neontechspace/fluxerly"
+
+export function runReportedBot(token: string | undefined, report: (text: string) => void) {
+    return runBot({
+        token,
+        onError: (failure) => report(failure.describe()),
+        events: {
+            messageCreate: ({ message, reply }) => {
+                if (message.content !== "!ping") return undefined
+                return reply("Pong!")
+            },
+        },
+    })
+}

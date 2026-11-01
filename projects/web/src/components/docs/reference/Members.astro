@@ -1,0 +1,105 @@
+---
+// Members of an interface, class or object type. Properties form a list of name, summary, type and further text.
+// Methods get a heading each, with their signatures in full. Nested members have no anchors
+import type { InheritedGroup, Member, Signature } from "../../../lib/reference"
+import { documentedFields as fieldsOf, fitted, narrowTypeWidth, propertyHtml, signatureHtml, typeHtml } from "../../../lib/reference-format"
+import Code from "../Code.astro"
+import Callable from "./Callable.astro"
+import DocText from "./DocText.astro"
+import Heading from "./Heading.astro"
+
+interface Props {
+    members: Member[]
+    inherited?: InheritedGroup[]
+    /** Heading level for methods, and for every member when each has its own section */
+    level?: 3 | 4
+    /** Each member as its own section, as on a class page */
+    sections?: boolean
+    nested?: boolean
+    /** Further reading the site adds under a member, by member name, such as the endpoint map under client.rest */
+    links?: Record<string, { href: string; text: string }>
+}
+
+const { members, inherited = [], level = 4, sections = false, nested = false, links = {} } = Astro.props
+const linkOf = (member: Member) => (Object.hasOwn(links, member.name) ? links[member.name] : undefined)
+const callable = (member: Member) => !!member.signatures?.length
+const order = (member: Member) => (member.kind === "constructor" ? 0 : callable(member) ? 2 : 1)
+const sorted = members.slice().sort((a, b) => order(a) - order(b))
+const listed = sections ? [] : sorted.filter((member) => nested || !callable(member))
+const blocks = sections ? sorted : nested ? [] : sorted.filter(callable)
+// A constructor's signature reads as new ClassName(...)
+const nameOf = (member: Member, signature: Signature) => (member.kind === "constructor" && typeof signature.r === "object" && "r" in signature.r ? signature.r.r : member.name)
+// A member documented on this page is at its anchor here, which its own comment does not mark
+const page = Astro.url.pathname.endsWith("/") ? Astro.url.pathname : `${Astro.url.pathname}/`
+const selfOf = (member: Member) => (member.anchor ? `${page}#${member.anchor}` : undefined)
+const documentedFields = (member: Member) => (member.signatures ? undefined : fieldsOf(member.type))
+---
+
+{
+    listed.length > 0 && (
+        <dl class:list={["ref-list", "ref-members", { "ref-nested": nested }]}>
+            {listed.map((member) => {
+                const fields = documentedFields(member)
+                return (
+                    <div class="ref-row" id={member.anchor}>
+                        <dt>
+                            <Code class="ref-name" text={member.name} />
+                            {member.optional && <> <span class="ref-flag">optional</span></>}
+                            {member.static && <> <span class="ref-flag">static</span></>}
+                            {member.anchor && <a class="ref-mark" href={`#${member.anchor}`} data-pagefind-ignore aria-label={`Link to ${member.name}`}>#</a>}
+                        </dt>
+                        <dd>
+                            {" "}
+                            <DocText doc={member.doc ?? member.signatures?.[0]?.doc} part="lead" self={selfOf(member)} />
+                            {member.signatures ? (
+                                member.signatures.map((signature) => <pre class="ref-type"><code set:html={fitted((width) => signatureHtml(signature, member.name, {}, width), narrowTypeWidth)} /></pre>)
+                            ) : (
+                                !fields && <pre class="ref-type"><code set:html={fitted((width) => typeHtml(member.type ?? "unknown", width), narrowTypeWidth)} /></pre>
+                            )}
+                            <DocText doc={member.doc ?? member.signatures?.[0]?.doc} part="body" self={selfOf(member)} />
+                            {!nested && <DocText doc={member.doc} part="rest" self={selfOf(member)} />}
+                            {linkOf(member) && <p class="ref-more"><a href={linkOf(member)!.href}>{linkOf(member)!.text}</a></p>}
+                            {fields && <Astro.self members={fields} nested />}
+                        </dd>
+                    </div>
+                )
+            })}
+        </dl>
+    )
+}
+{
+    blocks.map((member) => (
+        <section class="ref-member">
+            <Heading level={level} id={member.anchor ?? member.name} code>
+                {member.static ? `static ${member.name}` : member.name}
+            </Heading>
+            {member.signatures ? (
+                member.signatures.map((signature) => <Callable signature={signature} name={nameOf(member, signature)} isConstructor={member.kind === "constructor"} isStatic={member.static} self={selfOf(member)} />)
+            ) : (
+                <>
+                    <DocText doc={member.doc} part="lead" self={selfOf(member)} />
+                    <pre class="ref-sig"><code set:html={fitted((width) => propertyHtml(member, width))} /></pre>
+                    <DocText doc={member.doc} part="body" self={selfOf(member)} />
+                    {documentedFields(member) && <Astro.self members={documentedFields(member)!} nested />}
+                    <DocText doc={member.doc} part="rest" self={selfOf(member)} />
+                    {linkOf(member) && <p class="ref-more"><a href={linkOf(member)!.href}>{linkOf(member)!.text}</a></p>}
+                </>
+            )}
+        </section>
+    ))
+}
+{
+    inherited.map((group) => (
+        <p class="ref-inherited">
+            Inherited from {group.h ? <a href={group.h}><Code text={group.from} /></a> : <Code text={group.from} />}:{" "}
+            {group.m.map((member, index) => (
+                <>
+                    {index > 0 && ", "}
+                    <a id={member.a} href={member.h}>
+                        <Code text={member.n} />
+                    </a>
+                </>
+            ))}
+        </p>
+    ))
+}

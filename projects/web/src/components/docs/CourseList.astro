@@ -1,0 +1,32 @@
+---
+// The pages of one station, and below a reference category the class pages inside it
+import type { NavItem } from "../../lib/docs-nav"
+
+interface Props {
+    items: NavItem[]
+    nested?: boolean
+}
+
+const { items, nested = false } = Astro.props
+
+// Long class names may wrap between their words, never inside one
+const words = (title: string) => (title.includes(" ") ? [title] : title.split(/(?<=[a-z])(?=[A-Z])/))
+---
+
+<ul class:list={["course-list", { nested }]}>
+    {
+        items.map((item) => (
+            <li>
+                <a href={item.href} aria-current={item.current ? "page" : undefined} data-course-link>
+                    {words(item.title).map((word, index) => (
+                        <>
+                            {index > 0 && <wbr />}
+                            {word}
+                        </>
+                    ))}
+                </a>
+                {item.items?.length ? <Astro.self items={item.items} nested /> : null}
+            </li>
+        ))
+    }
+</ul>

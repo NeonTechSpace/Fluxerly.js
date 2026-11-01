@@ -1,0 +1,196 @@
+---
+import { titleCase } from "../../../lib/title-case"
+// The endpoint map: each Fluxer HTTP route a bot can use, the Fluxerly method that sends it, or client.rest.request
+// where none does, and the route's section in Fluxer's own docs, which keep the wire details. The table renders in
+// full without JavaScript. The search and the area filter only hide rows
+import "../../../styles/reference.css"
+import "../../../styles/endpoints.css"
+import Docs from "../../../layouts/Docs.astro"
+import Code from "../../../components/docs/Code.astro"
+import Heading from "../../../components/docs/reference/Heading.astro"
+import { endpoints, routeId, type EndpointRoute } from "../../../lib/endpoints"
+import { endpointView } from "../../../lib/endpoint-view"
+import { endpointsUrl, referenceUrl, type TocItem } from "../../../lib/reference"
+
+const { rest } = endpoints
+const { areas, counts } = endpointView(endpoints.areas)
+const toc: TocItem[] = areas.map((area) => ({ depth: 2, text: titleCase(area.title), id: area.slug }))
+
+const ids = areas.flatMap((area) => area.routes.map(routeId))
+const repeated = ids.find((id, index) => ids.indexOf(id) !== index)
+if (repeated) throw new Error(`Two routes share the anchor ${repeated}`)
+
+// What the search reads for a row: the route, its summary and the names a reader may know it by
+const searchText = (route: EndpointRoute) =>
+    [route.method, route.path, route.summary, ...route.methods.map((method) => method.name), route.fallback === "rest" ? rest.name : ""].join(" ").toLowerCase()
+---
+
+<Docs
+    title="Fluxer Endpoints"
+    description="Fluxer's HTTP routes that a bot can use, each with the Fluxerly method that calls it and a link to its section in the Fluxer docs"
+    section="reference"
+    current={endpointsUrl}
+    toc={toc}
+    crumbs={[{ title: "Reference", href: referenceUrl }]}
+>
+    <div class="ref ep">
+        <p class="ep-coverage">
+            <strong>{counts.withMethod}</strong> of {counts.routes} routes have a Fluxerly method. <strong>{counts.rest}</strong> more work through{" "}
+            <a href={rest.url}><Code text={rest.name} /></a>
+        </p>
+        <p class="ep-note">The Effect API uses the same method names. Routes a bot cannot send, such as sign-in and billing, are left out</p>
+
+        <form class="ep-tools" role="search" aria-label="Filter the routes" hidden data-ep-tools data-pagefind-ignore>
+            <label class="ep-field ep-find">
+                <span class="ep-label">Find a route</span>
+                <input type="search" name="q" autocomplete="off" spellcheck="false" placeholder="Such as /channels/123/messages or ban" data-ep-query />
+            </label>
+            <label class="ep-field ep-pick">
+                <span class="ep-label">Area</span>
+                <select name="area" data-ep-area-pick>
+                    <option value="">All areas</option>
+                    {areas.map((area) => <option value={area.slug}>{titleCase(area.title)}</option>)}
+                </select>
+            </label>
+            <p class="ep-status" aria-live="polite" data-ep-status></p>
+        </form>
+
+        {
+            areas.map((area) => (
+                <section class="ep-area" data-ep-area={area.slug}>
+                    <Heading level={2} id={area.slug}>{titleCase(area.title)}</Heading>
+                    <div class="ep-panel">
+                        <table class="ep-table" role="table">
+                            <colgroup>
+                                <col class="ep-col-route" />
+                                <col />
+                            </colgroup>
+                            <thead class="sr-only" role="rowgroup">
+                                <tr role="row">
+                                    <th scope="col" role="columnheader">Fluxer route</th>
+                                    <th scope="col" role="columnheader">Fluxerly</th>
+                                </tr>
+                            </thead>
+                            <tbody role="rowgroup">
+                                {area.routes.map((route) => (
+                                    <tr class="ep-row" id={routeId(route)} role="row" data-ep-row data-ep-method={route.method} data-ep-path={route.path} data-ep-text={searchText(route)}>
+                                        <td class="ep-route" role="cell">
+                                            <span class="ep-line">
+                                                <span class="ep-verb" data-verb={route.method.toLowerCase()}>{route.method}</span>
+                                                <Code class="ep-path" text={route.path} route />
+                                            </span>
+                                            {/* The gap before the docs link stays at the end of the summary's line, so a wrapped link starts flush */}
+                                            <span class="ep-summary">
+                                                {route.summary}<span class="ep-gap" aria-hidden="true" /><wbr />{route.docs && <a class="ep-docs" href={route.docs} aria-label={`${route.summary} in the Fluxer docs`}>Fluxer docs</a>}
+                                            </span>
+                                        </td>
+                                        <td class="ep-sdk" role="cell">
+                                            {route.methods.length ? (
+                                                <ul class="ep-methods">
+                                                    {route.methods.map((method) => (
+                                                        <li>
+                                                            <a href={method.url}>
+                                                                <Code text={method.name} />
+                                                            </a>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            ) : (
+                                                <span class="ep-fallback">
+                                                    Use{" "}
+                                                    <a href={rest.url}>
+                                                        <Code text={rest.name} />
+                                                    </a>
+                                                </span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            ))
+        }
+        <p class="ep-empty" hidden data-ep-empty>No route matches. Try a path such as /guilds or a method such as ban</p>
+    </div>
+</Docs>
+
+<script>
+    // Filters the rows as the reader types or picks an area. A pasted request URL or path, such as
+    // https://api.fluxer.app/v1/channels/123/messages, finds the route template it calls. The filter lives in the
+    // address, so a filtered view can be shared and survives a reload
+    const tools = document.querySelector<HTMLFormElement>("[data-ep-tools]")
+    const query = document.querySelector<HTMLInputElement>("[data-ep-query]")
+    const pick = document.querySelector<HTMLSelectElement>("[data-ep-area-pick]")
+    const status = document.querySelector<HTMLElement>("[data-ep-status]")
+    const empty = document.querySelector<HTMLElement>("[data-ep-empty]")
+    const areas = [...document.querySelectorAll<HTMLElement>("[data-ep-area]")]
+
+    if (tools && query && pick && status && empty) {
+        const rows = areas.flatMap((area) =>
+            [...area.querySelectorAll<HTMLElement>("[data-ep-row]")].map((row) => ({
+                row,
+                area,
+                method: row.dataset.epMethod ?? "",
+                segments: (row.dataset.epPath ?? "").split("/").filter(Boolean),
+                text: row.dataset.epText ?? "",
+            })),
+        )
+
+        // A query that reads as a request, an optional method and then a path, matches routes segment by segment. A
+        // parameter such as {channel_id} takes any value, and the last segment may still be half typed
+        const asRoute = (value: string) => {
+            const match = /^(get|post|put|patch|delete)?\s*(?:https?:\/\/[^/\s]+)?(\/\S*)$/i.exec(value)
+            if (!match) return undefined
+            const path = match[2]!.split(/[?#]/)[0]!.replace(/^\/v1(?=\/|$)/, "")
+            // A trailing slash asks for the routes below the path
+            return { method: match[1]?.toUpperCase(), segments: path.split("/").filter(Boolean), below: path.endsWith("/") }
+        }
+
+        type Route = NonNullable<ReturnType<typeof asRoute>>
+        const fits = (route: Route, item: (typeof rows)[number], exact: boolean) =>
+            (!route.method || route.method === item.method) &&
+            (exact ? route.segments.length === item.segments.length : route.segments.length <= item.segments.length) &&
+            route.segments.every((segment, index) => {
+                const own = item.segments[index]!.toLowerCase()
+                return own === segment || /^\{.+\}$/.test(own) || (!exact && index === route.segments.length - 1 && own.startsWith(segment))
+            })
+
+        const apply = () => {
+            const value = query.value.trim().toLowerCase()
+            const route = asRoute(value)
+            const terms = value.split(/\s+/).filter(Boolean)
+            const area = pick.value
+            // A whole path, such as a pasted request URL, shows the route it calls. One still being typed shows every
+            // route it could become
+            const exact = !!route && !route.below && rows.some((item) => fits(route, item, true))
+            let shown = 0
+            for (const item of rows) {
+                const inArea = !area || item.area.dataset.epArea === area
+                const matches = route ? fits(route, item, exact) : terms.every((term) => item.text.includes(term))
+                item.row.hidden = !(inArea && matches)
+                if (!item.row.hidden) shown++
+            }
+            for (const section of areas) section.hidden = !section.querySelector("[data-ep-row]:not([hidden])")
+            const filtering = Boolean(value || area)
+            status.textContent = filtering ? `${shown} of ${rows.length} routes` : ""
+            empty.hidden = shown > 0
+            const params = new URLSearchParams(location.search)
+            for (const [key, current] of [["q", query.value.trim()], ["area", area]] as const) current ? params.set(key, current) : params.delete(key)
+            const search = params.toString()
+            history.replaceState(history.state, "", `${location.pathname}${search ? `?${search}` : ""}${location.hash}`)
+        }
+
+        const params = new URLSearchParams(location.search)
+        query.value = params.get("q") ?? ""
+        const area = params.get("area")
+        if (area && [...pick.options].some((option) => option.value === area)) pick.value = area
+        tools.hidden = false
+        query.addEventListener("input", apply)
+        pick.addEventListener("change", apply)
+        // Enter keeps the reader on the page instead of submitting the form
+        tools.addEventListener("submit", (event) => event.preventDefault())
+        if (query.value || pick.value) apply()
+    }
+</script>

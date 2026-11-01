@@ -1,0 +1,1652 @@
+---
+// Open space below the hero's horizon. Everything under the water line is one signal line running
+// through space, from the npm coin at the horizon down to the last station. Sections hang off the
+// line on alternating sides, and a course log on the right edge shows where the reader is
+
+import Near from "./Near.astro"
+import { experienceKey } from "../../lib/experience"
+
+interface Props {
+    stops: { id: string; label: string }[]
+}
+
+const { stops } = Astro.props
+---
+
+<div class="night" data-night>
+    <!-- Still stops time before space is first drawn: this runs as the page is read, before anything below
+         it exists, and mirrors isStill in the script further down, which keeps the state from then on -->
+    <script is:inline define:vars={{ key: experienceKey }}>
+        {
+            let mode = document.documentElement.dataset.experience
+            if (mode !== "immersive" && mode !== "still") {
+                let stored = null
+                try {
+                    stored = window.localStorage.getItem(key)
+                } catch {
+                    // Storage is blocked, so nothing was chosen
+                }
+                mode = stored === "still" ? "still" : null
+            }
+            const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            if (mode === "still" || reduce) document.currentScript.parentElement.setAttribute("data-still", "")
+        }
+    </script>
+    <!-- Stars at two depths, the farthest things in space. The scroll moves them least, the far ones least of all.
+         The bodies of the conductor's universe sit in the sections, far behind them, and the near plane passes in
+         front of the margins, so space has depth all the way down -->
+    <div class="field field-far" aria-hidden="true"></div>
+    <div class="field field-near" aria-hidden="true"></div>
+    <Near seeds={11} />
+    <!-- Nebula light near the horizon, slowly breathing, under the first sections -->
+    <div class="nebula" aria-hidden="true"><div class="nebula-light"></div></div>
+    <div class="rays" aria-hidden="true"><div class="rays-light"></div></div>
+    <!-- The reader's light. Its frame moves with the scroll, so the light stays under a resting pointer -->
+    <div class="torch-frame" aria-hidden="true"><div class="torch" data-torch></div></div>
+    <!-- Stardust drifting up through the dark, space's own slow life -->
+    <div class="motes" aria-hidden="true">
+        {Array.from({ length: 14 }, (_, i) => <span class="mote" style={`--x: ${(7 + i * 6.6 + (i % 3) * 2.1) % 96}%; --d: ${34 + (i * 7) % 23}s; --w: ${-(i * 13) % 34}s; --s: ${2 + (i % 4) * 0.8}px; --sway: ${(i % 2 ? 1 : -1) * (18 + (i % 5) * 9)}px`} />)}
+    </div>
+    <!-- The thread. Script draws it through the stations. As the reader descends, the scroll opens its window
+         further down the line, so it lengthens in step with the page -->
+    <div class="thread-reveal" aria-hidden="true" data-thread-reveal>
+        <div class="thread-hold">
+            <svg class="thread" focusable="false" data-thread>
+                <defs>
+                    <linearGradient id="thread-fade" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="100%">
+                        <stop offset="0" stop-color="#46e3ef" />
+                        <stop offset="0.55" stop-color="#7fb0ff" />
+                        <stop offset="1" stop-color="#a57cff" />
+                    </linearGradient>
+                </defs>
+                <path class="thread-glow" data-thread-glow d="" />
+                <path class="thread-line" data-thread-line d="" />
+            </svg>
+            <!-- Messages travelling down the descent, the same beads that ride the hero's ribbon -->
+            <div class="beads" data-beads></div>
+        </div>
+    </div>
+    <svg class="thread-stations" aria-hidden="true" focusable="false" data-thread-stations>
+        <g class="stations" data-stations></g>
+    </svg>
+    <slot />
+    <!-- The course log: where you are along the signal line. Visible once the hero is out of sight -->
+    <nav class="log" aria-label="Sections" data-log>
+        <ol>
+            {
+                stops.map((stop, index) => (
+                    <li>
+                        <a href={`#${stop.id}`} data-stop={stop.id}>
+                            <span class="log-dot" aria-hidden="true">
+                                <span class="log-number">{String(index + 1).padStart(2, "0")}</span>
+                            </span>
+                            <span class="log-label">{stop.label}</span>
+                        </a>
+                    </li>
+                ))
+            }
+        </ol>
+    </nav>
+</div>
+
+<script>
+    import { anchorDepth, fitPinnedIntros } from "../../lib/depth"
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+
+    const night = document.querySelector<HTMLElement>("[data-night]")
+    if (night) {
+        const isStill = () => getExperience() === "still" || prefersReducedMotion()
+        const update = () => night.toggleAttribute("data-still", isStill())
+        update()
+        subscribeExperience(update)
+        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", update)
+        night.classList.add("js")
+
+        // Content rises into view once, the first time the visitor sees it
+        const seen = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add("is-in")
+                        seen.unobserve(entry.target)
+                    }
+                }
+            },
+            { rootMargin: "0px 0px -8% 0px" },
+        )
+        for (const element of night.querySelectorAll("[data-rise]")) seen.observe(element)
+
+        // The line runs from the npm coin at the horizon through every station to the last one
+        const reveal = night.querySelector<HTMLElement>("[data-thread-reveal]")
+        const svg = night.querySelector<SVGSVGElement>("[data-thread]")
+        const line = night.querySelector<SVGPathElement>("[data-thread-line]")
+        const glow = night.querySelector<SVGPathElement>("[data-thread-glow]")
+        const beadLayer = night.querySelector<HTMLElement>("[data-beads]")
+        const stationsSvg = night.querySelector<SVGSVGElement>("[data-thread-stations]")
+        const stationsGroup = night.querySelector<SVGGElement>("[data-stations]")
+        const stations = Array.from(night.querySelectorAll<HTMLElement>("[data-station]"))
+        const coin = document.querySelector<HTMLElement>("[data-waterline] .coin")
+        const ns = "http://www.w3.org/2000/svg"
+        // The drawn tip of the line stays level with this share of the screen height
+        const readingLine = 0.72
+        let points: { x: number; y: number; label: string }[] = []
+        let total = 0
+        let built = false
+        // Where the night sits on the page, how far the page is zoomed and how tall the screen is, kept so
+        // scroll and pointer work never reads layout
+        let nightTop = 0
+        let nightLeft = 0
+        let zoom = 1
+        let viewport = window.innerHeight
+        // The page's scroll position, read in the scroll event before any frame work has changed styles. Reading it
+        // later in a frame would make the browser work out styles and layout early, once more per frame
+        let scrollTop = window.scrollY
+
+        // The line as a table of points a few pixels apart along it. `tableReach` is the lowest point the
+        // line has reached by each entry. It only grows, so the place where the line reaches a depth is a search
+        const tableStep = 6
+        let tableCount = 0
+        let tableX = new Float32Array(0)
+        let tableY = new Float32Array(0)
+        let tableReach = new Float32Array(0)
+
+        // The first table entry at or below a depth in the night, or the entry count past the end
+        const reachIndex = (y: number) => {
+            let low = 0
+            let high = tableCount
+            while (low < high) {
+                const middle = (low + high) >> 1
+                if (tableReach[middle] < y) low = middle + 1
+                else high = middle
+            }
+            return low
+        }
+
+        // A point of the line a distance along it, between two table entries
+        const pointAt = (along: number) => {
+            const at = Math.min(tableCount - 1, Math.max(0, along / tableStep))
+            const index = Math.min(tableCount - 2, Math.floor(at))
+            const t = at - index
+            return [tableX[index] + (tableX[index + 1] - tableX[index]) * t, tableY[index] + (tableY[index + 1] - tableY[index]) * t]
+        }
+
+        // The layers that follow the scroll are CSS animations on the page's scroll timeline, which the
+        // compositor runs in step with the scroll itself. They need only where the night starts, where
+        // the reading line sits and where each body of space is anchored, written again when the page or
+        // the screen changes size
+        const measureScroll = () => {
+            const box = night.getBoundingClientRect()
+            scrollTop = window.scrollY
+            nightTop = box.top + scrollTop
+            nightLeft = box.left
+            zoom = night.offsetWidth > 0 ? box.width / night.offsetWidth : 1
+            viewport = window.innerHeight
+            night.style.setProperty("--night-top", `${nightTop.toFixed(1)}px`)
+            night.style.setProperty("--reading-line", `${(viewport * readingLine).toFixed(1)}px`)
+            fitPinnedIntros(night)
+            anchorDepth(night)
+        }
+
+        // Where an element sits once its section has risen into place. A section that has not risen yet is still
+        // lowered a little, so the line, the panels and the companions are measured as they will settle and
+        // nothing has to be measured again while the reader scrolls
+        const settledRect = (element: Element) => {
+            const rect = element.getBoundingClientRect()
+            const riser = element.closest<HTMLElement>("[data-rise]")
+            const risen = riser ? new DOMMatrixReadOnly(getComputedStyle(riser).transform).m42 * zoom : 0
+            // A heading pinned while its section scrolls is measured where it starts, at the top of its row. Measuring it where
+            // it's pinned would pull the line down the page whenever the page changes size with the reader inside the section
+            const pinned = element.closest<HTMLElement>(".split > .intro")
+            const pinnedBy = pinned && getComputedStyle(pinned).position === "sticky" ? pinned.getBoundingClientRect().top - risen - pinned.parentElement!.getBoundingClientRect().top : 0
+            const shift = risen + pinnedBy
+            return { left: rect.left, right: rect.right, width: rect.width, height: rect.height, top: rect.top - shift, bottom: rect.bottom - shift }
+        }
+
+        const build = () => {
+            if (!svg || !line || !glow || !stationsGroup || !stationsSvg) return
+            measureScroll()
+            // Everything here is measured in viewport pixels, which the page zoom on wide screens
+            // scales up. The SVG covers the night and uses the same units, so points land where measured
+            const box = night.getBoundingClientRect()
+            const width = box.width
+            const height = box.height
+            svg.setAttribute("viewBox", `0 0 ${width} ${height}`)
+            stationsSvg.setAttribute("viewBox", `0 0 ${width} ${height}`)
+
+            const coinBox = coin?.getBoundingClientRect()
+            const start = coinBox ? { x: coinBox.left - box.left + coinBox.width / 2, y: 0 } : { x: width * 0.16, y: 0 }
+            points = stations.map((station) => {
+                const rect = settledRect(station)
+                return { x: rect.left - box.left + rect.width / 2, y: rect.top - box.top + rect.height / 2, label: station.dataset.station ?? "" }
+            })
+            // The line that starts at the install command on the hero's water closes at the install command
+            // at the bottom: it arrives at the chip's left edge, level with its middle
+            const chipElement = night.querySelector<HTMLElement>("#install .cmd-chip")
+            const chipBox = chipElement ? settledRect(chipElement) : null
+            const chip = chipBox && chipBox.width > 0 ? { x: chipBox.left - box.left, y: chipBox.top - box.top + chipBox.height / 2 } : null
+            const end = chip ?? { x: width * 0.5, y: height - 24 }
+
+            // The thread runs straight down a section's edge and swings across the page only in the
+            // empty space before the next heading, so it never crosses the reading. Vertical tangents
+            // keep the swings smooth, like a signal drawn by hand
+            const waypoints: { x: number; y: number }[] = []
+            stations.forEach((station, index) => {
+                const point = points[index]
+                const section = station.closest("section")
+                const rect = section?.getBoundingClientRect()
+                // Arrive at the section's top edge on the station's side, then run straight down to the heading
+                if (rect && rect.top - box.top < point.y - 40) waypoints.push({ x: point.x, y: rect.top - box.top - 20 })
+                waypoints.push(point)
+                // Leave along the same edge from the section's bottom, so the swing across happens in the gap.
+                // The last station turns straight into the chip when the chip sits above the section's end
+                const last = index === stations.length - 1
+                if (rect && rect.bottom - box.top > point.y + 80 && !(last && chip && chip.y < rect.bottom - box.top)) {
+                    waypoints.push({ x: point.x, y: rect.bottom - box.top + 20 })
+                }
+            })
+            // Each piece of the line as a cubic curve, x and y of its start, two handles and its end. A
+            // straight piece keeps its handles on its ends. The path is written from them and sampled from them
+            const pieces: number[][] = []
+            let previous = start
+            const piece = (c1x: number, c1y: number, c2x: number, c2y: number, to: { x: number; y: number }) => {
+                pieces.push([previous.x, previous.y, c1x, c1y, c2x, c2y, to.x, to.y])
+                previous = to
+            }
+            for (const point of waypoints) {
+                if (Math.abs(point.x - previous.x) < 1) {
+                    piece(previous.x, previous.y, point.x, point.y, point)
+                } else {
+                    const k = Math.max(60, (point.y - previous.y) * 0.5)
+                    piece(previous.x, previous.y + k, point.x, point.y - k, point)
+                }
+            }
+            if (chip) {
+                // Down from the last station, then level into the chip, like a lead plugged into its socket
+                const down = Math.max(24, (end.y - previous.y) * 0.9)
+                const across = Math.max(24, (end.x - previous.x) * 0.6)
+                piece(previous.x, previous.y + down, end.x - across, end.y, end)
+            } else {
+                const k = Math.max(60, (end.y - previous.y) * 0.5)
+                piece(previous.x, previous.y + k, end.x, end.y - k, end)
+            }
+            let d = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)}`
+            for (const [x0, y0, c1x, c1y, c2x, c2y, x, y] of pieces) {
+                const straight = c1x === x0 && c1y === y0 && c2x === x && c2y === y
+                d += straight
+                    ? ` L ${x.toFixed(1)} ${y.toFixed(1)}`
+                    : ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${x.toFixed(1)} ${y.toFixed(1)}`
+            }
+            line.setAttribute("d", d)
+            glow.setAttribute("d", d)
+            total = line.getTotalLength()
+
+            // The table walks each piece in steps of about two pixels and keeps a point every table step.
+            // Asking the path for each point instead costs hundreds of milliseconds on a long page
+            const xs: number[] = [start.x]
+            const ys: number[] = [start.y]
+            let travelled = 0
+            let next = tableStep
+            let px = start.x
+            let py = start.y
+            for (const [x0, y0, c1x, c1y, c2x, c2y, x3, y3] of pieces) {
+                const rough = Math.hypot(c1x - x0, c1y - y0) + Math.hypot(c2x - c1x, c2y - c1y) + Math.hypot(x3 - c2x, y3 - c2y)
+                const steps = Math.max(4, Math.ceil(rough / 2))
+                for (let i = 1; i <= steps; i++) {
+                    const t = i / steps
+                    const u = 1 - t
+                    const x = u * u * u * x0 + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * x3
+                    const y = u * u * u * y0 + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * y3
+                    const step = Math.hypot(x - px, y - py)
+                    while (step > 0 && travelled + step >= next) {
+                        const k = (next - travelled) / step
+                        xs.push(px + (x - px) * k)
+                        ys.push(py + (y - py) * k)
+                        next += tableStep
+                    }
+                    travelled += step
+                    px = x
+                    py = y
+                }
+            }
+            xs.push(previous.x)
+            ys.push(previous.y)
+            const oldX = tableX
+            const oldY = tableY
+            const oldCount = tableCount
+            tableCount = xs.length
+            tableX = Float32Array.from(xs)
+            tableY = Float32Array.from(ys)
+            // How much of the line is the same as before. An answer opening only moves what's below it
+            let unchanged = 0
+            while (unchanged < tableCount && unchanged < oldCount && tableX[unchanged] === oldX[unchanged] && tableY[unchanged] === oldY[unchanged]) unchanged++
+            tableReach = new Float32Array(tableCount)
+            let lowest = -Infinity
+            for (let i = 0; i < tableCount; i++) {
+                lowest = Math.max(lowest, tableY[i])
+                tableReach[i] = lowest
+            }
+            // A far body drifts past the page as it scrolls, so one the line could meet at any point of that drift stays out
+            for (const body of night.querySelectorAll<HTMLElement>(".far")) {
+                body.removeAttribute("data-clear")
+                const rect = body.getBoundingClientRect()
+                const holder = body.offsetParent?.getBoundingClientRect()
+                if (!holder) continue
+                const placed = holder.top + window.scrollY - nightTop + body.offsetTop * zoom
+                const drift = viewport * 0.3
+                const left = rect.left - nightLeft - 24
+                const right = rect.right - nightLeft + 24
+                const top = placed - drift
+                const bottom = placed + rect.height + drift
+                for (let i = 0; i < tableCount; i++) {
+                    if (tableX[i] >= left && tableX[i] <= right && tableY[i] >= top && tableY[i] <= bottom) {
+                        body.setAttribute("data-clear", "")
+                        break
+                    }
+                }
+            }
+            threadShown = reveal ? reveal.getClientRects().length > 0 : false
+            collectPanels()
+            measurePanels()
+            measureFloats()
+            sectionTops = sections.map((section) => section.getBoundingClientRect().top + window.scrollY)
+            pageHeight = document.documentElement.scrollHeight
+            // Beads are made again only for a stretch of line that changed, so a rebuild leaves the rest of them running
+            const beadKey = `${zoom}@${threadShown}`
+            makeBeads(beadKey === lastBeadKey ? unchanged : 0)
+            lastBeadKey = beadKey
+
+            // The stations stay the same elements, so one that's lit doesn't light up again
+            if (stationGroups.length === points.length) {
+                points.forEach((point, index) => stationGroups[index].setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`))
+                built = true
+                reach()
+                return
+            }
+            stationsGroup.replaceChildren()
+            stationLit = points.map(() => false)
+            points.forEach((point, index) => {
+                const group = document.createElementNS(ns, "g")
+                group.setAttribute("class", "station")
+                group.setAttribute("transform", `translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})`)
+                const halo = document.createElementNS(ns, "circle")
+                halo.setAttribute("class", "station-halo")
+                halo.setAttribute("r", "23")
+                const ring = document.createElementNS(ns, "circle")
+                ring.setAttribute("class", "station-ring")
+                ring.setAttribute("r", "14")
+                const number = document.createElementNS(ns, "text")
+                number.setAttribute("class", "station-number")
+                number.setAttribute("text-anchor", "middle")
+                number.setAttribute("dominant-baseline", "central")
+                number.textContent = String(index + 1).padStart(2, "0")
+                group.append(halo, ring, number)
+                stationsGroup.append(group)
+            })
+            stationGroups = Array.from(stationsGroup.children) as SVGGElement[]
+            built = true
+            reach()
+        }
+
+        // Beads of light run down the line, a message every few seconds: a bead every bead spacing, each
+        // sliding one spacing along the line per loop, so together they look like one endless stream. Each
+        // bead is its own small layer with an animation through points of the line, which the compositor
+        // runs without the page ever being painted again for it
+        const beadSpacing = 240
+        const beadLength = 10
+        const beadLoop = 7000
+        // The line's first stretch fades in out of the hero's water, and a bead on it fades in with it
+        const beadFadeIn = 180
+        // Keyframes per bead along its stretch of line, about ten pixels apart
+        const beadSteps = 24
+        let beadStart: number | null = null
+        // Each bead with the stretch of the night its animation covers, top and bottom in viewport pixels
+        let beads: { element: HTMLElement; animation: Animation; top: number; bottom: number; running: boolean }[] = []
+        let lastBeadKey = ""
+
+        // A bead whose whole stretch lies within the first `unchanged` table entries stays as it is
+        const makeBeads = (unchanged: number) => {
+            const kept = threadShown ? beads.filter((_, k) => (((k + 1) * beadSpacing + beadLength / 2 + 3) / tableStep) + 1 < unchanged) : []
+            for (const bead of beads.slice(kept.length)) {
+                bead.animation.cancel()
+                bead.element.remove()
+            }
+            beads = kept
+            if (!beadLayer) return
+            if (!threadShown || tableCount < 2) return
+            // Every bead shares one start, kept through rebuilds so the stream never jumps
+            beadStart ??= Number(document.timeline.currentTime ?? 0)
+            for (let k = kept.length; k * beadSpacing + beadLength / 2 < total; k++) {
+                const frames: Keyframe[] = []
+                let lastAngle: number | null = null
+                let top = Infinity
+                let bottom = -Infinity
+                for (let i = 0; i <= beadSteps; i++) {
+                    const along = (k + i / beadSteps) * beadSpacing + beadLength / 2
+                    const at = Math.min(along, total)
+                    const [x, y] = pointAt(at)
+                    const [x1, y1] = pointAt(at - 3)
+                    const [x2, y2] = pointAt(at + 3)
+                    // The bead lies along the line. Its turn keeps counting past a half circle, so it never spins back
+                    let angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI - 90
+                    if (lastAngle !== null) {
+                        while (angle - lastAngle > 180) angle -= 360
+                        while (angle - lastAngle < -180) angle += 360
+                    }
+                    lastAngle = angle
+                    top = Math.min(top, y)
+                    bottom = Math.max(bottom, y)
+                    frames.push({
+                        offset: i / beadSteps,
+                        transform: `translate(${(x / zoom).toFixed(2)}px, ${(y / zoom).toFixed(2)}px) rotate(${angle.toFixed(1)}deg)`,
+                        // Past the end of the line a bead is gone, as the dashes of a line end with it
+                        opacity: along > total ? 0 : Math.min(1, along / beadFadeIn),
+                    })
+                }
+                const bead = document.createElement("i")
+                bead.className = "bead"
+                beadLayer.append(bead)
+                const animation = bead.animate(frames, { duration: beadLoop, iterations: Infinity, easing: "linear" })
+                animation.pause()
+                animation.currentTime = 0
+                beads.push({ element: bead, animation, top, bottom, running: false })
+            }
+            runBeads()
+        }
+
+        // A bead runs while its stretch of line is within a screen of the view, rejoining the shared stream
+        // where it stands now. Elsewhere, and while time stands still, it waits at its first place, so the
+        // page never services animations nobody can see
+        const runBeads = () => {
+            const still = night.hasAttribute("data-still")
+            const viewTop = scrollTop - nightTop - viewport
+            const viewBottom = scrollTop - nightTop + 2 * viewport
+            for (const bead of beads) {
+                const run = !still && bead.bottom >= viewTop && bead.top <= viewBottom
+                if (run === bead.running) continue
+                bead.running = run
+                if (run) {
+                    bead.animation.startTime = beadStart
+                } else {
+                    bead.animation.pause()
+                    bead.animation.currentTime = 0
+                }
+            }
+        }
+
+        // How far the reader has descended, as a line a little below the middle of the screen
+        const log = night.querySelector<HTMLElement>("[data-log]")
+        const logLinks = Array.from(night.querySelectorAll<HTMLAnchorElement>("[data-stop]"))
+        const sections = Array.from(night.querySelectorAll<HTMLElement>("section[id]"))
+        let sectionTops: number[] = []
+        let pageHeight = 0
+        let stationGroups: SVGGElement[] = []
+        let stationLit: boolean[] = []
+        let logShown: boolean | null = null
+        let currentStop: string | null = null
+        let ticking = false
+        // Runs once per scrolled frame from stored positions only. The line itself, the stars, the reader's
+        // light and the companions follow the scroll in CSS, so nothing here moves them
+        const reach = () => {
+            ticking = false
+            if (!built) return
+            const scrollY = scrollTop
+            const still = night.hasAttribute("data-still")
+            const depth = still ? Infinity : scrollY + viewport * readingLine - nightTop
+            drawnLength = still ? total : Math.min(total, reachIndex(depth) * tableStep)
+            stationGroups.forEach((station, index) => {
+                const on = points[index].y <= depth
+                if (stationLit[index] === on) return
+                stationLit[index] = on
+                station.classList.toggle("is-lit", on)
+                // The thread reaching a section wakes it: its keepsake glows
+                sections[index]?.toggleAttribute("data-reached", on)
+            })
+
+            // The course log appears once the hero is gone, and marks the section in view
+            const below = scrollY > nightTop - viewport * 0.5
+            if (below !== logShown) {
+                logShown = below
+                log?.toggleAttribute("data-visible", below)
+            }
+            // The section the reading line is in, and at the page's end the last one, which the page may be
+            // too short to bring up to the reading line
+            const middle = scrollY + viewport * 0.45
+            let current = ""
+            sections.forEach((section, index) => {
+                if (sectionTops[index] - 120 <= middle) current = section.id
+            })
+            if (sections.length > 0 && scrollY + viewport >= pageHeight - 2) current = sections[sections.length - 1].id
+            if (current !== currentStop) {
+                currentStop = current
+                // An empty aria-current means false, so the current stop names what it is
+                for (const link of logLinks) {
+                    if (link.dataset.stop === current) link.setAttribute("aria-current", "location")
+                    else link.removeAttribute("aria-current")
+                }
+            }
+            runBeads()
+            // The page moves under a resting pointer, so what the reader's light touches changes
+            if (torchOn) wakeLight()
+        }
+
+        // Companions turn a little toward the reader's light. Their centers on the page, measured with the line
+        const floats = Array.from(night.querySelectorAll<HTMLElement>("[data-float]"))
+        let floatBox = new Float32Array(0)
+        const floatWritten: { tx: number; ty: number; lit: number }[] = floats.map(() => ({ tx: 0, ty: 0, lit: 0 }))
+        const measureFloats = () => {
+            floatBox = new Float32Array(floats.length * 3)
+            floats.forEach((element, index) => {
+                const rect = settledRect(element)
+                const top = rect.top + window.scrollY
+                floatBox[index * 3] = rect.left + rect.width / 2
+                floatBox[index * 3 + 1] = top + rect.height / 2
+                floatBox[index * 3 + 2] = rect.height / 2
+                // A companion drifts up 36 pixels while it crosses the screen, from entering at the bottom to
+                // leaving at the top. The range is in the page's own pixels, as the scroll timeline counts them
+                element.style.setProperty("--drift-start", `${((top - viewport) / zoom).toFixed(1)}px`)
+                element.style.setProperty("--drift-end", `${((top + rect.height) / zoom).toFixed(1)}px`)
+            })
+        }
+
+        // The reader's own light: a soft glow under the content that follows the pointer through space. Its
+        // frame keeps the screen's top left corner as the page scrolls, so the light is placed in screen pixels
+        const torch = night.querySelector<HTMLElement>("[data-torch]")
+        let torchTarget = { x: 0, y: 0 }
+        let torchNow = { x: 0, y: 0 }
+        let torchOn = false
+        let torchFrame = 0
+        const torchStep = () => {
+            torchFrame = 0
+            if (!torch) return
+            torchNow = { x: torchNow.x + (torchTarget.x - torchNow.x) * 0.12, y: torchNow.y + (torchTarget.y - torchNow.y) * 0.12 }
+            torch.style.transform = `translate3d(${torchNow.x.toFixed(1)}px, ${torchNow.y.toFixed(1)}px, 0)`
+            lightStep()
+            if (Math.abs(torchTarget.x - torchNow.x) + Math.abs(torchTarget.y - torchNow.y) > 0.5) torchFrame = requestAnimationFrame(torchStep)
+        }
+        night.addEventListener(
+            "pointermove",
+            (event) => {
+                if (event.pointerType === "touch" || night.hasAttribute("data-still")) return
+                torchTarget = { x: (event.clientX - nightLeft) / zoom, y: event.clientY / zoom }
+                if (!torchOn) {
+                    torchOn = true
+                    torchNow = torchTarget
+                    night.toggleAttribute("data-torch-on", true)
+                }
+                if (!torchFrame) torchFrame = requestAnimationFrame(torchStep)
+            },
+            { passive: true },
+        )
+        night.addEventListener("pointerleave", () => {
+            torchOn = false
+            night.toggleAttribute("data-torch-on", false)
+            wakeLight()
+        })
+
+        // Panels catch the signal: a bead passing a glass panel lights the panel's edge nearest it in the
+        // section's voice, and the light fades once the bead has gone by. Each bead keeps one of three slots
+        // on a panel by its place in the line, so a light follows its bead and never jumps to another.
+        // The lights lie over the panel in a layer of their own, and each frame only moves and fades them,
+        // so the panel and the text in it are never restyled or repainted for them. The reader's light on the
+        // glass lies in the same layer
+        // A bead lights a panel from this many pixels away, fully once it is within the nearer distance
+        const catchReach = 120
+        const catchFull = 24
+        const maxBeads = 12
+        const slots = 3
+        // Seconds a light takes to rise as a bead comes near, and to fade after it
+        const lightRise = 0.12
+        const lightFade = 0.6
+        let panels: HTMLElement[] = []
+        let panelBox = new Float32Array(0)
+        let panelNear = new Uint8Array(0)
+        let nearCount = 0
+        let slotTarget = new Float32Array(0)
+        let slotLevel = new Float32Array(0)
+        let slotX = new Float32Array(0)
+        let slotY = new Float32Array(0)
+        // What was last written to each light, so unchanged lights cost no style work
+        let writtenLevel = new Float32Array(0)
+        let writtenX = new Float32Array(0)
+        let writtenY = new Float32Array(0)
+        // The light over each panel, made the first time a bead or the reader's light reaches it: a rim along
+        // the panel's edge and a soft glow over its glass, each with one dot of light per slot, and the
+        // reader's light on the glass
+        type PanelLight = { holder: HTMLElement; beads: HTMLElement[]; rim: HTMLElement[]; glow: HTMLElement[]; torch: HTMLElement; torchLayer: HTMLElement; beadLit: boolean; torchLit: boolean }
+        let lights: (PanelLight | null)[] = []
+        let drawnLength = 0
+        let threadShown = false
+        let signalFrame = 0
+        let lastSignalTime = 0
+
+        const nearObserver = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    const index = panels.indexOf(entry.target as HTMLElement)
+                    if (index >= 0) panelNear[index] = entry.isIntersecting ? 1 : 0
+                }
+                nearCount = 0
+                for (const near of panelNear) nearCount += near
+                wakeSignal()
+            },
+            { rootMargin: `${catchReach}px 0px` },
+        )
+
+        // The glass panels of the sections. An island that renders again can replace them, so this runs on every build
+        const collectPanels = () => {
+            const found = Array.from(night.querySelectorAll<HTMLElement>(".glass"))
+            if (found.length === panels.length && found.every((panel, index) => panel === panels[index])) return
+            for (const light of lights) light?.holder.remove()
+            nearObserver.disconnect()
+            panels = found
+            const count = panels.length
+            panelBox = new Float32Array(count * 4)
+            panelNear = new Uint8Array(count)
+            nearCount = 0
+            lights = panels.map(() => null)
+            slotTarget = new Float32Array(count * slots)
+            slotLevel = new Float32Array(count * slots)
+            slotX = new Float32Array(count * slots)
+            slotY = new Float32Array(count * slots)
+            writtenLevel = new Float32Array(count * slots)
+            writtenX = new Float32Array(count * slots)
+            writtenY = new Float32Array(count * slots)
+            for (const panel of panels) nearObserver.observe(panel)
+        }
+
+        // Panel boxes in viewport pixels from the night's top left, like the line
+        const measurePanels = () => {
+            const box = night.getBoundingClientRect()
+            panels.forEach((panel, index) => {
+                const rect = settledRect(panel)
+                panelBox[index * 4] = rect.left - box.left
+                panelBox[index * 4 + 1] = rect.top - box.top
+                panelBox[index * 4 + 2] = rect.right - box.left
+                panelBox[index * 4 + 3] = rect.bottom - box.top
+                placeLight(index)
+            })
+        }
+
+        // The light layer sits over its panel, in the night's own pixels inside the zoomed page
+        const placeLight = (index: number) => {
+            const light = lights[index]
+            if (!light) return
+            const style = light.holder.style
+            style.left = `${(panelBox[index * 4] / zoom).toFixed(1)}px`
+            style.top = `${(panelBox[index * 4 + 1] / zoom).toFixed(1)}px`
+            style.width = `${((panelBox[index * 4 + 2] - panelBox[index * 4]) / zoom).toFixed(1)}px`
+            style.height = `${((panelBox[index * 4 + 3] - panelBox[index * 4 + 1]) / zoom).toFixed(1)}px`
+        }
+
+        const makeLight = (index: number) => {
+            const panel = panels[index]
+            const look = getComputedStyle(panel)
+            const holder = document.createElement("span")
+            holder.className = "panel-light"
+            holder.setAttribute("aria-hidden", "true")
+            holder.hidden = true
+            holder.style.borderRadius = look.borderRadius
+            // The section's voice, which the layer does not inherit from outside the section
+            holder.style.setProperty("--light", look.getPropertyValue("--accent").trim() || "#46e3ef")
+            const torchLayer = document.createElement("span")
+            torchLayer.className = "panel-light-torch"
+            torchLayer.hidden = true
+            const glowLayer = document.createElement("span")
+            glowLayer.className = "panel-light-glow"
+            glowLayer.hidden = true
+            const rimLayer = document.createElement("span")
+            rimLayer.className = "panel-light-rim"
+            rimLayer.hidden = true
+            const light: PanelLight = { holder, beads: [glowLayer, rimLayer], rim: [], glow: [], torch: torchLayer.appendChild(document.createElement("b")), torchLayer, beadLit: false, torchLit: false }
+            for (let slot = 0; slot < slots; slot++) {
+                light.glow.push(glowLayer.appendChild(document.createElement("i")))
+                light.rim.push(rimLayer.appendChild(document.createElement("i")))
+            }
+            holder.append(torchLayer, glowLayer, rimLayer)
+            night.append(holder)
+            lights[index] = light
+            placeLight(index)
+            return light
+        }
+
+        // A panel's light layer shows while a bead or the reader's light is on it
+        const showLight = (light: PanelLight) => {
+            const on = light.beadLit || light.torchLit
+            if (light.holder.hidden === on) light.holder.hidden = !on
+        }
+
+        const setBeadLit = (light: PanelLight, on: boolean) => {
+            if (light.beadLit === on) return
+            light.beadLit = on
+            for (const layer of light.beads) layer.hidden = !on
+            showLight(light)
+        }
+
+        const darkenPanels = () => {
+            slotLevel.fill(0)
+            writtenLevel.fill(0)
+            for (const light of lights) if (light) setBeadLit(light, false)
+        }
+
+        const signalStep = (now: number) => {
+            signalFrame = 0
+            const dt = lastSignalTime > 0 ? Math.min(0.1, (now - lastSignalTime) / 1000) : 0
+            lastSignalTime = now
+            const clock = document.timeline.currentTime
+            if (night.hasAttribute("data-still") || !threadShown || beadStart === null || clock === null) {
+                // Still: nothing lights
+                darkenPanels()
+                lastSignalTime = 0
+                return
+            }
+            const time = Number(clock) - beadStart
+            slotTarget.fill(0)
+            if (nearCount > 0) {
+                // Each bead slides one spacing per loop, so bead k sits at (k + phase) spacings along the line,
+                // its middle half a bead further on
+                const phase = (((time % beadLoop) + beadLoop) % beadLoop) / beadLoop
+                const viewTop = scrollTop - nightTop - catchReach
+                const viewBottom = scrollTop - nightTop + viewport + catchReach
+                const from = reachIndex(viewTop) * tableStep
+                let k = Math.max(0, Math.floor((from - beadLength / 2) / beadSpacing - phase))
+                for (let count = 0; count < maxBeads; k++) {
+                    const along = (k + phase) * beadSpacing + beadLength / 2
+                    if (along > drawnLength) break
+                    const entry = Math.min(tableCount - 1, Math.round(along / tableStep))
+                    const x = tableX[entry]
+                    const y = tableY[entry]
+                    if (y > viewBottom) break
+                    if (y < viewTop) continue
+                    count++
+                    const slot = k % slots
+                    for (let p = 0; p < panels.length; p++) {
+                        if (!panelNear[p]) continue
+                        const left = panelBox[p * 4]
+                        const top = panelBox[p * 4 + 1]
+                        const right = panelBox[p * 4 + 2]
+                        const bottom = panelBox[p * 4 + 3]
+                        // The nearest point of the panel's edge
+                        let edgeX = x < left ? left : x > right ? right : x
+                        let edgeY = y < top ? top : y > bottom ? bottom : y
+                        if (edgeX === x && edgeY === y) {
+                            const toSide = Math.min(x - left, right - x)
+                            const toEnd = Math.min(y - top, bottom - y)
+                            if (toSide < toEnd) edgeX = x - left < right - x ? left : right
+                            else edgeY = y - top < bottom - y ? top : bottom
+                        }
+                        const distance = Math.hypot(x - edgeX, y - edgeY)
+                        if (distance >= catchReach) continue
+                        const t = Math.min(1, (catchReach - distance) / (catchReach - catchFull))
+                        const strength = t * t * (3 - 2 * t)
+                        const index = p * slots + slot
+                        if (strength > slotTarget[index]) {
+                            slotTarget[index] = strength
+                            slotX[index] = edgeX - left
+                            slotY[index] = edgeY - top
+                        }
+                    }
+                }
+            }
+
+            let glowing = false
+            for (let p = 0; p < panels.length; p++) {
+                let lit = false
+                let changed = false
+                for (let slot = 0; slot < slots; slot++) {
+                    const index = p * slots + slot
+                    const target = slotTarget[index]
+                    const level = slotLevel[index]
+                    const next = level + (target - level) * (1 - Math.exp(-dt / (target > level ? lightRise : lightFade)))
+                    slotLevel[index] = next < 0.004 ? 0 : next
+                    if (slotLevel[index] > 0) lit = true
+                    if (
+                        Math.abs(slotLevel[index] - writtenLevel[index]) > 0.008 ||
+                        (slotLevel[index] === 0 && writtenLevel[index] !== 0) ||
+                        (slotLevel[index] > 0 && (Math.abs(slotX[index] - writtenX[index]) > 0.75 || Math.abs(slotY[index] - writtenY[index]) > 0.75))
+                    ) {
+                        changed = true
+                    }
+                }
+                if (lit) glowing = true
+                const shown = lights[p]?.beadLit ?? false
+                if (!changed && lit === shown) continue
+                if (!lit) {
+                    if (lights[p]) setBeadLit(lights[p]!, false)
+                    for (let slot = 0; slot < slots; slot++) writtenLevel[p * slots + slot] = 0
+                    continue
+                }
+                const light = lights[p] ?? makeLight(p)
+                setBeadLit(light, true)
+                for (let slot = 0; slot < slots; slot++) {
+                    const index = p * slots + slot
+                    const level = slotLevel[index]
+                    if (Math.abs(level - writtenLevel[index]) > 0.008 || (level === 0 && writtenLevel[index] !== 0) || !shown) {
+                        const opacity = level.toFixed(3)
+                        light.rim[slot].style.opacity = opacity
+                        light.glow[slot].style.opacity = opacity
+                        writtenLevel[index] = level
+                    }
+                    if (level > 0 && (Math.abs(slotX[index] - writtenX[index]) > 0.75 || Math.abs(slotY[index] - writtenY[index]) > 0.75 || !shown)) {
+                        // Panel pixels inside the zoomed page
+                        const place = `translate3d(${(slotX[index] / zoom).toFixed(1)}px, ${(slotY[index] / zoom).toFixed(1)}px, 0)`
+                        light.rim[slot].style.transform = place
+                        light.glow[slot].style.transform = place
+                        writtenX[index] = slotX[index]
+                        writtenY[index] = slotY[index]
+                    }
+                }
+            }
+            if (glowing || nearCount > 0) signalFrame = requestAnimationFrame(signalStep)
+            else lastSignalTime = 0
+        }
+
+        const wakeSignal = () => {
+            if (!signalFrame && built) signalFrame = requestAnimationFrame(signalStep)
+        }
+
+        // Companions turn a little toward the reader's light, and the glass panels catch it. Runs on the
+        // frames the light moves or the page scrolls under it, from stored positions only
+        let lightFrame = 0
+        const lightStep = () => {
+            lightFrame = 0
+            const scrollY = scrollTop
+            const lx = nightLeft + torchNow.x * zoom
+            const ly = torchNow.y * zoom
+            floats.forEach((element, index) => {
+                const cx = floatBox[index * 3]
+                const cy = floatBox[index * 3 + 1] - scrollY
+                const half = floatBox[index * 3 + 2]
+                // Far companions keep their pose while the light is on, and all of them settle once it goes out
+                if (torchOn && (cy + half < -200 || cy - half > viewport + 200)) return
+                const dx = lx - cx
+                const dy = ly - cy
+                const distance = Math.hypot(dx, dy)
+                const pull = torchOn ? Math.max(0, 1 - distance / 520) : 0
+                const tx = (dx / (distance || 1)) * 10 * pull
+                const ty = (dy / (distance || 1)) * 10 * pull
+                const written = floatWritten[index]
+                if (Math.abs(tx - written.tx) < 0.05 && Math.abs(ty - written.ty) < 0.05 && Math.abs(pull - written.lit) < 0.005) return
+                element.style.setProperty("--tx", `${tx.toFixed(2)}px`)
+                element.style.setProperty("--ty", `${ty.toFixed(2)}px`)
+                element.style.setProperty("--lit", pull.toFixed(2))
+                // Brightening is a filter on the moving layer, which costs a pass on every frame, so it is on only while lit
+                element.toggleAttribute("data-lit", pull > 0.005)
+                floatWritten[index] = { tx, ty, lit: pull }
+            })
+            panels.forEach((_, index) => {
+                const left = nightLeft + panelBox[index * 4]
+                const top = nightTop + panelBox[index * 4 + 1] - scrollY
+                const bottom = nightTop + panelBox[index * 4 + 3] - scrollY
+                const on = torchOn && bottom > -100 && top < viewport + 100
+                let light = lights[index]
+                if (!on && !light?.torchLit) return
+                light ??= makeLight(index)
+                if (on) {
+                    light.torch.style.transform = `translate3d(${((lx - left) / zoom).toFixed(1)}px, ${((ly - top) / zoom).toFixed(1)}px, 0)`
+                }
+                if (light.torchLit !== on) {
+                    light.torchLit = on
+                    light.torchLayer.hidden = !on
+                    showLight(light)
+                }
+            })
+        }
+        const wakeLight = () => {
+            if (!lightFrame) lightFrame = requestAnimationFrame(lightStep)
+        }
+
+        const onScroll = () => {
+            scrollTop = window.scrollY
+            if (ticking) return
+            ticking = true
+            requestAnimationFrame(reach)
+        }
+        window.addEventListener("scroll", onScroll, { passive: true })
+        // The first size draws the line at once. After that it redraws when the size has settled, because an FAQ answer gliding open
+        // resizes the page on every frame, and the line is costly to lay out
+        let sized = false
+        let settle = 0
+        const resize = new ResizeObserver(() => {
+            if (!sized) {
+                sized = true
+                build()
+                return
+            }
+            window.clearTimeout(settle)
+            settle = window.setTimeout(build, 120)
+        })
+        resize.observe(night)
+        // A screen that changes height moves the hero's end and the reading line, without resizing the night
+        window.addEventListener("resize", () => {
+            measureScroll()
+            measureFloats()
+            sectionTops = sections.map((section) => section.getBoundingClientRect().top + window.scrollY)
+            pageHeight = document.documentElement.scrollHeight
+            reach()
+        })
+
+        // A link to a section, in the course log, the hero or an answer, scrolls there in the page's own motion: smoothly
+        // while the world is alive, at once with time stopped. The browser's own jump is not used: it lands
+        // short of a section still rising into place, and the same link twice would move the page again
+        const jumpTo = (id: string) => {
+            const target = document.getElementById(id)
+            if (!target) return false
+            const top = target.getBoundingClientRect().top + window.scrollY - parseFloat(getComputedStyle(target).scrollMarginTop)
+            window.scrollTo({ top: Math.max(0, Math.round(top)), behavior: isStill() ? "instant" : "smooth" })
+            // Focus follows the jump, so the next Tab continues from the section instead of from the link
+            const heading = target.querySelector<HTMLElement>(".section-title") ?? target
+            if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1")
+            heading.focus({ preventScroll: true })
+            return true
+        }
+        document.addEventListener("click", (event) => {
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            const link = (event.target as Element).closest<HTMLAnchorElement>('a[href^="#"]')
+            if (!link) return
+            const id = decodeURIComponent(link.hash.slice(1))
+            if (!id || !jumpTo(id)) return
+            event.preventDefault()
+            if (location.hash !== `#${id}`) history.pushState(null, "", `#${id}`)
+        })
+        document.fonts?.ready.then(build)
+        // Time stopping or starting again changes the beads and the reader's light
+        const onTimeChange = () => {
+            if (night.hasAttribute("data-still") && torchOn) {
+                torchOn = false
+                night.toggleAttribute("data-torch-on", false)
+                wakeLight()
+            }
+            reach()
+            wakeSignal()
+        }
+        subscribeExperience(onTimeChange)
+        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", onTimeChange)
+        build()
+    }
+</script>
+
+<style>
+    .night {
+        /* The scroll timeline layers below cover this much of the page's own pixels from the top, more than
+           the page is tall at any width, so each moves by a fixed share of the scroll */
+        --follow: 100000px;
+        --night-top: 0px;
+        --reading-line: 0px;
+        /* How far in from the right edge the course log's dots reach, which the near plane keeps clear of */
+        --log-reach: 58px;
+
+        position: relative;
+        isolation: isolate;
+        /* Clip, not hidden: hidden makes the night its own scroll container, which an anchor jump or scrollIntoView
+           scrolls inside, moving the sections away from the line's stations, and which keeps the sections' sticky
+           intros from following the reader */
+        overflow: clip;
+        padding-block: clamp(72px, 6vw, 112px) clamp(96px, 6.6vw, 128px);
+        /* Space starts in the dark the hero's water deepens into, so no edge shows where one ends and the other
+           begins. From there down into open space, one unbroken dark, with a faint violet reach of the nebula and
+           the cyan light at the last station */
+        background:
+            radial-gradient(42vw 520px at 88% 900px, rgb(165 124 255 / 0.06), transparent 70%),
+            radial-gradient(38vw 480px at 8% 46%, rgb(61 112 204 / 0.06), transparent 72%),
+            radial-gradient(46vw 420px at 70% calc(100% - 200px), rgb(70 227 239 / 0.05), transparent 72%),
+            linear-gradient(to bottom, #050820 0, #04061c 30%, var(--color-night) 60%, #03040f 100%);
+    }
+
+    /* A far body lags behind the page, so near the top of the page it sits higher than where it was placed and is
+       cut by space's top edge. Over the far bodies and under everything else, this dark hides that cut: they rise
+       out of it instead */
+    .night::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto;
+        z-index: -1;
+        height: 360px;
+        background: linear-gradient(to bottom, #050820 25%, rgb(5 8 32 / 0));
+        pointer-events: none;
+    }
+
+    /* Layers that keep pace with the scroll. The compositor runs these with the scroll itself, so they
+       never trail it by a frame */
+    .torch-frame,
+    .thread-reveal,
+    .thread-hold {
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+    }
+
+    /* Soft diagonal beams of the horizon light, reaching down into space. They sway very slowly while the world is alive.
+       The sway moves the layer and the masked beams inside it are painted once. They rise out of the dark from
+       space's top edge */
+    .rays {
+        position: absolute;
+        /* A fixed reach, not a share of the night's height, which would move the beams as the page takes its
+           final height and count as a layout shift */
+        inset: 0 -10% auto;
+        z-index: -1;
+        height: 1500px;
+        pointer-events: none;
+        transform-origin: 50% 0;
+        animation: rays-sway 46s ease-in-out infinite alternate;
+    }
+
+    .rays-light {
+        position: absolute;
+        inset: 0;
+        background:
+            linear-gradient(104deg, transparent 30%, rgb(70 227 239 / 0.08) 33%, transparent 36.5%),
+            linear-gradient(104deg, transparent 44%, rgb(120 200 255 / 0.06) 47.5%, transparent 51%),
+            linear-gradient(104deg, transparent 58%, rgb(70 227 239 / 0.07) 61%, transparent 64%),
+            linear-gradient(104deg, transparent 70%, rgb(120 200 255 / 0.045) 73%, transparent 76.5%);
+        mask-image: linear-gradient(to bottom, transparent 0, rgb(0 0 0 / 0.7) 260px, rgb(0 0 0 / 0.5) 600px, transparent 1400px);
+    }
+
+    @keyframes rays-sway {
+        from {
+            transform: translateX(-1.2%) skewX(-1deg);
+        }
+        to {
+            transform: translateX(1.2%) skewX(1deg);
+        }
+    }
+
+    /* Stardust rises through the whole stretch of space */
+    .motes {
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        overflow: hidden;
+        pointer-events: none;
+    }
+
+    .mote {
+        position: absolute;
+        left: var(--x);
+        bottom: -20px;
+        width: var(--s);
+        height: var(--s);
+        border-radius: 50%;
+        background: rgb(190 240 255 / 0.9);
+        box-shadow: 0 0 6px 1px rgb(70 227 239 / 0.35);
+        opacity: 0;
+        animation: mote-rise var(--d) linear var(--w) infinite;
+        will-change: transform, opacity;
+    }
+
+    @keyframes mote-rise {
+        0% {
+            transform: translate3d(0, 0, 0);
+            opacity: 0;
+        }
+        12% {
+            opacity: 0.55;
+        }
+        50% {
+            transform: translate3d(var(--sway), -1400px, 0);
+        }
+        88% {
+            opacity: 0.35;
+        }
+        100% {
+            transform: translate3d(0, -2800px, 0);
+            opacity: 0;
+        }
+    }
+
+    /* The torch's frame keeps the top left corner of the screen while the page scrolls: it moves down by
+       exactly what the page scrolls past the night's top. The night still clips it, as it did the torch */
+    .torch-frame {
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: -1;
+        width: 0;
+        height: 0;
+        pointer-events: none;
+        animation-name: keep-screen;
+        animation-timeline: scroll(root);
+        animation-range: 0px var(--follow);
+    }
+
+    @keyframes keep-screen {
+        from {
+            transform: translate3d(0, calc(var(--night-top) / var(--page-zoom) * -1), 0);
+        }
+        to {
+            transform: translate3d(0, calc(var(--follow) - var(--night-top) / var(--page-zoom)), 0);
+        }
+    }
+
+    /* The reader's own light in space, cyan at the core, violet at the edge */
+    .torch {
+        position: absolute;
+        top: -360px;
+        left: -360px;
+        width: 720px;
+        height: 720px;
+        border-radius: 50%;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 600ms ease;
+        will-change: transform;
+    }
+
+    .night[data-torch-on] .torch {
+        opacity: 1;
+    }
+
+    /* Glass catches the signal: a bead passing near lights the panel's edge nearest it in the section's voice,
+       with a little of its light over the glass. Script lays one light over each panel a bead or the reader's
+       light reaches and only moves and fades its dots */
+    .night :global(.panel-light) {
+        position: absolute;
+        z-index: 1;
+        pointer-events: none;
+    }
+
+    .night :global(.panel-light-rim),
+    .night :global(.panel-light-glow),
+    .night :global(.panel-light-torch) {
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+    }
+
+    /* The rim: a fine line just inside the border, bright where the bead is nearest */
+    .night :global(.panel-light-rim) {
+        padding: 2px;
+        mask:
+            linear-gradient(#000 0 0) content-box exclude,
+            linear-gradient(#000 0 0);
+    }
+
+    .night :global(.panel-light-glow) {
+        overflow: clip;
+        opacity: 0.2;
+        mix-blend-mode: plus-lighter;
+    }
+
+    .night :global(.panel-light i) {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 300px;
+        height: 300px;
+        margin: -150px 0 0 -150px;
+        border-radius: 50%;
+        background: radial-gradient(closest-side, var(--light), transparent);
+        opacity: 0;
+        will-change: transform, opacity;
+    }
+
+    /* Glass keeps the faint light it has always shown at rest: centered high above the panel, so only a short
+       panel catches its edge. It never moves, so it is painted once */
+    .night :global(.glass) {
+        background-image:
+            radial-gradient(220px 160px at 50% -100%, rgb(70 227 239 / 0.1), transparent 70%),
+            var(--glass-fill);
+    }
+
+    /* Glass catches the reader's light where it passes. The light moves over the glass in its own layer,
+       so the panel is never painted again for it */
+    .night :global(.panel-light-torch) {
+        overflow: clip;
+    }
+
+    .night :global(.panel-light-torch b) {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 440px;
+        height: 320px;
+        margin: -160px 0 0 -220px;
+        background: radial-gradient(closest-side, rgb(70 227 239 / 0.1), transparent 70%);
+        will-change: transform;
+    }
+
+    .night[data-still] .torch-frame {
+        display: none;
+    }
+
+    /* The thread sits under the content and over the backgrounds. Its window reaches from far above the
+       night down to the reading line, and the scroll moves the window down the page while the line inside
+       it holds still, so the drawn line grows exactly as the page moves. Nothing is painted again for it */
+    .thread-reveal {
+        position: absolute;
+        top: 0;
+        left: 0;
+        z-index: -1;
+        width: 100%;
+        height: 200%;
+        overflow: clip;
+        pointer-events: none;
+        /* The drawn tip thins out over the last stretch above the reading line, so the line never ends in a cut
+           and its glow never stops on a straight edge. The fade belongs to the window and moves with it */
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 160px), transparent);
+        animation-name: thread-window;
+        animation-timeline: scroll(root);
+        animation-range: 0px var(--follow);
+    }
+
+    .thread-hold {
+        position: absolute;
+        inset: 0;
+        animation-name: thread-stay;
+        animation-timeline: scroll(root);
+        animation-range: 0px var(--follow);
+    }
+
+    /* The window's lower edge sits on the reading line: the reading line's depth in the night, less the
+       window's own height */
+    @keyframes thread-window {
+        from {
+            transform: translate3d(0, calc((var(--reading-line) - var(--night-top)) / var(--page-zoom) - 100%), 0);
+        }
+        to {
+            transform: translate3d(0, calc((var(--reading-line) - var(--night-top)) / var(--page-zoom) - 100% + var(--follow)), 0);
+        }
+    }
+
+    @keyframes thread-stay {
+        from {
+            transform: translate3d(0, calc((var(--night-top) - var(--reading-line)) / var(--page-zoom) + 100%), 0);
+        }
+        to {
+            transform: translate3d(0, calc((var(--night-top) - var(--reading-line)) / var(--page-zoom) + 100% - var(--follow)), 0);
+        }
+    }
+
+    .night[data-still] .thread-reveal,
+    .night[data-still] .thread-hold {
+        animation: none;
+    }
+
+    .thread,
+    .thread-stations {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+        pointer-events: none;
+    }
+
+    /* The window is twice the night's height, the line inside it covers the night. The line rises out of the
+       hero's water instead of starting at a cut: its first stretch fades in. The mask never changes, so it is
+       painted once like the line */
+    .thread {
+        height: 50%;
+        mask-image: linear-gradient(to bottom, transparent 0, #000 180px);
+    }
+
+    .thread-stations {
+        z-index: -1;
+    }
+
+    .thread-line,
+    .thread-glow {
+        fill: none;
+        stroke-linecap: round;
+    }
+
+    .thread-line {
+        stroke: url(#thread-fade);
+        stroke-width: 1.5;
+        opacity: 0.85;
+    }
+
+    .thread-glow {
+        stroke: rgb(70 227 239 / 0.3);
+        stroke-width: 10;
+        filter: blur(8px);
+    }
+
+    /* Beads of light run down the drawn thread, a message every few seconds. A bead is a short dash of
+       light along the line with a soft glow, sized in screen pixels like the line. A shadow's blur is twice
+       the spread a drop shadow filter names, so twelve pixels here match the line's drop shadow of six */
+    .beads {
+        position: absolute;
+        top: 0;
+        left: 0;
+    }
+
+    .beads :global(.bead) {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: calc(3px / var(--page-zoom));
+        height: calc(13px / var(--page-zoom));
+        margin: calc(-6.5px / var(--page-zoom)) 0 0 calc(-1.5px / var(--page-zoom));
+        border-radius: calc(1.5px / var(--page-zoom));
+        background: var(--color-cyan-pale);
+        box-shadow: 0 0 calc(12px / var(--page-zoom)) rgb(70 227 239 / 0.9);
+        /* A resting bead keeps its own layer, so stopping or starting it never paints the line again */
+        will-change: transform;
+    }
+
+    /* Nebula light near the horizon, slowly breathing, under the first sections. The breathing moves the
+       layer and the masked light inside it is painted once. It rises out of the dark, so no light is cut at
+       space's top edge */
+    .nebula {
+        position: absolute;
+        inset: 0 0 auto;
+        z-index: -1;
+        height: 1100px;
+        pointer-events: none;
+        animation: caustics 28s ease-in-out infinite alternate;
+    }
+
+    .nebula-light {
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(ellipse 18% 9% at 20% 8%, rgb(70 227 239 / 0.12), transparent 70%),
+            radial-gradient(ellipse 22% 10% at 58% 4%, rgb(120 200 255 / 0.1), transparent 70%),
+            radial-gradient(ellipse 16% 8% at 84% 10%, rgb(70 227 239 / 0.09), transparent 70%),
+            radial-gradient(ellipse 26% 8% at 40% 18%, rgb(120 200 255 / 0.06), transparent 70%);
+        background-size: 100% 100%;
+        mask-image: linear-gradient(to bottom, transparent 0, #000 200px, rgb(0 0 0 / 0.5) 400px, transparent 1000px);
+    }
+
+    @keyframes caustics {
+        0% {
+            transform: translateX(-3%) scaleY(1);
+        }
+        50% {
+            transform: translateX(2%) scaleY(1.15);
+        }
+        100% {
+            transform: translateX(3%) scaleY(0.95);
+        }
+    }
+
+    .night[data-still] .nebula {
+        animation: none;
+    }
+
+    .thread-stations :global(.station-halo) {
+        fill: rgb(70 227 239 / 0);
+        transition: fill 600ms ease;
+    }
+
+    .thread-stations :global(.station-ring) {
+        fill: var(--color-night);
+        stroke: rgb(160 190 255 / 0.35);
+        stroke-width: 1.2;
+        transition:
+            stroke 500ms ease,
+            fill 500ms ease;
+    }
+
+    .thread-stations :global(.station-number) {
+        font-family: var(--font-mono);
+        font-size: var(--type-micro);
+        font-weight: var(--weight-semibold);
+        fill: rgb(195 200 230 / 0.5);
+        transition: fill 500ms ease;
+    }
+
+    .thread-stations :global(.station.is-lit .station-halo) {
+        fill: rgb(70 227 239 / 0.12);
+    }
+
+    .thread-stations :global(.station.is-lit .station-ring) {
+        stroke: var(--color-cyan);
+        fill: #071a2c;
+    }
+
+    .thread-stations :global(.station.is-lit .station-number) {
+        fill: var(--color-cyan-light);
+    }
+
+    /* The course log on the right edge */
+    .log {
+        position: fixed;
+        right: clamp(14px, 1.6vw, 30px);
+        top: 50%;
+        z-index: 15;
+        transform: translate(12px, -50%);
+        opacity: 0;
+        pointer-events: none;
+        transition:
+            opacity var(--speed-slow) ease,
+            transform var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .log[data-visible] {
+        opacity: 1;
+        transform: translate(0, -50%);
+        pointer-events: auto;
+    }
+
+    /* Until the frame's own margin is wide enough to hold the log and the line beside it, the sections' right side
+       makes that room itself: the log's dots end 58 px from the edge, the line passes 24 px clear of them at 82 px,
+       and the heading starts 26 px past the station's center. The current section's name shows only while the
+       reader points at the log or focuses it */
+    @media (min-width: 1280px) and (max-width: 1919px) {
+        .night > :global(section) :global(.page-grid),
+        .night > :global(section) :global(.split) {
+            padding-inline-end: 108px;
+        }
+    }
+
+
+    .log ol {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    /* A finger needs the stations further apart than a pointer does */
+    @media (any-pointer: coarse) {
+        .log ol {
+            gap: 14px;
+        }
+
+        .log a {
+            position: relative;
+        }
+
+        .log a::after {
+            content: "";
+            position: absolute;
+            inset: -7px 0;
+        }
+    }
+
+    .log a {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        height: 30px;
+        color: rgb(195 200 230 / 0.6);
+        text-decoration: none;
+    }
+
+    .log-dot {
+        display: grid;
+        flex: none;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border: 1px solid rgb(160 190 255 / 0.28);
+        border-radius: 50%;
+        /* Opaque enough without a backdrop blur, which would be drawn again on every frame of a scroll */
+        background: rgb(4 5 26 / 0.88);
+        transition:
+            border-color var(--speed-slow) ease,
+            background-color var(--speed-slow) ease,
+            transform var(--speed-slow) ease;
+    }
+
+    .log-number {
+        font-family: var(--font-mono);
+        font-size: var(--type-micro);
+        font-weight: var(--weight-semibold);
+        line-height: 1;
+        color: rgb(195 200 230 / 0.55);
+        transition: color var(--speed-slow) ease;
+    }
+
+    .log-label {
+        order: -1;
+        max-width: 0;
+        overflow: hidden;
+        font-size: var(--type-small);
+        font-weight: var(--weight-medium);
+        white-space: nowrap;
+        opacity: 0;
+        transition:
+            max-width var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1),
+            opacity var(--speed-normal) ease;
+    }
+
+    /* One station is lit: the section the reader is in. Pointing at another only brightens its ring a little,
+       and keyboard focus draws its own ring around the dot */
+    .log a[aria-current] .log-dot {
+        border-color: var(--color-cyan);
+        background: #071a2c;
+    }
+
+    .log a:not([aria-current]):hover .log-dot {
+        border-color: rgb(70 227 239 / 0.5);
+    }
+
+    .log a:focus-visible {
+        outline: none;
+    }
+
+    .log a:focus-visible .log-dot {
+        outline: 2px solid var(--color-cyan);
+        outline-offset: 2px;
+    }
+
+    .log a[aria-current] .log-number,
+    .log a:hover .log-number {
+        color: var(--color-cyan-light);
+    }
+
+    .log a[aria-current] .log-label,
+    .log:hover .log-label,
+    .log a:focus-visible .log-label {
+        max-width: 280px;
+        padding-right: 2px;
+        opacity: 1;
+    }
+
+    .log a[aria-current] .log-label {
+        color: var(--color-ink);
+    }
+
+    /* The current section's name shows only while the reader points at the log or focuses it, so it never lies over the
+       reading at any width */
+    .log a[aria-current]:not(:hover, :focus-visible) .log-label {
+        max-width: 0;
+        padding-right: 0;
+        opacity: 0;
+    }
+
+    .log:hover a[aria-current] .log-label {
+        max-width: 280px;
+        padding-right: 2px;
+        opacity: 1;
+    }
+
+    /* Content rises into view once. Script adds .js, so without it nothing starts hidden */
+    .night.js :global([data-rise]) {
+        opacity: 0;
+        transform: translateY(16px);
+        transition:
+            opacity 700ms ease,
+            transform 700ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .night.js :global([data-rise].is-in) {
+        opacity: 1;
+        transform: none;
+    }
+
+    .night[data-still] :global([data-rise]) {
+        opacity: 1;
+        transform: none;
+        transition: none;
+    }
+
+    .night[data-still] .rays,
+    .night[data-still] .mote {
+        animation: none;
+    }
+
+    .night[data-still] .motes {
+        display: none;
+    }
+
+    /* With time stopped the stations and the course log switch at once, as the header does */
+    .night[data-still] .log,
+    .night[data-still] .log-dot,
+    .night[data-still] .log-number,
+    .night[data-still] .log-label,
+    .night[data-still] .thread-stations :global(*) {
+        transition: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .rays,
+        .mote {
+            animation: none;
+        }
+
+        .motes {
+            display: none;
+        }
+
+        .night.js :global([data-rise]) {
+            opacity: 1;
+            transform: none;
+            transition: none;
+        }
+    }
+
+    /* Every later section, even with a helper layer between two of them */
+    .night > :global(section ~ section) {
+        margin-top: var(--section-gap);
+    }
+
+    @media (max-width: 1279px) {
+        .night {
+            --log-reach: 0px;
+        }
+
+        .thread-reveal,
+        .thread-stations,
+        .log {
+            display: none;
+        }
+    }
+
+    /* A touch screen has no reader's light, and what a phone's GPU would redo on every frame goes: the sway of the beams,
+       the blur along the whole line and the mask on its moving window */
+    @media (any-pointer: coarse) {
+        .torch-frame {
+            display: none;
+        }
+
+        .rays {
+            animation: none;
+        }
+
+        .thread-reveal {
+            mask-image: none;
+        }
+
+        .thread-glow {
+            filter: none;
+            opacity: 0.3;
+        }
+    }
+</style>

@@ -1,0 +1,17 @@
+[Unit]
+Description=Fluxer bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=fluxer-bot
+WorkingDirectory=/srv/fluxer-bot
+EnvironmentFile=/etc/fluxer-bot.env
+ExecStart=/usr/bin/node bot.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

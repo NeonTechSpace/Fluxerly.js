@@ -1,0 +1,12 @@
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    sharding: "auto",
+    events: {
+        messageCreate: ({ message, reply }) => {
+            if (message.content !== "!ping") return undefined
+            return reply("Pong!")
+        },
+    },
+})

@@ -1,0 +1,157 @@
+---
+// Error and log codes from the SDK's code catalogue: error codes by error class, the shared operation reasons,
+// and log record codes by area. Each code is an entry like those of the troubleshooting guide: the code as the
+// console prints it, in brackets, then what it means and what to do
+import "../../styles/reference.css"
+import Docs from "../../layouts/Docs.astro"
+import Code from "../../components/docs/Code.astro"
+import Heading from "../../components/docs/reference/Heading.astro"
+import { codes, codesUrl, referenceUrl, type TocItem } from "../../lib/reference"
+
+const codeId = (prefix: string, code: string) => `${prefix}-${code.replace(/[^A-Za-z0-9]+/g, "-").replace(/-$/, "").toLowerCase()}`
+const reasons = codes.reasons.map((reason) => reason.reason)
+const allReasons = (values?: string[]) => values?.length === reasons.length && values.every((value, index) => value === reasons[index])
+
+const errorClasses = [...new Set(codes.errors.map((entry) => entry.error))].sort()
+const errorGroups = errorClasses.map((error) => {
+    const entries = codes.errors.filter((entry) => entry.error === error)
+    return { error, id: `error-${error.toLowerCase()}`, url: entries[0]?.url, entries }
+})
+const areas = [...new Set(codes.logs.map((entry) => entry.code.split(".")[0]!))]
+const logGroups = areas.map((area) => ({ area, id: `log-${area.toLowerCase()}`, entries: codes.logs.filter((entry) => entry.code.split(".")[0] === area) }))
+
+const toc: TocItem[] = [
+    { depth: 2, text: "Error Codes", id: "error-codes" },
+    ...errorGroups.map((group) => ({ depth: 3 as const, text: group.error, id: group.id })),
+    { depth: 2, text: "Operation Reasons", id: "operation-reasons" },
+    { depth: 2, text: "Log Record Codes", id: "log-codes" },
+    ...logGroups.map((group) => ({ depth: 3 as const, text: group.area, id: group.id })),
+]
+---
+
+<Docs
+    title="Error and Log Codes"
+    description="What each code means and what to do about it"
+    section="codes"
+    current={codesUrl}
+    toc={toc}
+    crumbs={[{ title: "Reference", href: referenceUrl }]}
+>
+    <div class="ref">
+        <div class="ref-prose ref-summary">
+            <p>Every SDK error has a stable <code>code</code>, and every log record has a <code>code</code> too. Search this page for a code copied from an error or a log line</p>
+            <p>A code with a placeholder, such as <code>guild.&lt;reason&gt;</code>, stands for a family. The error's field of the same name, such as <code>reason</code>, supplies the value</p>
+        </div>
+
+        <section class="ref-group">
+            <Heading level={2} id="error-codes">Error Codes</Heading>
+            <p class="ref-intro">The output of <code>describeError(error)</code> shows the code in brackets after the error name. In JSON log output, a record's <code>error.code</code> holds it</p>
+            {
+                errorGroups.map((group) => (
+                    <section class="ref-codes">
+                        <Heading level={3} id={group.id} code>
+                            {group.url ? <a href={group.url}>{group.error}</a> : group.error}
+                        </Heading>
+                        <dl class="entries ref-code-list">
+                            {group.entries.map((entry) => (
+                                <div class="entry" id={codeId("error", entry.code)}>
+                                    <dt class="entry-term">
+                                        <Code class="record" text={entry.code} />
+                                        <a class="entry-mark" href={`#${codeId("error", entry.code)}`} aria-label={`Link to ${entry.code}`} data-pagefind-ignore>#</a>
+                                    </dt>
+                                    <dd class="entry-part" data-voice="sdk">
+                                        {" "}
+                                        <span class="entry-label">What it means</span>
+                                        <div class="entry-text">
+                                            <p>{entry.meaning}</p>
+                                            {entry.values &&
+                                                (allReasons(entry.values) ? (
+                                                    <p class="ref-values">
+                                                        The value is any of the <a href="#operation-reasons">operation reasons</a>
+                                                    </p>
+                                                ) : (
+                                                    <p class="ref-values">
+                                                        The value is one of{" "}
+                                                        {entry.values.map((value, index) => (
+                                                            <>
+                                                                {index > 0 && " "}
+                                                                <Code text={value} />
+                                                            </>
+                                                        ))}
+                                                    </p>
+                                                ))}
+                                        </div>
+                                    </dd>
+                                    {entry.action && (
+                                        <dd class="entry-part" data-voice="you">
+                                            {" "}
+                                            <span class="entry-label">What to do</span>
+                                            <p>{entry.action}</p>
+                                        </dd>
+                                    )}
+                                </div>
+                            ))}
+                        </dl>
+                    </section>
+                ))
+            }
+        </section>
+
+        <section class="ref-group">
+            <Heading level={2} id="operation-reasons">Operation Reasons</Heading>
+            <p class="ref-intro">Request failures, such as <code>guild.&lt;reason&gt;</code> and <code>message.&lt;reason&gt;</code>, share these reasons</p>
+            <dl class="entries ref-code-list">
+                {
+                    codes.reasons.map((reason) => (
+                        <div class="entry" id={`reason-${reason.reason.toLowerCase()}`}>
+                            <dt class="entry-term">
+                                <Code text={reason.reason} />
+                            </dt>
+                            <dd class="entry-part">
+                                {" "}
+                                <p>{reason.meaning}</p>
+                            </dd>
+                        </div>
+                    ))
+                }
+            </dl>
+        </section>
+
+        <section class="ref-group">
+            <Heading level={2} id="log-codes">Log Record Codes</Heading>
+            <p class="ref-intro">Readable console lines show the record code in brackets after the category, and JSON lines hold it in <code>code</code></p>
+            {
+                logGroups.map((group) => (
+                    <section class="ref-codes">
+                        <Heading level={3} id={group.id} code>{group.area}</Heading>
+                        <dl class="entries ref-code-list">
+                            {group.entries.map((entry) => (
+                                <div class="entry" id={codeId("log", entry.code)}>
+                                    <dt class="entry-term">
+                                        <Code class="record" text={entry.code} />
+                                        <span class="ref-levels">
+                                            {entry.levels.map((level) => <span class="ref-flag" data-level={level}>{level}</span>)}
+                                        </span>
+                                        <a class="entry-mark" href={`#${codeId("log", entry.code)}`} aria-label={`Link to ${entry.code}`} data-pagefind-ignore>#</a>
+                                    </dt>
+                                    <dd class="entry-part" data-voice="sdk">
+                                        {" "}
+                                        <span class="entry-label">What it means</span>
+                                        <p>{entry.meaning}</p>
+                                    </dd>
+                                    {entry.action && (
+                                        <dd class="entry-part" data-voice="you">
+                                            {" "}
+                                            <span class="entry-label">What to do</span>
+                                            <p>{entry.action}</p>
+                                        </dd>
+                                    )}
+                                </div>
+                            ))}
+                        </dl>
+                    </section>
+                ))
+            }
+        </section>
+    </div>
+</Docs>

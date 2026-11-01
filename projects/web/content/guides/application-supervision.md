@@ -49,6 +49,7 @@ export async function runSupervisedBot(
             { gateway: client.state, criticalWorker, handlerFailures },
             client.diagnostics(),
         );
+    const gatewayObserver = client.observeState(report);
 
     try {
         const registered = client.on(
@@ -168,6 +169,8 @@ export async function runSupervisedBot(
             await client.shutdown();
         } catch (failure) {
             rejected.push(failure);
+        } finally {
+            gatewayObserver.close();
         }
         if (hasPrimaryFailure && rejected.length > 0) {
             primaryFailure = new AggregateError(
@@ -195,7 +198,7 @@ The subscription's `onError` counts an isolated handler failure while the subscr
 
 If a process manager runs the bot, exit with a failure status after `critical-worker-failed` so it can start a new process. To restart within the same process, call `runSupervisedBot` again with a new client and a limit on restart attempts
 
-A bot split across processes by the [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) gets the process-manager policy by default: When a child process exits unexpectedly, the parent starts a new one for the same shards, up to three times in a row. The parent's `workers.status()` also includes each child's latest `diagnostics` snapshot, so one place shows every child's gateway state and request pressure
+A bot split across processes by the [supervisor](/docs/sharding/#run-shards-in-several-processes) gets the process-manager policy by default: When a child process exits unexpectedly, the parent starts a new one for the same shards, up to three times in a row. The parent's `workers.status()` also includes each child's latest `diagnostics` snapshot, so one place shows every child's gateway state and request pressure
 
 A restart subscribes only to future events. It does not rerun the failed handler or recover events missed while the subscription was stopped. For work that must survive a restart, the application needs a durable queue, rules to prevent duplicate work and a way to check what already completed
 
@@ -218,9 +221,9 @@ The `diagnostics.events` snapshot reports this client's open event sources, mess
 
 Default handlers receive an `AbortSignal`, but the application must still track its own Promises, even when they respond to cancellation. Returning a Promise lets the SDK wait for that handler's work and report its failure. Closing a subscription does not wait for it, and neither does a plain `client.shutdown()`, which cancels running handlers at once
 
-A shutdown can drain first. With `client.shutdown({ drainMs: 10_000 })`, the client stops accepting new events, lets running handlers, their waiting events, running [scheduled tasks](/docs/{{version}}/starter-lifetime/#run-work-later-or-on-a-schedule) and REST requests finish for up to that many milliseconds, then cancels what is left. The `runBot` runner drains this way when asked to stop, for up to its `drainMs` option, 5,000 ms by default. In both APIs, a child of the [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) drains when the parent stops it, including an automatic move to a larger shard plan, for up to the supervisor's `shutdownTimeoutMs` minus one second, which is 4 seconds with the default of 5,000 ms. A child failure or loss of the parent's message channel stops running work without draining. The drain covers only work that handlers return and scheduled tasks, not detached Promises
+A shutdown can drain first. With `client.shutdown({ drainMs: 10_000 })`, the client stops accepting new events, lets running handlers, their waiting events, running [scheduled tasks](/docs/starter-lifetime/#run-work-later-or-on-a-schedule) and REST requests finish for up to that many milliseconds, then cancels what is left. The `runBot` runner drains this way when asked to stop, for up to its `drainMs` option, 5,000 ms by default. In both APIs, a child of the [supervisor](/docs/sharding/#run-shards-in-several-processes) drains when the parent stops it, including an automatic move to a larger shard plan, for up to the supervisor's `shutdownTimeoutMs` minus one second, which is 4 seconds with the default of 5,000 ms. A child failure or loss of the parent's message channel stops running work without draining. The drain covers only work that handlers return and scheduled tasks, not detached Promises
 
-Collector progress callbacks behave differently: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped [finalizers](/docs/{{version}}/glossary/#finalizer), as shown in the [Effect application testing guide](/docs/{{version}}/effect-application-testing/)
+Collector progress callbacks behave differently: Their completion waits for the returned callback work. Native Effect handlers use interruption and awaited scoped [finalizers](/docs/glossary/#finalizer), as shown in the [Effect application testing guide](/docs/effect-application-testing/)
 
 When an external operation must finish before process exit, retain its Promise in an application-owned set. Remove it on either settlement path without creating an unobserved rejected Promise. Stop intake first, then inspect the outcomes of the retained work
 

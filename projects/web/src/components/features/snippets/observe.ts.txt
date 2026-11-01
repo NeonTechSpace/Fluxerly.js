@@ -1,0 +1,36 @@
+import { runBot, type Observation } from "@neontechspace/fluxerly"
+
+type Attributes = Record<string, string | number>
+
+/** The parts of an OpenTelemetry Meter this bot uses */
+interface Meter {
+    createHistogram(name: string, options?: { unit?: string }): {
+        record(value: number, attributes?: Attributes): void
+    }
+    createCounter(name: string): { add(value: number, attributes?: Attributes): void }
+}
+
+export function meterObserver(meter: Meter) {
+    const requests = meter.createHistogram("bot.rest.duration", { unit: "ms" })
+    const handlers = meter.createHistogram("bot.handler.duration", { unit: "ms" })
+    const reconnects = meter.createCounter("bot.gateway.reconnects")
+    return (observation: Observation) => {
+        if (observation.type === "rest")
+            requests.record(observation.durationMs, {
+                method: observation.method,
+                route: observation.route,
+                status: observation.status ?? "none",
+            })
+        else if (observation.type === "handler")
+            handlers.record(observation.durationMs, {
+                event: observation.event,
+                ...(observation.command === undefined ? {} : { command: observation.command }),
+                outcome: observation.outcome,
+            })
+        else if (observation.type === "reconnect") reconnects.add(1, { shard: observation.shardId })
+    }
+}
+
+export function runObservedBot(token: string | undefined, meter: Meter) {
+    return runBot({ token, observe: meterObserver(meter), events: {} })
+}

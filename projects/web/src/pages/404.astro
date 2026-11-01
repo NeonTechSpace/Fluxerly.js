@@ -1,0 +1,603 @@
+---
+// A missing page. The words say plainly that the page does not exist and where to go. The picture says it in the
+// site's language: the signal line comes down from above through two lit stations and fades out in open space,
+// and beyond its tip an unlit station marked 404 drifts off the line. A signpost floats beside it, showing the way
+// back up the line. Search engines skip the page
+import { BookOpenIcon } from "@phosphor-icons/react/ssr"
+import Depth from "../components/sections/Depth.astro"
+import Site from "../layouts/Site.astro"
+import { iconSrc } from "../lib/art"
+import { experienceKey } from "../lib/experience"
+import { links } from "../lib/links"
+
+// The picture is drawn in a 560 by 660 box. The parts that move while the world is alive sit over the drawing as
+// their own elements, each placed by these numbers, so the drawing itself is never painted again for them
+const box = { width: 560, height: 560, top: -60 }
+const pct = (value: number, of: number) => `${((value / of) * 100).toFixed(3)}%`
+// The lost station: its center and the radius of the dotted seat around it
+const adrift = { x: 330, y: 420, r: 62 }
+// The signpost: its box
+const signpost = { x: 50, y: 270, size: 176 }
+const place = (x: number, y: number, size: number) =>
+    `left: ${pct(x, box.width)}; top: ${pct(y - box.top, box.height)}; width: ${pct(size, box.width)}`
+---
+
+<Site title="Page Not Found · Fluxerly.js" description="This page does not exist. Go to the Home Page or open the docs" noindex>
+    <section class="lost" aria-labelledby="lost-title" data-lost>
+        <!-- Still stops time before space is first drawn, as on the homepage -->
+        <script is:inline define:vars={{ key: experienceKey }}>
+            {
+                let mode = document.documentElement.dataset.experience
+                if (mode !== "immersive" && mode !== "still") {
+                    let stored = null
+                    try {
+                        stored = window.localStorage.getItem(key)
+                    } catch {
+                        // Storage is blocked, so nothing was chosen
+                    }
+                    mode = stored === "still" ? "still" : null
+                }
+                const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                if (mode === "still" || reduce) document.currentScript.parentElement.setAttribute("data-still", "")
+            }
+        </script>
+        <!-- The same space as the rest of the site, with its depth: the star fields behind everything, and far
+             behind the words, in the open space above them, a world the line never reached either -->
+        <div class="field field-far" aria-hidden="true"></div>
+        <div class="field field-near" aria-hidden="true"></div>
+        <Depth name="crescent-violet" side="left" inset="70%" top="10%" width={140} depth={0} opacity={0.8} />
+        <div class="words">
+            <h1 class="section-title lost-title" id="lost-title">This Page <span class="hi">Does Not Exist</span></h1>
+            <p class="lead">The address may be old or mistyped</p>
+            <nav class="ways" aria-label="Where to go next">
+                <a class="way way-home" href="/">
+                    <span class="wave-mark" aria-hidden="true"></span>
+                    Go to the Home Page
+                </a>
+                <a class="way way-docs" href={links.docs}>
+                    <BookOpenIcon size={20} weight="regular" aria-hidden="true" />
+                    Open the Docs
+                </a>
+            </nav>
+        </div>
+
+        <!-- The picture: the signal line in space, drawn in the same strokes as the homepage's line, and the place it never reached -->
+        <div class="scene" aria-hidden="true">
+            <div class="picture" data-picture>
+                <svg class="space" viewBox={`0 ${box.top} ${box.width} ${box.height}`} focusable="false">
+                    <defs>
+                        <!-- Cyan at the top, the same drift to blue as the homepage's line, then fading into the dark where it ends -->
+                        <linearGradient id="lost-line" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="300">
+                            <stop offset="0" stop-color="#46e3ef" />
+                            <stop offset="0.62" stop-color="#7fb0ff" />
+                            <stop offset="0.8" stop-color="#7fb0ff" stop-opacity="0.75" />
+                            <stop offset="1" stop-color="#7fb0ff" stop-opacity="0" />
+                        </linearGradient>
+                        <linearGradient id="lost-fade" gradientUnits="userSpaceOnUse" x1="0" y1="-60" x2="0" y2="300">
+                            <stop offset="0" stop-color="#fff" stop-opacity="0" />
+                            <stop offset="0.1" stop-color="#fff" />
+                            <stop offset="0.74" stop-color="#fff" />
+                            <stop offset="1" stop-color="#fff" stop-opacity="0" />
+                        </linearGradient>
+                        <!-- The line arrives from far above the picture and its light thins out where it ends -->
+                        <mask id="lost-reach" maskUnits="userSpaceOnUse">
+                            <rect x="0" y="-60" width="560" height="360" fill="url(#lost-fade)" />
+                        </mask>
+                        <radialGradient id="lost-haze">
+                            <stop offset="0" stop-color="#46e3ef" stop-opacity="0.11" />
+                            <stop offset="1" stop-color="#46e3ef" stop-opacity="0" />
+                        </radialGradient>
+                        <radialGradient id="lost-dark">
+                            <stop offset="0" stop-color="#3d70cc" stop-opacity="0.07" />
+                            <stop offset="1" stop-color="#3d70cc" stop-opacity="0" />
+                        </radialGradient>
+                    </defs>
+
+                    <!-- Open space: a cold haze where the line still carries light, a dimmer one where it does not, and far stars -->
+                    <ellipse cx="300" cy="110" rx="250" ry="180" fill="url(#lost-haze)" />
+                    <ellipse cx="330" cy="410" rx="230" ry="140" fill="url(#lost-dark)" />
+                    <g class="stars">
+                        <circle cx="48" cy="52" r="1.2" />
+                        <circle cx="132" cy="118" r="0.8" />
+                        <circle cx="96" cy="236" r="1" />
+                        <circle cx="470" cy="38" r="1.1" />
+                        <circle cx="522" cy="130" r="0.8" />
+                        <circle cx="500" cy="300" r="1.3" />
+                        <circle cx="60" cy="356" r="0.9" />
+                        <circle cx="536" cy="420" r="0.9" />
+                        <circle cx="420" cy="470" r="1" />
+                        <circle cx="150" cy="480" r="0.8" />
+                        <circle cx="258" cy="420" r="0.7" />
+                        <circle cx="470" cy="190" r="0.7" />
+                        <circle cx="24" cy="470" r="1.1" />
+                        <circle cx="340" cy="60" r="0.7" />
+                    </g>
+
+                    <!-- The signal line, from beyond the top of the picture, through two stations, into the dark -->
+                    <g mask="url(#lost-reach)">
+                        <path class="line-glow" d="M 200 -60 L 200 60 C 200 120, 360 110, 360 170 C 360 240, 280 230, 280 300" />
+                        <path class="line" d="M 200 -60 L 200 60 C 200 120, 360 110, 360 170 C 360 240, 280 230, 280 300" />
+                    </g>
+
+                </svg>
+
+                <!-- Messages still travel down the line while the world is alive, and go out where it ends. Each bead
+                     follows the line as a motion path in the drawing's own pixels, which the script scales to the
+                     picture, so the beads move on the compositor and the drawing is never painted again for them -->
+                <div class="beads" data-beads>
+                    <i class="bead" style="--delay: 0s"></i>
+                    <i class="bead" style="--delay: -6.85s"></i>
+                </div>
+
+                <!-- Two stations the line did reach, lit as they are on the homepage, over the beads passing through them -->
+                <svg class="space stops" viewBox={`0 ${box.top} ${box.width} ${box.height}`} focusable="false">
+                    <g class="stop" transform="translate(200 60)">
+                        <circle class="stop-halo" r="23" />
+                        <circle class="stop-ring" r="14" />
+                        <text class="stop-number" text-anchor="middle" dominant-baseline="central">01</text>
+                    </g>
+                    <g class="stop" transform="translate(360 170)">
+                        <circle class="stop-halo" r="23" />
+                        <circle class="stop-ring" r="14" />
+                        <text class="stop-number" text-anchor="middle" dominant-baseline="central">02</text>
+                    </g>
+                </svg>
+
+                <!-- The station the line never reached, drifted off to one side, unlit, inside the dotted seat a line would take -->
+                <div class="adrift" style={place(adrift.x - adrift.r, adrift.y - adrift.r, adrift.r * 2)}>
+                    <svg viewBox={`${-adrift.r} ${-adrift.r} ${adrift.r * 2} ${adrift.r * 2}`} focusable="false">
+                        <circle class="adrift-seat" r={adrift.r} />
+                        <circle class="adrift-pulse" r="40" />
+                        <circle class="adrift-ring" r="40" />
+                        <text class="adrift-number" text-anchor="middle" dominant-baseline="central">404</text>
+                    </svg>
+                </div>
+
+                <!-- The signpost, which knows the way back -->
+                <div class="signpost-seat" style={place(signpost.x, signpost.y, signpost.size)}>
+                    <img class="signpost" src={iconSrc("results-signpost", 640)} alt="" width="640" height="640" decoding="async" />
+                </div>
+            </div>
+        </div>
+    </section>
+</Site>
+
+<script>
+    import { anchorDepth, markSpaceTop } from "../lib/depth"
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../lib/experience"
+
+    const lost = document.querySelector<HTMLElement>("[data-lost]")
+    if (lost) {
+        // Still, chosen or asked for by the system, stops everything in the picture
+        const update = () => lost.toggleAttribute("data-still", getExperience() === "still" || prefersReducedMotion())
+        update()
+        subscribeExperience(update)
+        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", update)
+
+        // The star fields and the far crescent follow the little scroll there is in CSS, anchored once the page is laid out
+        const measure = () => {
+            markSpaceTop(lost)
+            anchorDepth(lost)
+        }
+        new ResizeObserver(measure).observe(lost)
+        window.addEventListener("resize", measure)
+        measure()
+
+        // The beads are laid out in the drawing's 560 pixel wide box and scaled to the picture as drawn
+        const picture = lost.querySelector<HTMLElement>("[data-picture]")
+        if (picture) {
+            const fit = () => picture.style.setProperty("--fit", (picture.clientWidth / 560).toFixed(4))
+            new ResizeObserver(fit).observe(picture)
+            fit()
+        }
+    }
+</script>
+
+<style>
+    .lost {
+        --accent: var(--color-cyan);
+        /* The fixed header above and the footer below, so the page fills one screen between them */
+        --header: 76px;
+        --footer: 170px;
+
+        /* The picture's height follows the screen, so the words beside it never need a scroll on a short laptop */
+        --tall: min(560px, calc(100svh / var(--page-zoom, 1) - var(--header) - var(--footer) - 88px));
+
+        position: relative;
+        isolation: isolate;
+        display: grid;
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        column-gap: var(--page-gutter);
+        align-items: center;
+        max-width: 1720px;
+        min-height: calc(100svh / var(--page-zoom, 1) - var(--footer));
+        margin-inline: auto;
+        padding: calc(var(--header) + clamp(16px, 4vh, 48px)) var(--page-margin) clamp(32px, 5vh, 64px);
+        box-sizing: border-box;
+        /* The star fields reach past the section and are cut at its edges */
+        overflow: hidden;
+    }
+
+    /* The words stand level with the picture's middle: the title beside the lit stations, the ways on beside the
+       signpost and the lost station, so the two columns read as one thing. The open space above them holds the far
+       crescent, as the open space above the picture holds the line coming in */
+    .words {
+        grid-column: 1 / span 6;
+        align-self: center;
+    }
+
+    .scene {
+        grid-column: 7 / -1;
+        display: grid;
+        justify-items: center;
+    }
+
+    .lost-title {
+        font-size: clamp(36px, 3vw, 58px);
+    }
+
+    .ways {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-top: 34px;
+    }
+
+    /* Two ways on. The home page is what you do, in cyan and filled, the docs are what the SDK knows, in violet
+       on glass. Each carries its mark: the conductor's waves for the home page, an open book for the docs */
+    .way {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 50px;
+        padding: 11px 22px 11px 18px;
+        border: 1px solid transparent;
+        border-radius: var(--corner-large);
+        corner-shape: squircle;
+        font-size: var(--type-lead);
+        font-weight: var(--weight-medium);
+        line-height: 1.2;
+        text-decoration: none;
+        transition:
+            border-color var(--speed-normal) ease,
+            background-color var(--speed-normal) ease,
+            box-shadow var(--speed-normal) ease;
+    }
+
+    .way svg {
+        flex: none;
+    }
+
+    .way-home {
+        --accent: var(--color-cyan);
+
+        color: #04101c;
+        background: var(--color-cyan);
+        border-color: rgb(205 250 255 / 0.5);
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.35),
+            0 12px 32px -14px rgb(70 227 239 / 0.7);
+    }
+
+    .way-home .wave-mark {
+        background: #04101c;
+    }
+
+    .way-home:hover {
+        background: #8ef1f7;
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.4),
+            0 14px 36px -12px rgb(70 227 239 / 0.85);
+    }
+
+    .way-docs {
+        --accent: var(--color-violet);
+
+        color: var(--color-ink);
+        background: var(--glass-fill);
+        border-color: rgb(165 124 255 / 0.4);
+        box-shadow:
+            var(--glass-highlight),
+            0 24px 60px -36px rgb(0 0 0 / 0.9);
+    }
+
+    .way-docs svg {
+        color: var(--color-violet);
+    }
+
+    .way-docs:hover {
+        border-color: rgb(165 124 255 / 0.75);
+        background: linear-gradient(180deg, rgb(165 124 255 / 0.14), rgb(165 124 255 / 0.06)), var(--glass-fill);
+    }
+
+    .way:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+    }
+
+    /* The picture keeps the drawing's proportions, so the parts laid over it land where they were drawn */
+    .picture {
+        /* The picture's width over the drawing's, set by the script, which the beads' layer scales by */
+        --fit: 1;
+
+        position: relative;
+        width: min(100%, var(--tall));
+        aspect-ratio: 1;
+    }
+
+    .space {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+    }
+
+    /* The beads' layer: the drawing's box in its own pixels, scaled to the picture */
+    .beads {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 560px;
+        height: 560px;
+        transform: scale(var(--fit));
+        transform-origin: 0 0;
+        pointer-events: none;
+    }
+
+    /* A bead of light like the ones that ride the homepage's line. It follows the line from beyond the top of the
+       picture and goes out with the line's light. Two beads a homepage spacing apart, at the homepage's pace */
+    .bead {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 10px;
+        height: 3px;
+        border-radius: 2px;
+        background: #c8fbff;
+        box-shadow: 0 0 6px 1px rgb(70 227 239 / 0.9);
+        offset-path: path("M 200 0 L 200 120 C 200 180, 360 170, 360 230 C 360 300, 280 290, 280 360");
+        offset-rotate: auto;
+        opacity: 0;
+        will-change: offset-distance, opacity;
+        animation: lost-bead 13.7s linear infinite;
+        animation-delay: var(--delay);
+    }
+
+    @keyframes lost-bead {
+        0% {
+            offset-distance: 0%;
+            opacity: 0;
+        }
+        10% {
+            opacity: 1;
+        }
+        74% {
+            opacity: 1;
+        }
+        100% {
+            offset-distance: 100%;
+            opacity: 0;
+        }
+    }
+
+    .stars circle {
+        fill: rgb(238 240 255 / 0.55);
+    }
+
+    .line,
+    .line-glow {
+        fill: none;
+        stroke-linecap: round;
+    }
+
+    .line {
+        stroke: url(#lost-line);
+        stroke-width: 1.5;
+        opacity: 0.9;
+    }
+
+    .line-glow {
+        stroke: rgb(70 227 239 / 0.3);
+        stroke-width: 10;
+        filter: blur(8px);
+    }
+
+    .stop-halo {
+        fill: rgb(70 227 239 / 0.12);
+    }
+
+    .stop-ring {
+        fill: #071a2c;
+        stroke: #46e3ef;
+        stroke-width: 1.2;
+    }
+
+    .stop-number {
+        font-family: var(--font-mono);
+        font-size: var(--type-micro);
+        font-weight: var(--weight-semibold);
+        fill: #8ef1f7;
+    }
+
+    /* The lost station: no halo, a dim rim, and the dotted seat around it where a line would have come in.
+       It drifts a little, on its own layer */
+    .adrift {
+        position: absolute;
+        will-change: transform;
+        animation: lost-drift 11s ease-in-out infinite alternate;
+    }
+
+    .adrift svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        overflow: visible;
+    }
+
+    .adrift-seat {
+        fill: none;
+        stroke: rgb(160 190 255 / 0.22);
+        stroke-width: 1;
+        stroke-dasharray: 1.5 7;
+        stroke-linecap: round;
+    }
+
+    /* A message goes out from the station that was never reached, and nothing answers */
+    .adrift-pulse {
+        fill: none;
+        stroke: rgb(160 190 255 / 0.5);
+        stroke-width: 1;
+        transform-box: fill-box;
+        transform-origin: center;
+        animation: lost-ripple 6.85s ease-out infinite;
+    }
+
+    .lost[data-still] .adrift-pulse {
+        display: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .adrift-pulse {
+            display: none;
+        }
+    }
+
+    @keyframes lost-ripple {
+        from {
+            opacity: 0.9;
+            transform: scale(1);
+        }
+        60%,
+        to {
+            opacity: 0;
+            transform: scale(2.4);
+        }
+    }
+
+    .adrift-ring {
+        fill: var(--color-night);
+        stroke: rgb(160 190 255 / 0.34);
+        stroke-width: 1.2;
+    }
+
+    .adrift-number {
+        font-family: var(--font-mono);
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        letter-spacing: var(--tracking-wide);
+        fill: rgb(195 200 230 / 0.62);
+    }
+
+    @keyframes lost-drift {
+        from {
+            transform: translateY(-5px);
+        }
+        to {
+            transform: translateY(5px);
+        }
+    }
+
+    .signpost-seat {
+        position: absolute;
+        aspect-ratio: 1;
+    }
+
+    .signpost {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        filter: drop-shadow(0 14px 20px rgb(0 0 0 / 0.55)) drop-shadow(0 0 16px rgb(236 196 110 / 0.18));
+        will-change: transform;
+        animation: lost-float 6.5s ease-in-out infinite;
+    }
+
+    @keyframes lost-float {
+        0%,
+        100% {
+            transform: translateY(0);
+        }
+        50% {
+            transform: translateY(-9px);
+        }
+    }
+
+    /* Still: the same picture with time stopped */
+    .lost[data-still] .beads {
+        display: none;
+    }
+
+    .lost[data-still] .adrift,
+    .lost[data-still] .signpost {
+        animation: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .beads {
+            display: none;
+        }
+
+        .adrift,
+        .signpost {
+            animation: none;
+        }
+    }
+
+    /* Portrait screens and phones: one centered column that reads in order, first what happened (the title and its
+       line), then the picture, then the ways on. The words' block opens up so its parts take their places in it */
+    @media (max-width: 899px) {
+        .lost {
+            align-content: center;
+            row-gap: 0;
+            padding-top: calc(var(--header) + 8px);
+            text-align: center;
+        }
+
+        .words {
+            display: contents;
+        }
+
+        .lost-title,
+        .lead,
+        .scene,
+        .ways {
+            grid-column: 1 / -1;
+        }
+
+        .lost-title {
+            order: 1;
+            margin-inline: auto;
+        }
+
+        .lead {
+            order: 2;
+            margin-inline: auto;
+        }
+
+        .scene {
+            order: 3;
+            margin-block: clamp(16px, 3vh, 32px);
+        }
+
+        .ways {
+            order: 4;
+            justify-content: center;
+            margin-top: 0;
+        }
+
+        .lost {
+            --tall: min(380px, 36svh);
+        }
+    }
+
+    @media (max-width: 480px) {
+        .ways {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .way {
+            justify-content: center;
+        }
+    }
+</style>

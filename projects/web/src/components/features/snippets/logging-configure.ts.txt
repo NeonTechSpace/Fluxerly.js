@@ -1,0 +1,5 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+export function traceRequests(client: Client) {
+    client.logging.configure({ level: "warn", categories: { rest: "debug" } })
+}

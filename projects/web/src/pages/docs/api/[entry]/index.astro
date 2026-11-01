@@ -1,0 +1,78 @@
+---
+// An entry point: its description and examples, then its categories
+import "../../../../styles/reference.css"
+import Docs from "../../../../layouts/Docs.astro"
+import Code from "../../../../components/docs/Code.astro"
+import Declaration from "../../../../components/docs/reference/Declaration.astro"
+import DocText from "../../../../components/docs/reference/DocText.astro"
+import Heading from "../../../../components/docs/reference/Heading.astro"
+import Md from "../../../../components/docs/reference/Md.astro"
+import { isReexport, model, referenceUrl, type Entry, type TocItem } from "../../../../lib/reference"
+
+export function getStaticPaths() {
+    return model.entries.map((entry) => ({ params: { entry: entry.key }, props: { entry } }))
+}
+
+interface Props {
+    entry: Entry
+}
+
+const { entry } = Astro.props
+const current = entry.url
+const toc: TocItem[] = [
+    { depth: 2, text: "Categories", id: "categories" },
+    ...(entry.uncategorized.length ? [{ depth: 2 as const, text: "Other", id: "other" }] : []),
+]
+---
+
+<Docs
+    title={entry.title}
+    description={`Import from ${entry.importPath}`}
+    section="reference"
+    current={current}
+    toc={toc}
+    crumbs={[{ title: "Reference", href: referenceUrl }]}
+>
+    <div class="ref">
+        <DocText doc={entry.doc} part="lead" />
+        <DocText doc={entry.doc} part="body" />
+        <DocText doc={entry.doc} part="rest" />
+        <section class="ref-group">
+            <Heading level={2} id="categories">Categories</Heading>
+            <ul class="ref-categories">
+                {
+                    entry.categories.map((category) => (
+                        <li class="ref-category">
+                            <a href={category.url}>{category.title}</a>
+                            <p class="ref-count">{category.items.length} {category.items.length === 1 ? "symbol" : "symbols"}</p>
+                            <p class="ref-top">
+                                {category.top.map((name, index) => (
+                                    <>
+                                        {index > 0 && " "}
+                                        <Code text={name} />
+                                    </>
+                                ))}
+                            </p>
+                        </li>
+                    ))
+                }
+            </ul>
+        </section>
+        {
+            entry.uncategorized.length > 0 && (
+                <section class="ref-group">
+                    <Heading level={2} id="other">Other</Heading>
+                    {entry.uncategorized.map((item) =>
+                        isReexport(item) ? (
+                            <p id={item.anchor}>
+                                <a href={item.url}><Code text={item.name} /></a> <Md md={item.summary} inline />
+                            </p>
+                        ) : (
+                            <Declaration item={item} />
+                        ),
+                    )}
+                </section>
+            )
+        }
+    </div>
+</Docs>

@@ -2,7 +2,6 @@
 fluxer
 fluxerapp
 fluxerly
-fumadocs
 msgpackr
 workerd
 neontechspace
@@ -81,3 +80,5 @@ resharding
 unvouch
 unvouched
 pnig
+gsap
+nightlies

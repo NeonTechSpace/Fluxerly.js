@@ -1,0 +1,416 @@
+/* Marks in the docs prose and their hover peeks. Each kind has one look that says what it is: an API name in the
+   reference's violet, a code as a small mono span on a faint tint, a log level as a colored word on a tint of its own
+   color, and a glossary term with a dotted underline. A repeat, a name after its first mention in a section or a term after its first use on the page,
+   keeps its peek but drops the look, with only a faint dotted line. Levels and status codes are short and look the same
+   every time. Nothing moves by itself. Text stays at 15px or larger */
+
+.docs {
+    --peek-violet: var(--violet-bright);
+    /* Levels in the colors the terminal panels print them: quiet for trace and debug, green for a record that went
+       well, gold for a warning, coral for a failure */
+    --level-trace: var(--ink-muted);
+    --level-debug: var(--ink-muted);
+    --level-info: var(--ok);
+    --level-warn: var(--gold);
+    --level-error: var(--bad);
+    --level-fatal: var(--bad);
+}
+
+:is(.docs-prose, .ref) a.peek {
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        text-decoration-color var(--speed-fast) ease,
+        box-shadow var(--speed-fast) ease;
+}
+
+/* An API name links to the reference, so it speaks in the reference's violet wherever it stands */
+:is(.docs-prose, .ref) a.peek-api:not(.peek-quiet) {
+    color: var(--peek-violet);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: rgb(165 124 255 / 0.5);
+    text-underline-offset: 4px;
+}
+
+:is(.docs-prose, .ref) a.peek-api:not(.peek-quiet) > code {
+    color: inherit;
+    background: rgb(165 124 255 / 0.13);
+}
+
+:is(.docs-prose, .ref) a.peek-api:not(.peek-quiet):hover {
+    color: var(--color-violet-mist);
+    text-decoration-color: currentColor;
+}
+
+/* A log record, error, HTTP or close code: a mono span on a faint tint, no underline, brighter under the pointer */
+:is(.docs-prose, .ref) a.peek-code:not(.peek-quiet) {
+    color: var(--ink-high);
+    text-decoration: none;
+}
+
+:is(.docs-prose, .ref) a.peek-code:not(.peek-quiet) > code {
+    color: inherit;
+    background: var(--tint);
+    transition: background-color var(--speed-fast) ease;
+}
+
+:is(.docs-prose, .ref) a.peek-code:not(.peek-quiet):hover {
+    color: var(--ink-high);
+}
+
+:is(.docs-prose, .ref) a.peek-code:not(.peek-quiet):hover > code {
+    background: rgb(255 255 255 / 0.12);
+}
+
+/* A log level: a word in its level's color on a faint tint of that color, as on the codes page */
+:is(.docs-prose, .ref) a.peek-level {
+    --level: var(--level-info);
+    display: inline-block;
+    padding: 0 0.45em;
+    font-size: max(0.84em, 15px);
+    line-height: 1.5;
+    color: var(--level);
+    text-decoration: none;
+    background: color-mix(in srgb, var(--level) 12%, transparent);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+a.peek-level[data-level="trace"],
+.peek-flag[data-level="trace"] {
+    --level: var(--level-trace);
+}
+
+a.peek-level[data-level="debug"],
+.peek-flag[data-level="debug"] {
+    --level: var(--level-debug);
+}
+
+a.peek-level[data-level="info"],
+.peek-flag[data-level="info"] {
+    --level: var(--level-info);
+}
+
+a.peek-level[data-level="warn"],
+.peek-flag[data-level="warn"] {
+    --level: var(--level-warn);
+}
+
+a.peek-level[data-level="error"],
+.peek-flag[data-level="error"] {
+    --level: var(--level-error);
+}
+
+a.peek-level[data-level="fatal"],
+.peek-flag[data-level="fatal"] {
+    --level: var(--level-fatal);
+}
+
+:is(.docs-prose, .ref) a.peek-level:hover {
+    color: var(--level);
+    background: color-mix(in srgb, var(--level) 22%, transparent);
+}
+
+/* A glossary term keeps the prose color, with a dotted line that says a definition is near */
+:is(.docs-prose, .ref) a.peek-term:not(.peek-quiet) {
+    color: inherit;
+    text-decoration: underline dotted;
+    text-decoration-thickness: 1.5px;
+    text-decoration-color: rgb(255 255 255 / 0.5);
+    text-underline-offset: 5px;
+}
+
+:is(.docs-prose, .ref) a.peek-term:not(.peek-quiet):hover {
+    color: var(--ink-high);
+    text-decoration-color: var(--cyan);
+}
+
+/* A repeat: the prose's own color and code's own chip, with a faint dotted line that brightens to the kind's color
+   under the pointer */
+:is(.docs-prose, .ref) a.peek.peek-quiet {
+    --quiet-tone: var(--peek-violet);
+    color: inherit;
+    text-decoration: underline dotted;
+    text-decoration-thickness: 1px;
+    text-decoration-color: rgb(255 255 255 / 0.16);
+    text-underline-offset: 5px;
+}
+
+:is(.docs-prose, .ref) a.peek-term.peek-quiet {
+    --quiet-tone: var(--cyan);
+}
+
+:is(.docs-prose, .ref) a.peek-code.peek-quiet {
+    --quiet-tone: var(--color-ink);
+}
+
+:is(.docs-prose, .ref) a.peek.peek-quiet:hover {
+    color: var(--color-ink);
+    text-decoration-color: var(--quiet-tone);
+}
+
+:is(.docs-prose, .ref) a.peek:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* The card */
+
+/* The card is the raised plane: frosted and a little lighter than the night, with a hairline of light along its top
+   edge and a deep shade under it. Only its link carries the tone of what it explains */
+.peek-card {
+    --peek-tone: var(--violet);
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 80;
+    box-sizing: border-box;
+    width: max-content;
+    min-width: min(17rem, calc(100vw - 24px));
+    max-width: min(35rem, calc(100vw - 24px));
+    padding: 14px 18px 12px;
+    font-family: var(--font-sans);
+    font-size: var(--type-body);
+    line-height: 1.5;
+    color: var(--ink-body);
+    text-align: left;
+    /* The prose behind is blurred away, so it never reads through the words of the card */
+    background: var(--raised);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--raised-shade);
+    backdrop-filter: var(--raised-blur);
+    opacity: 0;
+    transform: translateY(4px);
+    transition:
+        opacity var(--speed-fast) ease,
+        transform var(--speed-fast) ease;
+}
+
+.peek-card[data-side="above"] {
+    transform: translateY(-4px);
+}
+
+.peek-card.is-open {
+    opacity: 1;
+    transform: none;
+}
+
+.peek-card[hidden] {
+    display: none;
+}
+
+/* The tone of the card's top rim follows what it explains */
+.peek-card[data-form="term"] {
+    --peek-tone: var(--cyan);
+}
+
+.peek-card[data-form="code"] {
+    --peek-tone: rgb(200 215 255);
+}
+
+.peek-card[data-form="level"] {
+    --peek-tone: var(--level, var(--level-info));
+}
+
+.peek-card[data-level="trace"],
+.peek-card[data-level="debug"] {
+    --level: var(--level-debug);
+}
+
+.peek-card[data-level="info"] {
+    --level: var(--level-info);
+}
+
+.peek-card[data-level="warn"] {
+    --level: var(--level-warn);
+}
+
+.peek-card[data-level="error"],
+.peek-card[data-level="fatal"] {
+    --level: var(--level-error);
+}
+
+.peek-title {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    align-items: center;
+}
+
+.peek-sig {
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-ink-soft);
+}
+
+/* The same hues as the signature wells: types mint, keywords violet, literals gold, parameters pale blue */
+.peek-sig .ty-n {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+}
+
+.peek-sig .ty-t {
+    color: var(--color-success);
+}
+
+.peek-sig .ty-k {
+    color: var(--color-violet-light);
+}
+
+.peek-sig .ty-l {
+    color: var(--gold);
+}
+
+.peek-sig .ty-p {
+    color: var(--color-periwinkle);
+}
+
+/* Type names link to their own reference, violet and underlined, as in a reference signature */
+.peek-sig a {
+    color: var(--peek-violet, var(--color-violet-light));
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: rgb(165 124 255 / 0.5);
+    text-underline-offset: 3px;
+}
+
+.peek-sig a:hover {
+    color: var(--color-violet-mist);
+    text-decoration-color: currentColor;
+}
+
+.peek-chip {
+    padding: 0.05em 0.45em;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+    overflow-wrap: anywhere;
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.peek-flag {
+    --level: var(--level-info);
+    display: inline-block;
+    padding: 0 8px;
+    font-size: var(--type-small);
+    line-height: 1.6;
+    color: var(--level);
+    background: color-mix(in srgb, var(--level) 12%, transparent);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.peek-flag-title {
+    font-weight: var(--weight-semibold);
+}
+
+.peek-term-title {
+    font-size: var(--type-lead);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+}
+
+.peek-text,
+.peek-extra,
+.peek-action {
+    margin: 6px 0 0;
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    text-wrap: pretty;
+}
+
+.peek-text {
+    -webkit-line-clamp: 3;
+}
+
+.peek-extra,
+.peek-action {
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+    -webkit-line-clamp: 2;
+}
+
+.peek-card :is(.peek-text, .peek-extra, .peek-action) code {
+    padding: 0.05em 0.3em;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    color: var(--ink-high);
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.peek-label,
+.peek-x-label {
+    margin-right: 6px;
+    color: var(--color-ink);
+}
+
+.peek-x-label {
+    font-family: var(--font-mono);
+}
+
+.peek-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 10px;
+    padding-top: 9px;
+    font-size: var(--type-small);
+    border-top: 1px solid var(--hair);
+}
+
+.peek-kind {
+    color: var(--ink-muted);
+}
+
+.peek-link {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    margin-left: auto;
+    font-weight: var(--weight-medium);
+    color: var(--peek-tone);
+    text-decoration: none;
+}
+
+.peek-card[data-form="code"] .peek-link,
+.peek-card[data-form="level"] .peek-link {
+    color: var(--cyan);
+}
+
+.peek-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+.peek-arrow {
+    flex: none;
+}
+
+/* Still and the system's reduced motion show the card and the marks without any motion */
+.peek-card[data-still],
+html[data-experience="still"] a.peek {
+    transition: none;
+    transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .peek-card,
+    a.peek {
+        transition: none;
+        transform: none;
+    }
+}

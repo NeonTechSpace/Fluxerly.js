@@ -4,7 +4,7 @@ navTitle: First Effect bot
 description: Understand the small set of Effect concepts needed to send a message and run a bot
 ---
 
-Effect is optional. The [default JavaScript and TypeScript API](/docs/{{version}}/quick-start/) supports the same SDK capabilities with `async` functions and Results
+Effect is optional. The [default JavaScript and TypeScript API](/docs/quick-start/) supports the same SDK capabilities with `async` functions and Results
 
 Use the native Effect API when several bot operations must stop together, resources must close and failures need separate handling. Those operations can use the same services and cleanup scope as the rest of an Effect application
 
@@ -12,16 +12,16 @@ The examples introduce each Effect concept before combining them into a bot
 
 ## Install the matching version
 
-To start from a generated Effect project with a test, run the command from [Generate the project](/docs/{{version}}/quick-start/#generate-the-project) with `--template effect` in the bot's folder, which may already hold the token's `.env` and a `.gitignore`.
+To start from a generated Effect project with a test, run the command from [Generate the project](/docs/quick-start/#generate-the-project) with `--template effect` in the bot's folder, which may already hold the token's `.env` and a `.gitignore`.
 
-First generate a project with [the quick start](/docs/{{version}}/quick-start/) and choose Effect, which installs the SDK, Effect, TypeScript 7 and the Node.js types for typechecking. Fluxerly is tested against Node.js 24.15 or newer. A project set up by hand needs `"type": "module"` in `package.json` and the TypeScript setup that the quick start's TypeScript section describes. Native examples use TypeScript
+First generate a project with [the quick start](/docs/quick-start/) and choose Effect, which installs the SDK, Effect, TypeScript 7 and the Node.js types for typechecking. Fluxerly is tested against Node.js 24.15 or newer. A project set up by hand needs `"type": "module"` in `package.json` and the TypeScript setup that the quick start's TypeScript section describes. Native examples use TypeScript
 
-Fluxerly is tested against Effect {{effect-version}} and accepts later Effect 4 releases. The installed SDK lists its accepted range under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. Effect 3 and Effect 4 prereleases are incompatible
+Fluxerly works with Effect 4. The installed SDK lists its accepted range under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. Effect 3 and Effect 4 prereleases are incompatible
 
 These examples import Effect directly, so declare it as a direct dependency. For this documentation version, the command is:
 
 ```command
-{"kind":"add","package":"effect","version":"{{effect-version}}"}
+{"kind":"add","package":"effect"}
 ```
 
 Check which Effect version the application has installed:
@@ -82,7 +82,7 @@ export function installPing(client: Client) {
 
 ## Run the complete bot
 
-This is the bot that `fluxerly init --template effect` writes. Save it as `bot.ts` and start it with `node --env-file=.env bot.ts`, using the `.env` file from the [quick start](/docs/{{version}}/quick-start/). The `defineBot` function holds the bot's options and returns them unchanged, keeping the types of command arguments and the services that handlers require. The runner registers the commands before it connects
+This is the bot that `fluxerly init --template effect` writes. Save it as `bot.ts` and start it with `node --env-file=.env bot.ts`, using the `.env` file from the [quick start](/docs/quick-start/). The `defineBot` function holds the bot's options and returns them unchanged, keeping the types of command arguments and the services that handlers require. The runner registers the commands before it connects
 
 ```ts
 {{starter:bot-effect.ts}}
@@ -90,7 +90,7 @@ This is the bot that `fluxerly init --template effect` writes. Save it as `bot.t
 
 Send `!ping` and expect `Pong!`. Press Ctrl+C to stop the bot. The SDK interrupts it and waits for its cleanup
 
-The last line passes the options and the token to `runBot` and runs that program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The line runs only when Node.js runs the file, so a test can import `bot` without starting it, as the [Effect application testing guide](/docs/{{version}}/effect-application-testing/#test-a-runbot-bot-against-an-in-memory-fluxer) shows. The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
+The last line passes the options and the token to `runBot` and runs that program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The line runs only when Node.js runs the file, so a test can import `bot` without starting it, as the [Effect application testing guide](/docs/effect-application-testing/#test-a-runbot-bot-against-an-in-memory-fluxer) shows. The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
 
 <details>
 <summary>What the runner watches while the bot runs</summary>
@@ -101,7 +101,7 @@ Keep the token private, including in the environment and in process-manager sett
 
 </details>
 
-The [small bot](/docs/{{version}}/small-bot/) guide shows a larger native bot with commands, a permission guard, a cooldown and a welcome message
+The [small bot](/docs/small-bot/) guide shows a larger native bot with commands, a permission guard, a cooldown and a welcome message
 
 ## Report failures outside runBot
 
@@ -133,4 +133,4 @@ export async function announce(token: string, channelId: string) {
 
 Effect represents expected errors, defects and interruption. A defect is an unexpected fault, and interruption means cancellation. Effect's Cause can retain these together, including cleanup failures. Do not turn every Cause into a retry
 
-Continue with [scoped workflows](/docs/{{version}}/effect-workflows/) to combine collectors, failure handling and concurrent reads
+Continue with [scoped workflows](/docs/effect-workflows/) to combine collectors, failure handling and concurrent reads

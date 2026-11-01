@@ -1,0 +1,123 @@
+/* A small pill: the waves, then the pause or play mark for what a press does next */
+.motion {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 10px 0 8px;
+    color: var(--color-cyan);
+    background: rgb(70 227 239 / 0.06);
+    border: 1px solid rgb(70 227 239 / 0.3);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition:
+        color var(--speed-normal) ease,
+        border-color var(--speed-normal) ease,
+        background-color var(--speed-normal) ease;
+}
+
+/* Until the island knows the visitor's choice the switch claims neither state, so Still never loads looking switched on */
+.motion:not([data-ready]) {
+    transition: none;
+}
+
+html[data-still] .motion:not([data-ready]) {
+    color: var(--color-muted);
+    background: none;
+    border-color: rgb(195 200 230 / 0.18);
+    transition: none;
+}
+
+.motion:hover {
+    background: rgb(70 227 239 / 0.12);
+    border-color: rgb(70 227 239 / 0.55);
+}
+
+.motion:focus-visible {
+    outline: 2px solid var(--color-cyan);
+    outline-offset: 2px;
+}
+
+/* The waves are longer than the icon. The window shows the middle and lets them flow in and out softly
+   at both sides, the way a signal passes through */
+.motion-waves {
+    width: 20px;
+    height: 20px;
+    overflow: visible;
+    mask-image: linear-gradient(to right, transparent, #000 16%, #000 84%, transparent);
+    mask-repeat: no-repeat;
+}
+
+/* The wave rolls while motion is on, a slow travel of the crests from left to right. It waits until the
+   island knows the state, so a visit that chose Still never sees it move */
+.motion-wave {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    animation: motion-roll 2.4s linear infinite paused;
+}
+
+.motion[data-ready][aria-checked="true"] .motion-wave {
+    animation-play-state: running;
+}
+
+/* The two Fluxer waves ride in step, parallel as in the mark, so they never cross */
+.motion-wave-low {
+    opacity: 0.6;
+}
+
+/* One full period, 18 units of the 24 unit icon, so the last frame is the first again */
+@keyframes motion-roll {
+    from {
+        transform: translateX(-18px);
+    }
+    to {
+        transform: translateX(0);
+    }
+}
+
+/* The mark for the next press, drawn in the waves' own stroke. Hidden until the state is known */
+.motion-next {
+    width: 11px;
+    height: 11px;
+}
+
+html[data-still] .motion:not([data-ready]) .motion-next {
+    visibility: hidden;
+}
+
+.motion-pause {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+}
+
+.motion-play {
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 1.4;
+    stroke-linejoin: round;
+}
+
+/* Motion off: the waves stop where they are, keeping their shape so they still read as waves, and the
+   control goes quiet */
+.motion[aria-checked="false"] {
+    color: var(--color-muted);
+    background: rgb(195 200 230 / 0.04);
+    border-color: rgb(195 200 230 / 0.2);
+}
+
+.motion[aria-checked="false"]:hover {
+    color: var(--color-ink);
+    background: rgb(195 200 230 / 0.09);
+    border-color: rgb(195 200 230 / 0.42);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .motion-wave {
+        animation: none;
+    }
+}

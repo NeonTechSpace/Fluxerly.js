@@ -1,0 +1,1117 @@
+---
+import { ArrowRightIcon, GithubLogoIcon } from "@phosphor-icons/react/ssr"
+import effectAll from "../features/snippets/effect-all.ts.txt?raw"
+import effectMatch from "../features/snippets/effect-match.ts.txt?raw"
+import CodePanel from "../features/CodePanel.astro"
+import Companion from "./Companion.astro"
+import Depth from "./Depth.astro"
+import { iconSrc, type IconName } from "../../lib/art"
+import { links } from "../../lib/links"
+
+// NeonFlux changes on its own schedule, so nothing here quotes it: the channels are examples of what it does, the counts
+// are rounded down and the code is the SDK's own sample, which the site keeps working
+
+type Card = {
+    title: string
+    description?: string
+    fields?: [string, string][]
+    note?: string
+    // A member's own color on the card
+    accent?: string
+    picture?: IconName
+    options?: { label: string; mine?: boolean }[]
+}
+type Message = { from: "you"; text: string } | { from: "bot"; text: string } | { from: "bot"; card: Card } | { from: "page"; card: Card }
+
+const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: string; aside?: string; messages: Message[] }[] = [
+    {
+        id: "role-picker",
+        tab: "Role Picker",
+        hint: "Claim roles on the website",
+        icon: "roles-tags",
+        channel: "On the Website",
+        aside: "An optional alternative to reaction roles, which work in chat. Each has its own switch and starts off, so a server can use either or both",
+        messages: [
+            {
+                from: "page",
+                card: {
+                    title: "Pick one colour",
+                    description: "Claim a role here, and drop it any time",
+                    options: [
+                        { label: "Red" },
+                        { label: "Blue", mine: true },
+                        { label: "Green" },
+                        { label: "Violet" },
+                    ],
+                },
+            },
+        ],
+    },
+    {
+        id: "profiles",
+        tab: "Profiles",
+        hint: "Every member's page",
+        icon: "star-drop",
+        channel: "general",
+        messages: [
+            { from: "you", text: "!profile @Riley" },
+            {
+                from: "bot",
+                card: {
+                    title: "Riley",
+                    description: "Draws pixel towns and runs the Friday game night",
+                    accent: "#ecc46e",
+                    fields: [
+                        ["Rank", "Level 6, rank #7"],
+                        ["Birthday", "March 3"],
+                        ["Links", "riley.art"],
+                    ],
+                },
+            },
+        ],
+    },
+    {
+        id: "showcases",
+        tab: "Showcases",
+        hint: "Show what you made",
+        icon: "announce-megaphone",
+        channel: "showcase",
+        messages: [
+            {
+                from: "bot",
+                card: {
+                    title: "Pocket Toolbox",
+                    description: "A little painted toolbox, made over one long weekend",
+                    picture: "toolbox",
+                    fields: [["By", "Riley"]],
+                },
+            },
+        ],
+    },
+    {
+        id: "help",
+        tab: "Help",
+        hint: "Catches a typo",
+        icon: "commands-key",
+        channel: "general",
+        messages: [
+            { from: "you", text: "!pign" },
+            { from: "bot", text: "That's close to !ping. Send !help to see what I can do" },
+            { from: "you", text: "!ping" },
+            { from: "bot", text: "Pong!" },
+        ],
+    },
+    {
+        id: "moderation",
+        tab: "Moderation",
+        hint: "Keeps every case",
+        icon: "guard-shield",
+        channel: "staff",
+        messages: [
+            { from: "you", text: "!mod warn @Sam Spamming links" },
+            {
+                from: "bot",
+                card: {
+                    title: "Warning for @Sam",
+                    description: "Spamming links",
+                    fields: [
+                        ["Case", "#12"],
+                        ["Staff", "@Riley"],
+                    ],
+                },
+            },
+        ],
+    },
+    {
+        id: "tickets",
+        tab: "Tickets",
+        hint: "Asks in private",
+        icon: "support-lifebuoy",
+        channel: "direct message",
+        messages: [
+            { from: "bot", text: "What do you need help with? Only the team will see this" },
+            { from: "you", text: "My role panel stopped working" },
+            { from: "bot", text: "Got it. Reply send and I'll open your ticket" },
+        ],
+    },
+]
+
+const stats = [
+    { value: "50+", label: "Built-In Commands" },
+    { value: "25+", label: "Features to Switch On" },
+    { value: "Open", label: "Source, Run It Yourself" },
+]
+
+const groups: { title: string; text: string; icon: IconName }[] = [
+    { title: "Community", text: "Profiles, showcases, levels, events and birthdays", icon: "star-drop" },
+    { title: "Roles", text: "A role picker or reaction roles, verification, newcomer roles and the member list", icon: "roles-tags" },
+    { title: "Moderation", text: "Cases, automatic rules, raid protection, logs and alerts", icon: "guard-shield" },
+    { title: "Messages", text: "Announcements, greetings, custom replies and message cleanup", icon: "announce-megaphone" },
+    { title: "Support", text: "Tickets, the help desk and suggestions", icon: "support-lifebuoy" },
+    { title: "Voice", text: "Temporary voice rooms and finding a group", icon: "first-reply-radio" },
+    { title: "Setup", text: "Check NeonFlux, apply presets, see activity and back up the server", icon: "config-sliders" },
+    { title: "Basics", text: "Ping, help, away status, prefix and reply style", icon: "commands-key" },
+]
+
+const proofs = [
+    {
+        title: "Background Work Cleans Up After Itself",
+        text: "Each worker lives in an Effect scope, so nothing is left running when the bot stops",
+    },
+    {
+        title: "A Failed Job Stays Contained",
+        text: "A job that fails is logged and the worker waits for the next one, so one bad job never takes the bot down",
+    },
+    {
+        title: "Failures Have Names",
+        text: "Effect keeps failures in the types, so each one gets its own plain reply instead of a crash",
+    },
+    {
+        title: "Every Answer Is Checked",
+        text: "Answers from its backend are decoded with Effect Schema before the bot uses them",
+    },
+]
+---
+
+<!-- The tagline's promise kept: the bot of your dreams, built on this SDK by its maker, and shown at work -->
+<section class="neonflux" id="neonflux" aria-labelledby="neonflux-title" data-accent="violet">
+    <Depth name="crescent-violet" side="left" bottom="18%" width={170} opacity={0.75} />
+    <div class="page-grid">
+        <div class="head" data-rise>
+            <h2 class="section-title" id="neonflux-title"><span class="station" data-station="neonflux" aria-hidden="true"></span>Meet <span class="hi">NeonFlux</span></h2>
+            <p class="lead">The open-source Fluxer bot that answers to you, from source code to server. It runs on Fluxerly.js through the SDK's Effect API, so every command below is this SDK at work</p>
+            <div class="ways">
+                <a class="source visit" href={links.neonfluxHome} target="_blank" rel="noopener">
+                    Visit NeonFlux
+                    <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
+                </a>
+                <a class="source" href={links.neonflux} target="_blank" rel="noopener">
+                    <GithubLogoIcon size={22} weight="fill" aria-hidden="true" />
+                    NeonFlux on GitHub
+                    <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
+                </a>
+            </div>
+            <ul class="stats">
+                {
+                    stats.map((stat) => (
+                        <li>
+                            <strong>{stat.value}</strong>
+                            <span>{stat.label}</span>
+                        </li>
+                    ))
+                }
+            </ul>
+        </div>
+
+        <div class="bot" data-rise>
+            <div class="orbit" aria-hidden="true">
+                <img src={iconSrc("guard-shield", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                <img src={iconSrc("events-bell", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                <img src={iconSrc("support-lifebuoy", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                <img src={iconSrc("commands-key", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+            </div>
+            <Companion name="neonflux-bot" alt="NeonFlux, a small angular robot with a wind-up key" size={440} />
+        </div>
+
+        <div class="deck" data-rise data-neonflux-deck>
+            <div class="tabs" role="tablist" aria-label="NeonFlux at work">
+                {
+                    scenes.map((scene, index) => (
+                        <button class="tab" type="button" role="tab" id={`nf-tab-${scene.id}`} aria-controls={`nf-panel-${scene.id}`} aria-selected={index === 0 ? "true" : "false"} tabindex={index === 0 ? 0 : -1}>
+                            <img src={iconSrc(scene.icon, 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                            <span class="tab-words">
+                                <span class="tab-name">{scene.tab}</span>
+                                <span class="tab-hint">{scene.hint}</span>
+                            </span>
+                        </button>
+                    ))
+                }
+            </div>
+            <div class="window glass">
+                <div class="panels">
+                    {
+                        scenes.map((scene, index) => (
+                            <div class="panel" role="tabpanel" id={`nf-panel-${scene.id}`} aria-labelledby={`nf-tab-${scene.id}`} data-active={index === 0 ? "" : undefined} inert={index !== 0}>
+                                <p class="channel">
+                                    {scene.channel !== "On the Website" && <span aria-hidden="true">{scene.channel === "direct message" ? "@" : "#"}</span>} {scene.channel}
+                                </p>
+                                <ol class="log" data-page={scene.channel === "On the Website" ? "" : undefined}>
+                                    {scene.messages.map((message, order) =>
+                                        message.from === "you" ? (
+                                            <li class="message you" style={`--order: ${order}`}>
+                                                <span class="text">{message.text}</span>
+                                            </li>
+                                        ) : (
+                                            <li class="message from-bot" style={`--order: ${order}`}>
+                                                {message.from === "bot" && <img class="avatar" src={iconSrc("neonflux-bot", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />}
+                                                <div class="said">
+                                                    {message.from === "bot" && <span class="author">NeonFlux</span>}
+                                                    {"text" in message ? (
+                                                        <span class="text">{message.text}</span>
+                                                    ) : (
+                                                        <div class="card" style={message.card.accent ? `--card-accent: ${message.card.accent}` : undefined}>
+                                                            <strong class="card-title">{message.card.title}</strong>
+                                                            {message.card.description && <p>{message.card.description}</p>}
+                                                            {message.card.picture && <img class="card-picture" src={iconSrc(message.card.picture, 320)} alt="" width="320" height="320" loading="lazy" decoding="async" />}
+                                                            {message.card.fields && (
+                                                                <dl>
+                                                                    {message.card.fields.map(([name, value]) => (
+                                                                        <div>
+                                                                            <dt>{name}</dt>
+                                                                            <dd>{value}</dd>
+                                                                        </div>
+                                                                    ))}
+                                                                </dl>
+                                                            )}
+                                                            {message.card.options && (
+                                                                <ul class="options" aria-label="Roles to claim">
+                                                                    {message.card.options.map((option) => (
+                                                                        <li data-mine={option.mine ? "" : undefined}>{option.label}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            )}
+                                                            {message.card.note && <p class="note">{message.card.note}</p>}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </li>
+                                        ),
+                                    )}
+                                </ol>
+                                {scene.aside && <p class="aside">{scene.aside}</p>}
+                            </div>
+                        ))
+                    }
+                </div>
+            </div>
+            <p class="caption">Examples of what it does</p>
+        </div>
+
+        <div class="engine">
+            <div class="engine-code" data-rise>
+                <h3 class="engine-title">The Bot Runs <span class="hi">on Effect</span></h3>
+                <p class="engine-note">It is written with the SDK's Effect API, the same one as these two samples</p>
+                <div class="engine-samples">
+                    <CodePanel code={effectAll} file="Reads That Run Together" label="Two reads running together on the SDK's Effect API" language="js" />
+                    <CodePanel code={effectMatch} file="Failures as Values" label="A failure kept as a value on the SDK's Effect API" language="js" />
+                </div>
+            </div>
+            <div class="engine-proofs" data-rise>
+                <h3 class="engine-title">Built to <span class="hi">Hold Up</span></h3>
+                <ul>
+                    {
+                        proofs.map((proof) => (
+                            <li>
+                                <span class="wave-mark" aria-hidden="true" />
+                                <div>
+                                    <h4>{proof.title}</h4>
+                                    <p>{proof.text}</p>
+                                </div>
+                            </li>
+                        ))
+                    }
+                </ul>
+                <a class="prose-link go-link" href="/effect/">
+                    See the Effect API
+                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                </a>
+            </div>
+        </div>
+
+        <ul class="groups" data-rise>
+            {
+                groups.map((group) => (
+                    <li>
+                        <img src={iconSrc(group.icon, 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                        <h3>{group.title}</h3>
+                        <p>{group.text}</p>
+                    </li>
+                ))
+            }
+            <li class="dashboard">
+                <img src={iconSrc("data-database", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                <h3>A Dashboard That Stays Live</h3>
+                <p>Forms update as the data changes, a change made elsewhere never overwrites your draft, and the audit log records every setting change</p>
+            </li>
+        </ul>
+
+        <div class="closing" data-rise>
+            <p>NeonFlux is being rebuilt, and public joining is on hold until it is ready. The source is open today</p>
+            <div class="closing-links">
+                <a class="source visit" href={links.neonfluxHome} target="_blank" rel="noopener">
+                    Visit NeonFlux
+                    <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
+                </a>
+                <a class="source" href={links.neonflux} target="_blank" rel="noopener">
+                    <GithubLogoIcon size={22} weight="fill" aria-hidden="true" />
+                    NeonFlux on GitHub
+                    <ArrowRightIcon size={16} weight="bold" aria-hidden="true" />
+                </a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+    // The channels: choosing a tab plays its exchange. The first one waits until it is really in view
+    for (const deck of document.querySelectorAll<HTMLElement>("[data-neonflux-deck]")) {
+        const tabs = [...deck.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+        const panels = [...deck.querySelectorAll<HTMLElement>('[role="tabpanel"]')]
+        const choose = (index: number) => {
+            tabs.forEach((tab, at) => {
+                tab.setAttribute("aria-selected", String(at === index))
+                tab.tabIndex = at === index ? 0 : -1
+            })
+            panels.forEach((panel, at) => {
+                panel.toggleAttribute("data-active", at === index)
+                panel.inert = at !== index
+            })
+        }
+        tabs.forEach((tab, index) => {
+            tab.addEventListener("click", () => choose(index))
+            tab.addEventListener("keydown", (event) => {
+                const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key]
+                if (!step) return
+                event.preventDefault()
+                const next = (index + step + tabs.length) % tabs.length
+                choose(next)
+                tabs[next]?.focus()
+            })
+        })
+        deck.dataset.waiting = ""
+        const seen = new IntersectionObserver(
+            ([entry]) => {
+                if (!entry?.isIntersecting) return
+                seen.disconnect()
+                delete deck.dataset.waiting
+            },
+            { threshold: 0.3 },
+        )
+        seen.observe(deck)
+    }
+</script>
+
+<style>
+    /* The ways to the bot, its website and its source: glass in the section's own voice, as plain to see as the hero's buttons */
+    .source {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 48px;
+        padding: 0 20px;
+        font-size: var(--type-body);
+        font-weight: var(--weight-semibold);
+        color: var(--color-ink);
+        text-decoration: none;
+        background:
+            radial-gradient(120% 90% at 50% 120%, rgb(190 150 255 / 0.32), rgb(190 150 255 / 0) 62%),
+            linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0) 42%),
+            linear-gradient(180deg, rgb(82 52 160 / 0.8), rgb(44 28 104 / 0.86));
+        border: 1px solid rgb(190 150 255 / 0.5);
+        border-radius: var(--corner-round);
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22);
+        transition: border-color var(--speed-fast) ease;
+    }
+
+    .source:hover {
+        border-color: rgb(210 180 255 / 0.95);
+    }
+
+    /* The website comes first and burns a little brighter */
+    .visit {
+        background:
+            radial-gradient(120% 90% at 50% 120%, rgb(210 180 255 / 0.5), rgb(190 150 255 / 0) 62%),
+            linear-gradient(180deg, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0) 42%),
+            linear-gradient(180deg, rgb(116 76 214 / 0.92), rgb(72 44 156 / 0.94));
+    }
+
+    .source:focus-visible {
+        outline: 2px solid var(--color-cyan);
+        outline-offset: 3px;
+    }
+
+    .source :global(svg:last-child) {
+        transition: transform var(--speed-fast) ease;
+    }
+
+    .source:hover :global(svg:last-child) {
+        transform: translateX(3px);
+    }
+
+    .ways {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 22px;
+        margin-top: 18px;
+    }
+
+    .neonflux {
+        position: relative;
+    }
+
+    .head {
+        grid-column: 1 / span 6;
+        grid-row: 1;
+        align-self: center;
+    }
+
+    .section-title {
+        position: relative;
+    }
+
+    .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px clamp(14px, 2.4vw, 48px);
+        margin: clamp(28px, 2.6vw, 44px) 0 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .stats strong {
+        display: block;
+        font-size: var(--type-display);
+        font-weight: var(--weight-display);
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        letter-spacing: var(--tracking-tight);
+        color: var(--color-violet-pale);
+    }
+
+    .stats span {
+        display: block;
+        margin-top: 8px;
+        font-size: var(--type-body);
+        line-height: 1.35;
+        color: var(--color-muted);
+    }
+
+    /* The bot at the middle of what it looks after: the ring turns, and each icon turns back to stay upright */
+    .bot {
+        --orbit: min(34vw, 60vh, 540px);
+        --orbit-icon: clamp(44px, 4.6vw, 76px);
+        --companion-cap: calc(var(--orbit) * 0.62);
+
+        position: relative;
+        display: grid;
+        grid-column: 7 / -1;
+        grid-row: 1;
+        place-items: center;
+        min-height: calc(var(--orbit) + var(--orbit-icon) + 12px);
+    }
+
+    .bot :global(.companion) {
+        --depth: 0;
+    }
+
+    .orbit {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: var(--orbit);
+        aspect-ratio: 1;
+        translate: -50% -50%;
+        border: 1px dashed rgb(165 124 255 / 0.3);
+        border-radius: 50%;
+    }
+
+    .orbit img {
+        position: absolute;
+        width: var(--orbit-icon);
+        height: auto;
+        margin: calc(var(--orbit-icon) / -2);
+    }
+
+    .orbit img:nth-child(1) {
+        top: 0;
+        left: 50%;
+    }
+
+    .orbit img:nth-child(2) {
+        top: 50%;
+        left: 100%;
+    }
+
+    .orbit img:nth-child(3) {
+        top: 100%;
+        left: 50%;
+    }
+
+    .orbit img:nth-child(4) {
+        top: 50%;
+        left: 0;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        :global(html:not([data-still])) .orbit {
+            animation: nf-orbit 54s linear infinite;
+        }
+
+        :global(html:not([data-still])) .orbit img {
+            animation: nf-orbit 54s linear infinite reverse;
+        }
+
+        /* Each message arrives in turn, whenever its channel is chosen */
+        :global(html:not([data-still])) .deck[data-waiting] .message {
+            opacity: 0;
+        }
+
+        :global(html:not([data-still])) .deck:not([data-waiting]) .panel[data-active] .message {
+            animation: nf-message 380ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+            animation-delay: calc(var(--order) * 520ms + 80ms);
+        }
+
+        .tab img {
+            transition: scale var(--speed-normal) ease;
+        }
+
+        :global(html:not([data-still])) .tab:hover img,
+        :global(html:not([data-still])) .tab[aria-selected="true"] img {
+            scale: 1.1;
+        }
+    }
+
+    @keyframes nf-orbit {
+        to {
+            rotate: 360deg;
+        }
+    }
+
+    @keyframes nf-message {
+        from {
+            opacity: 0;
+            translate: 0 10px;
+        }
+    }
+
+    .deck {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+        column-gap: var(--page-gutter);
+        row-gap: 14px;
+        margin-top: clamp(32px, 3.4vw, 64px);
+    }
+
+    .tabs {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .tab {
+        display: flex;
+        flex: 1;
+        align-items: center;
+        gap: 16px;
+        min-height: 44px;
+        padding: 10px 16px;
+        font: inherit;
+        color: var(--color-muted);
+        text-align: left;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        cursor: pointer;
+        transition:
+            color var(--speed-fast) ease,
+            background-color var(--speed-fast) ease,
+            border-color var(--speed-fast) ease;
+    }
+
+    .tab:hover {
+        color: var(--color-ink);
+        background: rgb(165 124 255 / 0.08);
+    }
+
+    .tab[aria-selected="true"] {
+        color: var(--color-ink);
+        background: rgb(165 124 255 / 0.14);
+        border-color: rgb(165 124 255 / 0.42);
+    }
+
+    .tab img {
+        flex: none;
+        width: 52px;
+        height: 52px;
+        object-fit: contain;
+    }
+
+    .tab-words {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+    }
+
+    .tab-name {
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        line-height: 1.2;
+    }
+
+    .tab-hint {
+        font-size: var(--type-small);
+        color: rgb(195 200 230 / 0.72);
+    }
+
+    .window {
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    /* All the channels share one cell, so choosing another never moves the page */
+    .panels {
+        display: grid;
+    }
+
+    .panel {
+        display: flex;
+        flex-direction: column;
+        grid-area: 1 / 1;
+        min-width: 0;
+        visibility: hidden;
+    }
+
+    .panel[data-active] {
+        visibility: visible;
+    }
+
+    .channel {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        min-height: 46px;
+        margin: 0;
+        padding-inline: 20px;
+        font-size: var(--type-small);
+        font-weight: var(--weight-medium);
+        color: var(--color-ink);
+        border-bottom: 1px solid rgb(160 190 255 / 0.12);
+    }
+
+    .channel span {
+        color: rgb(195 200 230 / 0.6);
+    }
+
+    .log {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        justify-content: flex-end;
+        gap: 14px;
+        margin: 0;
+        padding: clamp(18px, 1.6vw, 28px);
+        list-style: none;
+    }
+
+    .log[data-page] {
+        justify-content: center;
+    }
+
+    /* A website's menu fills its window, with roles large enough to press */
+    .log[data-page] .message {
+        width: 100%;
+        max-width: none;
+    }
+
+    .log[data-page] .said {
+        width: 100%;
+    }
+
+    .log[data-page] .card {
+        padding: clamp(18px, 2vw, 30px);
+    }
+
+    .log[data-page] .card-title {
+        font-size: var(--type-title);
+    }
+
+    .log[data-page] .options li {
+        min-height: 44px;
+        padding-inline: 20px;
+    }
+
+    .message {
+        display: flex;
+        gap: 12px;
+        max-width: min(100%, 680px);
+    }
+
+    .you {
+        align-self: flex-end;
+    }
+
+    .you .text {
+        font-family: var(--font-mono);
+        font-size: var(--type-small);
+        font-variant-ligatures: none;
+        background: linear-gradient(180deg, rgb(70 227 239 / 0.2), rgb(34 150 178 / 0.18));
+        border: 1px solid rgb(70 227 239 / 0.28);
+    }
+
+    .avatar {
+        flex: none;
+        width: 36px;
+        height: 36px;
+        object-fit: contain;
+    }
+
+    .said {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+    }
+
+    .author {
+        font-size: var(--type-small);
+        font-weight: var(--weight-medium);
+        color: var(--color-violet-pale);
+    }
+
+    .text {
+        padding: 9px 14px;
+        font-size: var(--type-body);
+        line-height: 1.45;
+        color: var(--color-ink);
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+        border-radius: var(--corner-large);
+        corner-shape: squircle;
+    }
+
+    .from-bot .text {
+        background: linear-gradient(180deg, rgb(165 124 255 / 0.2), rgb(120 90 220 / 0.14));
+        border: 1px solid rgb(165 124 255 / 0.3);
+    }
+
+    .card {
+        padding: 14px 18px 16px;
+        color: var(--color-ink);
+        background: rgb(165 124 255 / 0.09);
+        border: 1px solid rgb(165 124 255 / 0.22);
+        border-left: 3px solid var(--card-accent, var(--color-violet));
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+    }
+
+    /* The bot's own words in a chat, so not one of the page's headings */
+    .card-title {
+        display: block;
+        font-size: var(--type-body);
+        font-weight: var(--weight-semibold);
+    }
+
+    .card p {
+        margin: 4px 0 0;
+        font-size: var(--type-body);
+        color: var(--color-muted);
+    }
+
+    .card dl {
+        display: grid;
+        gap: 10px;
+        margin: 12px 0 0;
+    }
+
+    .card dt {
+        font-size: var(--type-small);
+        font-weight: var(--weight-semibold);
+        color: rgb(195 200 230 / 0.78);
+    }
+
+    .card dd {
+        margin: 2px 0 0;
+        font-size: var(--type-body);
+        overflow-wrap: anywhere;
+    }
+
+    .card-picture {
+        display: block;
+        width: min(100%, 180px);
+        height: auto;
+        margin-top: 12px;
+    }
+
+    .options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 14px 0 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .options li {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 32px;
+        padding-inline: 11px;
+        font-size: var(--type-body);
+        font-variant-numeric: tabular-nums;
+        color: var(--color-muted);
+        background: rgb(160 190 255 / 0.08);
+        border: 1px solid rgb(160 190 255 / 0.16);
+        border-radius: var(--corner-round);
+    }
+
+    .options li[data-mine] {
+        color: var(--color-ink);
+        background: rgb(165 124 255 / 0.24);
+        border-color: rgb(165 124 255 / 0.62);
+    }
+
+    .card .note {
+        margin-top: 12px;
+        font-size: var(--type-small);
+        color: rgb(195 200 230 / 0.72);
+    }
+
+    .aside {
+        margin: 0;
+        padding: 0 clamp(18px, 1.6vw, 28px) clamp(18px, 1.6vw, 28px);
+        font-size: var(--type-small);
+        line-height: 1.5;
+        color: rgb(195 200 230 / 0.78);
+    }
+
+    .caption {
+        grid-column: 2;
+        margin: 0;
+        font-size: var(--type-small);
+        color: rgb(195 200 230 / 0.72);
+    }
+
+    .groups {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: var(--page-gutter);
+        margin: clamp(48px, 4.4vw, 84px) 0 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .groups li {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        column-gap: 14px;
+        align-content: start;
+        padding-block: 18px 6px;
+        border-top: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .groups img {
+        grid-row: 1 / span 2;
+        width: 56px;
+        height: 56px;
+        object-fit: contain;
+    }
+
+    .groups h3 {
+        margin: 0;
+        font-size: var(--type-lead);
+        font-weight: var(--weight-semibold);
+        color: var(--color-ink);
+    }
+
+    .groups p {
+        margin: 4px 0 0;
+        font-size: var(--type-body);
+        line-height: 1.45;
+        color: var(--color-muted);
+    }
+
+    .groups .dashboard {
+        grid-column: 1 / -1;
+    }
+
+    .engine {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+        gap: clamp(32px, 3.6vw, 72px);
+        align-items: start;
+        margin-top: clamp(48px, 4.4vw, 84px);
+    }
+
+    .engine-code,
+    .engine-proofs {
+        min-width: 0;
+    }
+
+    .engine-title {
+        margin: 0 0 20px;
+        font-size: var(--type-heading);
+        font-weight: var(--weight-semibold);
+        line-height: 1.2;
+        letter-spacing: var(--tracking-snug);
+        color: var(--color-ink);
+        text-wrap: balance;
+    }
+
+    .engine-title .hi {
+        color: var(--accent, var(--color-violet));
+    }
+
+    .engine-samples {
+        display: grid;
+        gap: 14px;
+    }
+
+    .engine-note {
+        margin: -8px 0 18px;
+        font-size: var(--type-body);
+        color: var(--color-muted);
+    }
+
+    .go-link {
+        margin-top: 18px;
+    }
+
+    .engine-proofs ul {
+        display: grid;
+        gap: 20px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .engine-proofs li {
+        display: flex;
+        gap: 14px;
+    }
+
+    .engine-proofs .wave-mark {
+        margin-top: 6px;
+    }
+
+    .engine-proofs h4 {
+        margin: 0;
+        font-size: var(--type-lead);
+        font-weight: var(--weight-semibold);
+        color: var(--color-ink);
+    }
+
+    .engine-proofs p {
+        margin: 4px 0 0;
+        font-size: var(--type-body);
+        line-height: 1.5;
+        color: var(--color-muted);
+    }
+
+    .closing {
+        display: flex;
+        flex-wrap: wrap;
+        grid-column: 1 / -1;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px 32px;
+        margin-top: clamp(36px, 3vw, 56px);
+        padding-top: 20px;
+        border-top: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .closing p {
+        margin: 0;
+        font-size: var(--type-body);
+        color: var(--color-muted);
+    }
+
+    .closing-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0 28px;
+    }
+
+    .closing .go-link {
+        margin-top: 0;
+    }
+
+    @media (max-width: 899px) {
+        .head,
+        .bot {
+            grid-column: 1 / -1;
+            grid-row: auto;
+        }
+
+        .bot {
+            --orbit: min(72vw, 330px);
+            --orbit-icon: 44px;
+
+            margin-top: 18px;
+        }
+
+        .deck {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .tabs {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+
+        .tab {
+            grid-column: span 2;
+            gap: 10px;
+            padding: 6px 10px;
+        }
+
+
+        .tab img {
+            width: 38px;
+            height: 38px;
+        }
+
+        .tab-name {
+            font-size: var(--type-body);
+        }
+
+        .tab-hint {
+            display: none;
+        }
+
+        .caption {
+            grid-column: 1;
+        }
+
+        .groups {
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+        }
+
+        .engine {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
+
+    @media (max-width: 599px) {
+        .tab {
+            grid-column: span 3;
+        }
+    }
+
+    /* The narrowest phones stack each tab's icon over its name, so a long name keeps inside its button */
+    @media (max-width: 399px) {
+        .tab {
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px 6px;
+            text-align: center;
+        }
+    }
+
+    /* Wide enough for two columns of words, not for four */
+    @media (min-width: 900px) and (max-width: 1279px) {
+        .groups {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .tab {
+            transition: none;
+        }
+    }
+</style>

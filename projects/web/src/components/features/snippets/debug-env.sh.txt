@@ -1,0 +1,1 @@
+FLUXERLY_DEBUG=rest,ratelimit node bot.js

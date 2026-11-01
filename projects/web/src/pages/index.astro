@@ -1,5 +1,42 @@
 ---
-import versions from '../../content/versions.json'
-// The deployed worker answers this with an HTTP redirect before static output is used
-return Astro.redirect(versions.latestPath ? `/docs/${versions.latestPath}/` : '/docs/preview/')
+import Site from "../layouts/Site.astro"
+import Hero from "../components/Hero.astro"
+import Night from "../components/sections/Night.astro"
+import FirstReply from "../components/sections/FirstReply.astro"
+import Maker from "../components/sections/Maker.astro"
+import AlreadyThere from "../components/sections/AlreadyThere.astro"
+import Grows from "../components/sections/Grows.astro"
+import Checked from "../components/sections/Checked.astro"
+import Questions from "../components/sections/Questions.astro"
+import Tools from "../components/sections/Tools.astro"
+import Install from "../components/sections/Install.astro"
+import NeonFlux from "../components/sections/NeonFlux.astro"
+import { homeGraph } from "../lib/seo"
 ---
+
+<Site graph={homeGraph}>
+    <Hero />
+    <Night
+        stops={[
+            { id: "first-reply", label: "Your First Reply" },
+            { id: "why", label: "Why Fluxerly Was Built" },
+            { id: "already-there", label: "Already Built" },
+            { id: "grows", label: "From One File to a Full Application" },
+            { id: "neonflux", label: "Meet NeonFlux" },
+            { id: "quality", label: "Quality, Speed and Security" },
+            { id: "questions", label: "The Questions That Come Up First" },
+            { id: "tools", label: "Tools That Come with the SDK" },
+            { id: "install", label: "Install It" },
+        ]}
+    >
+        <FirstReply />
+        <Maker />
+        <AlreadyThere />
+        <Grows />
+        <NeonFlux />
+        <Checked />
+        <Questions />
+        <Tools />
+        <Install />
+    </Night>
+</Site>

@@ -1,0 +1,805 @@
+---
+import CrystalDefs from "../CrystalDefs.astro"
+import { faceArt, mascotArt } from "../../lib/art"
+import { links } from "../../lib/links"
+
+// The bubbles rising from the sea floor. Fixed, so the page is the same on every visit. They keep to the right of the page's words,
+// wherever those end
+// Beams of warm light from under the floor behind the conductor. Each sways on its own, as a show's lights do
+const beams = [
+    { from: -46, to: -28, beat: 17, width: 26, tone: "amber" },
+    { from: -24, to: -8, beat: 13, width: 18, tone: "rose" },
+    { from: -14, to: 12, beat: 19, width: 30, tone: "gold" },
+    { from: 6, to: 26, beat: 11, width: 16, tone: "amber" },
+    { from: 22, to: 44, beat: 15, width: 24, tone: "rose" },
+    { from: -38, to: -12, beat: 23, width: 14, tone: "cool" },
+    { from: 14, to: 38, beat: 21, width: 14, tone: "cool" },
+]
+// The conductor at the end of the page is alive as the hero's is, with plain layers rather than the hero's scene, so no page pays
+// for that here. Its parts are the face's own pictures, placed as shares of the trimmed mascot
+const mascotBox = { left: 450, top: 98, width: 1168, height: 1676 }
+const share = (value: number, of: number) => `${((value / of) * 100).toFixed(3)}%`
+const placed = (box: { left: number; top: number; width: number; height: number }) =>
+    `left: ${share(box.left - mascotBox.left, mascotBox.width)}; top: ${share(box.top - mascotBox.top, mascotBox.height)}; width: ${share(box.width, mascotBox.width)}; height: ${share(box.height, mascotBox.height)}`
+// One side of a picture holding both, in a box of its own that can move around its own middle
+const sideOf = (part: { left: number; top: number; width: number; height: number }, split: number, left: boolean) => {
+    const box = left ? { ...part, width: split - part.left } : { ...part, left: split, width: part.left + part.width - split }
+    return { box, inner: `left: ${share(part.left - box.left, box.width)}; width: ${share(part.width, box.width)}; height: 100%` }
+}
+const faceSplit = 1014
+const cheekSplit = 1024
+const { eyes, brows, crescents, waves, lens, flow, violet } = faceArt.parts
+const faceSides = [
+    { kind: "eye", src: eyes.src, ...sideOf(eyes, faceSplit, true), origin: [761.5, 1080.5] },
+    { kind: "eye eye-right", src: eyes.src, ...sideOf(eyes, faceSplit, false), origin: [1268.5, 1056.5] },
+    { kind: "brow", src: brows.src, ...sideOf(brows, faceSplit, true), origin: [761, 930] },
+    { kind: "brow brow-right", src: brows.src, ...sideOf(brows, faceSplit, false), origin: [1269, 909] },
+    { kind: "cheek", src: crescents.src, ...sideOf(crescents, cheekSplit, true), origin: [684, 1271] },
+    { kind: "cheek cheek-right", src: crescents.src, ...sideOf(crescents, cheekSplit, false), origin: [1364, 1271] },
+].map((side) => ({ ...side, originStyle: `transform-origin: ${share(side.origin[0]! - side.box.left, side.box.width)} ${share(side.origin[1]! - side.box.top, side.box.height)}` }))
+const holeOrigin = `transform-origin: ${share(1050 - lens.left, lens.width)} ${share(1466.5 - lens.top, lens.height)}`
+const holeRing = { left: 1050 - 92, top: 1466.5 - 92, width: 184, height: 184 }
+
+// A beam is a picture of a soft wedge, drawn once. Its point lies under the floor, and its light starts from nothing at the floor
+// and ends in nothing near the top, so no edge shows and the browser has no mask to redraw while the beam turns
+const beamLight = { amber: ["255,176,96", 0.42], rose: ["255,140,110", 0.34], gold: ["255,208,120", 0.46], cool: ["120,225,255", 0.2] } as const
+const beamPicture = (tone: keyof typeof beamLight, spread: number) => {
+    const [color, light] = beamLight[tone]
+    const reach = Math.tan((spread / 2) * (Math.PI / 180)) * 112
+    const wedge = (share: number, opacity: number) => `<polygon points='50,100 ${50 - reach * share},0 ${50 + reach * share},0' fill='url(#f)' opacity='${opacity}'/>`
+    const stops = [[0, 0], [0.09, 0.14], [0.3, 0.34], [0.56, 0.8], [0.72, 1], [0.85, 0]].map(([at, part]) => `<stop offset='${at}' stop-color='rgb(${color})' stop-opacity='${(part! * light).toFixed(3)}'/>`).join("")
+    return `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><defs><linearGradient id='f' x1='0' x2='0' y1='0' y2='1'>${stops}</linearGradient><filter id='b' x='-30%' y='-5%' width='160%' height='110%'><feGaussianBlur stdDeviation='2.4 1'/></filter></defs><g filter='url(#b)'>${wedge(1, 0.5)}${wedge(0.5, 0.6)}</g></svg>`)}")`
+}
+
+const tones = ["cyan", "violet", "cyan", "gold", "violet", "cyan"] as const
+const columns = [72, 47, 88, 58, 51, 84, 46, 54, 91, 49, 62, 78, 86, 52]
+const bubbles = columns.map((x, index) => ({
+    x,
+    size: 14 + ((index * 37) % 34),
+    rise: 15 + ((index * 53) % 16),
+    wait: -((index * 41) % 29),
+    sway: (index % 2 ? 1 : -1) * (14 + ((index * 19) % 30)),
+    turn: (index % 2 ? 1 : -1) * (50 + ((index * 23) % 120)),
+    tone: tones[index % tones.length]!,
+}))
+---
+
+<footer class="site-footer">
+    <div class="sea-floor">
+    <!-- The bottom of the ocean: a light from below that nobody has reached, and crystal bubbles rising out of it, up through
+         the space the reader has come down. They keep to the columns the page leaves free -->
+    <div class="beams" aria-hidden="true" data-abyss>
+        {beams.map((beam) => <div class:list={["beam", beam.tone]} style={`--from: ${beam.from}deg; --to: ${beam.to}deg; --beat: ${beam.beat}s; background-image: ${beamPicture(beam.tone as keyof typeof beamLight, beam.width)}`}></div>)}
+    </div>
+    <div class="abyss" aria-hidden="true" data-abyss>
+        <CrystalDefs />
+        <div class="floor-light"></div>
+        {
+            bubbles.map((bubble) => (
+                <span class="bubble" style={`--x: ${bubble.x}%; --size: ${bubble.size}px; --rise-for: ${bubble.rise}s; --wait: ${bubble.wait}s; --sway: ${bubble.sway}px; --turn: ${bubble.turn}deg`}>
+                    <svg viewBox="0 0 40 40" focusable="false">
+                        <use href={`#crystal-${bubble.tone}`} />
+                    </svg>
+                </span>
+            ))
+        }
+    </div>
+    <div class="ending" aria-hidden="true" data-abyss>
+        <div class="conductor">
+            <div class="afloat">
+                <img class="body" src={mascotArt.endingBody} width={mascotArt.width} height={mascotArt.height} alt="" loading="lazy" decoding="async" />
+                <!-- The living parts, asked for only when the site is moving and this nears the screen -->
+                <div class="alive" data-ending-alive>
+                    <img class="body" data-src={mascotArt.endingBase} alt="" />
+                    <img class="part" data-src={lens.src} alt="" style={placed(lens)} />
+                    <img class="part hole-flow" data-src={flow.src} alt="" style={`${placed(flow)}; ${holeOrigin}`} />
+                    <span class="hole-rim" style={placed(holeRing)}><span class="hole-ring"></span></span>
+                    <img class="part hole-violet" data-src={violet.src} alt="" style={`${placed(violet)}; ${holeOrigin}`} />
+                    <div class="looks">
+                        {
+                            faceSides.filter((side) => side.kind.startsWith("eye")).map((side) => (
+                                <span class:list={["side", side.kind]} style={`${placed(side.box)}; ${side.originStyle}`}>
+                                    <img data-src={side.src} alt="" style={side.inner} />
+                                </span>
+                            ))
+                        }
+                    </div>
+                    {
+                        faceSides.filter((side) => !side.kind.startsWith("eye")).map((side) => (
+                            <span class:list={["side", side.kind]} style={`${placed(side.box)}; ${side.originStyle}`}>
+                                <img data-src={side.src} alt="" style={side.inner} />
+                            </span>
+                        ))
+                    }
+                    <img class="part" data-src={waves.src} alt="" style={placed(waves)} />
+                    <!-- The mouth charging: light that fills the strokes from left to right, kept to their shape -->
+                    <span class="charge" style={placed(waves)} data-mask={waves.src}><i></i></span>
+                </div>
+                <!-- The whole cap fills like a balloon from where it sits on the head, and its fan and fold swell further still -->
+                <div class="cap">
+                    <img class="fan" src={mascotArt.endingFan} width={mascotArt.width} height={mascotArt.height} alt="" loading="lazy" decoding="async" />
+                    <img class="fold" src={mascotArt.endingFold} width={mascotArt.width} height={mascotArt.height} alt="" loading="lazy" decoding="async" />
+                    <img src={mascotArt.endingSeat} width={mascotArt.width} height={mascotArt.height} alt="" loading="lazy" decoding="async" />
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+    <div class="row">
+        <div class="brand">
+            <a class="name" href="/">Fluxerly<span class="js">.js</span></a>
+            <p class="tagline">A Fluxer-native bot SDK for JavaScript, TypeScript and Effect</p>
+            <p class="credit">Open source by <a href="https://github.com/NeonTechSpace" target="_blank" rel="noopener">NeonTechSpace</a></p>
+        </div>
+        <nav class="links" aria-label="Footer">
+            <a href={links.docs}>Docs</a>
+            <a href={links.changelog}>Changelog</a>
+            <a href={links.github} target="_blank" rel="noopener">GitHub</a>
+            <a href={links.npm} target="_blank" rel="noopener">npm</a>
+            <a href={links.neonfluxHome} target="_blank" rel="noopener">NeonFlux</a>
+            <a href={links.license} target="_blank" rel="noopener">Apache-2.0</a>
+        </nav>
+    </div>
+    <p class="independent">Fluxerly.js is an independent project. It is not affiliated with, endorsed by or sponsored by Fluxer</p>
+</footer>
+
+<script>
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+
+    // The conductor's living parts come when the site is moving and the end of the page is near, and show once they're all decoded
+    const endingBox = document.querySelector<HTMLElement>("[data-ending-alive]")
+    if (endingBox) {
+        const wake = () => {
+            if (endingBox.dataset.loading !== undefined || getExperience() === "still" || prefersReducedMotion()) return
+            endingBox.dataset.loading = ""
+            const pictures = [...endingBox.querySelectorAll<HTMLImageElement>("img[data-src]")]
+            for (const picture of pictures) picture.src = picture.dataset.src ?? ""
+            for (const masked of endingBox.querySelectorAll<HTMLElement>("[data-mask]")) masked.style.maskImage = `url(${masked.dataset.mask})`
+            Promise.all(pictures.map((picture) => picture.decode()))
+                .then(() => endingBox.toggleAttribute("data-live", true))
+                .catch((reason) => console.warn("The conductor at the end of the page stays as painted:", reason))
+        }
+        let near = false
+        new IntersectionObserver(
+            ([entry]) => {
+                near = Boolean(entry?.isIntersecting)
+                if (near) wake()
+            },
+            { rootMargin: "60% 0px" },
+        ).observe(endingBox)
+        subscribeExperience(() => {
+            if (near) wake()
+        })
+    }
+
+    // The bubbles rise only while the sea floor is near the screen
+    for (const abyss of document.querySelectorAll<HTMLElement>("[data-abyss]")) {
+        new IntersectionObserver(([entry]) => abyss.toggleAttribute("data-on", Boolean(entry?.isIntersecting)), { rootMargin: "200px" }).observe(abyss)
+    }
+</script>
+
+<style>
+    /* The bottom of the ocean. It stands behind the ending and reaches up past the footer's top, over the end of the page.
+       Nothing here takes a pointer. A fine grain drawn once keeps the long soft light from showing bands */
+    .sea-floor {
+        position: relative;
+    }
+
+    .abyss {
+        --reach: min(92vh, 860px);
+
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: var(--reach);
+        overflow: clip;
+        pointer-events: none;
+        /* The light comes out of nothing at the floor and ends in nothing at the top, so no straight edge shows either way */
+        mask-image: linear-gradient(to top, transparent, #000 13%, #000 74%, transparent);
+    }
+
+    .floor-light {
+        position: absolute;
+        inset: 0;
+        background:
+            url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"),
+            radial-gradient(60% 34% at 50% 100%, rgb(150 240 255 / 0.3), rgb(70 227 239 / 0.13) 42%, transparent 100%),
+            radial-gradient(90% 62% at 50% 100%, rgb(110 120 255 / 0.13), rgb(165 124 255 / 0.05) 55%, transparent 100%);
+        /* Out of nothing at the very bottom too, so no line shows where the footer starts */
+        mask-image: linear-gradient(to top, transparent, #000 20%, #000 55%, transparent);
+    }
+
+    /* The beams have their own room, which stays tall on a phone, where the bubbles keep to their short band */
+    .beams {
+        --reach: min(92vh, 860px);
+
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: var(--reach);
+        overflow: clip;
+        pointer-events: none;
+    }
+
+    @media (any-pointer: coarse), (max-width: 1279px) {
+        .beams {
+            --reach: min(70vh, 560px);
+        }
+    }
+
+    /* A beam is one picture of a soft wedge, turned about its point, which lies under the floor. Only the turn moves */
+    .beam {
+        position: absolute;
+        left: 50%;
+        bottom: -18%;
+        width: calc(var(--reach) * 1.05);
+        height: 118%;
+        translate: -50% 0;
+        transform: rotate(calc((var(--from) + var(--to)) / 2));
+        transform-origin: 50% 100%;
+        background-size: 100% 100%;
+    }
+
+    /* A bubble rests low in the light in the Still mode, and rises only while time runs */
+    .bubble {
+        position: absolute;
+        bottom: 6%;
+        left: var(--x);
+        width: var(--size);
+        height: var(--size);
+        opacity: 0.8;
+        filter: drop-shadow(0 0 6px rgb(120 230 255 / 0.5));
+    }
+
+    .bubble:nth-of-type(n + 7) {
+        display: none;
+    }
+
+    .bubble svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        :global(html:not([data-still])) .bubble {
+            bottom: 0;
+            display: block;
+            opacity: 0;
+            filter: none;
+            animation: bubble-rise var(--rise-for) linear var(--wait) infinite paused;
+        }
+
+        :global(html:not([data-still])) .abyss[data-on] .bubble {
+            animation-play-state: running;
+            will-change: transform, opacity;
+        }
+
+        :global(html:not([data-still])) .beam {
+            will-change: transform, opacity;
+            animation: beam-sway var(--beat) ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .beams[data-on] .beam {
+            animation-play-state: running;
+        }
+    }
+
+    /* On a narrow screen the bubbles rise as far as the beams do, and the floor's own glow stays low */
+    @media (any-pointer: coarse), (max-width: 1279px) {
+        .abyss {
+            --reach: min(70vh, 560px);
+        }
+
+        .floor-light {
+            inset: auto 0 0;
+            height: clamp(150px, 17vw, 260px);
+        }
+
+        :global(html:not([data-still])) .bubble:nth-of-type(n + 9) {
+            display: none;
+        }
+    }
+
+    @keyframes bubble-rise {
+        0% {
+            transform: translate3d(0, 0, 0) rotate(0deg) scale(0.7);
+            opacity: 0;
+        }
+        8% {
+            opacity: 0.9;
+        }
+        50% {
+            transform: translate3d(var(--sway), calc(var(--reach) * -0.5), 0) rotate(calc(var(--turn) * 0.5)) scale(1);
+        }
+        82% {
+            opacity: 0.55;
+        }
+        100% {
+            transform: translate3d(calc(var(--sway) * -0.4), calc(var(--reach) * -1), 0) rotate(var(--turn)) scale(1.08);
+            opacity: 0;
+        }
+    }
+
+    @keyframes beam-sway {
+        from {
+            opacity: 0.7;
+            transform: rotate(var(--from));
+        }
+        to {
+            opacity: 1;
+            transform: rotate(var(--to));
+        }
+    }
+
+    :global(.docs) :is(.abyss, .beams),
+    :global(main:has(.lost) ~ .site-footer) :is(.abyss, .beams) {
+        display: none;
+    }
+
+    /* The last thing on the page: the conductor rises over a horizon like the first one, seeing the reader off. The docs
+       stay calm, and end on the plain row */
+    .ending {
+        --stands: clamp(190px, 20vw, 320px);
+
+        position: relative;
+        height: var(--stands);
+        pointer-events: none;
+    }
+
+    /* As wide as lets its face show whole and its fade end where the ending does */
+    .conductor {
+        position: absolute;
+        left: 50%;
+        top: 12%;
+        width: calc(var(--stands) * 0.632);
+        aspect-ratio: 1168 / 1676;
+        translate: -50% 0;
+    }
+
+    .conductor img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        max-width: none;
+    }
+
+    /* It stands in the light and fades down into the dark, with no line where it ends */
+    .conductor .body {
+        mask-image: linear-gradient(to bottom, #000 85%, transparent 96%);
+    }
+
+    .afloat,
+    .alive,
+    .cap,
+    .looks {
+        position: absolute;
+        inset: 0;
+    }
+
+    .alive {
+        visibility: hidden;
+    }
+
+    .alive[data-live] {
+        visibility: visible;
+    }
+
+    :global(html[data-still]) .alive {
+        visibility: hidden;
+    }
+
+    /* The parts sit by their boxes, not filling the conductor */
+    .conductor .alive .part {
+        inset: auto;
+        width: auto;
+        height: auto;
+    }
+
+    .side {
+        position: absolute;
+        overflow: clip;
+    }
+
+    .conductor .side img {
+        inset: 0 auto auto;
+        max-width: none;
+    }
+
+    /* Light that runs through the mouth stays inside its strokes. Only the band moves */
+    .charge {
+        position: absolute;
+        overflow: clip;
+        mask-size: 100% 100%;
+        mask-repeat: no-repeat;
+        opacity: 0;
+    }
+
+    .charge i {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 70%;
+        background: linear-gradient(90deg, rgb(120 240 255 / 0), rgb(150 245 255 / 0.85) 55%, rgb(230 253 255 / 0.95) 72%, rgb(120 240 255 / 0));
+        transform: translate3d(-110%, 0, 0);
+    }
+
+    /* Light running along the black hole's rim. The hole is painted with a rim only from its left over its top, and the disc
+       crosses below, so the light shows only on that stretch and fades in and out at its ends */
+    .hole-rim {
+        position: absolute;
+        mask-image: conic-gradient(from 250deg, transparent, #000 30deg, #000 110deg, transparent 140deg);
+    }
+
+    .hole-ring {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: conic-gradient(rgb(190 245 255 / 0) 0deg, rgb(190 245 255 / 0) 250deg, rgb(200 245 255 / 0.72) 340deg, rgb(190 245 255 / 0) 360deg);
+        mask-image: radial-gradient(closest-side, transparent 80%, #000 86%, #000 94%, transparent 100%);
+        opacity: 0;
+    }
+
+    /* The cap sits on the head. The air comes in from the band, so it grows upward and outward from there */
+    .cap {
+        transform-origin: 49.7% 45%;
+    }
+
+    .conductor .fan,
+    .conductor .fold {
+        transform-origin: 49.7% 33.5%;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        :global(html:not([data-still])) .conductor {
+            animation-name: ending-rise;
+            animation-duration: auto;
+            animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+            animation-fill-mode: both;
+            animation-timeline: view();
+            animation-range: entry 0% entry 100%;
+        }
+
+        :global(html:not([data-still])) .afloat {
+            animation: ending-float 6.1s ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .cap {
+            animation: cap-fill 4.3s ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .conductor .fan {
+            animation: cap-fan-fill 3.1s ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .conductor .fold {
+            animation: cap-fold-fill 3.7s ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .looks {
+            animation: ending-look 11s steps(1) infinite paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .eye {
+            animation: ending-blink 5.3s linear infinite paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .brow {
+            animation: ending-brow 7.3s ease-in-out infinite paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .brow-right {
+            animation-duration: 9.1s;
+            animation-delay: -3s;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .cheek {
+            animation: ending-cheek 4.7s ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .cheek-right {
+            animation-duration: 5.9s;
+            animation-direction: alternate-reverse;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .hole-flow {
+            animation: ending-disk 4.9s ease-in-out infinite alternate paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .hole-violet {
+            animation: ending-disk 6.3s ease-in-out infinite alternate-reverse paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .hole-ring {
+            opacity: 1;
+            animation: ending-spin 5.3s linear infinite paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .charge {
+            animation: ending-charge-show 8s linear infinite paused;
+        }
+
+        :global(html:not([data-still])) .alive[data-live] .charge i {
+            animation: ending-charge-run 8s cubic-bezier(0.3, 0.1, 0.4, 1) infinite paused;
+        }
+
+        /* Only while it can be seen */
+        :global(html:not([data-still])) .ending[data-on] :is(.afloat, .cap, .fan, .fold, .looks, .eye, .brow, .cheek, .hole-flow, .hole-violet, .hole-ring, .charge, .charge i) {
+            animation-play-state: running;
+            will-change: transform;
+        }
+
+    }
+
+    @keyframes ending-rise {
+        from {
+            translate: -50% 70%;
+        }
+        to {
+            translate: -50% 0;
+        }
+    }
+
+    @keyframes ending-float {
+        from {
+            transform: translate3d(0, 1.2%, 0) rotate(-1.4deg);
+        }
+        to {
+            transform: translate3d(0, -1.6%, 0) rotate(1.4deg);
+        }
+    }
+
+    @keyframes cap-fill {
+        from {
+            transform: scale(1, 1) rotate(-0.8deg);
+        }
+        to {
+            transform: scale(1.035, 1.075) rotate(1deg);
+        }
+    }
+
+    @keyframes ending-look {
+        0%,
+        100% {
+            transform: none;
+        }
+        22% {
+            transform: translate3d(-1.5%, -0.4%, 0);
+        }
+        41% {
+            transform: translate3d(1.2%, 0.5%, 0);
+        }
+        63% {
+            transform: none;
+        }
+        81% {
+            transform: translate3d(1.5%, -0.5%, 0);
+        }
+    }
+
+    @keyframes ending-blink {
+        0%,
+        90%,
+        100% {
+            transform: none;
+        }
+        92%,
+        93% {
+            transform: scaleY(0.07);
+        }
+    }
+
+    @keyframes ending-brow {
+        0%,
+        58%,
+        100% {
+            transform: none;
+        }
+        72% {
+            transform: translate3d(0, -14%, 0) rotate(-3deg);
+        }
+        84% {
+            transform: translate3d(0, -8%, 0) rotate(1.5deg);
+        }
+    }
+
+    @keyframes ending-cheek {
+        from {
+            transform: translate3d(0, 3%, 0) rotate(-7deg);
+        }
+        to {
+            transform: translate3d(0, -4%, 0) rotate(7deg);
+        }
+    }
+
+    @keyframes ending-disk {
+        from {
+            transform: rotate(-2.2deg);
+        }
+        to {
+            transform: rotate(2.2deg);
+        }
+    }
+
+    @keyframes ending-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
+    @keyframes ending-charge-show {
+        0%,
+        62%,
+        100% {
+            opacity: 0;
+        }
+        65%,
+        88% {
+            opacity: 1;
+        }
+    }
+
+    @keyframes ending-charge-run {
+        0%,
+        62% {
+            transform: translate3d(-110%, 0, 0);
+        }
+        86%,
+        100% {
+            transform: translate3d(160%, 0, 0);
+        }
+    }
+
+    @keyframes cap-fan-fill {
+        0% {
+            transform: none;
+        }
+        48% {
+            transform: scale(1.03, 1.09) rotate(1deg);
+        }
+        72% {
+            transform: scale(1.02, 1.05) rotate(-0.4deg);
+        }
+        100% {
+            transform: scale(1.045, 1.13) rotate(0.8deg);
+        }
+    }
+
+    @keyframes cap-fold-fill {
+        0% {
+            transform: none;
+        }
+        60% {
+            transform: scale(1.015, 1.035) rotate(-0.5deg);
+        }
+        100% {
+            transform: scale(1.025, 1.06) rotate(0.4deg);
+        }
+    }
+
+    :global(.docs) .site-footer {
+        background: var(--color-night);
+    }
+
+    :global(.docs) .ending,
+    :global(main:has(.lost) ~ .site-footer) .ending {
+        display: none;
+    }
+
+    /* The footer's row and its rule line up with the content's edges, not the window's */
+    .site-footer {
+        /* Starts in the dark space ends in, across the whole width, so no edge shows where the page gives way to it */
+        background: linear-gradient(to bottom, #03040f, var(--color-night) clamp(150px, 17vw, 260px));
+    }
+
+    .row,
+    .independent {
+        margin-inline: var(--frame-inline);
+    }
+
+    .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px 40px;
+        padding-block: 36px 20px;
+        /* A rule that fades out at both ends rather than stopping square */
+        border-top: 1px solid transparent;
+        border-image: linear-gradient(90deg, transparent, rgb(160 190 255 / 0.16) 18%, rgb(160 190 255 / 0.16) 82%, transparent) 1;
+    }
+
+    /* Whose project this is not, for anyone who takes the name for Fluxer's own */
+    .independent {
+        margin-block: 0;
+        padding-bottom: 36px;
+        font-size: var(--type-small);
+        line-height: 1.5;
+        color: rgb(195 200 230 / 0.72);
+    }
+
+    .name {
+        font-size: var(--type-lead);
+        font-weight: var(--weight-display);
+        letter-spacing: var(--tracking-snug);
+        color: var(--color-ink);
+        text-decoration: none;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+    }
+
+    .js {
+        color: var(--color-cyan);
+    }
+
+    .tagline {
+        margin: 6px 0 0;
+        font-size: var(--type-body);
+        color: rgb(195 200 230 / 0.78);
+    }
+
+    /* The org behind the SDK, quieter than the tagline. Its gold is the badge on the conductor's cap, the maker's mark */
+    .credit {
+        margin: 4px 0 0;
+        font-size: var(--type-small);
+        color: rgb(195 200 230 / 0.62);
+    }
+
+    .credit a {
+        color: rgb(236 196 110 / 0.85);
+        text-decoration: underline;
+        text-decoration-color: rgb(236 196 110 / 0.3);
+        text-underline-offset: 4px;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        transition: text-decoration-color var(--speed-fast) ease;
+    }
+
+    .credit a:hover {
+        text-decoration-color: rgb(236 196 110 / 0.8);
+    }
+
+    /* In the docs gold marks one thing, the reader's page in the course, so the credit speaks in the footer's own
+       quiet voice there */
+    :global(.docs) .credit a {
+        color: rgb(195 200 230 / 0.8);
+        text-decoration-color: rgb(195 200 230 / 0.3);
+    }
+
+    :global(.docs) .credit a:hover {
+        color: var(--color-ink);
+        text-decoration-color: rgb(238 240 255 / 0.6);
+    }
+
+    .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 28px;
+    }
+
+    .links a {
+        font-size: var(--type-small);
+        font-weight: var(--weight-regular);
+        color: var(--color-muted);
+        text-decoration: underline;
+        text-decoration-color: transparent;
+        text-underline-offset: 5px;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        transition:
+            color var(--speed-fast) ease,
+            text-decoration-color var(--speed-fast) ease;
+    }
+
+    .links a:hover {
+        color: var(--color-ink);
+        text-decoration-color: rgb(238 240 255 / 0.5);
+    }
+    @media (max-width: 899px) {
+        .links {
+            row-gap: 0;
+        }
+    }
+</style>

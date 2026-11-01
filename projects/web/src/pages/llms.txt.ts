@@ -1,6 +1,3 @@
-import { llmsRoot } from "../lib/assistant-docs"
-import { searchVersions } from "../lib/search-index"
+import { asText, indexText } from "../lib/ai-docs"
 
-export function GET() {
-    return new Response(llmsRoot(searchVersions()), { headers: { "content-type": "text/plain; charset=utf-8" } })
-}
+export const GET = () => asText(indexText())

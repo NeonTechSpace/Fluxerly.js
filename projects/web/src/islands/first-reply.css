@@ -1,0 +1,531 @@
+.fr {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    column-gap: var(--page-gutter);
+    row-gap: 20px;
+    align-items: start;
+}
+
+/* The chat takes 5 of 12 columns and the code 7, one gutter apart. Its composer sits about level
+   with the reply line, so the signal crosses the gutter almost flat */
+.fr-chat {
+    grid-column: 1 / span 5;
+    grid-row: 1 / span 2;
+    min-width: 0;
+}
+
+.fr-window {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.fr-window-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 46px;
+    padding-inline: 18px;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: var(--color-ink);
+    border-bottom: 1px solid rgb(160 190 255 / 0.12);
+}
+
+.fr-hash {
+    font-size: var(--type-body);
+    font-weight: var(--weight-regular);
+    color: rgb(195 200 230 / 0.6);
+}
+
+/* A channel of fixed height. Older messages scroll away above, the page never grows */
+.fr-log {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: 236px;
+    margin: 0;
+    padding: 18px;
+    overflow-y: auto;
+    list-style: none;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(160 190 255 / 0.25) transparent;
+}
+
+.fr-log > :first-child {
+    margin-top: auto;
+}
+
+.fr-empty,
+.fr-silent {
+    font-size: var(--type-body);
+    line-height: 1.5;
+    color: rgb(195 200 230 / 0.72);
+}
+
+.fr-empty {
+    align-self: center;
+    margin-block: auto;
+    text-align: center;
+}
+
+.fr-silent {
+    align-self: flex-start;
+    padding-left: 2px;
+}
+
+.fr-silent code {
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+    color: var(--color-muted);
+}
+
+.fr-bubble {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 82%;
+    animation: fr-in 240ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.fr-you {
+    align-self: flex-end;
+    align-items: flex-end;
+}
+
+.fr-bot {
+    align-self: flex-start;
+}
+
+.fr-author {
+    padding-inline: 4px;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: rgb(195 200 230 / 0.72);
+}
+
+.fr-bot .fr-author {
+    color: var(--color-violet-pale);
+}
+
+.fr-text {
+    padding: 9px 14px;
+    font-size: var(--type-body);
+    line-height: 1.4;
+    color: var(--color-ink);
+    overflow-wrap: anywhere;
+    border-radius: var(--corner-large);
+    corner-shape: squircle;
+}
+
+.fr-you .fr-text {
+    font-family: var(--font-mono);
+    font-variant-ligatures: none;
+    font-size: var(--type-small);
+    background: linear-gradient(180deg, rgb(70 227 239 / 0.2), rgb(34 150 178 / 0.18));
+    border: 1px solid rgb(70 227 239 / 0.28);
+    border-bottom-right-radius: 5px;
+}
+
+.fr-bot .fr-text {
+    background: linear-gradient(180deg, rgb(165 124 255 / 0.2), rgb(120 90 220 / 0.14));
+    border: 1px solid rgb(165 124 255 / 0.3);
+    border-bottom-left-radius: 5px;
+}
+
+@keyframes fr-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+.fr-composer {
+    display: flex;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid rgb(160 190 255 / 0.12);
+}
+
+.fr-input {
+    flex: 1;
+    font-variant-ligatures: none;
+    min-width: 0;
+    height: 42px;
+    padding-inline: 14px;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    color: var(--color-ink);
+    background: rgb(4 5 26 / 0.55);
+    border: 1px solid rgb(160 190 255 / 0.18);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+}
+
+.fr-input:focus-visible {
+    outline-offset: 1px;
+}
+
+.fr-send {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    height: 42px;
+    padding-inline: 16px;
+    font: inherit;
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    color: #f4fdff;
+    background:
+        linear-gradient(180deg, rgb(255 255 255 / 0.14), rgb(255 255 255 / 0) 50%),
+        linear-gradient(180deg, rgb(70 227 239 / 0.46), rgb(24 120 150 / 0.48));
+    border: 1px solid rgb(120 240 250 / 0.45);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.3);
+    cursor: pointer;
+    transition:
+        background-color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease;
+}
+
+.fr-send:hover {
+    border-color: rgb(160 245 252 / 0.8);
+}
+
+/* The conductor's waves carry the message */
+.fr-send-waves {
+    width: 18px;
+    height: 13px;
+    fill: none;
+    stroke: var(--color-cyan-pale);
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    transition: transform var(--speed-normal) ease;
+}
+
+.fr-send:hover .fr-send-waves {
+    transform: translateX(2px);
+}
+
+.fr-send:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fr-note {
+    margin: 14px 0 0;
+    font-size: var(--type-body);
+    line-height: 1.5;
+    color: rgb(195 200 230 / 0.72);
+}
+
+.fr-code {
+    grid-column: 6 / -1;
+    grid-row: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.fr-code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    height: 50px;
+    padding-inline: 10px 20px;
+    border-bottom: 1px solid rgb(160 190 255 / 0.12);
+}
+
+.fr-tabs {
+    display: flex;
+    gap: 2px;
+}
+
+.fr-tab {
+    position: relative;
+    height: 34px;
+    padding-inline: 12px;
+    font: inherit;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: rgb(195 200 230 / 0.78);
+    background: none;
+    border: 0;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
+}
+
+.fr-tab:hover {
+    color: var(--color-ink);
+}
+
+.fr-tab[aria-selected="true"] {
+    color: var(--color-ink);
+    background: rgb(160 190 255 / 0.1);
+}
+
+.fr-tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: -9px;
+    height: 2px;
+    background: var(--color-cyan);
+    border-radius: 2px;
+}
+
+.fr-file {
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    color: rgb(195 200 230 / 0.66);
+}
+
+.fr-pre {
+    padding-block: 16px 20px;
+}
+
+.fr-pre:focus-visible {
+    outline-offset: -2px;
+}
+
+.fr-pre .ln {
+    transition:
+        background-color var(--speed-slow) ease,
+        box-shadow var(--speed-slow) ease;
+}
+
+.fr-pre .ln.is-lit {
+    background-color: rgb(70 227 239 / 0.13);
+    box-shadow: inset 2px 0 0 var(--color-cyan);
+}
+
+.fr-pre .ln.is-quiet {
+    background-color: rgb(195 200 230 / 0.08);
+    box-shadow: inset 2px 0 0 rgb(195 200 230 / 0.5);
+}
+
+.fr-chips {
+    grid-column: 6 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+/* The signal. Drawn over the gap between the chat and the code, never over text */
+.fr-signal {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+}
+
+.fr-signal path {
+    fill: none;
+    stroke-linecap: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    opacity: 0;
+}
+
+.fr-signal-line {
+    stroke-width: 2.4;
+}
+
+/* Your message goes out in cyan. The reply comes back in the bot's violet */
+.fr-signal-glow {
+    stroke: rgb(70 227 239 / 0.35);
+    stroke-width: 7;
+    filter: blur(4px);
+}
+
+.fr-signal-back .fr-signal-glow {
+    stroke: rgb(165 124 255 / 0.35);
+}
+
+.fr-signal-end {
+    fill: var(--color-cyan-light);
+    opacity: 0;
+}
+
+.fr-signal-back .fr-signal-end {
+    fill: var(--color-violet-pale);
+}
+
+.fr-signal g[data-signal="drawing"] path {
+    opacity: 1;
+    animation: fr-draw 900ms cubic-bezier(0.5, 0, 0.25, 1) forwards;
+}
+
+.fr-signal-back[data-signal="drawing"] path {
+    animation-duration: 700ms;
+}
+
+.fr-signal g[data-signal="drawing"] .fr-signal-end {
+    animation: fr-arrive 300ms ease 820ms forwards;
+}
+
+.fr-signal-back[data-signal="drawing"] .fr-signal-end {
+    animation-delay: 620ms;
+}
+
+.fr-signal g[data-signal="shown"] path,
+.fr-signal g[data-signal="fading"] path {
+    stroke-dashoffset: 0;
+}
+
+.fr-signal g[data-signal="shown"] path,
+.fr-signal g[data-signal="shown"] .fr-signal-end {
+    opacity: 0.85;
+}
+
+.fr-signal g[data-signal="fading"] path,
+.fr-signal g[data-signal="fading"] .fr-signal-end {
+    animation: fr-fade 700ms ease forwards;
+}
+
+@keyframes fr-draw {
+    from {
+        stroke-dashoffset: 1;
+    }
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes fr-arrive {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes fr-fade {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+/* Still mode and reduced motion: nothing animates, results appear at once */
+.fr[data-still] .fr-bubble,
+.fr[data-still] .fr-signal path,
+.fr[data-still] .fr-signal-end {
+    animation: none;
+}
+
+/* While the message is out, the waves on the button ride along with it. The cursor stays normal */
+.fr-send[data-busy] .fr-send-waves {
+    animation: fr-send-ride 900ms ease-in-out infinite;
+}
+
+@keyframes fr-send-ride {
+    0%,
+    100% {
+        transform: translateX(0);
+    }
+    50% {
+        transform: translateX(3px);
+    }
+}
+
+.fr[data-still] .fr-send[data-busy] .fr-send-waves {
+    animation: none;
+}
+
+.fr[data-still] .fr-pre .ln,
+.fr[data-still] .fr-tab,
+.fr[data-still] .fr-send {
+    transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fr-bubble,
+    .fr-signal path,
+    .fr-signal-end {
+        animation: none;
+    }
+
+    .fr-pre .ln {
+        transition: none;
+    }
+}
+
+@media (max-width: 899px) {
+    .fr {
+        grid-template-columns: minmax(0, 1fr);
+        row-gap: 28px;
+    }
+
+    .fr-chat,
+    .fr-code,
+    .fr-chips {
+        grid-column: 1;
+        grid-row: auto;
+    }
+
+    /* One column: the chat takes the whole row, and the two commands sit side by side under the code */
+    .fr-chips {
+        flex-direction: row;
+    }
+
+    .fr-signal {
+        display: none;
+    }
+}
+
+/* The bot is typing: three dots that rise in turn */
+.fr-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 1.4em;
+}
+
+.fr-dots i {
+    display: block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-violet-pale);
+    animation: fr-dot 900ms ease-in-out infinite;
+}
+
+.fr-dots i:nth-child(2) {
+    animation-delay: 150ms;
+}
+
+.fr-dots i:nth-child(3) {
+    animation-delay: 300ms;
+}
+
+@keyframes fr-dot {
+    0%,
+    60%,
+    100% {
+        transform: translateY(0);
+        opacity: 0.5;
+    }
+    30% {
+        transform: translateY(-4px);
+        opacity: 1;
+    }
+}
+
+.fr[data-still] .fr-dots i {
+    animation: none;
+}

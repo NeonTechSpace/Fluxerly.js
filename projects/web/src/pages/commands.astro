@@ -1,0 +1,62 @@
+---
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import registerCommands from "../components/features/snippets/register-commands.ts.txt?raw"
+import typedArguments from "../components/features/snippets/typed-arguments.ts.txt?raw"
+import guardsCooldowns from "../components/features/snippets/guards-cooldowns.ts.txt?raw"
+import commandGroups from "../components/features/snippets/command-groups.ts.txt?raw"
+import helpPages from "../components/features/snippets/help-pages.ts.txt?raw"
+
+const accent = "cyan"
+---
+
+<FeaturePage slug="commands" companion="commands-key" companionAlt="A keycap with a slash cut into it">
+    <Fragment slot="title"><span class="hi">Commands</span> with the Plumbing Done</Fragment>
+
+    <Scene id="register" step={1} side="left" {accent} guide={guide("small-bot")} guideLabel="A Small Bot with Commands">
+        <Fragment slot="title">Each Key Is a Command</Fragment>
+        <Fragment slot="text">
+            <p>A prefix command is a message that starts with a prefix, such as <code class="inline-code">!ping</code>. Pass your commands to <code class="inline-code">runBot</code>, and its command router reads the name after the prefix and runs the matching <code class="inline-code">execute</code></p>
+            <p>If a reply fails, the router reports it with the command's name, and every other command keeps working</p>
+        </Fragment>
+        <CodePanel file="bot.ts" label="Two commands" code={registerCommands} />
+    </Scene>
+
+    <Scene id="arguments" step={2} side="right" {accent} guide={guide("commands", "convert-arguments-before-execution")} guideLabel="Convert Arguments in the Docs">
+        <Fragment slot="title">Arguments Arrive Typed</Fragment>
+        <Fragment slot="text">
+            <p>Describe each argument once, and the router converts the words after the name before <code class="inline-code">execute</code> runs. With <code class="inline-code">parseQuoted</code> a quoted name counts as one argument, and a duration such as <code class="inline-code">10m</code> arrives as milliseconds</p>
+            <p>A missing or invalid argument never reaches your code. The bot answers with the reason and the command's usage instead</p>
+        </Fragment>
+        <CodePanel file="bot.ts" label="Commands with typed arguments" code={typedArguments} />
+    </Scene>
+
+    <Scene id="guards" icon="cooldown-hourglass" iconAlt="An hourglass, for a command's cooldown" step={3} side="left" {accent} guide={guide("commands", "guard-limit-and-wrap-commands")} guideLabel="Guard and Limit Commands in the Commands Guide">
+        <Fragment slot="title">Guards and Cooldowns</Fragment>
+        <Fragment slot="text">
+            <p>A guard decides whether a matched command may run, and a cooldown limits how often it can. Here <code class="inline-code">!purge</code> runs only in a community, only for members with Manage messages, and at most once every 30 seconds in each channel</p>
+            <p>Middleware wraps every command, here to time it. A guard's answer does not replace Fluxer's own check of each request the command makes</p>
+        </Fragment>
+        <CodePanel file="bot.ts" label="A guarded command with a cooldown" code={guardsCooldowns} />
+    </Scene>
+
+    <Scene id="groups" step={4} side="right" {accent} guide={guide("commands", "add-help-from-the-registered-commands")} guideLabel="Help and Groups in the Docs">
+        <Fragment slot="title">Groups for a Larger Bot</Fragment>
+        <Fragment slot="text">
+            <p>A group gives related commands a shared first word, such as <code class="inline-code">tools</code> in <code class="inline-code">!tools ping</code>, and can have a short alias like <code class="inline-code">!t ping</code></p>
+            <p>Groups organize names and help only. A command that needs protection still carries its own guard</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="A command inside a group" code={commandGroups} />
+    </Scene>
+
+    <Scene id="help" step={5} side="left" {accent} guide={guide("commands", "add-help-from-the-registered-commands")} guideLabel="Generated Help in the Docs">
+        <Fragment slot="title">Help and Pages from the Same Definitions</Fragment>
+        <Fragment slot="text">
+            <p>Every command receives <code class="inline-code">sendHelp</code>, which lists the commands with their descriptions, and <code class="inline-code">paginate</code>, which shows any list as pages that the command's author flips with ◀ and ▶ reactions</p>
+            <p>Help is built from the definitions the router already has, so it matches the commands</p>
+        </Fragment>
+        <CodePanel file="bot.ts" label="A help command and reaction pages" code={helpPages} />
+    </Scene>
+</FeaturePage>

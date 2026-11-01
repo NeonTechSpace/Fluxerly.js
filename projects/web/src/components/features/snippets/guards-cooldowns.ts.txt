@@ -1,0 +1,25 @@
+import { guards, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        mentionPrefix: true,
+        use: [
+            async (context, next) => {
+                const started = Date.now()
+                await next()
+                console.info(`${context.name} took ${Date.now() - started} ms`)
+            },
+        ],
+        commands: {
+            purge: {
+                description: "Delete recent messages",
+                guard: [guards.guildOnly(), guards.requirePermissions(["ManageMessages"])],
+                cooldown: { durationMs: 30_000, per: "channel" },
+                arguments: { count: { type: "integer", min: 1, max: 100, default: 10 } },
+                execute: ({ values, reply }) => reply(`Would delete ${values.count} messages`),
+            },
+        },
+    },
+})

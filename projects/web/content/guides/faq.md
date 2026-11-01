@@ -6,86 +6,46 @@ description: Short answers to common questions about the SDK
 
 Each answer is short and links to the page that covers the topic in full
 
-<details>
-<summary>Why does loading the SDK fail with a require error?</summary>
+## Why does loading the SDK fail with a require error?
 
-The SDK ships only ECMAScript modules, so `require("@neontechspace/fluxerly")` fails with an error saying that Fluxerly is ESM-only. Use `import`, and add `"type": "module"` to the project's `package.json` or name the file with `.mjs`. See [troubleshooting](/docs/{{version}}/troubleshooting/#the-process-fails-with-a-require-error)
+The SDK ships only ECMAScript modules, so `require("@neontechspace/fluxerly")` fails with an error saying that Fluxerly is ESM-only. Use `import`, and add `"type": "module"` to the project's `package.json` or name the file with `.mjs`. See [troubleshooting](/docs/troubleshooting/#the-process-fails-with-a-require-error)
 
-</details>
+## Which Node.js version is required?
 
-<details>
-<summary>Which Node.js version is required?</summary>
+Fluxerly is tested against Node.js 24.15 or newer. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/support-and-compatibility/)
 
-Fluxerly is tested against Node.js 24.15 or newer. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/{{version}}/support-and-compatibility/)
+## Does TypeScript need extra setup?
 
-</details>
+Install `@types/node` as a development dependency and include the Node.js types, for example with `"types": ["node"]` in `tsconfig.json`. The SDK's types use Node.js `AbortSignal` and `AsyncDisposable`. The SDK supports TypeScript 7. JavaScript projects need no TypeScript installation. See [create a bot](/docs/create-a-bot/)
 
-<details>
-<summary>Does TypeScript need extra setup?</summary>
+## Where should the bot token be stored?
 
-Install `@types/node` as a development dependency and include the Node.js types, for example with `"types": ["node"]` in `tsconfig.json`. The SDK's types use Node.js `AbortSignal` and `AsyncDisposable`. The SDK supports TypeScript 7. JavaScript projects need no TypeScript installation. See [create a bot](/docs/{{version}}/create-a-bot/)
+Keep it out of the code, in the `FLUXER_BOT_TOKEN` environment variable. For local development, put it in a `.env` file, start the bot with `node --env-file=.env bot.js`, and add `.env` to `.gitignore`. The SDK never writes the token to its logs. Regenerate a token that has been shared or committed. See [create a bot](/docs/create-a-bot/)
 
-</details>
+## Why does the bot not see or answer messages?
 
-<details>
-<summary>Where should the bot token be stored?</summary>
+The bot must be a member of the community and have permission to view the channel and send messages there. [Create a bot](/docs/create-a-bot/) lists the minimum permissions. The SDK sends no gateway intents, so no intent setting is required. The `gateway.ignoredEvents` option suppresses listed dispatches, with exceptions for messages that mention the bot, @here or @everyone, and for reaction batches. See [event filtering](/docs/testing/#match-gateway-event-filtering) for those exceptions. The starter also ignores messages from bots and anything other than `!ping`. See [troubleshooting](/docs/troubleshooting/#no-reply-arrives)
 
-Keep it out of the code, in the `FLUXER_BOT_TOKEN` environment variable. For local development, put it in a `.env` file, start the bot with `node --env-file=.env bot.js`, and add `.env` to `.gitignore`. The SDK never writes the token to its logs. Regenerate a token that has been shared or committed. See [create a bot](/docs/{{version}}/create-a-bot/)
+## Why do methods return Results instead of throwing?
 
-</details>
+Failures such as a missing permission, a network error or a rate limit are expected in a running bot. A [Result](/docs/glossary/#result) makes them visible in the return type, so they are handled where they happen instead of stopping the bot. Programming mistakes, such as invalid options, still throw `ConfigurationError` at once. The `orThrow` function returns a Result's value or throws its error when throwing suits the code better. See [reliability](/docs/reliability/)
 
-<details>
-<summary>Why does the bot not see or answer messages?</summary>
-
-The bot must be a member of the community and have permission to view the channel and send messages there. [Create a bot](/docs/{{version}}/create-a-bot/) lists the minimum permissions. The SDK sends no gateway intents, so no intent setting is required, but an event type listed in `gateway.ignoredEvents` is not delivered. The starter also ignores messages from bots and anything other than `!ping`. See [troubleshooting](/docs/{{version}}/troubleshooting/#no-reply-arrives)
-
-</details>
-
-<details>
-<summary>Why do methods return Results instead of throwing?</summary>
-
-Failures such as a missing permission, a network error or a rate limit are expected in a running bot. A [Result](/docs/{{version}}/glossary/#result) makes them visible in the return type, so they are handled where they happen instead of stopping the bot. Programming mistakes, such as invalid options, still throw `ConfigurationError` at once. The `orThrow` function returns a Result's value or throws its error when throwing suits the code better. See [reliability](/docs/{{version}}/reliability/)
-
-</details>
-
-<details>
-<summary>What is Effect?</summary>
+## What is Effect?
 
 Effect is a TypeScript library for writing programs that handle failures, cancellation and cleanup in a structured way. Work is written as an Effect value that describes what to do, and each possible failure is part of its type. When the work stops, whether it succeeded, failed or was cancelled, Effect runs the cleanup it owns. The [Effect website](https://effect.website) introduces it
 
-</details>
+## Is Effect required?
 
-<details>
-<summary>Is Effect required?</summary>
+No. The default `@neontechspace/fluxerly` entry point works with plain JavaScript or TypeScript, Promises and Results. The SDK uses Effect internally, and npm, pnpm and Bun install it automatically. The `@neontechspace/fluxerly/effect` entry point is for applications that already use Effect. See [first Effect bot](/docs/effect-first-bot/)
 
-No. The default `@neontechspace/fluxerly` entry point works with plain JavaScript or TypeScript, Promises and Results. The SDK uses Effect internally, and npm, pnpm and Bun install it automatically. The `@neontechspace/fluxerly/effect` entry point is for applications that already use Effect. See [first Effect bot](/docs/{{version}}/effect-first-bot/)
+## Does the bot need to handle rate limits?
 
-</details>
+Usually not. For Fluxer API requests, an HTTP 429 with a usable retry delay is retried when the request body can be reused and the wait fits within the request's deadline. An inline attachment or webhook request carrying a `file` or `stream` attachment fails instead, because that body cannot be sent again. A response without a usable retry delay also fails. Waits of a second or longer are logged as `ratelimit.wait`. For a request whose body can be reused, a known wait that would reach or pass its deadline fails with a `ratelimit.deadline` record instead. See [rate limit](/docs/glossary/#rate-limit) and [troubleshooting](/docs/troubleshooting/)
 
-<details>
-<summary>Is the SDK stable?</summary>
+## How can a bot be tested without Fluxer?
 
-Not yet. Fluxerly is a prerelease, and its API can still change between versions. Nightly and RC releases can include breaking changes at any time, including after the first stable release. The lockfile records the exact installed version and keeps installs reproducible. For a nightly or RC, install with `--save-exact` in npm and pnpm, or `--exact` in Bun, so a fresh install without a lockfile cannot pick up a newer nightly or RC that may break the API. Read the [changelog](/docs/{{version}}/changelog/) before upgrading. See [version numbers and release channels](/docs/{{version}}/support-and-compatibility/#version-numbers-and-release-channels)
+The `@neontechspace/fluxerly/testing` entry point creates a real client connected to an in-memory Fluxer. Its `createTestBot` function runs a bot from the same options object it passes to `runBot`. Tests deliver events, answer requests and check what the bot sent, without a network, token or account. Effect applications use `@neontechspace/fluxerly/effect/testing`. See [Test a bot without Fluxer](/docs/testing/)
 
-</details>
+## Does the bot need sharding?
 
-<details>
-<summary>Does the bot need to handle rate limits?</summary>
-
-Usually not. When Fluxer answers with HTTP 429, the SDK waits for the required delay and sends the request again, within the request's deadline. Waits of a second or longer are logged as `ratelimit.wait`. A request whose wait would pass its deadline fails with a `ratelimit.deadline` record instead. See [rate limit](/docs/{{version}}/glossary/#rate-limit) and [troubleshooting](/docs/{{version}}/troubleshooting/)
-
-</details>
-
-<details>
-<summary>How can a bot be tested without Fluxer?</summary>
-
-The `@neontechspace/fluxerly/testing` entry point creates a real client connected to an in-memory Fluxer. Its `createTestBot` function runs a bot from the same options object it passes to `runBot`. Tests deliver events, answer requests and check what the bot sent, without a network, token or account. Effect applications use `@neontechspace/fluxerly/effect/testing`. See [Test a bot without Fluxer](/docs/{{version}}/testing/)
-
-</details>
-
-<details>
-<summary>Does the bot need sharding?</summary>
-
-Most bots do not. One [shard](/docs/{{version}}/glossary/#shard) carries up to 2,500 communities, Fluxer's limit. For a larger bot in one process, `sharding: "auto"` counts its communities when it first connects and opens one shard per 2,000 communities, which leaves room to grow. A bot without `sharding` settings that passes the limit moves to that automatic count when Fluxer refuses its one shard, so it keeps running. Running shards in several processes without a supervisor needs an explicit shard total. A [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) can choose the total itself with `totalShards: "auto"`. See [sharding](/docs/{{version}}/sharding/)
-
-</details>
+Most bots do not. One [shard](/docs/glossary/#shard) carries up to 2,500 communities, Fluxer's limit. For a larger bot in one process, `sharding: "auto"` counts its communities when it first connects and opens one shard per 2,000 communities, which leaves room to grow. A bot without `sharding` settings that passes the limit moves to that automatic count when Fluxer refuses its one shard, so it keeps running. Running shards in several processes without a supervisor needs an explicit shard total. A [supervisor](/docs/sharding/#run-shards-in-several-processes) can choose the total itself with `totalShards: "auto"`. See [sharding](/docs/sharding/)

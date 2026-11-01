@@ -1,0 +1,63 @@
+---
+// One call signature: its summary, the signature panel, parameters, result, failures and examples
+import type { Signature } from "../../../lib/reference"
+import { failureTypes, fitted, narrowTypeWidth, signatureHtml, typeHtml } from "../../../lib/reference-format"
+import DocText from "./DocText.astro"
+import Md from "./Md.astro"
+import Params from "./Params.astro"
+
+interface Props {
+    signature: Signature
+    name: string
+    isConstructor?: boolean
+    isStatic?: boolean
+    /** The reference URL of the function or method, which its own comment does not mark */
+    self?: string
+}
+
+const { signature, name, isConstructor = false, isStatic = false, self } = Astro.props
+const failures = failureTypes(signature.r)
+const showsResult = !isConstructor && (signature.doc?.returns || signature.r !== "void")
+---
+
+<div class="ref-callable">
+    <DocText doc={signature.doc} part="lead" self={self} />
+    <pre class="ref-sig"><code set:html={fitted((width) => signatureHtml(signature, name, { isConstructor, isStatic }, width))} /></pre>
+    <DocText doc={signature.doc} part="body" self={self} />
+    {
+        signature.p.length > 0 && (
+            <>
+                <p class="ref-label">Parameters</p>
+                <Params parameters={signature.p} />
+            </>
+        )
+    }
+    {
+        showsResult && (
+            <dl class="ref-list ref-result">
+                <div class="ref-row">
+                    <dt class="ref-label">Returns</dt>
+                    <dd>
+                        <pre class="ref-type"><code set:html={fitted((width) => typeHtml(signature.r, width), narrowTypeWidth)} /></pre>
+                        <Md md={signature.doc?.returns} self={self} />
+                    </dd>
+                </div>
+                {failures.length > 0 && (
+                    <div class="ref-row">
+                        <dt class="ref-label">Fails with</dt>
+                        <dd>
+                            <ul class="ref-failures">
+                                {failures.map((failure) => (
+                                    <li>
+                                        <code set:html={typeHtml(failure)} />
+                                    </li>
+                                ))}
+                            </ul>
+                        </dd>
+                    </div>
+                )}
+            </dl>
+        )
+    }
+    <DocText doc={signature.doc} part="rest" self={self} />
+</div>

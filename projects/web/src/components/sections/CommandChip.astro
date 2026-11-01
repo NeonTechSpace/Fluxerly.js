@@ -1,0 +1,46 @@
+---
+import { CheckIcon, CopyIcon } from "@phosphor-icons/react/ssr"
+import { breakableHtml } from "../../../scripts/docs/code-breaks.mjs"
+
+interface Props {
+    command: string
+    class?: string
+}
+
+const { command, class: className } = Astro.props
+const [tool, ...rest] = command.split(" ")
+---
+
+<!-- On a phone the command may turn at a space or after a slash in the package name, never inside a word -->
+<div class:list={["cmd-chip", className]}>
+    <code><span class="cmd-tool">{tool}</span> <Fragment set:html={breakableHtml(rest.join(" "))} /></code>
+    <button class="copy-button" type="button" aria-label={`Copy ${command}`} data-chip-copy={command}>
+        <CopyIcon className="icon-copy" size={17} aria-hidden="true" />
+        <CheckIcon className="icon-done" size={17} weight="bold" aria-hidden="true" />
+    </button>
+    <span class="sr-only" aria-live="polite" data-chip-status></span>
+</div>
+
+<script>
+    import { reportCopyFailed } from "../../lib/copy-failed"
+    // Same behavior as the hero's npm chip: copy, show a check for a moment and announce it
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-chip-copy]")) {
+        const status = button.parentElement?.querySelector<HTMLElement>("[data-chip-status]")
+        let reset = 0
+        button.addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(button.dataset.chipCopy ?? "")
+            } catch (error) {
+                reportCopyFailed(error)
+                return
+            }
+            button.dataset.copied = "true"
+            if (status) status.textContent = "Copied"
+            window.clearTimeout(reset)
+            reset = window.setTimeout(() => {
+                delete button.dataset.copied
+                if (status) status.textContent = ""
+            }, 1800)
+        })
+    }
+</script>

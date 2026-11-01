@@ -1,0 +1,64 @@
+---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import { iconSrc, type IconName } from "../../../lib/art"
+// The reference landing: the four entry points, then the task index and the code catalogue. An entry point's import
+// path shows once, in its summary when the summary names it
+import "../../../styles/reference.css"
+import Docs from "../../../layouts/Docs.astro"
+import Code from "../../../components/docs/Code.astro"
+import Heading from "../../../components/docs/reference/Heading.astro"
+import Md from "../../../components/docs/reference/Md.astro"
+import { codesUrl, endpointsUrl, model, referenceUrl, tasksUrl, type TocItem } from "../../../lib/reference"
+
+const toc: TocItem[] = [
+    ...model.entries.map((entry) => ({ depth: 2 as const, text: entry.title, id: entry.key })),
+    { depth: 2, text: "Find a Method by Task", id: "tasks" },
+    { depth: 2, text: "Fluxer Endpoints", id: "endpoints" },
+    { depth: 2, text: "Error and Log Codes", id: "codes" },
+]
+
+const entryIcons: Record<string, IconName> = { "js-ts": "sdk-package", effect: "effect-plug", testing: "testing-flask", "effect-testing": "testing-flask" }
+---
+
+<Docs title="API Reference" description="Every method and type of the SDK, by entry point" section="reference" current={referenceUrl} toc={toc}>
+    <div class="ref">
+        {
+            model.entries.map((entry) => (
+                <section class="ref-group">
+                    <div class="ref-entry-head">
+                        <img src={iconSrc(entryIcons[entry.key] ?? "api-book", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                        <Heading level={2} id={entry.key}>{entry.title}</Heading>
+                    </div>
+                    {!entry.doc.summary?.includes(entry.importPath) && (
+                        <p class="ref-import">
+                            Import from <Code text={entry.importPath} />
+                        </p>
+                    )}
+                    <Md md={entry.doc.summary} class="ref-summary" />
+                    <Md md={entry.doc.examples?.[0]} class="ref-example" />
+                    <p class="ref-more">
+                        <a class="prose-link go-link" href={entry.url}>
+                            Browse {entry.title}
+                            <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                        </a>
+                    </p>
+                </section>
+            ))
+        }
+        <section class="ref-group">
+            <Heading level={2} id="tasks">Find a Method by Task</Heading>
+            <p class="ref-intro">Each client method, listed by what it does, with the first sentence of its documentation</p>
+            <p class="ref-more"><a href={tasksUrl}>Open the task index</a></p>
+        </section>
+        <section class="ref-group">
+            <Heading level={2} id="endpoints">Fluxer Endpoints</Heading>
+            <p class="ref-intro">Each Fluxer HTTP route a bot can use, with the Fluxerly method that calls it and a link to Fluxer's own docs for it</p>
+            <p class="ref-more"><a href={endpointsUrl}>Open the endpoint map</a></p>
+        </section>
+        <section class="ref-group">
+            <Heading level={2} id="codes">Error and Log Codes</Heading>
+            <p class="ref-intro">Every error and log record carries a stable code. Look one up to learn what it means and what to do</p>
+            <p class="ref-more"><a href={codesUrl}>Look up a code</a></p>
+        </section>
+    </div>
+</Docs>

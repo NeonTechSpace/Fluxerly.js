@@ -1,0 +1,8 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+export async function searchChannel(client: Client, channelId: string, text: string) {
+    const result = await client.messages.search({ channelId }, { content: text, limit: 10 })
+    if (result.isErr()) return result
+    if (result.value.indexing) return undefined
+    return result.value.messages
+}

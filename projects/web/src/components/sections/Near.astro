@@ -1,0 +1,117 @@
+---
+// The near plane of space: specks of light pass close in front of the margins, and on wide screens the
+// clouds of the conductor's brows drift by at the edges. They take more than the page's pace, so they are the nearest things in space. Only ever in the
+// margins, so they never cross the reading, and never on a phone, where there is no margin to keep
+
+interface Props {
+    // How many seeds along the whole space
+    seeds?: number
+}
+
+const { seeds: count = 10 } = Astro.props
+// Cyan and violet mostly, the gold of the conductor's badge now and then
+const colors = ["#46e3ef", "#a57cff", "#46e3ef", "#ecc46e", "#a57cff", "#46e3ef", "#a57cff"]
+const seeds = Array.from({ length: count }, (_, i) => ({
+    // Spread down the space with a little jitter, never in the handover from the hero
+    top: 5 + (i * 90) / count + ((i * 37) % 11) / 2,
+    side: i % 2 ? "right" : "left",
+    // Somewhere inside the page margin
+    inset: 0.25 + ((i * 53) % 60) / 100,
+    size: 6 + ((i * 29) % 6),
+    color: colors[i % colors.length],
+    // Each at its own distance, so they do not pass as one sheet
+    depth: 0.75 + ((i * 41) % 50) / 100,
+}))
+---
+
+<div class="near" aria-hidden="true">
+    {
+        seeds.map((seed) => (
+            <i class="depth seed" data-side={seed.side} style={`--at: ${(seed.top / 100).toFixed(3)}; --inset: ${seed.inset.toFixed(2)}; --size: ${seed.size}px; --color: ${seed.color}; --depth: calc(var(--depth-near) * ${seed.depth.toFixed(2)})`} />
+        ))
+    }
+    <img class="depth cloud cloud-cyan" src="/art/depth/cloud-cyan.webp" width="690" height="245" alt="" loading="lazy" decoding="async" />
+    <img class="depth cloud cloud-violet" src="/art/depth/cloud-violet.webp" width="690" height="244" alt="" loading="lazy" decoding="async" />
+</div>
+
+<script>
+    for (const near of document.querySelectorAll<HTMLElement>(".near")) {
+        let width = -1
+        new ResizeObserver(([entry]) => {
+            if (entry.contentRect.width === width) return
+            width = entry.contentRect.width
+            near.style.setProperty("--near-height", `${entry.contentRect.height}px`)
+        }).observe(near)
+    }
+</script>
+
+<style>
+    /* Seeds and clouds are placed down the space by its height. The script below pins that height and measures it
+       again only when the width changes, so opening an answer, which makes the page taller, does not slide them */
+    .near {
+        --near-height: 100%;
+
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+    }
+
+    .seed,
+    .cloud {
+        top: calc(var(--near-height) * var(--at));
+    }
+
+    /* A seed is a soft point of light, out of focus because it is so near. It sits somewhere inside the page margin,
+       and on the right it keeps past the course log's column, where a speck between two dots would read as a stray */
+    .seed[data-side="left"] {
+        left: calc(var(--page-margin) * var(--inset));
+    }
+
+    .seed[data-side="right"] {
+        right: calc(var(--log-reach, 0px) + var(--page-margin) * var(--inset));
+    }
+
+    .seed {
+        width: var(--size);
+        height: var(--size);
+        border-radius: 50%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--color) 80%, white) 0, var(--color) 32%, transparent 72%);
+        box-shadow: 0 0 calc(var(--size) * 1.8) calc(var(--size) * 0.35) color-mix(in srgb, var(--color) 40%, transparent);
+        opacity: 0.85;
+    }
+
+    /* The clouds need a margin wide enough to hold them, which only wide screens have. Each keeps to its margin:
+       its inner edge stops short of the content's frame and the rest passes off the screen, so it never drifts in
+       front of the reading */
+    .cloud {
+        display: none;
+        width: 420px;
+        height: auto;
+        opacity: 0.16;
+    }
+
+    .cloud-cyan {
+        --at: 0.09;
+        right: calc(100% - var(--frame-inline) + 16px);
+        --depth: calc(var(--depth-near) * 0.6);
+    }
+
+    .cloud-violet {
+        --at: 0.56;
+        left: calc(100% - var(--frame-inline) + 16px);
+        --depth: calc(var(--depth-near) * 0.7);
+    }
+
+    @media (min-width: 2200px) {
+        .cloud {
+            display: block;
+        }
+    }
+
+    @media (max-width: 899px) {
+        .near {
+            display: none;
+        }
+    }
+</style>

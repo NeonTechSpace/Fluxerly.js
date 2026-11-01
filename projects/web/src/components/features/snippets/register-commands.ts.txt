@@ -1,0 +1,18 @@
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: {
+            ping: {
+                description: "Check that the bot can reply",
+                execute: ({ reply }) => reply("Pong!"),
+            },
+            about: {
+                description: "Describe this bot",
+                execute: ({ reply }) => reply("Built with Fluxerly"),
+            },
+        },
+    },
+})

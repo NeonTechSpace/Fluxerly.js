@@ -1,0 +1,12 @@
+import { Effect } from "effect"
+import { createClient } from "@neontechspace/fluxerly/effect"
+
+export function sendHello(token: string, channelId: string) {
+    const program = Effect.scoped(
+        Effect.gen(function* () {
+            const client = yield* createClient({ token })
+            return yield* client.messages.send(channelId, "Hello from Effect")
+        }),
+    )
+    return Effect.runPromise(program)
+}

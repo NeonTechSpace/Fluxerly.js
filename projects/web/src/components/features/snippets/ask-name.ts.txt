@@ -1,0 +1,13 @@
+import { orThrow, type Client } from "@neontechspace/fluxerly"
+
+export async function askPreferredName(client: Client, channelId: string, userId: string) {
+    await using collector = client.messages.collect(channelId, {
+        filter: (message) => message.author.id === userId && !message.author.isBot,
+        maxMessages: 1,
+        timeoutMs: 30_000,
+    })
+    orThrow(await client.messages.send(channelId, "What name should the bot use?"))
+
+    const answer = orThrow(await collector.result())
+    return answer.messages[0]?.content
+}

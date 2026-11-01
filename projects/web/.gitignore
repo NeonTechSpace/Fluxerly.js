@@ -1,9 +1,11 @@
 node_modules/
-.astro/
 dist/
-content/docs/
-content/versions.json
-released/
-playwright-report/
-test-results/
+.astro/
 .wrangler/
+test-results/
+# Generated from the SDK by scripts/docs/generate.mjs
+content/reference/
+content/examples/
+content/changelog.md
+# Published versions' snapshots, read by scripts/fetch-releases.js
+released/

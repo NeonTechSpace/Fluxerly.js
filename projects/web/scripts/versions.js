@@ -1,51 +1,45 @@
 import { parseVersion, compareVersions } from "../../release/planning.js"
 export { parseVersion, compareVersions }
-// Every retained release asset must stay readable by the current generator
-export const snapshotSchemas = Object.freeze([1, 2])
+
+// The snapshot format this site can build. Older release assets hold another site's pages, so they stay on GitHub and are not served
+export const snapshotSchema = 3
+const required = ["guides/index.md", "guides/quick-start.md", "guides/meta.json", "guides/glossary.md", "changelog.md", "reference/model.json", "reference/codes.json", "reference/links.json", "reference/endpoints.json"]
+
 export function channelTargets(versions) {
-    // Retired Canary versions are never served
-    const labels = { stable: "Stable", rc: "RC", nightly: "Nightly" }
+    // Retired channels are never served
+    const labels = { stable: "Stable", nightly: "Nightly" }
     const sorted = [...versions].sort(compareVersions).reverse()
-    const targets = Object.entries(labels).flatMap(([channel, label]) => {
+    return Object.entries(labels).flatMap(([channel, label]) => {
         const version = sorted.find((v) => parseVersion(v).channel === channel)
         return version ? [{ version, label, path: channel === "stable" ? version : channel }] : []
     })
-    return targets
 }
+
 export function defaultVersion(versions) {
     return channelTargets(versions)[0]?.version ?? null
 }
+
 export function retainedVersions(versions) {
     const targets = new Set(channelTargets(versions).map((target) => target.version))
     return versions.filter((version) => parseVersion(version).channel === "stable" || targets.has(version))
 }
-export function publishedSnapshotFiles(snapshot) {
-    // Withdraw editorial content from the site without altering retained release assets
-    return snapshot.files.filter((file) => file.path !== "migration.md").map((file) => {
-        if (file.path !== "meta.json") return file
-        const metadata = JSON.parse(file.content)
-        if (!metadata.pages?.includes("migration")) return file
-        return { ...file, content: JSON.stringify({ ...metadata, pages: metadata.pages.filter((page) => page !== "migration") }) }
-    })
-}
+
 export function validateSnapshot(snapshot) {
-    if (!snapshotSchemas.includes(snapshot?.schemaVersion) || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit))
-        throw new Error("Invalid docs provenance")
+    if (snapshot?.schemaVersion !== snapshotSchema || !/^[a-f0-9]{40}$/.test(snapshot.sourceCommit)) throw new Error("Invalid docs provenance")
     parseVersion(snapshot.version)
     if (!Array.isArray(snapshot.files) || snapshot.files.length === 0) throw new Error("Empty docs snapshot")
     const paths = new Set()
     for (const file of snapshot.files) {
         if (
             typeof file.path !== "string" ||
-            !/^[\w.\- /]+\.(md|json)$/.test(file.path) ||
-            file.path.split("/").some((p) => !p || p === "." || p === "..") ||
+            !/^[\w.\- /]+$/.test(file.path) ||
+            file.path.split("/").some((part) => !part || part === "." || part === "..") ||
             paths.has(file.path) ||
             typeof file.content !== "string"
         )
             throw new Error("Invalid docs snapshot file")
         paths.add(file.path)
     }
-    if (!paths.has("index.md") || !paths.has("quick-start.md") || !paths.has("changelog.md"))
-        throw new Error("Incomplete docs snapshot")
+    if (required.some((path) => !paths.has(path))) throw new Error("Incomplete docs snapshot")
     return snapshot
 }

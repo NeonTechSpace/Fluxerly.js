@@ -1,0 +1,60 @@
+---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import Companion from "../sections/Companion.astro"
+import Depth from "../sections/Depth.astro"
+import type { IconName } from "../../lib/art"
+
+// One scene of a feature page: the heading, a few sentences, its point and the guide that goes deeper hang on one
+// side, the code on the other, and the sides alternate as the reader descends, like the homepage's sections
+
+interface Props {
+    id: string
+    // Position of the scene on its page, from 1
+    step: number
+    side: "left" | "right"
+    accent: "cyan" | "violet"
+    guide: string
+    guideLabel: string
+    // A painted icon under the words, where the scene means one and its column has room
+    icon?: IconName
+    iconAlt?: string
+}
+
+const { id, step, side, accent, guide, guideLabel, icon, iconAlt = "" } = Astro.props
+
+// Far behind every third scene after the first, in the margin on the heading's side, outside the reading: the page's own
+// crescent, then the other one
+const far =
+    step % 3 !== 1 || step === 1
+        ? null
+        : step === 4
+          ? { name: accent === "cyan" ? "crescent-cyan" : "crescent-violet", width: 150, depth: 0.9, top: "58%" }
+          : { name: accent === "cyan" ? "crescent-violet" : "crescent-cyan", width: 124, depth: 1, top: "56%" }
+---
+
+<section class="scene" id={id} aria-labelledby={`${id}-title`} data-accent={accent}>
+    {far && <Depth name={far.name as "crescent-cyan"} side={side} top={far.top} width={far.width} depth={far.depth} opacity={0.85} />}
+    <div class="split" data-side={side}>
+        <div class="intro" data-rise>
+            <span class="step" aria-hidden="true">{String(step).padStart(2, "0")}</span>
+            <h2 class="section-title" id={`${id}-title`}><slot name="title" /></h2>
+            <div class="scene-text"><slot name="text" /></div>
+            {
+                Astro.slots.has("point") && (
+                    <p class="point">
+                        <span class="wave-mark" aria-hidden="true" />
+                        <span><slot name="point" /></span>
+                    </p>
+                )
+            }
+            <a class="prose-link go-link" href={guide}>
+                {guideLabel}
+                <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+            </a>
+            {icon && <Companion class="keepsake" name={icon} alt={iconAlt} size={170} />}
+        </div>
+        <div class="body" data-rise>
+            <slot />
+        </div>
+    </div>
+</section>

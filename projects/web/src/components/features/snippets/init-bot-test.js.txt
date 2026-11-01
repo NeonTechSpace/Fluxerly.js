@@ -1,0 +1,14 @@
+import assert from "node:assert/strict"
+import { test } from "node:test"
+import { createTestBot } from "@neontechspace/fluxerly/testing"
+import { bot } from "./bot.js"
+
+// createTestBot runs the bot against an in-memory Fluxer, so no token or network is needed
+test("the bot answers !ping with Pong! and ignores other messages", async () => {
+    await using testBot = createTestBot(bot)
+    await testBot.ready()
+
+    // The say method sends a message as a user and returns the messages the bot sent in response
+    assert.deepEqual((await testBot.say("!ping")).map((message) => message.content), ["Pong!"])
+    assert.deepEqual(await testBot.say("hello"), [])
+})

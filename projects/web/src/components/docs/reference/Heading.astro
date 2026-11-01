@@ -1,0 +1,20 @@
+---
+// A heading whose anchor shows a small link mark on hover. A heading of code may wrap only at its seams. The mark stays
+// out of the search index, so result titles read as the heading alone
+import { seamHtml } from "../../../../scripts/docs/code-breaks.mjs"
+
+interface Props {
+    level: 2 | 3 | 4
+    id: string
+    code?: boolean
+    class?: string
+}
+
+const { level, id, code = false, class: className } = Astro.props
+const Tag = `h${level}` as "h2" | "h3" | "h4"
+const inner = code ? seamHtml(await Astro.slots.render("default")) : undefined
+---
+
+<Tag id={id} class:list={["ref-heading", className]}>
+    {code ? <code set:html={inner} /> : <slot />}<a class="ref-mark" href={`#${id}`} aria-label="Link to this section" data-pagefind-ignore>#</a>
+</Tag>

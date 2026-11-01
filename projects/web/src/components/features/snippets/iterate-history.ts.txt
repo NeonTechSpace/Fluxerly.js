@@ -1,0 +1,13 @@
+import type { Client, Message } from "@neontechspace/fluxerly"
+
+export async function findRecentMessage(
+    client: Client,
+    channelId: string,
+    matches: (message: Message) => boolean,
+) {
+    for await (const item of client.messages.iterateHistory(channelId, { maxItems: 200 })) {
+        if (item.isErr()) return item
+        if (matches(item.value)) return item
+    }
+    return undefined
+}

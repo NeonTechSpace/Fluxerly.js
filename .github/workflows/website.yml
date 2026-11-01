@@ -1,0 +1,86 @@
+name: Website
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+cache-mode: read
+concurrency:
+  group: website
+  cancel-in-progress: false
+  queue: max
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: website
+      url: https://fluxerly.neontechspace.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+      - name: Read verified release snapshots
+        id: snapshots
+        run: node web/scripts/fetch-releases.js
+        working-directory: projects
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build the SDK declarations for the checks
+        id: build
+        run: pnpm --filter @neontechspace/fluxerly build
+        working-directory: projects
+      - name: Refresh the download counts for this deploy
+        # npm being down shouldn't stop a release, so the site then keeps the counts it has
+        continue-on-error: true
+        run: pnpm --filter fluxerly-docs downloads:fetch
+        working-directory: projects
+      - name: Build and check the public site from the published versions
+        id: workspace
+        run: pnpm --filter fluxerly-docs check:public
+        working-directory: projects
+      - name: Require successful Check for the exact checkout
+        id: ci
+        run: node web/scripts/checked-source.js
+        working-directory: projects
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Record the checked source
+        id: source
+        shell: bash
+        run: |
+          source="$(git rev-parse HEAD)"
+          if [ "$source" != "$CHECKED_SOURCE" ]; then
+            printf 'Checkout changed after CI verification\n' >&2
+            exit 1
+          fi
+          printf 'DOCS_SOURCE_COMMIT=%s\n' "$source" >> "$GITHUB_ENV"
+          printf '{"sourceCommit":"%s"}\n' "$source" > projects/web/dist/deployment.json
+        env:
+          CHECKED_SOURCE: ${{ steps.ci.outputs.source_commit }}
+      - name: Deploy to the site's address and verify it
+        id: deploy
+        run: node scripts/deploy.js
+        working-directory: projects/web
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Summarize website delivery
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Website delivery
+          steps: ${{ toJSON(steps) }}
+          details: >-
+            {"Checked source commit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "Exact deployment URL": ${{ toJSON(steps.deploy.outputs.deployment_url) }}, "Custom-domain access": ${{ toJSON(steps.deploy.outputs.custom_domain_status == 'verified' && 'Verified' || steps.deploy.outputs.custom_domain_status == 'challenged' && 'Cloudflare challenge, public access not verified' || 'Unconfirmed, inspect deployment verification') }}}
+          next: Open https://fluxerly.neontechspace.com to look at the deployed site

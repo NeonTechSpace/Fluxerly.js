@@ -6,7 +6,7 @@ description: Create announcement channels, publish messages, follow them in the 
 
 An announcement channel publishes messages to the text channels that follow it, in the same community or another one. Sending a message to the announcement channel does not publish it
 
-These helpers take the existing `client` from the [first bot](/docs/{{version}}/quick-start/) or [first Effect bot](/docs/{{version}}/effect-first-bot/). Pass decimal IDs from trusted application configuration. The default API returns a [Result](/docs/{{version}}/glossary/#result). Native Effect helpers return an [Effect](/docs/{{version}}/glossary/#effect), run with `yield*` inside the application program
+These helpers take the existing `client` from the [first bot](/docs/quick-start/) or [first Effect bot](/docs/effect-first-bot/). Pass decimal IDs from trusted application configuration. The default API returns a [Result](/docs/glossary/#result). Native Effect helpers return an [Effect](/docs/glossary/#effect), run with `yield*` inside the application program
 
 ## Create an announcement channel
 
@@ -56,7 +56,7 @@ export async function setAnnouncementChannel(client: Client, channelId: string, 
 
 A text channel that follows an announcement channel cannot become one. Delete its follower webhooks first. Converting an announcement channel back to text removes its follower webhooks asynchronously. A successful edit does not wait for that removal
 
-Fluxer sends a `channelUpdate` event with the new type. Code that handles channel updates must check the new `type` rather than retaining the old channel shape
+The SDK emits a `guildChannelUpdate` event with the new type. Code that handles channel updates must check the new `type` rather than retaining the old channel shape
 
 With the native Effect API:
 
@@ -118,9 +118,9 @@ Only a message that is not a reply, forward, system notice or published copy can
 
 Editing the source message updates its published copies later. Deleting the source does not delete the copies. Fluxer marks them with `MessageFlags.SourceMessageDeleted`, changes their text to `[Original message deleted]` and removes their attachments
 
-The [messages guide](/docs/{{version}}/messages/#reply-to-a-message-and-check-what-happened) explains which flags sends and edits accept
+The [messages guide](/docs/messages/#reply-to-a-message-and-check-what-happened) explains which flags sends and edits accept
 
-If sending succeeds but publication fails, the source message stays posted, which is why the helpers log its ID. Before publishing again, fetch that message and check `MessageFlags.Crossposted`. Fluxer sets the flag before it finishes the request and clears it only when queuing the copies fails, so a failed publish can still leave the message published. Do not rerun the whole helper after an [uncertain write](/docs/{{version}}/reliability/), because that can send another source message
+If sending succeeds but publication fails, the source message stays posted, which is why the helpers log its ID. Before publishing again, fetch that message and check `MessageFlags.Crossposted`. Fluxer sets the flag before it finishes the request and clears it only when queuing the copies fails, so a failed publish can still leave the message published. Do not rerun the whole helper after an [uncertain write](/docs/reliability/), because that can send another source message
 
 </details>
 
@@ -203,7 +203,7 @@ export function observeAnnouncements(client: Client, observe: (message: Message)
 }
 ```
 
-The returned subscription stops with the client. Call its `close()` method to stop it earlier. The [events guide](/docs/{{version}}/events-and-collectors/) covers registration and delivery limits
+The returned subscription stops with the client. Call its `close()` method to stop it earlier. The [events guide](/docs/events-and-collectors/) covers registration and delivery limits
 
 With the native Effect API, registration belongs to the scope that runs it. Keep that scope open while the handler is needed:
 
@@ -266,8 +266,8 @@ Follower webhook metadata can also include `sourceGuild` and `sourceChannel`. Th
 
 ## Handle permission and delivery failures
 
-Fluxer checks permissions on the final request. Local [permission checks](/docs/{{version}}/guilds-and-permissions/) can help explain a failure, but cannot authorize an action. Creating or converting channels needs `ManageChannels`. Following and managing follower webhooks needs `ManageWebhooks`. Publishing another author's message needs `ManageMessages`. Following also fails for a duplicate follow, incompatible age-restriction or content-warning settings, a full webhook limit, or a community with announcements disabled through the `ANNOUNCEMENT_CHANNELS_DISABLED` feature
+Fluxer checks permissions on the final request. Local [permission checks](/docs/guilds-and-permissions/) can help explain a failure, but cannot authorize an action. Creating or converting channels needs `ManageChannels`. Following and managing follower webhooks needs `ManageWebhooks`. Publishing another author's message needs `ManageMessages`. Following also fails for a duplicate follow, incompatible age-restriction or content-warning settings, a full webhook limit, or a community with announcements disabled through the `ANNOUNCEMENT_CHANNELS_DISABLED` feature
 
-The default API returns expected failures in a Result. Check `isErr()` before reading `value`, and use `describeError` to report a failure without logging credentials. Native Effects carry expected failures in their error channel. Use `Effect.match` as shown in [Effect workflows](/docs/{{version}}/effect-workflows/) when the application needs to turn success or failure into a value
+The default API returns expected failures in a Result. Check `isErr()` before reading `value`, and use `describeError` to report a failure without logging credentials. Native Effects carry expected failures in their error channel. Use `Effect.match` as shown in [Effect workflows](/docs/effect-workflows/) when the application needs to turn success or failure into a value
 
 A connected gateway is needed to observe conversions, copies and follow notices, not to make these HTTP requests. A successful request does not wait for later gateway delivery. Identify each copy by its own message ID, because a replayed event can deliver the same copy again

@@ -76,7 +76,7 @@ export async function discussIn(client: Client, message: Message) {
 
 ## Create a forum post
 
-In a forum or media channel, `threads.createPost` creates a post: A public thread together with its first message. The message takes the same content, embeds, files and stickers as `messages.send`, and files go in the same request. The `appliedTagIds` setting applies up to 5 of the channel's tags. The [forum channel guide](/docs/{{version}}/forum-channels/) describes the tags and settings a forum channel has
+In a forum or media channel, `threads.createPost` creates a post: A public thread together with its first message. The message takes the same content, embeds, files and stickers as `messages.send`, and files go in the same request. The `appliedTagIds` setting applies up to 5 of the channel's tags. The [forum channel guide](/docs/forum-channels/) describes the tags and settings a forum channel has
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -135,7 +135,7 @@ In every list, a thread the bot joined has `membership` set
 
 ## Search threads
 
-The `threads.search` method finds threads of a text, announcement, forum or media channel by name, tags and archive state, and returns one page. In a forum or media channel, the page's `firstMessages` holds the first message of each post. Searching needs `ReadMessageHistory`
+The `threads.search` method finds threads of a text, announcement, forum or media channel by name, tags and archive state, and returns one page. In a forum or media channel, the page's `firstMessages` holds the posts' first messages that still exist. Searching needs `ReadMessageHistory`
 
 When a community has no thread search index yet, Fluxer starts building one and the result has `indexing` set to `true` and no threads. The SDK does not retry, so search again later
 
@@ -196,4 +196,4 @@ export async function communitiesWithThreads(client: Client) {
 
 ## Thread permissions
 
-`Permissions` includes `ManageThreads`, `CreatePublicThreads`, `CreatePrivateThreads` and `SendMessagesInThreads`. A thread has no permission overwrites of its own. Fluxer computes its permissions in the parent channel and uses `SendMessagesInThreads` in place of `SendMessages`. The `permissions.calculate` method does the same when it receives the parent as `parentChannel`, and `permissions.fetch` and the `requirePermissions` guard read the parent themselves. See [communities and permissions](/docs/{{version}}/guilds-and-permissions/#check-permissions-using-available-data)
+`Permissions` includes `ManageThreads`, `CreatePublicThreads`, `CreatePrivateThreads` and `SendMessagesInThreads`. A thread has no permission overwrites of its own. Fluxer computes its permissions in the parent channel and uses `SendMessagesInThreads` in place of `SendMessages`. The `permissions.calculate` method does the same when it receives the parent as `parentChannel`, and `permissions.fetch` and the `requirePermissions` guard read the parent themselves. See [communities and permissions](/docs/guilds-and-permissions/#check-permissions-using-available-data)

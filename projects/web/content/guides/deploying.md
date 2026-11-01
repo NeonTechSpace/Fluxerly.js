@@ -38,17 +38,19 @@ In the default API, unless `processSignals` is `false`, the SDK listens for SIGI
 - Signals the handlers and tasks still running to stop through their `signal`
 - Closes the command router and every event subscription
 - Closes each gateway connection, giving it up to 5 seconds to close normally
-- Saves resumable sessions when a [session store](/docs/{{version}}/sharding/#resume-after-a-restart) is configured. Saves for local shards run in parallel, each with a 5-second timeout
+- Saves resumable sessions when a [session store](/docs/sharding/#resume-after-a-restart) is configured. Saves for local shards run in parallel, each with a 5-second timeout
 - Waits for the SDK's own cleanup of sockets, requests and collector callbacks
 - Finally logs `Shutdown complete` with its duration, removes its signal listeners and resolves the `runBot` Result
 
-The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running. After `runBot` resolves, close database connections, timers and servers the application opened. A returned handler Promise, a running scheduled task and their REST requests get the drain window to finish. Track detached Promises, timers not started with `client.schedule` and work that needs more than that window, as shown in [application supervision](/docs/{{version}}/application-supervision/#drain-application-owned-work)
+The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running. After `runBot` resolves, close database connections, timers and servers the application opened. A returned handler Promise, a running scheduled task and their REST requests get the drain window to finish. Track detached Promises, timers not started with `client.schedule` and work that needs more than that window, as shown in [application supervision](/docs/application-supervision/#drain-application-owned-work)
 
 Use a 30-second stop timeout before the process manager force-kills the bot. With the default `drainMs`, allow up to 5 seconds for the drain, up to 5 seconds to close gateway connections and up to 5 seconds for parallel session saves when a store is configured, plus time for remaining SDK cleanup and the application's cleanup after `runBot` resolves. Increase the timeout when `drainMs` is larger or application cleanup needs longer. A force-kill before session saves finish can prevent resuming after restart. Each listener handles only the first signal of its kind, so sending the same signal again during shutdown gets Node.js's default handling and usually ends the process at once
 
 ## Logs
 
-The SDK writes Info and Debug records to standard output and warnings and errors to standard error. When output is not a terminal, as under every setup below, each record is one JSON object per line, ready for a log collector. Set `FLUXERLY_LOG_FORMAT=pretty` in the environment for readable lines instead. The [logging guide](/docs/{{version}}/logging/) covers levels and categories
+The default API writes Info and Debug records to standard output and warnings and errors to standard error. When output is not a terminal, as under every setup below, each record is one JSON object per line, ready for a log collector. Set `FLUXERLY_LOG_FORMAT=pretty` in the environment for readable lines instead
+
+The native Effect API uses the application's Effect logger unless `logging.format` is set explicitly. Set `logging: { format: "json" }` for the same JSON output, or `logging: { format: "pretty" }` for readable lines. The [logging guide](/docs/logging/) covers levels and categories
 
 ## Run with PM2
 
@@ -113,7 +115,7 @@ sudo systemctl enable --now fluxer-bot
 journalctl -u fluxer-bot -f
 ```
 
-For a [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) that runs child processes, add `KillMode=mixed` so SIGTERM reaches only the parent, which then stops its children
+For a [supervisor](/docs/sharding/#run-shards-in-several-processes) that runs child processes, add `KillMode=mixed` so SIGTERM reaches only the parent, which then stops its children
 
 ## Run with Docker
 
@@ -146,7 +148,7 @@ The token reaches the container only at run time through `--env-file`. The `--in
 
 ## Restart policy
 
-Restart after a crash, but with a delay: A bot that fails at startup, for example with a rejected token, fails again at once. Each setup above adds one: PM2 through `exp_backoff_restart_delay`, systemd through `RestartSec` and Docker through its own growing restart delay. Each restart creates a new client and a new gateway session. Events that arrived while the bot was down are not replayed unless a [session store](/docs/{{version}}/sharding/#resume-after-a-restart) lets a quick restart resume the previous session
+Restart after a crash, but with a delay: A bot that fails at startup, for example with a rejected token, fails again at once. Each setup above adds one: PM2 through `exp_backoff_restart_delay`, systemd through `RestartSec` and Docker through its own growing restart delay. Each restart creates a new client and a new gateway session. Events that arrived while the bot was down are not replayed unless a [session store](/docs/sharding/#resume-after-a-restart) lets a quick restart resume the previous session
 
 <details>
 <summary>Which failures end the process?</summary>
@@ -154,6 +156,6 @@ Restart after a crash, but with a delay: A bot that fails at startup, for exampl
 The SDK keeps the bot running through handler failures, dropped events and lost connections, and reconnects on its own.
 The `runBot` Result fails, and the process exits with code 1, for a startup failure such as a rejected token or an unreachable instance, a connection failure the SDK cannot recover from, or a failed `setup` callback.
 Invalid options throw `ConfigurationError` before connecting.
-The [reliability guide](/docs/{{version}}/reliability/) and [troubleshooting](/docs/{{version}}/troubleshooting/) explain these failures
+The [reliability guide](/docs/reliability/) and [troubleshooting](/docs/troubleshooting/) explain these failures
 
 </details>

@@ -1,0 +1,9 @@
+import { Effect } from "effect"
+import type { Client } from "@neontechspace/fluxerly/effect"
+
+export function readGuildOverview(client: Client, guildId: string) {
+    return Effect.all({
+        guild: client.guilds.fetch(guildId),
+        channels: client.channels.fetchAll(guildId),
+    }, { concurrency: 2 })
+}

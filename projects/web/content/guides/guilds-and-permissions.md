@@ -4,11 +4,11 @@ navTitle: Communities & permissions
 description: Read communities, members and channels, calculate permissions, grant roles and moderate members deliberately
 ---
 
-A [community](/docs/{{version}}/glossary/#guild), called a guild in the API, has its own [members](/docs/{{version}}/glossary/#member), [roles](/docs/{{version}}/glossary/#role) and channels. Each kind of community data comes from its own request: Fetching a community does not load its members or roles. Fetch the data a decision needs, then let Fluxer check the final request, because a permission calculated locally does not authorize anything by itself
+A [community](/docs/glossary/#guild), called a guild in the API, has its own [members](/docs/glossary/#member), [roles](/docs/glossary/#role) and channels. Each kind of community data comes from its own request: Fetching a community does not load its members or roles. Fetch the data a decision needs, then let Fluxer check the final request, because a permission calculated locally does not authorize anything by itself
 
 ## Read a community and one member together
 
-Fetch the community and one member to show their details. Add this helper to a module that already has a bot [`Client`](/docs/{{version}}/api/interfaces/js-ts.Client/)
+Fetch the community and one member to show their details. Add this helper to a module that already has a bot [`Client`](/docs/api/js-ts/client/)
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -26,9 +26,9 @@ export async function readGuildMember(client: Client, guildId: string, userId: s
 }
 ```
 
-The helper returns the community and the member, or the first failed [Result](/docs/{{version}}/glossary/#result) if either request fails. The returned objects are [frozen snapshots](/docs/{{version}}/glossary/#frozen-snapshot) that do not change afterward
+The helper returns the community and the member, or the first failed [Result](/docs/glossary/#result) if either request fails. The returned objects are [frozen snapshots](/docs/glossary/#frozen-snapshot) that do not change afterward
 
-The bot must be a member of the community for [`Guilds.fetch`](/docs/{{version}}/api/interfaces/js-ts.Guilds/#fetch) to succeed, and the result does not include the member list. The two reads are separate observations, so neither proves that a later role action will still be allowed
+The bot must be a member of the community for [`Guilds.fetch`](/docs/api/js-ts/guilds-and-members/#guilds-fetch) to succeed, and the result does not include the member list. The two reads are separate observations, so neither proves that a later role action will still be allowed
 
 The `guildHealthUpdate` event reports lag and recovery of a community's server through `guildId` and `degraded`. A degraded server is lagging, not disconnected or unavailable. The notice does not reconnect the client or invalidate community caches
 
@@ -73,9 +73,9 @@ export async function listChannels(client: Client, guildId: string) {
 
 The helper returns a Result with one line for each channel the bot can see. A channel type that Fluxer adds later, which this SDK version does not know yet, arrives with `type` set to `"unknown"` and the number Fluxer sent in `rawType`. Handling the `"unknown"` case makes the `switch` complete, so TypeScript can check that every case returns a value
 
-Announcement channels have the same topic and message fields as text channels. See [announcement channels](/docs/{{version}}/announcement-channels/) to create or convert one, publish a message and follow it from a text channel in the same community or another one
+Announcement channels have the same topic and message fields as text channels. See [announcement channels](/docs/announcement-channels/) to create or convert one, publish a message and follow it from a text channel in the same community or another one
 
-Threads, forum channels and media channels have their own types as well. See [threads](/docs/{{version}}/threads/) and [forum channels](/docs/{{version}}/forum-channels/) for their fields
+Threads, forum channels and media channels have their own types as well. See [threads](/docs/threads/) and [forum channels](/docs/forum-channels/) for their fields
 
 ## Reorder channels and check the result
 
@@ -124,11 +124,11 @@ export function reorderChannelsWithEffect(client: Client, guildId: string, posit
 
 ## Read the member verification level
 
-The community's `verificationLevel` describes its member verification policy. The `GuildVerificationLevels` constants range from `None` through `High`. Fluxer retired its phone-verification level, so there is no `VeryHigh` constant. This policy is separate from the [two-factor requirement for moderation](/docs/{{version}}/guilds-and-permissions/#communities-that-require-two-factor-authentication)
+The community's `verificationLevel` describes its member verification policy. The `GuildVerificationLevels` constants range from `None` through `High`. Fluxer retired its phone-verification level, so there is no `VeryHigh` constant. This policy is separate from the [two-factor requirement for moderation](/docs/guilds-and-permissions/#communities-that-require-two-factor-authentication)
 
 ## Check permissions using available data
 
-Check whether a member has the `ManageRoles` permission from data the application already holds. Supply a [`PermissionInput`](/docs/{{version}}/api/interfaces/js-ts.PermissionInput/) with the community, the member, every role the member has and, optionally, the target channel
+Check whether a member has the `ManageRoles` permission from data the application already holds. Supply a [`PermissionInput`](/docs/api/js-ts/roles-and-permissions/#permissioninput) with the community, the member, every role in `member.roleIds`, the implicit everyone role whose ID equals `guild.id` and, optionally, the target channel
 
 ```ts
 import { Permissions, type Client, type PermissionInput } from "@neontechspace/fluxerly"
@@ -141,11 +141,11 @@ export function hasManageRoles(client: Client, input: PermissionInput) {
 
 The helper returns `true` or `false` from the supplied data. It throws `GuildOperationError` with reason `input` if that data is inconsistent or incomplete
 
-A thread has no permission overwrites of its own, because Fluxer calculates its permissions in its parent channel. To check a thread, supply the thread as `channel` and its parent channel as `parentChannel`. The calculation then uses the parent's overwrites and grants `SendMessages` exactly when `SendMessagesInThreads` is granted, as Fluxer does. A thread without its parent, or with another channel as `parentChannel`, fails with reason `input`. The [`permissions.fetch`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#fetch) method reads the parent itself when its `channelId` names a thread
+A thread has no permission overwrites of its own, because Fluxer calculates its permissions in its parent channel. To check a thread, supply the thread as `channel` and its parent channel as `parentChannel`. The calculation then uses the parent's overwrites and grants `SendMessages` exactly when `SendMessagesInThreads` is granted, as Fluxer does. A thread without its parent, or with another channel as `parentChannel`, fails with reason `input`. The [`permissions.fetch`](/docs/api/js-ts/roles-and-permissions/#permissionhelpers-fetch) method reads the parent itself when its `channelId` names a thread
 
-To decide without requests, call `client.permissions.fetch(target, { preferCache: true })`. It takes each part from an enabled cache and fetches only what is missing, which is how `guards.requirePermissions` decides. Cached parts follow the gateway events applied so far and can come from different moments, so keep the default fresh read for the moment right before an action where a stale grant matters
+To reuse cached data, call `client.permissions.fetch(target, { preferCache: true })`. It takes each part from an enabled cache and fetches only what is missing, which is how `guards.requirePermissions` decides. Cached parts follow the gateway events applied so far and can come from different moments, so keep the default fresh read for the moment right before an action where a stale grant matters
 
-To see what the bot can do in every channel, call [`permissions.fetchChannels`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#fetchchannels) with the bot's own ID. It reads the community once and calculates each channel locally, instead of reading again for every channel
+To see what the bot can do in every channel, call [`permissions.fetchChannels`](/docs/api/js-ts/roles-and-permissions/#permissionhelpers-fetchchannels) with the bot's own ID. It reads the community once and calculates each channel locally, instead of reading again for every channel
 
 ```ts
 import { permissionBits, type Client } from "@neontechspace/fluxerly"
@@ -166,9 +166,9 @@ A timed-out member keeps their permission bits, while Fluxer blocks sending mess
 <details>
 <summary>What does a calculated permission not cover?</summary>
 
-The [`permissions.calculate`](/docs/{{version}}/api/interfaces/js-ts.PermissionHelpers/#calculate) method makes no request and reads no cache. Its result does not establish channel visibility, role hierarchy, multi-factor authentication requirements, application authorization or Fluxer's final decision.
+The [`permissions.calculate`](/docs/api/js-ts/roles-and-permissions/#permissionhelpers-calculate) method makes no request and reads no cache. Its result does not establish channel visibility, role hierarchy, multi-factor authentication requirements, application authorization or Fluxer's final decision.
 In a thread, the result also does not show whether the member can see a private thread, which Fluxer allows only to its members and to members who can manage threads, or whether the thread is archived or locked.
-For prefix commands, the `guards.requirePermissions` guard in the [commands guide](/docs/{{version}}/commands/) performs this check from cached or fetched data
+For prefix commands, the `guards.requirePermissions` guard in the [commands guide](/docs/commands/) performs this check from cached or fetched data
 
 </details>
 
@@ -192,7 +192,7 @@ Pass the overwrite as read from the channel, or `undefined` when there is none. 
 
 ## Check what Fluxer will refuse in an overwrite
 
-Unless the bot has `Administrator`, an overwrite change can allow, or stop denying, only permissions the bot has in the channel. Fluxer refuses anything more with `missingPermissions`. The [`permissionBits.refusedGrants`](/docs/{{version}}/api/modules/js-ts/#permissionbits) helper returns the bits Fluxer would refuse, so the application can check a change before sending it. The [`channels`](/docs/{{version}}/api/interfaces/js-ts.Channels/#setpermissionoverwrite) reference describes how each method applies the rule
+Unless the bot has `Administrator`, an overwrite change can allow, or stop denying, only permissions the bot has in the channel. Fluxer refuses anything more with `missingPermissions`. The [`permissionBits.refusedGrants`](/docs/api/js-ts/roles-and-permissions/#permissionbits) helper returns the bits Fluxer would refuse, so the application can check a change before sending it. The [`channels`](/docs/api/js-ts/channels/#channels-setpermissionoverwrite) reference describes how each method applies the rule
 
 ```ts
 import { permissionBits, type Client, type PermissionOverwrite } from "@neontechspace/fluxerly"
@@ -236,7 +236,7 @@ export function syncedChildren(category: GuildChannel, channels: readonly GuildC
 
 ## Grant a configured opt-in role
 
-Call this helper from a command in a community that lets a member opt into a role. Take `roleId` from trusted application configuration, not from command text, and configure only roles that members may assign to themselves. Fluxer checks the [role hierarchy](/docs/{{version}}/glossary/#role-hierarchy) on the request: The bot's highest role must rank above the role, whichever member receives it
+Call this helper from a command in a community that lets a member opt into a role. Take `roleId` from trusted application configuration, not from command text, and configure only roles that members may assign to themselves. Fluxer checks the [role hierarchy](/docs/glossary/#role-hierarchy) on the request: The bot's highest role must rank above the role, whichever member receives it
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly"
@@ -251,7 +251,7 @@ export async function grantOptInRole(
 }
 ```
 
-The helper gives the configured role to the command's author. It returns `undefined` when the message is not from a person in a community, and otherwise the Result of the role request. Fluxer enforces the role hierarchy, management restrictions and the bot's `ManageRoles` permission on [`addRole`](/docs/{{version}}/api/interfaces/js-ts.Members/#addrole), so the command must inspect that Result and apply any additional access policy of the application
+The helper gives the configured role to the command's author. It returns `undefined` when the message is not from a person in a community, and otherwise the Result of the role request. Fluxer enforces the role hierarchy, management restrictions and the bot's `ManageRoles` permission on [`addRole`](/docs/api/js-ts/guilds-and-members/#members-addrole), so the command must inspect that Result and apply any additional access policy of the application
 
 ## Give a role an icon
 
@@ -297,9 +297,9 @@ export async function banForOneDay(client: Client, target: MemberReference, mode
 
 The helper returns `undefined` when the bot or the moderator does not rank above the target, and otherwise the Result of a rank check or the ban. Omit `durationMs` for a permanent ban. Both durations are in milliseconds and must be whole seconds. Fluxer checks the bot's permissions, such as Ban Members, and the role hierarchy for each request
 
-The SDK checks ban options before sending anything. An invalid option fails with a `GuildOperationError` whose `reason` is `input`, and its `inputValidation.path` names the field, such as `input.durationMs`. A [`duration` command argument](/docs/{{version}}/commands/#convert-arguments-before-execution) can be passed to `durationMs` unchanged when it sets `wholeSeconds: true`, `min: 60_000` and `max: 63_072_000_000`
+The SDK checks ban options before sending anything. An invalid option fails with a `GuildOperationError` whose `reason` is `input`, and its `inputValidation.path` names the field, such as `input.durationMs`. A [`duration` command argument](/docs/commands/#convert-arguments-before-execution) can be passed to `durationMs` unchanged when it sets `wholeSeconds: true`, `min: 60_000` and `max: 63_072_000_000`
 
-The [`members.kick`](/docs/{{version}}/api/interfaces/js-ts.Members/#kick) and `members.timeout` methods take the same member reference. Use `members.unban` and `members.fetchBans` to review and lift bans. In a prefix command, `guards.requirePermissions(["BanMembers"])` makes sure the person who typed the command also has that permission
+The [`members.kick`](/docs/api/js-ts/guilds-and-members/#members-kick) and `members.timeout` methods take the same member reference. Use `members.unban` and `members.fetchBans` to review and lift bans. In a prefix command, `guards.requirePermissions(["BanMembers"])` makes sure the person who typed the command also has that permission
 
 <details>
 <summary>Compare ranks from data already held</summary>
@@ -312,13 +312,13 @@ The caches can supply that data. With `cache.roles` enabled, `roles.getAll(guild
 
 ## Communities that require two-factor authentication
 
-A community owner can require two-factor authentication ([MFA](/docs/{{version}}/glossary/#mfa)) for moderation. In such a community, only the owner and accounts with two-factor authentication enabled can use `Administrator`, `BanMembers`, `KickMembers`, `ManageChannels`, `ManageGuild`, `ManageMessages`, `ManageRoles`, `ManageThreads`, `ManageWebhooks` and `ModerateMembers`. That covers kicks, bans, timeouts, role changes, deleting other people's messages, moderating threads and changes to channels, webhooks and community settings
+A community owner can require two-factor authentication ([MFA](/docs/glossary/#mfa)) for moderation. In such a community, only the owner and accounts with two-factor authentication enabled can use `Administrator`, `BanMembers`, `KickMembers`, `ManageChannels`, `ManageGuild`, `ManageMessages`, `ManageRoles`, `ManageThreads`, `ManageWebhooks` and `ModerateMembers`. That covers kicks, bans, timeouts, role changes, deleting other people's messages, moderating threads and changes to channels, webhooks and community settings
 
 A bot cannot enable two-factor authentication itself. Its account follows the account that owns its application, so the bot can act in these communities only when that owner account has two-factor authentication enabled, or when the bot owns the community
 
 Otherwise Fluxer refuses the request with HTTP 400 after confirming that the bot holds the permission. To tell this failure apart from other rejections, check `errors.apiCode(result.error) === "twoFactorRequired"`. The `errors.apiCode` function, imported with `errors` from the SDK, returns the name of Fluxer's error code, or `undefined` when the error carries no code that the SDK recognizes. Repeating the request fails the same way until the application owner enables two-factor authentication. A calculated permission from `permissions.calculate` or a passing `guards.requirePermissions` guard does not rule this out, because both read role permissions and not the community's requirement
 
-To check a community in advance, read the [`mfaLevel`](/docs/{{version}}/api/interfaces/js-ts.Guild/#mfalevel) of the community from `guilds.fetch` or a `guildCreate` event. The value `GuildMfaLevels.Elevated` means the community has this requirement, and `GuildMfaLevels.None` means it does not. The SDK cannot see whether the application owner has two-factor authentication enabled, so an elevated level means a moderation request can fail, not that it will. Fluxer's API reference describes [MFA levels](https://docs.fluxer.app/http-api/guilds/#mfa-levels) and [elevated permissions](https://docs.fluxer.app/http-api/permissions/#elevated-permissions)
+To check a community in advance, read the [`mfaLevel`](/docs/api/js-ts/guilds-and-members/#guild-mfalevel) of the community from `guilds.fetch` or a `guildCreate` event. The value `GuildMfaLevels.Elevated` means the community has this requirement, and `GuildMfaLevels.None` means it does not. The SDK cannot see whether the application owner has two-factor authentication enabled, so an elevated level means a moderation request can fail, not that it will. Fluxer's API reference describes [MFA levels](https://docs.fluxer.app/http-api/guilds/#mfa-levels) and [elevated permissions](https://docs.fluxer.app/http-api/permissions/#elevated-permissions)
 
 ## Read audit records
 
@@ -330,7 +330,7 @@ Fluxerly supports observing voice states in communities and moving, disconnectin
 
 A voice state, whether from `voiceStateUpdate`, a `voiceStateSnapshot` or a private call, also reports `isE2eeCapable` for end-to-end encrypted voice, `isPeerToPeer` for a connection that does not pass through LiveKit, and `version`, Fluxer's counter for that participant's state. An omitted flag reads as `false`
 
-Bots cannot join voice channels or send and receive audio or video yet. That feature waits for Fluxer's voice update and an SDK implementation after it. A `Connect` or `Speak` permission describes what Fluxer allows, not an SDK feature, and the bot's gateway `connect()` receives events rather than opening a voice connection. See [member voice controls](/docs/{{version}}/api/interfaces/js-ts.Members/#move) for the current operations
+Bots cannot join voice channels or send and receive audio or video yet. That feature waits for Fluxer's voice update and an SDK implementation after it. A `Connect` or `Speak` permission describes what Fluxer allows, not an SDK feature, and the bot's gateway `connect()` receives events rather than opening a voice connection. See [member voice controls](/docs/api/js-ts/guilds-and-members/#members-move) for the current operations
 
 ## Wire it up
 

@@ -1,0 +1,57 @@
+---
+import "../styles/global.css"
+import Header from "../components/Header.astro"
+import PageTransitions from "../components/PageTransitions.astro"
+import Seo from "../components/Seo.astro"
+import SiteFooter from "../components/sections/SiteFooter.astro"
+import { iconSrc, mascotArt, mascotSizes, mascotSrcset } from "../lib/art"
+import { specs as skyIcons } from "../scene/companion-specs"
+import { homeDescription, homeTitle } from "../lib/seo"
+// The one Outfit file the pages' Latin text needs, asked for with the page instead of after its stylesheet
+import outfitUrl from "@fontsource-variable/outfit/files/outfit-latin-wght-normal.woff2?url"
+
+interface Props {
+    title?: string
+    description?: string
+    noindex?: boolean
+    graph?: Record<string, unknown>[]
+}
+
+const { title = homeTitle, description = homeDescription, noindex, graph } = Astro.props
+---
+
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <!-- The homepage's heaviest picture, wanted at the size the hero draws it, asked for before any stylesheet can hold the parser up -->
+        {Astro.url.pathname === "/" && <link rel="preload" as="image" fetchpriority="high" href={mascotArt.small} imagesrcset={mascotSrcset} imagesizes={mascotSizes} />}
+        <!-- The icons in the hero's sky, where the layout has room for them. On other screens they aren't asked for -->
+        {
+            Astro.url.pathname === "/" &&
+                skyIcons.map((icon) => (
+                    <link
+                        rel="preload"
+                        as="image"
+                        fetchpriority="high"
+                        media="(min-width: 900px) and (min-height: 481px) and (min-aspect-ratio: 4/5)"
+                        href={iconSrc(icon.slug, 320)}
+                        imagesrcset={`${iconSrc(icon.slug, 320)} 320w, ${iconSrc(icon.slug, 640)} 640w`}
+                        imagesizes={`${Math.round(icon.size * 100)}vh`}
+                    />
+                ))
+        }
+        <Seo title={title} description={description} noindex={noindex} graph={graph} />
+        <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
+        <PageTransitions />
+    </head>
+    <body>
+        <a class="skip-link" href="#main">Skip to Content</a>
+        <Header />
+        <main id="main">
+            <slot />
+        </main>
+        <SiteFooter />
+    </body>
+</html>

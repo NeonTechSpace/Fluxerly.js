@@ -1,0 +1,72 @@
+---
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import shardingAuto from "../components/features/snippets/sharding-auto.ts.txt?raw"
+import sessionStore from "../components/features/snippets/session-store.ts.txt?raw"
+import productionStop from "../components/features/snippets/production-stop.js.txt?raw"
+import supervisor from "../components/features/snippets/supervisor.ts.txt?raw"
+import botHealth from "../components/features/snippets/bot-health.ts.txt?raw"
+import unit from "../components/features/snippets/fluxer-bot.service.txt?raw"
+
+const accent = "cyan"
+---
+
+<FeaturePage slug="production" companion="production-server" companionAlt="A compact server rack with wave lights on its front">
+    <Fragment slot="title">A Bot That <span class="hi">Stays Up</span></Fragment>
+
+    <Scene id="sharding" step={1} side="left" {accent} guide={guide("sharding", "let-the-sdk-choose-the-shard-count")} guideLabel="Sharding in the Docs">
+        <Fragment slot="title">An Automatic Shard Count</Fragment>
+        <Fragment slot="text">
+            <p>A shard is one gateway connection, carrying the events of part of the bot's communities. With <code class="inline-code">sharding: "auto"</code>, the SDK counts the communities at the first connect and opens one shard for every 2,000</p>
+            <p>When the bot outgrows that plan while it runs, Fluxer closes a shard with code 4011, and the SDK moves every shard to a larger plan in the same process. The bot keeps running. Events sent during the move are missed, and the move is logged once at Warn</p>
+        </Fragment>
+        <CodePanel file="bot.ts" label="A bot that chooses its own shard count" code={shardingAuto} />
+    </Scene>
+
+    <Scene id="sessions" step={2} side="right" {accent} guide={guide("sharding", "resume-after-a-restart")} guideLabel="Session Resume in the Sharding Guide">
+        <Fragment slot="title">Restarts That Resume</Fragment>
+        <Fragment slot="text">
+            <p>A restarted bot normally starts new sessions and misses what happened while it was down. Fluxer keeps a disconnected session for 60 seconds, and <code class="inline-code">fileSessionStore</code> saves each shard's session at a clean shutdown and offers it at the next start. Its folder, <code class="inline-code">sessions</code> here, holds session IDs that let the token resume a session, so keep it out of version control and readable only by the bot's account</p>
+            <p>A quick restart, such as a deploy, then resumes and receives the missed events within Fluxer's replay limits. Each snapshot is written to a temporary file and renamed into place, so a crash never leaves a half-written one, and a store problem never stops the bot</p>
+        </Fragment>
+        <CodePanel file="bot.ts" label="A bot that saves its sessions to disk" code={sessionStore} />
+    </Scene>
+
+    <Scene id="stop" icon="shutdown-switch" iconAlt="A power switch with a clean off position" step={3} side="left" {accent} guide={guide("starter-lifetime", "from-start-to-stop")} guideLabel="From Start to Stop">
+        <Fragment slot="title">A Stop That Finishes the Work</Fragment>
+        <Fragment slot="text">
+            <p>Ctrl+C, or the SIGTERM a process manager sends, asks the bot to stop. It stops taking new events, lets running handlers and their requests finish for up to five seconds, a time <code class="inline-code">drainMs</code> changes, then cancels what is left and closes the connection</p>
+            <p><code class="inline-code">runBot</code> never exits the process. Once it resolves, the application closes what it opened, and Node.js ends on its own</p>
+        </Fragment>
+        <CodePanel file="bot.js" label="A bot with a longer drain and its own cleanup" code={productionStop} />
+    </Scene>
+
+    <Scene id="supervisor" step={4} side="right" {accent} guide={guide("sharding", "run-shards-in-several-processes")} guideLabel="Run Shards in Several Processes">
+        <Fragment slot="title">Crashed Processes Come Back</Fragment>
+        <Fragment slot="text">
+            <p>When one process is not enough, the SDK's supervisor starts several Node.js child processes, gives each its shards and stops them all on shutdown</p>
+            <p>A child that exits unexpectedly is replaced, up to three times in a row with a growing delay. A child that runs for a minute after becoming ready gets its full budget back, so only a crash loop uses it up</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="The supervisor's parent process" code={supervisor} />
+    </Scene>
+
+    <Scene id="health" step={5} side="left" {accent} guide={guide("application-supervision", "watch-the-connection-and-subscription")} guideLabel="The Application Supervision Guide">
+        <Fragment slot="title">Gateway Health and Worker Health, Apart</Fragment>
+        <Fragment slot="text">
+            <p>A connected bot can still have a stopped subscription, the registration that delivers one event to its handler. A report on the connection alone would call that bot healthy</p>
+            <p>The supervision guide reports both side by side: The gateway's state, and the critical worker's state with its failure count. Health reports carry states and counts, never event bodies or raw exceptions</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="The health report's shape" code={botHealth} />
+    </Scene>
+
+    <Scene id="deploy" step={6} side="right" {accent} guide={guide("deploying", "run-with-systemd")} guideLabel="Deploying in the Docs">
+        <Fragment slot="title">Deploy with the Token in the Environment</Fragment>
+        <Fragment slot="text">
+            <p>A deployed bot is an ordinary Node.js process. Here systemd reads the token from a file that only root can read, so the bot's own account never needs access to it, and the token never sits in the code</p>
+            <p>A stop sends SIGTERM and waits 30 seconds before forcing it, which leaves the drain and cleanup room to finish. systemd restarts the bot after a crash or a failing exit code, but not after a clean stop</p>
+        </Fragment>
+        <CodePanel file="fluxer-bot.service" label="A systemd unit for the bot" code={unit} language="ini" />
+    </Scene>
+</FeaturePage>

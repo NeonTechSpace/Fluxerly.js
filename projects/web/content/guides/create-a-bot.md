@@ -4,7 +4,7 @@ navTitle: Create a bot
 description: Create the application, copy its token and invite the bot to a community
 ---
 
-A Fluxer bot is an application with its own bot account. This page creates the application, keeps its token private and adds the bot to a community, which is what the API calls a [guild](/docs/{{version}}/glossary/#guild). The [quick start](/docs/{{version}}/quick-start/) then makes the bot answer its first command
+A Fluxer bot is an application with its own bot account. This page creates the application, keeps its token private and adds the bot to a community, which is what the API calls a [guild](/docs/glossary/#guild). The [quick start](/docs/quick-start/) then makes the bot answer its first command
 
 ## What is needed
 
@@ -27,7 +27,7 @@ Fluxer's API reference describes [what creating an application returns](https://
 
 ## 2. Copy the token
 
-On the application's page, the **Secrets & tokens** section shows the **Bot token**. Fluxer shows the token only right after the application is created or after **Regenerate**, so copy it now and keep it somewhere private, such as a password manager, until the [quick start](/docs/{{version}}/quick-start/) saves it in the bot's `.env` file. Anyone holding the token can act as the bot, so keep it out of source code, chat messages, screenshots and logs
+On the application's page, the **Secrets & tokens** section shows the **Bot token**. Fluxer shows the token only right after the application is created or after **Regenerate**, so copy it now and keep it somewhere private, such as a password manager, until the [quick start](/docs/quick-start/) saves it in the bot's `.env` file. Anyone holding the token can act as the bot, so keep it out of source code, chat messages, screenshots and logs
 
 <details>
 <summary>If the token leaks or gets lost</summary>
@@ -40,7 +40,7 @@ A token has the form `<application_id>.<secret>`, so the part before the dot is 
 
 ## 3. Invite the bot to a community
 
-An invite link opens Fluxer's page for adding the bot to a community. The quick start needs three [permissions](/docs/{{version}}/guilds-and-permissions/):
+An invite link opens Fluxer's page for adding the bot to a community. The quick start needs three [permissions](/docs/guilds-and-permissions/):
 
 - `ViewChannel`, to see the channel where a command is typed
 - `SendMessages`, to reply
@@ -82,4 +82,4 @@ Save it as `invite.js` in the bot's folder, or `invite.ts` for TypeScript, and r
 
 ## Next
 
-Continue with the [quick start](/docs/{{version}}/quick-start/) to generate the project, save the token in it and answer `!ping`
+Continue with the [quick start](/docs/quick-start/) to generate the project, save the token in it and answer `!ping`

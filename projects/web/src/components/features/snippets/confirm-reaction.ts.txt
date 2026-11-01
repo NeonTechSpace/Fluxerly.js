@@ -1,0 +1,12 @@
+import { orThrow, type Client, type MessageReference } from "@neontechspace/fluxerly"
+
+export async function waitForConfirmation(client: Client, message: MessageReference, userId: string) {
+    await using collector = client.messages.collectReactions(message, {
+        emoji: "✅",
+        filter: (reaction) => reaction.userId === userId,
+        maxReactions: 1,
+        timeoutMs: 20_000,
+    })
+    const result = orThrow(await collector.result())
+    return result.reactions.length > 0
+}

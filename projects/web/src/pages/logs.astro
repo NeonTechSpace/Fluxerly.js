@@ -1,0 +1,87 @@
+---
+import Code from "../components/docs/Code.astro"
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import LogPanel from "../components/features/LogPanel.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import twoShard from "../components/features/snippets/two-shard.log.txt?raw"
+import handlerFailed from "../components/features/snippets/handler-failed.log.txt?raw"
+import failedReply from "../components/features/snippets/failed-reply.log.txt?raw"
+import loggingConfigure from "../components/features/snippets/logging-configure.ts.txt?raw"
+import debugEnv from "../components/features/snippets/debug-env.sh.txt?raw"
+import sinkEntry from "../components/features/snippets/sink-entry.ts.txt?raw"
+import healthSnapshot from "../components/features/snippets/health-snapshot.ts.txt?raw"
+import observe from "../components/features/snippets/observe.ts.txt?raw"
+
+const accent = "violet"
+---
+
+<FeaturePage slug="logs" companion="logs-scroll" companionAlt="A scroll of output lines unrolling from a spool">
+    <Fragment slot="title"><span class="hi">See</span> What a Bot Is Doing</Fragment>
+
+    <Scene id="default" step={1} side="left" {accent} guide={guide("logging", "read-the-default-output")} guideLabel="Read the Default Output">
+        <Fragment slot="title">Readable from the First Run</Fragment>
+        <Fragment slot="text">
+            <p>Every client prints what it is doing without any setup: Startup, each shard becoming ready, lost connections with their close code and next step, long rate-limit waits and shutdown. A shard is one gateway connection, the live link that delivers events</p>
+            <p>On a terminal each record is one line with its level, category, code in brackets, message and facts, and an error's details follow on indented lines. Each line also starts with its time, left out here. Under a process manager the same records print as JSON. The Effect entry point logs through the running program's Effect logger unless a format or sink is set</p>
+        </Fragment>
+        <LogPanel log={twoShard} label="A two-shard bot that starts, loses one connection and stops" />
+    </Scene>
+
+    <Scene id="handler" step={2} side="right" {accent} guide={guide("logging", "read-the-default-output")} guideLabel="Failed Handlers in the Docs">
+        <Fragment slot="title">A Failed Handler, in Full</Fragment>
+        <Fragment slot="text">
+            <p>A handler that throws is printed at Error with its message, stack and cause chain, because the error came from the bot's own code</p>
+            <p>Frames inside the SDK collapse into one line, so the bot's own frames stand out. Credentials are masked everywhere in the record, causes included</p>
+        </Fragment>
+        <LogPanel log={handlerFailed} label="The log record of a handler that threw" />
+    </Scene>
+
+    <Scene id="permissions" step={3} side="left" {accent} guide={guide("logging", "read-the-default-output")} guideLabel="Rejections in the Docs">
+        <Fragment slot="title">Permission Hints</Fragment>
+        <Fragment slot="text">
+            <p>An expected SDK error, such as a refused request, prints its code, hint and details instead of stack frames</p>
+            <p>For this failed reply, the hint names View channel and Send messages and where to grant them, and <code class="inline-code">requiredPermissions</code> lists them in the details. Fluxer does not say which one is missing, so the SDK names every permission it checks</p>
+        </Fragment>
+        <Fragment slot="point">The hint names the permissions and where to grant them</Fragment>
+        <LogPanel log={failedReply} label="The log record of a reply without permission" />
+    </Scene>
+
+    <Scene id="levels" step={4} side="right" {accent} guide={guide("logging", "choose-levels-and-categories")} guideLabel="Levels and Categories">
+        <Fragment slot="title">Turn the Detail Up or Down</Fragment>
+        <Fragment slot="text">
+            <p>The default level is info. Set a level for the whole client and one for single areas, such as <code class="inline-code">rest</code> for requests, when the client is created or while it runs, without a restart</p>
+            <p>To look closer without touching the code, set <code class="inline-code">FLUXERLY_DEBUG</code> before starting the bot. <code class="inline-code">1</code> adds Debug records everywhere, and a list such as <code class="inline-code">rest,ratelimit</code> adds them only there</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Change levels while the bot runs" code={loggingConfigure} />
+        <CodePanel file="Terminal" label="Debug records for requests and rate limits" code={debugEnv} language="sh" />
+    </Scene>
+
+    <Scene id="sink" step={5} side="left" {accent} guide={guide("logging", "send-records-to-an-existing-logger")} guideLabel="Send Records to a Logger">
+        <Fragment slot="title">Into the Logger You Already Use</Fragment>
+        <Fragment slot="text">
+            <p>The <code class="inline-code">sink</code> option replaces the console output. It receives each record as an object with a level, a fixed code, a readable message and safe facts</p>
+            <p>A sink that throws is counted and reported once, and the bot keeps working. Match on the code, because the wording of a message can change</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Pass every record to an existing logger" code={sinkEntry} />
+    </Scene>
+
+    <Scene id="counters" step={6} side="right" {accent} guide={guide("logging", "count-what-happened")} guideLabel="Counters in the Logging Guide">
+        <Fragment slot="title">Count What Happened</Fragment>
+        <Fragment slot="text">
+            <p><Code class="inline-code" text="client.diagnostics().counters" /> keeps running totals since the client was created: Handler failures, dropped events by reason, reconnects, retries, rate-limit waits and more</p>
+            <p>Identical warnings and errors within a minute print once, then say how many were hidden. The counters still include every occurrence, hidden repeats too</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="A health snapshot from the counters" code={healthSnapshot} />
+    </Scene>
+
+    <Scene id="observe" step={7} side="left" {accent} guide={guide("logging", "export-metrics-and-traces-with-opentelemetry")} guideLabel="OpenTelemetry Export in the Logging Guide">
+        <Fragment slot="title">Metrics and Traces</Fragment>
+        <Fragment slot="text">
+            <p>Pass <code class="inline-code">observe</code> to receive a measurement each time the SDK finishes a piece of work: A request with its route, status and duration, a rate-limit wait, a reconnect, and a handler or command run with its outcome</p>
+            <p>Measurements never contain tokens, payloads or message content, so they can go to any monitoring system. An <code class="inline-code">observe</code> function that throws changes nothing the bot does</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Record durations and reconnects with a meter" code={observe} />
+    </Scene>
+</FeaturePage>

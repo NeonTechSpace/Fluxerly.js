@@ -4,7 +4,7 @@ navTitle: Emoji & stickers
 description: Put custom emoji in messages, add reactions, send community stickers and create emoji
 ---
 
-Unicode emoji such as 🎉 work directly in message content and reactions. Custom emoji belong to a [community](/docs/{{version}}/glossary/#guild) and have a name and an ID. Fluxer displays them from markup such as `<:name:id>` for a static image or `<a:name:id>` for an animated one
+Unicode emoji such as 🎉 work directly in message content and reactions. Custom emoji belong to a [community](/docs/glossary/#guild) and have a name and an ID. Fluxer displays them from markup such as `<:name:id>` for a static image or `<a:name:id>` for an animated one
 
 | Task | Input |
 | --- | --- |
@@ -17,7 +17,7 @@ The SDK does not turn shortcodes such as `:party:` into emoji IDs. Look up the n
 
 ## Find an emoji and use it twice
 
-Fetch a community's emoji and find the configured ID. The helper uses that emoji in a message and as a reaction to it. Add it to a bot that already has a [client](/docs/{{version}}/quick-start/)
+Fetch a community's emoji and find the configured ID. The helper uses that emoji in a message and as a reaction to it. Add it to a bot that already has a [client](/docs/quick-start/)
 
 ```ts
 import { format, type Client } from "@neontechspace/fluxerly"
@@ -46,7 +46,7 @@ Custom markup can also be passed directly, for example `client.messages.addReact
 
 ## Reuse a received or parsed emoji
 
-Reaction [events](/docs/{{version}}/glossary/#event) already contain everything needed to add the same reaction. This [handler](/docs/{{version}}/glossary/#handler), registered with `client.on`, mirrors each person's reaction with the bot's own. Supply the connected bot's ID so the bot ignores its own reactions
+Reaction [events](/docs/glossary/#event) already contain everything needed to add the same reaction. This [handler](/docs/glossary/#handler), registered with `client.on`, mirrors each person's reaction with the bot's own. Supply the connected bot's ID so the bot ignores its own reactions
 
 ```ts
 import { describeError, type Client } from "@neontechspace/fluxerly"
@@ -60,12 +60,12 @@ export function mirrorReactions(client: Client, botId: string) {
 }
 ```
 
-The `client.on` method returns a subscription. Keep it and call its `close()` method when mirroring should end. The same emoji inputs work for removing reactions, listing the people who reacted and choosing a [collector](/docs/{{version}}/glossary/#collector)'s emoji. To read custom emoji markup typed by a user, use `format.tryParseCustomEmoji()`, which returns a [Result](/docs/{{version}}/glossary/#result) instead of throwing on invalid text, and pass the parsed value on
+The `client.on` method returns a subscription. Keep it and call its `close()` method when mirroring should end. The same emoji inputs work for removing reactions, listing the people who reacted and choosing a [collector](/docs/glossary/#collector)'s emoji. To read custom emoji markup typed by a user, use `format.tryParseCustomEmoji()`, which returns a [Result](/docs/glossary/#result) instead of throwing on invalid text, and pass the parsed value on
 
 <details>
 <summary>Grouped reactions and emoji matching</summary>
 
-This example handles one added reaction at a time, which is how reactions in a community always arrive. Fluxer groups additions into a `messageReactionAddMany` event only in direct messages, and only when `gateway.flags.debounceMessageReactions` is set. For a time or item limit that handles both forms, use a [reaction collector](/docs/{{version}}/events-and-collectors/#accept-a-confirmation-reaction).
+This example handles one added reaction at a time, which is how reactions in a community always arrive. Fluxer groups additions into a `messageReactionAddMany` event only in direct messages, and only when `gateway.flags.debounceMessageReactions` is set. For a time or item limit that handles both forms, use a [reaction collector](/docs/events-and-collectors/#accept-a-confirmation-reaction).
 Collectors match custom emoji by ID, even after a rename. Unicode emoji match the exact text, including skin tone and variation selectors
 
 </details>
@@ -95,7 +95,7 @@ export async function sendGuildSticker(
 }
 ```
 
-Received messages list their stickers in `message.stickers`. Image URLs come from the [asset helpers](/docs/{{version}}/api/modules/js-ts/#assets), and image bytes are downloaded only on request
+Received messages list their stickers in `message.stickers`. Image URLs come from the [asset helpers](/docs/api/js-ts/builders-and-formatting/#assets), and image bytes are downloaded only on request
 
 ## Create a reusable community emoji
 
@@ -117,13 +117,13 @@ The returned `GuildEmoji` can be formatted into a message or used as a reaction.
 <details>
 <summary>Creating several emoji at once</summary>
 
-Batch creation with `createMany` returns separate `success` and `failed` lists, so inspect both. If the whole request fails with an unknown outcome, some emoji may still have been created, so fetch the community's emoji before retrying. The [reliability guide](/docs/{{version}}/reliability/) explains these uncertain writes
+Batch creation with `createMany` returns separate `success` and `failed` lists, so inspect both. If the whole request fails with an unknown outcome, some emoji may still have been created, so fetch the community's emoji before retrying. The [reliability guide](/docs/reliability/) explains these uncertain writes
 
 </details>
 
 ## Send and react with Effect
 
-The [Effect](/docs/{{version}}/glossary/#effect) API accepts the same reaction inputs. This function sends a reply, parses a custom emoji, then reacts to the reply. Run it inside the [Effect bot](/docs/{{version}}/effect-first-bot/)'s existing runtime
+The [Effect](/docs/glossary/#effect) API accepts the same reaction inputs. This function sends a reply, parses a custom emoji, then reacts to the reply. Run it inside the [Effect bot](/docs/effect-first-bot/)'s existing runtime
 
 ```ts
 import { Effect } from "effect"

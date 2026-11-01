@@ -1,0 +1,98 @@
+---
+import { ArrowRightIcon, ArrowUpRightIcon } from "@phosphor-icons/react/ssr"
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { effectWebsite, guide } from "../lib/links"
+import oneRequest from "../components/features/snippets/effect-one-request.ts.txt?raw"
+import botEffect from "../components/features/snippets/bot-effect.ts.txt?raw"
+import effectMatch from "../components/features/snippets/effect-match.ts.txt?raw"
+import effectCollect from "../components/features/snippets/effect-collect.ts.txt?raw"
+import effectAll from "../components/features/snippets/effect-all.ts.txt?raw"
+import effectServices from "../components/features/snippets/effect-services.ts.txt?raw"
+import effectTestPing from "../components/features/snippets/effect-test-ping.ts.txt?raw"
+
+const accent = "violet"
+---
+
+<FeaturePage
+    slug="effect"
+    companion="effect-plug"
+    companionAlt="A plug sliding into a socket, the Fluxer waves on the plug"
+    companionSize={380}
+    rich
+    nextLead={["results", "testing"]}
+>
+    <Fragment slot="title"><span class="hi">Effect</span>, When You Want It</Fragment>
+    <Fragment slot="links">
+        <a class="prose-link go-link" href={guide("effect-first-bot")}>
+            First Effect Bot in the Docs
+            <ArrowRightIcon size={17} weight="bold" aria-hidden="true" />
+        </a>
+        <a class="prose-link go-link" href={effectWebsite} target="_blank" rel="noopener">
+            Why Effect, on the Effect Website
+            <ArrowUpRightIcon size={17} weight="bold" aria-hidden="true" />
+        </a>
+    </Fragment>
+
+    <Scene id="one-request" step={1} side="left" {accent} guide={guide("effect-first-bot", "start-with-one-request")} guideLabel="One Request in the First Effect Bot Guide">
+        <Fragment slot="title">Start with One Request</Fragment>
+        <Fragment slot="text">
+            <p>Effect is a TypeScript library for programs whose failures and cleanup are part of the code. It is optional here: The default API has the same capabilities with async functions and Results. The examples need Effect 4 installed next to the SDK</p>
+            <p>An Effect describes work without running it. <code class="inline-code">Effect.scoped</code> gives the client a cleanup lifetime, called a scope, and <code class="inline-code">Effect.runPromise</code> runs the program from the application's top-level code</p>
+        </Fragment>
+        <Fragment slot="point">The message is sent only when Effect.runPromise runs the program</Fragment>
+        <CodePanel file="TypeScript" label="Send one message with Effect" code={oneRequest} />
+    </Scene>
+
+    <Scene id="bot" step={2} side="right" {accent} guide={guide("effect-first-bot", "run-the-complete-bot")} guideLabel="The Complete Bot in the First Effect Bot Guide">
+        <Fragment slot="title">Run the Complete Bot</Fragment>
+        <Fragment slot="text">
+            <p>The Effect <code class="inline-code">runBot</code> takes one options object, like the default one. Each handler returns an Effect, here the reply, so the SDK runs that work and can interrupt it</p>
+            <p>Ctrl+C stops the bot. The SDK interrupts what is still running and waits for its cleanup, and a failure that stops the bot is logged once with a failing exit code</p>
+        </Fragment>
+        <Fragment slot="point">Stopping the bot interrupts its work and waits for cleanup</Fragment>
+        <CodePanel file="bot.ts" label="The complete Effect bot" code={botEffect} />
+    </Scene>
+
+    <Scene id="match" step={3} side="left" {accent} guide={guide("effect-workflows", "handle-success-and-expected-failure")} guideLabel="Expected Failure in the Effect Workflows Guide">
+        <Fragment slot="title">Handle Success and Expected Failure</Fragment>
+        <Fragment slot="text">
+            <p>An expected failure, such as a refused send, is part of the Effect's type, so the compiler knows it can happen. <code class="inline-code">Effect.match</code> turns either outcome into a plain value, here for a status panel</p>
+            <p>Unexpected faults, called defects, and interruption stay separate and still reach the caller</p>
+        </Fragment>
+        <Fragment slot="point">Failures are in the type</Fragment>
+        <CodePanel file="TypeScript" label="Turn success or failure into a value" code={effectMatch} />
+    </Scene>
+
+    <Scene id="collect" step={4} side="right" {accent} guide={guide("effect-workflows", "collect-replies-and-clean-up")} guideLabel="Collectors in the Effect Workflows Guide">
+        <Fragment slot="title">Collect Replies and Clean Up</Fragment>
+        <Fragment slot="text">
+            <p>A collector gathers matching messages for a limited time. It registers before the question is sent, so a fast reply is not missed</p>
+            <p>Opened inside its own scope, the collector is released when the conversation ends, whether it succeeded, failed or was interrupted. The bot's client stays open</p>
+        </Fragment>
+        <Fragment slot="point">Cleanup is owned by the scope</Fragment>
+        <CodePanel file="TypeScript" label="Ask a question and collect the answer" code={effectCollect} />
+    </Scene>
+
+    <Scene id="together" step={5} side="left" {accent} guide={guide("effect-workflows", "run-independent-reads-together")} guideLabel="Independent Reads in the Effect Workflows Guide">
+        <Fragment slot="title">Run Independent Reads Together</Fragment>
+        <Fragment slot="text">
+            <p><code class="inline-code">Effect.all</code> fetches a community and its channels at the same time, with at most two requests at once. The SDK's request limits and rate-limit handling still apply</p>
+            <p>If one read fails, the other is interrupted, and its cleanup finishes before the failure arrives</p>
+        </Fragment>
+        <Fragment slot="point">If one read fails, the other stops and cleans up</Fragment>
+        <CodePanel file="TypeScript" label="Fetch a community and its channels together" code={effectAll} />
+    </Scene>
+
+    <Scene id="services" step={6} side="right" {accent} guide={guide("effect-application-testing", "define-application-services-and-handlers")} guideLabel="The Effect Application Testing Guide">
+        <Fragment slot="title">Services That a Test Can Replace</Fragment>
+        <Fragment slot="text">
+            <p>The <code class="inline-code">FluxerClient</code> service holds the SDK's client. A Layer, the way an Effect application supplies a service, builds it from the token in the environment, and a test can supply a different Layer</p>
+            <p>Here the handler asks for a greeting store and a reply service, never the client itself. The test provides fakes and moves a test clock forward instead of waiting, with no gateway and nothing of the SDK replaced</p>
+        </Fragment>
+        <Fragment slot="point">A test supplies fake services through a Layer</Fragment>
+        <CodePanel file="services.ts" label="Application services and the client Layer" code={effectServices} />
+        <CodePanel file="TypeScript" label="A deterministic test of the handler" code={effectTestPing} />
+    </Scene>
+</FeaturePage>

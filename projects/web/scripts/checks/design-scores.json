@@ -1,0 +1,13 @@
+{
+    "rounds": [
+        { "date": "2026-10-31", "note": "Before the consistency pass", "scores": { "reviewer-a": 6.8, "reviewer-b": 7.2 } },
+        { "date": "2026-10-31", "note": "Shared design values, title case, new welcome exit, short and folding screens", "scores": { "reviewer-a": 7.6, "reviewer-b": 8.1 } },
+        { "date": "2026-10-31", "note": "Section rail, docs hierarchy, touch targets", "scores": { "reviewer-a": 8.9, "reviewer-b": 9 } },
+        { "date": "2026-10-31", "note": "Reference text, header stability", "scores": { "reviewer-a": 8.9, "reviewer-b": 9.3 } },
+        { "date": "2026-10-31", "note": "Immersion scale: first effects on every page", "scores": { "reviewer-a-immersion": 7.5, "reviewer-b-immersion": 8.3 } },
+        { "date": "2026-10-31", "note": "Immersion scale: line of light, page icons, first reply demo, flying icons", "scores": { "reviewer-a-immersion": 8.8, "reviewer-b-immersion": 9.1 } },
+        { "date": "2026-10-31", "note": "NeonFlux showcase, wave charge from the PSD parts, depth on the Animated exit, Still as a dissolve, orbs removed", "scores": { "reviewer-a": 8.6, "reviewer-b": 9.3, "reviewer-a-immersion": 8.8, "reviewer-b-immersion": 9.4 } },
+        { "date": "2026-10-31", "note": "Exit through the mascot's real parts and black hole, light through the mouth, reflection restored, sea floor and crystal bubbles, role picker", "scores": { "reviewer-a": 8.5, "reviewer-b": 9.2, "reviewer-a-immersion": 9, "reviewer-b-immersion": 9.4 } },
+        { "date": "2026-10-31", "note": "One-time tip instead of the welcome, living face and black hole, icons moving part by part, warm beams and a cap that fills with air, hero art there together. Scores from the final narrow council round, on the install menu and an overall view", "scores": { "reviewer-a": 9, "reviewer-b": 9.5 } }
+    ]
+}

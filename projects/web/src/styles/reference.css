@@ -1,0 +1,565 @@
+/* The API reference. It is the half of the docs about what the SDK knows, so its accents are violet.
+   Type sizes: body 19px, summaries 20px, h2 32px, h3 24px, code 15px, nothing smaller than 15px */
+
+.ref {
+    --accent: var(--violet);
+    --accent-bright: var(--violet-bright);
+    --accent-soft: rgb(165 124 255 / 0.14);
+    --rule: var(--hair);
+    /* Signatures use the code wells' own hues: types mint, keywords violet, literals gold, parameters pale blue, and
+       the name itself in ink */
+    --type-name: var(--color-success);
+    --type-keyword: var(--color-violet-light);
+    --type-param: var(--color-periwinkle);
+    --type-text: var(--color-ink-soft);
+    margin-top: 28px;
+    font-size: var(--type-body);
+    line-height: 1.7;
+    color: var(--ink-body);
+}
+
+.ref p {
+    max-width: var(--measure, 35em);
+    margin: 0 0 0.75em;
+}
+
+.ref a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-decoration-color: rgb(165 124 255 / 0.5);
+    text-underline-offset: 4px;
+}
+
+.ref a:hover {
+    color: var(--accent-bright);
+    text-decoration-color: currentColor;
+}
+
+/* Inline code in prose and lists holds together like the guides' inline code: whole when it fits on a line, and
+   otherwise wrapped only at the seams the build marks with <wbr> */
+.ref :not(pre) > code {
+    display: inline;
+    padding: 0.08em 0.36em;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    line-height: 1.6;
+    color: var(--ink-high);
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    box-decoration-break: clone;
+    overflow-wrap: break-word;
+}
+
+.ref a code {
+    color: inherit;
+    text-decoration: inherit;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+/* A route template wraps only after its slashes, never inside a segment such as refresh-urls */
+.route-part {
+    white-space: nowrap;
+}
+
+/* Prose from SDK comments keeps the reading measure of the guides. Its code examples may use the full width */
+.ref-prose > :is(p, ul, ol, blockquote) {
+    max-width: var(--measure, 35em);
+}
+
+/* A comment's first paragraph, one sentence to a paragraph: the first is the summary, the others follow it quietly,
+   close together, so a long comment reads as a short list of facts instead of a wall */
+.ref-summary > p + p {
+    margin-top: -0.3em;
+    font-size: var(--type-body);
+    color: var(--ink-body);
+}
+
+.ref-summary > p:first-child:not(:only-child) {
+    margin-bottom: 0.9em;
+}
+
+.ref-row .ref-summary {
+    font-size: var(--type-body);
+}
+
+.ref-row .ref-summary > p + p {
+    font-size: var(--type-body);
+}
+
+/* Lists in a comment carry the docs' own marks, the waves and the numbers of docs.css, a little closer together */
+.ref-prose ul,
+.ref-prose ol {
+    margin: 0 0 0.75em;
+}
+
+.ref-prose strong {
+    font-weight: var(--weight-semibold);
+}
+
+.ref-group > .ref-summary {
+    font-size: var(--type-body);
+}
+
+/* The summary is the entry's first sentence, lit a step above the rest */
+.ref-summary {
+    font-size: var(--type-lead);
+    color: var(--ink-high);
+}
+
+.ref-intro,
+.ref-inherited,
+.ref-from {
+    color: var(--ink-muted);
+}
+
+/* Code blocks highlighted by Shiki take their well and frame from docs.css */
+.ref pre.astro-code code {
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+}
+
+/* Headings, each with a link mark that shows on hover */
+.ref-heading {
+    position: relative;
+    margin: 0;
+    font-weight: var(--weight-semibold);
+    line-height: 1.2;
+    letter-spacing: var(--tracking-snug);
+    color: var(--ink-high);
+    scroll-margin-top: 24px;
+}
+
+/* A heading of code is a heading, not an inline span: no tint behind it, whichever stylesheet comes last */
+.docs .docs-prose .ref-heading > code {
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0;
+    background: none;
+}
+
+h2.ref-heading {
+    margin: 72px 0 20px;
+    font-size: var(--type-heading);
+}
+
+h3.ref-heading {
+    margin: 0 0 14px;
+    font-size: var(--type-title);
+}
+
+h4.ref-heading {
+    margin: 0 0 12px;
+    font-size: var(--type-lead);
+}
+
+.ref-mark {
+    margin-left: 0.4em;
+    font-family: var(--font-sans);
+    font-weight: var(--weight-regular);
+    color: var(--accent);
+    text-decoration: none !important;
+    opacity: 0;
+    transition: opacity var(--speed-fast) ease;
+}
+
+.ref-heading:hover .ref-mark,
+.ref-row:hover .ref-mark,
+.ref-mark:focus-visible {
+    opacity: 1;
+}
+
+.ref-group > h2.ref-heading:first-child {
+    margin-top: 72px;
+}
+
+.ref > .ref-group:first-child > h2.ref-heading:first-child {
+    margin-top: 0;
+}
+
+/* A documented symbol, and a member with its own heading */
+.ref-symbol,
+.ref-member,
+.ref-tasks,
+.ref-codes {
+    margin-top: 56px;
+    scroll-margin-top: 24px;
+}
+
+.ref-member {
+    margin-top: 44px;
+}
+
+.ref-heading + .ref-symbol,
+.ref-heading + .ref-member,
+.ref-heading + .ref-tasks,
+.ref-heading + .ref-codes,
+.ref-intro + .ref-codes {
+    margin-top: 28px;
+}
+
+.ref-callable + .ref-callable {
+    margin-top: 36px;
+    padding-top: 28px;
+    border-top: 1px solid var(--rule);
+}
+
+/* Signatures and declarations: the name in ink, the types in the code wells' hues. A signature lies in a well cut
+   into the night like code. A long line wraps at its seams rather than scrolling away on a phone */
+.ref .ref-sig {
+    margin: 16px 0 22px;
+    padding: 18px 22px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--type-text);
+    background: var(--well);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--well-shade);
+    scrollbar-width: thin;
+}
+
+.ref-type {
+    margin: 0 0 6px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--type-text);
+    scrollbar-width: thin;
+}
+
+.ref-sig code,
+.ref-type code,
+.ref-failures code {
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+}
+
+.ty-n {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+}
+
+.ty-t {
+    color: var(--type-name);
+}
+
+.ty-k {
+    color: var(--type-keyword);
+}
+
+.ty-l {
+    color: var(--gold);
+}
+
+.ty-p {
+    color: var(--type-param);
+}
+
+.ref .ref-sig a,
+.ref .ref-type a,
+.ref .ref-failures a {
+    color: var(--accent);
+    text-decoration-color: rgb(165 124 255 / 0.35);
+    text-underline-offset: 3px;
+}
+
+/* A type printed at two widths: the wide form, and the narrow form for a phone's column. Only one shows */
+.ty-narrow {
+    display: none;
+}
+
+@container article (max-width: 649.98px) {
+    .ty-wide {
+        display: none;
+    }
+
+    .ty-narrow {
+        display: inline;
+    }
+}
+
+/* Definition lists: parameters, members and results. A row gives its name a line of its own, then its type and
+   description below at the column's full width, so a type has room and a long description keeps the reading measure
+   instead of running beside an empty name column. Indexes of names and one-line summaries keep two columns where
+   there is room */
+.ref-list {
+    margin: 12px 0 28px;
+}
+
+.ref-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px 24px;
+    padding: 18px 0 20px;
+    scroll-margin-top: 96px;
+}
+
+/* A line only between two rows, so a row is never framed by two */
+.ref-row + .ref-row {
+    border-top: 1px solid var(--rule);
+}
+
+/* A linked row is marked like a linked entry, with a rule in the reference's violet along its left edge */
+.ref-row:target {
+    margin-left: -16px;
+    padding-left: 13px;
+    border-left: 3px solid var(--accent);
+}
+
+.ref-row dt {
+    min-width: 0;
+    line-height: 1.5;
+}
+
+.ref-row dd {
+    min-width: 0;
+    margin: 0;
+}
+
+.ref-row dd > :last-child {
+    margin-bottom: 0;
+}
+
+.ref-row dd > .ref-type {
+    margin: 0 0 10px;
+}
+
+.ref-row dd > .ref-type:last-child {
+    margin-bottom: 0;
+}
+
+@container article (min-width: 700px) {
+    .ref-index .ref-row {
+        grid-template-columns: minmax(0, 17rem) minmax(0, 1fr);
+    }
+}
+
+/* A wide column holds the longest names, such as PrefixCommandRegistrationOptions, on one line */
+@container article (min-width: 880px) {
+    .ref-index .ref-row {
+        grid-template-columns: minmax(0, 20rem) minmax(0, 1fr);
+    }
+}
+
+.ref .ref-name {
+    padding: 0;
+    font-size: var(--type-body);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+    background: none;
+    box-shadow: none;
+}
+
+/* A flag is a word with a faint tint behind it, never a bordered badge */
+.ref-flag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 8px;
+    font-size: var(--type-small);
+    line-height: 1.6;
+    color: var(--ink-muted);
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    vertical-align: 1px;
+}
+
+/* Labels for the parts of an entry, in the shadow's lavender like the voice labels of the guides */
+.ref-label {
+    margin: 22px 0 4px;
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    color: var(--violet-bright);
+}
+
+.ref-result .ref-label {
+    margin: 0;
+}
+
+.ref-note {
+    color: var(--ink-muted);
+}
+
+/* A deprecation is a warning: a rule in the warning's gold, the word in gold, the text on the night */
+.ref-deprecated {
+    padding: 2px 0 2px 18px;
+    color: var(--ink-body);
+    border-left: 3px solid var(--gold);
+}
+
+.ref-deprecated > strong {
+    color: var(--gold);
+}
+
+/* Failure types are names, not prose, so they carry no list marks */
+.ref .ref-failures {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ref .ref-failures > li::before {
+    content: none;
+}
+
+.ref .ref-failures > li + li {
+    margin-top: 0;
+}
+
+/* Fields of an options object, nested under a member or parameter */
+.ref-nested {
+    margin: 10px 0 4px;
+    padding-left: 16px;
+    border-left: 1px solid var(--rule);
+}
+
+.ref-nested .ref-row {
+    padding: 12px 0 14px;
+}
+
+.ref-nested .ref-row:last-child {
+    border-bottom: 0;
+}
+
+.ref-inherited {
+    margin-top: 18px;
+}
+
+/* Entry point categories: one row each on a hairline, with the category name, how much it holds and the first names
+   in it */
+/* The categories are rows parted by hairlines, not a list with marks */
+.docs-prose .ref-categories {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.docs-prose .ref-categories > li::before {
+    content: none;
+}
+
+.ref-category {
+    padding: 18px 0 20px;
+    border-top: 1px solid var(--rule);
+}
+
+.ref-category:last-child {
+    border-bottom: 1px solid var(--rule);
+}
+
+.ref .ref-category > a {
+    font-size: var(--type-title);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+    text-decoration: none;
+}
+
+.ref .ref-category > a:hover {
+    color: var(--accent-bright);
+}
+
+.ref-count {
+    margin: 2px 0 10px;
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+}
+
+.ref-top {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+}
+
+.ref-import {
+    color: var(--ink-muted);
+}
+
+.ref-more a {
+    font-weight: var(--weight-medium);
+}
+
+.ref-values {
+    color: var(--ink-muted);
+}
+
+/* A log code's levels follow the code on its line */
+.ref-levels {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-left: 12px;
+    vertical-align: 1px;
+}
+
+.ref-levels .ref-flag {
+    margin-left: 0;
+}
+
+/* Levels in the colors the terminal panels print them: green for a record that went well, gold for a warning and
+   coral for a failure, each a colored word with a faint tint of its own color behind it */
+.ref-flag[data-level] {
+    --level: var(--ink-muted);
+
+    color: var(--level);
+    background: color-mix(in srgb, var(--level) 12%, transparent);
+}
+
+.ref-flag[data-level="info"] {
+    --level: var(--ok);
+}
+
+.ref-flag[data-level="warn"] {
+    --level: var(--gold);
+}
+
+.ref-flag[data-level="error"],
+.ref-flag[data-level="fatal"] {
+    --level: var(--bad);
+}
+
+/* Laptops have little height, so sections sit a little closer together */
+@media (min-width: 900px) and (max-height: 920px) {
+    h2.ref-heading,
+    .ref-group > h2.ref-heading:first-child {
+        margin-top: 56px;
+    }
+
+    .ref-symbol,
+    .ref-tasks,
+    .ref-codes {
+        margin-top: 44px;
+    }
+}
+
+/* An entry point's heading with its painted icon */
+.ref-entry-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.ref-entry-head img {
+    flex: none;
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
+}
+
+.ref-entry-head > :last-child {
+    margin-block: 0;
+}

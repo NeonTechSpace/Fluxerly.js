@@ -6,8 +6,7 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: false
   workerd: true
+  sharp: true
 minimumReleaseAgeExclude:
   - effect@4.1.0
-  - fumadocs-core@16.15.10
-  - fumadocs-ui@16.15.10
   - zod@4.6.4

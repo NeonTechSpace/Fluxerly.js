@@ -1,0 +1,9 @@
+INFO  lifecycle  [lifecycle.startupDeadline] Startup of 2 shards may take up to 31.0 s: The configured 30.0 s (connection.startupTimeoutMs) plus 1 s per additional shard, because the SDK starts shard sessions 1 s apart startupTimeoutMs=31000 configuredMs=30000 shards=2
+INFO  lifecycle  [lifecycle.ready] Shard 0 is ready shardId=0 attempt=1 durationMs=36 mode=identify shards=2
+INFO  lifecycle  [lifecycle.ready] Shard 1 is ready shardId=1 attempt=1 durationMs=1033 mode=identify shards=2
+INFO  lifecycle  [lifecycle.connected] Connected to Fluxer as MyBot in 1520 communities communities=1520 shards=2
+WARN  lifecycle  [lifecycle.connectionLost] Shard 1 lost its connection. Close code 4000 (UNKNOWN_ERROR): The gateway reported an unspecified error. Reconnecting and resuming the session in 755 ms shardId=1 closeCode=4000 attempt=1 delayMs=755 reason=closed classification=closed next=resume
+INFO  lifecycle  [lifecycle.ready] Shard 1 resumed its session after 766 ms offline shardId=1 attempt=2 durationMs=1 mode=resume shards=2
+INFO  lifecycle  [lifecycle.stopRequested] The signal passed to runBot was aborted, so the bot is shutting down
+INFO  lifecycle  [lifecycle.shutdown] Shutting down
+INFO  lifecycle  [lifecycle.shutdownComplete] Shutdown complete in 3 ms durationMs=3

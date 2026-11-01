@@ -1,0 +1,16 @@
+---
+// Inline code for a name or a code. Like inline code in Markdown, it may wrap only at the seams that
+// scripts/docs/code-breaks.mjs marks, and the styles keep it whole whenever it fits on a line. A route template wraps
+// only after its slashes and marks its parameters
+import { breakableHtml, routeHtml } from "../../../scripts/docs/code-breaks.mjs"
+
+interface Props {
+    text: string
+    class?: string
+    route?: boolean
+}
+
+const { text, class: className, route = false } = Astro.props
+---
+
+<code class={className} set:html={route ? routeHtml(text) : breakableHtml(text)} />

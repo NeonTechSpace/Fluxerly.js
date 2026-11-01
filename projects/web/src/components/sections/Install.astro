@@ -1,0 +1,77 @@
+---
+import InstallPicker from "../../islands/InstallPicker"
+import Companion from "./Companion.astro"
+---
+
+<section class="install" id="install" aria-labelledby="install-title" data-accent="cyan">
+    <div class="page-grid">
+        <div class="intro" data-rise>
+            <h2 class="section-title" id="install-title"><span class="station" data-station="install" aria-hidden="true"></span><span class="hi">Install</span> It</h2>
+        </div>
+        <p class="status" data-rise>Choose your package manager, then add the SDK to a project or start a new one</p>
+        <!-- The commands under their heading, so the line runs down the page's edge and plugs into the first one -->
+        <div class="picker" data-rise>
+            <InstallPicker client:visible />
+        </div>
+        <!-- The last station. The SDK's parcel rests here, beside the end of the line -->
+        <Companion class="keepsake" name="sdk-package" alt="A parcel tied with a wave-shaped ribbon, resting on the floor" size={300} resting />
+    </div>
+</section>
+
+<style>
+    /* The heading, its line and the commands in one column down the page's edge, the parcel across from them */
+    .intro,
+    .status,
+    .picker {
+        grid-column: 1 / span 6;
+    }
+
+    .section-title {
+        position: relative;
+    }
+
+    .status {
+        max-width: 40ch;
+        text-wrap: pretty;
+        margin: 22px 0 0;
+        font-size: var(--type-lead);
+        line-height: 1.6;
+        color: var(--color-muted);
+    }
+
+    .picker {
+        margin-top: 36px;
+    }
+
+    .install :global(.keepsake) {
+        /* A little more of a short screen than the other companions: it has a column of its own */
+        --companion-cap: max(200px, 30vh);
+
+        grid-column: 8 / -1;
+        grid-row: 1 / span 3;
+        justify-self: center;
+        align-self: center;
+    }
+
+    @media (max-width: 899px) {
+        /* The heading with the parcel beside it, the status and the commands under both */
+        .intro {
+            grid-column: 1 / span 7;
+            align-self: center;
+        }
+
+        .install :global(.keepsake) {
+            /* The phone's own cap, so the parcel keeps to its column and off the heading */
+            --companion-cap: min(160px, 34vw);
+
+            grid-column: 8 / -1;
+            grid-row: 1;
+            justify-self: end;
+        }
+
+        .status,
+        .picker {
+            grid-column: 1 / -1;
+        }
+    }
+</style>

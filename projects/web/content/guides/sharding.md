@@ -4,7 +4,7 @@ navTitle: Sharding
 description: Split a large bot across gateway connections and processes, and resume sessions after a restart
 ---
 
-A [shard](/docs/{{version}}/glossary/#shard) is one [gateway](/docs/{{version}}/glossary/#gateway) connection that carries the events of part of the bot's communities, which Fluxer's API calls [guilds](/docs/{{version}}/glossary/#guild). A bot starts with one connection, which is enough for about 2,000 communities. Fluxer allows at most 2,500 communities per shard and refuses to start a new session, the gateway login of one shard, above that with close code 4011 (sharding required)
+A [shard](/docs/glossary/#shard) is one [gateway](/docs/glossary/#gateway) connection that carries the events of part of the bot's communities, which Fluxer's API calls [guilds](/docs/glossary/#guild). A bot starts with one connection, which is enough for about 2,000 communities. Fluxer allows at most 2,500 communities per shard and refuses to start a new session, the gateway login of one shard, above that with close code 4011 (sharding required)
 
 ## Let the SDK choose the shard count
 
@@ -42,7 +42,7 @@ When Fluxer closes a shard with 4011 while the client runs, the SDK counts again
 Every shard then starts a new session, so events sent during the move are missed, and the community caches fill again from the new sessions.
 The move is logged once at Warn with code `lifecycle.resharded` and the old and new totals.
 After 3 moves within an hour, or at 16,384 shards, the next 4011 closure ends the client with a `ConnectionError`, as it does for an explicit `totalShards`.
-Automatic sizing suits one process that owns every shard. Processes that split shards between them need an explicit total, unless the [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) sizes the plan for them
+Automatic sizing suits one process that owns every shard. Processes that split shards between them need an explicit total, unless the [supervisor](/docs/sharding/#run-shards-in-several-processes) sizes the plan for them
 
 </details>
 
@@ -71,7 +71,7 @@ await runBot({
 })
 ```
 
-The `fileSessionStore` function keeps each shard's snapshot in its own file in the given folder, relative to the current working directory, and replaces a file only once its new contents are fully written. A snapshot contains the session ID, which lets the token resume the session, so keep the folder out of version control and readable only by the bot's account. Separate processes need separate folders unless their shard IDs never overlap. The store works with one shard as well: Pass `{ totalShards: 1, sessions: fileSessionStore("sessions") }`. To keep snapshots elsewhere, such as in a database, pass an object with `load` and `save` methods instead, as the [`SessionStore`](/docs/{{version}}/api/interfaces/js-ts.SessionStore/) reference describes
+The `fileSessionStore` function keeps each shard's snapshot in its own file in the given folder, relative to the current working directory, and replaces a file only once its new contents are fully written. A snapshot contains the session ID, which lets the token resume the session, so keep the folder out of version control and readable only by the bot's account. Separate processes need separate folders unless their shard IDs never overlap. The store works with one shard as well: Pass `{ totalShards: 1, sessions: fileSessionStore("sessions") }`. To keep snapshots elsewhere, such as in a database, pass an object with `load` and `save` methods instead, as the [`SessionStore`](/docs/api/js-ts/sharding-and-supervision/#sessionstore) reference describes
 
 <details>
 <summary>When a saved session is not used</summary>
@@ -117,16 +117,16 @@ To find the process that owns a community, pass its guild ID and the total to `s
 Fluxer limits how quickly a bot may start new sessions: 300 Identify commands, the command that starts a session, per IP address in each 60 seconds. One client spaces its own shards' Identify commands by one second, but separate processes do not know about each other.
 Pass `sharding.identify` with a `permit(shardId, totalShards, signal)` function, backed for example by a shared lock service, to make every process wait for its turn.
 The SDK calls it before each new session, never before a resume, and sends Identify as soon as the permit resolves. The coordinator then owns the pacing, so it should space its permits. A rejected permit is logged at Error and retried like a connection failure.
-The [`IdentifyCoordinator`](/docs/{{version}}/api/interfaces/js-ts.IdentifyCoordinator/) reference describes the timing.
-Children of the [supervisor](/docs/{{version}}/sharding/#run-shards-in-several-processes) below are paced by their parent and cannot set `sharding.identify`. To share the budget with other hosts, pass the same coordinator to the supervisor's `identify.coordinator` option, and the parent asks it before each child's new session
+The [`IdentifyCoordinator`](/docs/api/js-ts/sharding-and-supervision/#identifycoordinator) reference describes the timing.
+Children of the [supervisor](/docs/sharding/#run-shards-in-several-processes) below are paced by their parent and cannot set `sharding.identify`. To share the budget with other hosts, pass the same coordinator to the supervisor's `identify.coordinator` option, and the parent asks it before each child's new session
 
 </details>
 
 ## Run shards in several processes
 
-The [supervisor](/docs/{{version}}/glossary/#supervisor) starts several Node.js child processes, gives each its shards, restarts children that crash and stops them all on shutdown. Use it when one process is not enough, for example to spread a large bot over several CPU cores. One process can already own several shards, so smaller bots do not need it
+The [supervisor](/docs/glossary/#supervisor) starts several Node.js child processes, gives each its shards, restarts children that crash and stops them all on shutdown. Use it when one process is not enough, for example to spread a large bot over several CPU cores. One process can already own several shards, so smaller bots do not need it
 
-Save the parent as `supervisor.js`. With `totalShards: "auto"` it counts the bot's communities at start, as `sharding: "auto"` does, and splits the shards evenly across `processes` children. The count needs the bot token in the parent too
+Save the parent as `supervisor.js`. With `totalShards: "auto"` it counts the bot's communities at start, as `sharding: "auto"` does, and splits the shards evenly across up to `processes` children, with at least one shard per child. The count needs the bot token in the parent too
 
 ```ts
 import { describeError, supervisor } from "@neontechspace/fluxerly"
@@ -183,13 +183,13 @@ if (result.isErr()) {
 
 Start the parent with `node --env-file=.env supervisor.js`. Children inherit its environment and Node.js flags, so they read the same token. With TypeScript, point `entry` at `shard-worker.ts`
 
-The supervisor installs no signal handlers of its own, which is why the parent handles SIGINT and SIGTERM and calls `shutdown()`. That asks every child to stop, waits for them to exit and force-terminates a child that takes longer than 5 seconds. In both APIs, a child stopped by the parent first lets running handlers, queued handler events, running scheduled tasks and REST requests finish for up to 4 seconds, one second less than `shutdownTimeoutMs`. The same drain applies to children stopped while an automatic plan grows. A child stopped by its own failure or a lost parent message channel cancels running work without draining. Each child's output appears in the parent's output with a `[shard N]` or `[child id]` label, and the parent logs child starts, exits, crashes and restarts. Under systemd, add `KillMode=mixed` as described in [deploying](/docs/{{version}}/deploying/)
+The supervisor installs no signal handlers of its own, which is why the parent handles SIGINT and SIGTERM and calls `shutdown()`. That asks every child to stop, waits for them to exit and force-terminates a child that takes longer than 5 seconds. In both APIs, a child stopped by the parent first lets running handlers, queued handler events, running scheduled tasks and REST requests finish for up to 4 seconds, one second less than `shutdownTimeoutMs`. The same drain applies to children stopped while an automatic plan grows. A child stopped by its own failure or a lost parent message channel cancels running work without draining. Each child's output appears in the parent's output with a `[shard N]` or `[child id]` label, and the parent logs child starts, exits, crashes and restarts. Under systemd, add `KillMode=mixed` as described in [deploying](/docs/deploying/)
 
 A successful `start()` means every child accepted its shards and finished `configure`, not that every gateway session is ready. Use `workers.waitForReady()` to wait for connected sessions and `workers.status()` for a snapshot of each child. The Effect entry point exports a `supervisor` with the same options
 
 Unknown keys in supervisor creation, assignment, restart, Identify and child-run options fail with `ConfigurationError`, with a suggested name when one is close. Child-run options are checked before waiting for the parent. The default API also checks the options passed to `waitForReady`, which accepts only `signal`. The Effect wait is cancelled by interruption instead
 
-To resume sessions across a deploy, give each child the [session store](/docs/{{version}}/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` is the only sharding setting a child accepts
+To resume sessions across a deploy, give each child the [session store](/docs/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` is the only sharding setting a child accepts
 
 Some of Fluxer's limits apply to the whole bot account rather than to one process, so the children share them through the parent:
 
@@ -218,10 +218,10 @@ When a child uses up its attempts, the supervisor fails and stops the other chil
 Each child has `startupTimeoutMs` (default 30 seconds) to accept its assignment and finish `configure`, and `shutdownTimeoutMs` (default 5 seconds) to exit after a stop request.
 The parent logs why before it acts: `supervisor.startupTimeout` when a child misses its startup time, `supervisor.terminated` before it force-terminates a child and `supervisor.identifyUnacknowledged` when a child does not confirm a session start, which stops that child. When reading a child's output fails, `supervisor.outputFailed` records the error and that stream is no longer forwarded.
 A replacement is a new process with a new client. A crash leaves no resumable session, so the replacement starts new sessions.
-The [`SupervisorOptions`](/docs/{{version}}/api/interfaces/js-ts.SupervisorOptions/) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
+The [`SupervisorOptions`](/docs/api/js-ts/sharding-and-supervision/#supervisoroptions) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
 
 </details>
 
 ## Watch the bot's health
 
-A connected shard can still have a stopped subscription. The [application supervision guide](/docs/{{version}}/application-supervision/) shows how to watch the connection and a critical subscription together, and how to decide between failing and restarting. Across processes, `workers.status()` reports each child's process state, its latest connection state and its latest `diagnostics`: The child client's gateway latency, shard states, REST queue, cache use and counters, sent every 5 seconds by default (`diagnosticsIntervalMs`). The `restart` option replaces a child process that exits
+A connected shard can still have a stopped subscription. The [application supervision guide](/docs/application-supervision/) shows how to watch the connection and a critical subscription together, and how to decide between failing and restarting. Across processes, `workers.status()` reports each child's process state, its latest connection state and its latest `diagnostics`: The child client's gateway latency, shard states, REST queue, cache use and counters, sent every 5 seconds by default (`diagnosticsIntervalMs`). The `restart` option replaces a child process that exits

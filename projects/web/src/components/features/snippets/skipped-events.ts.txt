@@ -1,0 +1,8 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+// Gateway events that failed validation. Each was logged as gateway.dispatchRejected
+// and skipped, the cache entries it could have changed were cleared, and the session
+// kept running
+export function skippedGatewayEvents(client: Client) {
+    return client.diagnostics().counters.eventsDropped.malformed
+}

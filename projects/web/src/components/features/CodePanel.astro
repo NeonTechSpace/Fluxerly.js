@@ -1,0 +1,82 @@
+---
+import { CheckIcon, CopyIcon } from "@phosphor-icons/react/ssr"
+import CodeBlock from "../sections/CodeBlock.astro"
+import type { Language } from "../../islands/highlight"
+
+interface Props {
+    code: string
+    // The file the code belongs in, or its language when the guide names no file
+    file: string
+    // Accessible name of the scrollable block
+    label: string
+    // What the panel holds, JavaScript unless named: a .env file, an ignore file, a shell line, a unit file or text
+    language?: Language
+    class?: string
+}
+
+const { code, file, label, language = "js", class: className } = Astro.props
+const text = code.replace(/\n$/, "")
+---
+
+<figure class:list={["code-panel", "glass", className]}>
+    <figcaption class="bar">
+        <span class="file">{file}</span>
+        <button class="copy-button" type="button" aria-label={`Copy ${file}`} data-panel-copy={text}>
+            <CopyIcon className="icon-copy" size={17} aria-hidden="true" />
+            <CheckIcon className="icon-done" size={17} weight="bold" aria-hidden="true" />
+        </button>
+        <span class="sr-only" aria-live="polite" data-panel-status></span>
+    </figcaption>
+    <CodeBlock code={text} label={label} language={language} />
+</figure>
+
+<script>
+    import { reportCopyFailed } from "../../lib/copy-failed"
+    // Copies the panel's code, shows a check for a moment and announces it, like the command chips
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-panel-copy]")) {
+        const status = button.parentElement?.querySelector<HTMLElement>("[data-panel-status]")
+        let reset = 0
+        button.addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(button.dataset.panelCopy ?? "")
+            } catch (error) {
+                reportCopyFailed(error)
+                return
+            }
+            button.dataset.copied = "true"
+            if (status) status.textContent = "Copied"
+            window.clearTimeout(reset)
+            reset = window.setTimeout(() => {
+                delete button.dataset.copied
+                if (status) status.textContent = ""
+            }, 1800)
+        })
+    }
+</script>
+
+<style>
+    .code-panel {
+        min-width: 0;
+        margin: 0;
+        overflow: hidden;
+    }
+
+    .bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 8px 6px 22px;
+        border-bottom: 1px solid rgb(160 190 255 / 0.12);
+    }
+
+    .file {
+        font-family: var(--font-mono);
+        font-size: var(--type-small);
+        color: var(--color-muted);
+    }
+
+    .code-panel :global(.code) {
+        padding-block: 20px 22px;
+    }
+</style>

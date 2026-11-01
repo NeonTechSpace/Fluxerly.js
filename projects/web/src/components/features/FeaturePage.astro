@@ -1,0 +1,90 @@
+---
+import "../../styles/features.css"
+import Site from "../../layouts/Site.astro"
+import Companion from "../sections/Companion.astro"
+import type { IconName } from "../../lib/art"
+import NextRow from "./NextRow.astro"
+import Space from "./Space.astro"
+import { featurePages, type FeatureSlug } from "../../lib/links"
+
+// A feature page: the hero band with its title, the one line of what the page is for and its keepsake, then the
+// scenes, then the way on to the other pages
+
+interface Props {
+    slug: FeatureSlug
+    companion: IconName
+    companionAlt: string
+    companionSize?: number
+    // The richest hero of the site: a larger keepsake with its three orbits beside the title
+    rich?: boolean
+    // Pages the Next row lists first
+    nextLead?: FeatureSlug[]
+}
+
+const { slug, companion, companionAlt, companionSize = 320, rich = false, nextLead } = Astro.props
+const page = featurePages.find((entry) => entry.slug === slug) ?? featurePages[0]
+
+// The rich hero's orbits: success in the page's violet, expected failure in gold, requirements in cyan. Each ring's
+// near half passes in front of the keepsake and its far half behind. A ring reaches past the keepsake's outline at both
+// ends, so it turns from front to back outside the keepsake, the way an orbit around it would
+const orbits = [
+    { name: "success", tilt: -11, rx: 214, ry: 60, bead: 4.5, dur: "16s", frontUpper: false },
+    { name: "failure", tilt: 34, rx: 188, ry: 50, bead: 3.5, dur: "23s", frontUpper: false },
+    { name: "needs", tilt: -56, rx: 236, ry: 52, bead: 3, dur: "31s", frontUpper: false },
+]
+---
+
+<Site title={`${page.title} · Fluxerly.js`} description={page.summary}>
+    <Space accent={page.accent}>
+        <section class="feature-hero" aria-labelledby="page-title" data-accent={page.accent} data-reached data-rich={rich || undefined}>
+            <div class="page-grid">
+                <div class="hero-text">
+                    <!-- The signal line arrives from the top of the page at this page's station, beside the title -->
+                    <span class="arrival" aria-hidden="true"></span>
+                    <h1 class="page-title" id="page-title"><slot name="title" /></h1>
+                    <p class="lead hero-line">{page.summary}</p>
+                    {Astro.slots.has("links") && <div class="hero-links"><slot name="links" /></div>}
+                </div>
+                {
+                    rich ? (
+                        <div class="hero-companion orbit">
+                            <!-- Three orbits around the keepsake, one for each thing an Effect's type says: what it
+                                 produces, how it can fail and what it needs. The beads are work running inside each.
+                                 The far half of every ring passes behind the keepsake, the near half in front -->
+                            {
+                                ["far", "near"].map((half) => (
+                                    <svg class={`scope scope-${half}`} viewBox="-260 -260 520 520" aria-hidden="true" focusable="false">
+                                        {/* The ring's own upper and lower halves, in its tilted frame */}
+                                        <clipPath id={`scope-${half}-upper`} clipPathUnits="userSpaceOnUse">
+                                            <rect x="-320" y="-320" width="640" height="320" />
+                                        </clipPath>
+                                        <clipPath id={`scope-${half}-lower`} clipPathUnits="userSpaceOnUse">
+                                            <rect x="-320" y="0" width="640" height="320" />
+                                        </clipPath>
+                                        {orbits.map((orbit) => (
+                                            <g class={`orbit-${orbit.name}`} transform={`rotate(${orbit.tilt})`}>
+                                                <g clip-path={`url(#scope-${half}-${(half === "near") === orbit.frontUpper ? "upper" : "lower"})`}>
+                                                    <!-- A band with a body: a broad faint underlay and a firm core line -->
+                                                    <ellipse class="scope-band" rx={orbit.rx} ry={orbit.ry} />
+                                                    <ellipse class="scope-ring" rx={orbit.rx} ry={orbit.ry} />
+                                                    <circle class="scope-bead" r={orbit.bead}>
+                                                        <animateMotion dur={orbit.dur} repeatCount="indefinite" path={`M ${orbit.rx} 0 A ${orbit.rx} ${orbit.ry} 0 1 1 ${-orbit.rx} 0 A ${orbit.rx} ${orbit.ry} 0 1 1 ${orbit.rx} 0`} />
+                                                    </circle>
+                                                </g>
+                                            </g>
+                                        ))}
+                                    </svg>
+                                ))
+                            }
+                            <Companion name={companion} alt={companionAlt} size={companionSize} eager />
+                        </div>
+                    ) : (
+                        <Companion class="hero-companion" name={companion} alt={companionAlt} size={companionSize} eager />
+                    )
+                }
+            </div>
+        </section>
+        <slot />
+        <NextRow current={slug} lead={nextLead} />
+    </Space>
+</Site>

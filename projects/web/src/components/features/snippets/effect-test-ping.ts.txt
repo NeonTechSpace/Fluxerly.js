@@ -1,0 +1,25 @@
+import { Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
+import type { Message } from "@neontechspace/fluxerly/effect";
+import { BotReplies, GreetingStore, handlePing } from "./services.ts";
+
+export function testPing(message: Message, replies: Array<string>) {
+    const fakes = Layer.mergeAll(
+        Layer.succeed(GreetingStore, {
+            greetingFor: (userId) => Effect.succeed(`Hello ${userId}`),
+        }),
+        Layer.succeed(BotReplies, {
+            reply: (_message, content) =>
+                Effect.sync(() => replies.push(content)),
+        }),
+    );
+
+    return Effect.gen(function* () {
+        const fiber = yield* handlePing(message).pipe(
+            Effect.provide(fakes),
+            Effect.forkChild,
+        );
+        yield* TestClock.adjust("100 millis");
+        yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestClock.layer()));
+}

@@ -1,0 +1,22 @@
+test("a command that throws is reported", async () => {
+    await using bot = createTestBot({
+        commands: {
+            prefix: "!",
+            commands: {
+                broken: {
+                    execute: () => {
+                        throw new Error("Not implemented yet")
+                    },
+                },
+            },
+        },
+    })
+    await bot.ready()
+    bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "!broken" }))
+
+    await bot.idle()
+    assert.deepEqual(
+        bot.failures().map((record) => record.code),
+        ["commands.failed"],
+    )
+})

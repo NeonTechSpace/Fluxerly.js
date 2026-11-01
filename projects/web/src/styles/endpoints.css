@@ -1,0 +1,421 @@
+/* The endpoint map. Reference violet: one row per Fluxer route, its method and path with Fluxer's summary below them,
+   then the Fluxerly methods that send it. The method carries the meaning of the row in color: a read is cyan, the
+   light that looks without touching, a write is violet, the SDK changing what Fluxer knows, a patch or put is a
+   paler violet, and a delete is coral, the color of a failed record, so the rows that destroy something stand out
+   without a legend. Nothing is smaller than 15px.
+   A row is a short stack, route over methods, with everything after the method lined up under the path. Where the
+   column is wide the methods move beside their route, so the map reads across like a two-column index */
+
+.ep {
+    --verb-w: 76px;
+    --verb-gap: 12px;
+    --indent: calc(var(--verb-w) + var(--verb-gap));
+    --param: var(--color-periwinkle);
+}
+
+/* The page's one fact, how much of Fluxer the SDK covers, in the reference's bright lavender */
+.ep .ep-coverage {
+    margin: 0 0 6px;
+    font-size: var(--type-lead);
+    line-height: 1.55;
+    color: var(--ink-high);
+}
+
+.ep .ep-coverage strong {
+    font-weight: var(--weight-semibold);
+    color: var(--violet-bright);
+}
+
+.ep .ep-note {
+    margin: 0;
+    font-size: var(--type-body);
+    color: var(--ink-muted);
+}
+
+/* Search and area filter: two fields on the night, no card around them. Hidden until the script that runs them is
+   on the page */
+
+.ep-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);
+    align-items: end;
+    gap: 12px 18px;
+    margin: 36px 0 0;
+}
+
+.ep-tools[hidden] {
+    display: none;
+}
+
+.ep-field {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+}
+
+.ep-label {
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-muted);
+}
+
+/* The fields are wells cut into the night */
+.ep-tools :is(input, select) {
+    box-sizing: border-box;
+    width: 100%;
+    height: 48px;
+    padding: 0 14px;
+    font: inherit;
+    font-size: var(--type-body);
+    color: var(--ink-high);
+    background: var(--well);
+    border: 0;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--well-shade);
+}
+
+.ep-tools :is(input, select):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.ep-tools input::placeholder {
+    color: var(--ink-faint);
+}
+
+.ep-tools input::-webkit-search-cancel-button {
+    filter: grayscale(1) brightness(1.6);
+    cursor: pointer;
+}
+
+.ep-tools select {
+    padding-right: 40px;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='%23c3c8e6'%3E%3Cpath d='M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    background-size: 16px;
+}
+
+.ep-tools option {
+    color: var(--color-ink);
+    background: #0b0e2e;
+}
+
+.ep-tools input::placeholder {
+    color: var(--ink-faint);
+}
+
+.ep .ep-status {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+}
+
+.ep .ep-status:empty {
+    display: none;
+}
+
+.ep .ep-empty {
+    margin: 40px 0 0;
+    font-size: var(--type-body);
+    color: var(--ink-muted);
+}
+
+/* Areas, one per page of the Fluxer docs */
+
+.ep-area[hidden] {
+    display: none;
+}
+
+.ep h2.ref-heading,
+.ep .ep-area > h2.ref-heading:first-child {
+    margin: 64px 0 16px;
+    font-size: var(--type-heading);
+}
+
+/* Rows: a stack by default, with the table's own layout only where the column is wide. The rows lie on the night,
+   parted by hairlines, with no container around the list */
+
+.ep .ep-table {
+    display: block;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    overflow: visible;
+    font-size: var(--type-body);
+    line-height: 1.5;
+    border-collapse: collapse;
+}
+
+.ep .ep-table > :is(tbody, colgroup) {
+    display: block;
+}
+
+.ep .ep-table col {
+    display: none;
+}
+
+.ep .ep-row {
+    position: relative;
+    display: block;
+    padding: 17px 0 18px;
+    border-top: 1px solid var(--rule);
+    scroll-margin-top: 112px;
+}
+
+/* The last row still shown in an area closes the list with a hairline */
+.ep .ep-row:nth-last-child(1 of :not([hidden])) {
+    border-bottom: 1px solid var(--rule);
+}
+
+.ep .ep-row[hidden] {
+    display: none;
+}
+
+/* The first row still shown in an area has nothing above it to separate from */
+.ep .ep-row:nth-child(1 of :not([hidden])) {
+    border-top: 0;
+}
+
+.ep .ep-row > td {
+    display: block;
+    padding: 0;
+    border: 0;
+}
+
+.ep .ep-row > td.ep-sdk {
+    margin-top: 10px;
+    padding-left: var(--indent);
+}
+
+/* A linked route shows which row the link meant, with a rule in the reference's violet like a linked entry */
+.ep .ep-row:target::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -16px;
+    width: 3px;
+    background: var(--accent);
+}
+
+/* The method, then the path. The summary lines up under the path */
+
+.ep-line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--verb-gap);
+    min-width: 0;
+}
+
+/* The method: a word in the row's meaning color on a faint tint of that color, never a bordered badge */
+.ep-verb {
+    --verb: var(--cyan);
+    flex: none;
+    box-sizing: border-box;
+    width: var(--verb-w);
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    line-height: 1.65;
+    letter-spacing: var(--tracking-wide);
+    text-align: center;
+    color: var(--verb);
+    background: color-mix(in srgb, var(--verb) 12%, transparent);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.ep-verb[data-verb="post"] {
+    --verb: var(--violet-bright);
+}
+
+.ep-verb:is([data-verb="put"], [data-verb="patch"]) {
+    --verb: var(--color-violet-mist);
+}
+
+.ep-verb[data-verb="delete"] {
+    --verb: var(--bad);
+}
+
+.ep .ep-route code.ep-path {
+    display: inline;
+    min-width: 0;
+    max-width: none;
+    padding: 0;
+    font-size: var(--type-body);
+    font-weight: var(--weight-medium);
+    line-height: 1.6;
+    color: var(--ink-high);
+    overflow-wrap: normal;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.ep .route-param {
+    font-weight: var(--weight-regular);
+    color: var(--param);
+}
+
+.ep-summary {
+    display: block;
+    margin-top: 5px;
+    padding-left: var(--indent);
+    font-size: var(--type-body);
+    line-height: 1.5;
+    color: var(--ink-muted);
+}
+
+.ep-gap {
+    display: inline-block;
+    width: 12px;
+}
+
+.ep .ep-docs {
+    display: inline-block;
+    font-size: var(--type-small);
+    white-space: nowrap;
+    color: var(--ink-muted);
+    text-decoration-color: rgb(255 255 255 / 0.28);
+}
+
+.ep .ep-docs:hover {
+    color: var(--accent-bright);
+    text-decoration-color: currentColor;
+}
+
+/* The Fluxerly side */
+
+.ep .ep-methods {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ep .ep-methods > li {
+    min-width: 0;
+    margin: 0;
+}
+
+.ep .ep-methods > li::before {
+    content: none;
+}
+
+.ep .ep-methods code {
+    max-width: 100%;
+    font-size: var(--type-small);
+}
+
+.ep-fallback {
+    display: block;
+    font-size: var(--type-body);
+    line-height: 1.6;
+    color: var(--ink-muted);
+}
+
+.ep .ep-fallback a {
+    color: var(--violet-bright);
+}
+
+.ep .ep-fallback code {
+    font-size: var(--type-small);
+}
+
+/* A wide column: the methods beside their route, in a real table layout */
+@container article (min-width: 860px) {
+    .ep .ep-table {
+        display: table;
+        table-layout: fixed;
+    }
+
+    .ep .ep-table > tbody {
+        display: table-row-group;
+    }
+
+    .ep .ep-table > colgroup {
+        display: table-column-group;
+    }
+
+    .ep .ep-table col {
+        display: table-column;
+    }
+
+    .ep .ep-table .ep-col-route {
+        width: 57%;
+    }
+
+    .ep .ep-row {
+        display: table-row;
+    }
+
+    .ep .ep-row > td {
+        display: table-cell;
+        padding: 17px 0 18px;
+        vertical-align: top;
+        border-top: 1px solid var(--rule);
+    }
+
+    .ep .ep-row:nth-child(1 of :not([hidden])) > td {
+        border-top: 0;
+    }
+
+    .ep .ep-row:nth-last-child(1 of :not([hidden])) > td {
+        border-bottom: 1px solid var(--rule);
+    }
+
+    .ep .ep-row > td.ep-route {
+        position: relative;
+        padding-right: 28px;
+    }
+
+    .ep .ep-row > td.ep-sdk {
+        margin-top: 0;
+        padding-left: 0;
+    }
+
+    /* A table row cannot carry the mark itself, so its route cell does */
+    .ep .ep-row:target::before {
+        content: none;
+    }
+
+    .ep .ep-row:target > td.ep-route::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: -16px;
+        width: 3px;
+        background: var(--accent);
+    }
+}
+
+/* A phone's column: no indent, so the path and the summary keep the whole width */
+@container article (max-width: 639.98px) {
+    .ep {
+        --indent: 0px;
+    }
+
+    .ep-tools {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ep .ep-row:target::before {
+        left: -10px;
+    }
+}
+
+/* Laptops have little height, so areas sit a little closer together */
+@media (min-width: 900px) and (max-height: 920px) {
+    .ep h2.ref-heading,
+    .ep .ep-area > h2.ref-heading:first-child {
+        margin-top: 52px;
+    }
+}

@@ -8,7 +8,9 @@ Most bots need little code for reliability. The SDK reconnects on its own, keeps
 
 ## Return the reply's Result
 
-The default API returns expected failures, such as a missing permission or a network error, in a [`Result`](/docs/{{version}}/glossary/#result) instead of throwing. A handler that returns that Result hands a failure to the SDK. An HTTP 401 or 403 rejection is logged once unless the handler returns its failure more than one second after the rejection, when its `rest.rejected` Warn has already appeared. See [rejection logging](/docs/{{version}}/logging/#read-the-default-output)
+The default API returns expected failures, such as a missing permission or a network error, in a [`Result`](/docs/glossary/#result) instead of throwing. A handler that returns that Result hands a failure to the SDK
+
+The SDK holds a `rest.rejected` Warn for an HTTP 401 or 403 rejection for up to one second. If the handler returns that same failure while the Warn is held and no `onError` hook is configured for it, only the handler's failure record appears. See [rejection logging](/docs/logging/#read-the-default-output)
 
 ```ts
 import { errors, runBot } from "@neontechspace/fluxerly"
@@ -20,6 +22,7 @@ await runBot({
             if (message.content !== "!ping") return undefined
             const first = await reply("Pong!")
             if (first.isOk() || !errors.isRetryable(first.error)) return first
+            await new Promise((resolve) => setTimeout(resolve, errors.retryAfterMs(first.error) ?? 1_000))
             return reply("Pong!")
         },
     },
@@ -34,7 +37,7 @@ The bot itself follows the same rule. When a failure stops it, such as a rejecte
 
 ## Report failures that have no Result
 
-Some failures have no caller to return to: A throwing event handler or one that returns an Err, a failed command, a failing [collector](/docs/{{version}}/glossary/#collector) callback or filter, a message cache callback that throws or a subscription closed by a full queue with `overflow: "stop"`. The SDK sends each of them to the client's `onError` option with the original error and the IDs of the message involved, never its content. Without a hook it logs them at Error with the full message, stack and cause chain
+Some failures have no caller to return to: A throwing event handler or one that returns an Err, a failed command, a failing [collector](/docs/glossary/#collector) callback or filter, a message cache callback that throws or a subscription closed by a full queue with `overflow: "stop"`. The SDK sends each of them to the client's `onError` option with the original error and the IDs of the message involved, never its content. Without a hook it logs them at Error with the full message, stack and cause chain
 
 ```ts
 import { createClient, type FailureReport } from "@neontechspace/fluxerly"
@@ -95,7 +98,7 @@ Handlers in `runBot` receive a `signal` that is aborted when the bot stops. The 
 
 ## Send once when the outcome is uncertain
 
-A lost response, timeout or cancellation after a message was sent can leave it posted. Such a failure is an [uncertain write](/docs/{{version}}/glossary/#uncertain-write), and `errors.isRetryable` returns false for it. Do not send again just because the result is uncertain. Supply an application operation ID as the message nonce, and reconcile through an application workflow before deciding what to do next
+A lost response, timeout or cancellation after a message was sent can leave it posted. Such a failure is an [uncertain write](/docs/glossary/#uncertain-write), and `errors.isRetryable` returns false for it. Do not send again just because the result is uncertain. Supply an application operation ID as the message nonce, and reconcile through an application workflow before deciding what to do next
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -124,7 +127,7 @@ export async function sendOnceAndDiagnose(
 }
 ```
 
-The helper makes one send call, returns its `Result`, and logs only local state, request counts and cache counts from [`diagnostics`](/docs/{{version}}/api/interfaces/js-ts.Client/#diagnostics). A nonce has best-effort duplicate suppression for a limited window, not durable idempotency or exactly-once delivery
+The helper makes one send call, returns its `Result`, and logs only local state, request counts and cache counts from [`diagnostics`](/docs/api/js-ts/client/#diagnostics). A nonce has best-effort duplicate suppression for a limited window, not durable idempotency or exactly-once delivery
 
 ## Start, recover and stop the connection in one function
 
@@ -140,7 +143,7 @@ export async function runUntilStopped(client: Client, signal: AbortSignal) {
 
 Once `run()` starts, it waits through connection startup and recovery. It finishes after a normal stop, permanent failure or cancellation, once SDK cleanup is done
 
-The [`run`](/docs/{{version}}/api/interfaces/js-ts.Client/#run) method requires a disconnected client and closes it permanently once the accepted run ends. Alternatively, use `connect` for startup, `waitForClose` for later terminal failure and `shutdown` for final cleanup. Aborting `waitForClose` alone does not stop the client
+The [`run`](/docs/api/js-ts/client/#run) method requires a disconnected client and closes it permanently once the accepted run ends. Alternatively, use `connect` for startup, `waitForClose` for later terminal failure and `shutdown` for final cleanup. Aborting `waitForClose` alone does not stop the client
 
 ## Limits and retry rules
 
@@ -158,11 +161,11 @@ Each retry is counted in `diagnostics().counters.restRetries` and logged at Debu
 <details>
 <summary>Rate limits</summary>
 
-The SDK waits for [rate limits](/docs/{{version}}/glossary/#rate-limit) on its own and logs waits of one second or more at Warn.
+The SDK waits for [rate limits](/docs/glossary/#rate-limit) on its own and logs waits of one second or more at Warn.
 Waiting counts toward each operation's deadline. A wait that would pass the deadline fails at once with `ratelimit.deadline`, including for an operation queued behind an earlier pause, and the error's `retryAfterMs` names the remaining wait.
 A global HTTP 429 pauses unrelated API routes on the same client, including when a valid global header accompanies an unreadable error body. Cancelling one queued operation does not clear the shared pause.
 Server-provided bucket identifiers refine request grouping automatically, so bot code does not configure rate-limit groups. Matching limits share a wait, while independently limited resources stay separate. The first requests can still receive a 429 before the grouping is learned.
-The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) explains scope metadata and retry boundaries
+The [client contract](/docs/api/js-ts/client/) explains scope metadata and retry boundaries
 
 </details>
 
@@ -170,7 +173,7 @@ The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) explains s
 <summary>Request queue and capacity</summary>
 
 By default, a client runs up to 4 API requests at a time per local shard, capped at 64 for the client, and lets 256 requests wait. An explicit `rest.concurrency` stays fixed instead of scaling with the shard count. A request that finds the queue full fails at once with reason `busy` and was never sent, so it is safe to retry later.
-The `rest` client option changes these limits, as described in [configuration](/docs/{{version}}/configuration/#connection-and-requests)
+The `rest` client option changes these limits, as described in [configuration](/docs/configuration/#connection-and-requests)
 
 </details>
 
@@ -179,8 +182,8 @@ The `rest` client option changes these limits, as described in [configuration](/
 
 Gateway receive protection is automatic. A message beyond the fixed receive ceiling, or invalid UTF-8, stops the connection rather than repeatedly reconnecting to the same rejected data.
 A known event that fails validation is skipped instead: The SDK logs `gateway.dispatchRejected` at Warn with the event type and failing field, clears cache entries it could have changed and keeps the session running.
-Set `gateway: { onMalformedDispatch: "terminate" }` to end the session instead.
-The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) documents the ceiling and failure codes. Subscription queue limits apply separately and do not bound JSON parsing memory
+Set `gateway: { onMalformedDispatch: "terminate" }` to end the client instead.
+The [client contract](/docs/api/js-ts/client/) documents the ceiling and failure codes. Subscription queue limits apply separately and do not bound JSON parsing memory
 
 </details>
 
@@ -188,7 +191,7 @@ The [client contract](/docs/{{version}}/api/interfaces/js-ts.Client/) documents 
 <summary>Reconnects</summary>
 
 After a lost connection the SDK resumes the session when Fluxer allows it and otherwise starts a new one, waiting a growing random delay between attempts.
-Transient failures never make it give up. A permanent failure, such as a rejected token, ends the run with a connection error.
-The `connection.recovery` option changes the delays, as listed in [`ConnectionRecoveryOptions`](/docs/{{version}}/api/interfaces/js-ts.ConnectionRecoveryOptions/)
+The default recovery keeps retrying transient failures. A permanent failure, such as a rejected token, ends the run with a connection error.
+The `connection.recovery` option changes the delays, as listed in [`ConnectionRecoveryOptions`](/docs/api/js-ts/options/#connectionrecoveryoptions)
 
 </details>

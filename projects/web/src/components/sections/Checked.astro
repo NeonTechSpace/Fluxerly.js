@@ -1,0 +1,176 @@
+---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import CommandChip from "./CommandChip.astro"
+import Companion from "./Companion.astro"
+import { links } from "../../lib/links"
+import { endpointsUrl } from "../../lib/reference"
+
+interface Item {
+    title: string
+    text: string
+    href?: string
+    link?: string
+    command?: string
+}
+
+// Each part ends in the page where it can be checked, or the command that installs it
+const items: Item[] = [
+    {
+        title: "Never Blocked by a Missing Method",
+        text: "If a bot token can do it on Fluxer, you can do it today. Most routes have a named method, and a raw request on the same client reaches the rest, with the same rate limit handling and readable failures. The endpoint map lists every route and how to reach it",
+        href: endpointsUrl,
+        link: "See Every Route",
+    },
+    {
+        title: "Fixes Don't Wait for a Release",
+        text: "A dependable SDK can move when it needs to. Twice a day, if the SDK changed on the main branch and passed the check, the newest code goes to npm as a nightly build, so you can use a fix without waiting for a release. Another daily check compares Fluxer's API documents with the ones the SDK was built against",
+        // Exact, because a nightly can change between installs
+        command: "npm install --save-exact @neontechspace/fluxerly@nightly",
+    },
+    {
+        title: "Security Reviewed with Frontier AI",
+        text: "Frontier AI models review the code for security flaws, on top of the code scanning that runs on every push. A finding counts only with proof, such as a failing test or a traced path, and the maintainer decides every fix",
+        href: links.securityPolicy,
+        link: "Security Policy",
+    },
+]
+
+// The three parts in short, under the lead
+const facts = ["A way to every route a bot can use", "Fixes on npm up to twice a day", "Security reviews with frontier AI"]
+---
+
+<section class="checked" id="quality" aria-labelledby="quality-title" data-accent="cyan">
+    <div class="split" data-side="right">
+        <div class="intro" data-rise>
+            <h2 class="section-title" id="quality-title"><span class="station" data-station="quality" aria-hidden="true"></span>Quality, Speed and Security <span class="hi">You Can Check</span></h2>
+            <p class="lead">Each part comes with the checks and reviews behind it, and the test runs are public on GitHub</p>
+            <ul class="facts">
+                {
+                    facts.map((fact) => (
+                        <li>
+                            <span class="wave-mark" aria-hidden="true" />
+                            {fact}
+                        </li>
+                    ))
+                }
+            </ul>
+            <Companion class="keepsake" name="guard-shield" alt="A blue shield with copper bands and an engraved checkmark" size={210} />
+        </div>
+        <ol class="body items" data-rise>
+            {
+                items.map((item) => (
+                    <li class="item">
+                        <span class="wave-mark" aria-hidden="true"></span>
+                        <div class="content">
+                            <h3>{item.title}</h3>
+                            <p class="text">{item.text}</p>
+                            <div class="row">
+                                {item.command && <CommandChip class="chip" command={item.command} />}
+                                {item.href && (
+                                    <a class="prose-link go-link" href={item.href} target={item.href.startsWith("/") ? undefined : "_blank"} rel={item.href.startsWith("/") ? undefined : "noopener"}>
+                                        {item.link}
+                                        <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                                    </a>
+                                )}
+                            </div>
+                        </div>
+                    </li>
+                ))
+            }
+        </ol>
+    </div>
+</section>
+
+<style>
+    /* No margin reset here: on a phone the shared rule spaces the list from the lead */
+    .items {
+        padding: 0;
+        list-style: none;
+    }
+
+
+    .item:hover .wave-mark {
+        transform: translateX(3px);
+        filter: brightness(1.3);
+    }
+
+    .wave-mark {
+        transition:
+            transform var(--speed-normal) ease,
+            filter var(--speed-normal) ease;
+    }
+
+    .item {
+        display: flex;
+        gap: 22px;
+        padding: 30px 0 34px;
+        border-top: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .item:last-child {
+        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .item .wave-mark {
+        margin-top: 8px;
+    }
+
+    .content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    h3 {
+        margin: 0;
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        line-height: 1.3;
+        color: var(--color-ink);
+        text-wrap: balance;
+    }
+
+    .text {
+        max-width: 58ch;
+        margin: 10px 0 0;
+        font-size: var(--type-lead);
+        line-height: 1.6;
+        color: var(--color-muted);
+        text-wrap: pretty;
+    }
+
+    .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 14px 24px;
+        margin-top: 18px;
+    }
+
+
+    @media (max-width: 899px) {
+        .item {
+            gap: 16px;
+        }
+    }
+
+    /* Time stopped: the marks keep still when pointed at */
+    :global(.night[data-still]) .wave-mark {
+        transition: none;
+    }
+
+    :global(.night[data-still]) .item:hover .wave-mark {
+        transform: none;
+        filter: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .wave-mark {
+            transition: none;
+        }
+
+        .item:hover .wave-mark {
+            transform: none;
+            filter: none;
+        }
+    }
+</style>

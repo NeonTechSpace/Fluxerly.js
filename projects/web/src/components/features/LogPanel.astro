@@ -1,0 +1,309 @@
+---
+// A terminal excerpt of the SDK's readable log output, set as records rather than wrapped lines. Each record keeps the
+// order the console prints, level, category and code first, but the message gets its own line and the fields their
+// own quieter row, so a reader takes in one thing at a time. Lines printed under a record (the error, its hint, its
+// details, stack frames) hang under it in the same column
+
+interface Props {
+    log: string
+    // Accessible name of the excerpt
+    label: string
+}
+
+const { log, label } = Astro.props
+
+type Field = { key: string; value: string }
+type Nested =
+    | { kind: "error"; name: string; code?: string; text: string }
+    | { kind: "hint"; text: string }
+    | { kind: "details"; fields: Field[] }
+    | { kind: "frame"; text: string }
+    | { kind: "note"; text: string }
+    | { kind: "plain"; text: string }
+type Entry = { level?: string; category?: string; code?: string; message: string; fields: Field[]; nested: Nested[] }
+
+// A record code may break only before a dot, never inside a word part. Codes are word characters and dots only
+const seams = (code: string) => code.replace(/[^\w.]/g, "").split(".").join("<wbr>.")
+
+const fieldToken = /^([\w.]+)=(\S*)$/
+
+// Trailing key=value tokens are the record's fields, everything before them is its message
+function split(text: string): { message: string; fields: Field[] } {
+    const tokens = text.split(" ")
+    const fields: Field[] = []
+    while (tokens.length > 0) {
+        const match = fieldToken.exec(tokens[tokens.length - 1])
+        if (!match) break
+        fields.unshift({ key: match[1], value: match[2] })
+        tokens.pop()
+    }
+    return { message: tokens.join(" "), fields }
+}
+
+function nested(text: string): Nested {
+    let match = /^(\w*Error)\s*(?:\[([\w.]+)\])?:\s*(.*)$/.exec(text)
+    if (match) return { kind: "error", name: match[1], code: match[2], text: match[3] }
+    match = /^Hint:\s*(.*)$/.exec(text)
+    if (match) return { kind: "hint", text: match[1] }
+    match = /^Details:\s*(.*)$/.exec(text)
+    if (match) return { kind: "details", fields: split(match[1]).fields }
+    if (/^at\s/.test(text)) return { kind: "frame", text }
+    if (/^\.\.\./.test(text)) return { kind: "note", text }
+    return { kind: "plain", text }
+}
+
+const head = /^(INFO|WARN|ERROR|DEBUG)\s+(\w+)\s+\[([\w.]+)\]\s*(.*)$/
+const entries: Entry[] = []
+for (const raw of log.replace(/\n$/, "").split("\n")) {
+    const text = raw.trimStart()
+    const depth = raw.length - text.length
+    const last = entries[entries.length - 1]
+    if (depth > 0 && last) {
+        last.nested.push(nested(text))
+        continue
+    }
+    const match = head.exec(text)
+    if (match) entries.push({ level: match[1], category: match[2], code: match[3], ...split(match[4]), nested: [] })
+    else entries.push({ message: text, fields: [], nested: [] })
+}
+---
+
+<figure class="log-panel glass">
+    <figcaption class="bar"><span class="file">Terminal</span></figcaption>
+    <div class="records" tabindex="0" role="group" aria-label={label}>
+        {
+            entries.map((entry) => (
+                <div class="rec">
+                    {entry.level && (
+                        <p class="rec-head">
+                            <span class={`lvl lvl-${entry.level.toLowerCase()}`}>{entry.level}</span>
+                            <span class="cat">{entry.category}</span>
+                            <span class="rec-code">[<Fragment set:html={seams(entry.code ?? "")} />]</span>
+                        </p>
+                    )}
+                    <div class="rec-body">
+                        {entry.message && <p class="msg">{entry.message}</p>}
+                        {entry.fields.length > 0 && (
+                            <p class="fields">
+                                {entry.fields.map((field) => (
+                                    <span class="kv">
+                                        <span class="key">{field.key}=</span>
+                                        <span class="value">{field.value}</span>
+                                    </span>
+                                ))}
+                            </p>
+                        )}
+                        {entry.nested.length > 0 && (
+                            <div class="nest">
+                                {entry.nested.map((line) =>
+                                    line.kind === "error" ? (
+                                        <p class="n-error">
+                                            <span class="n-name">{line.name}</span>
+                                            {line.code && <span class="rec-code"> [<Fragment set:html={seams(line.code)} />]</span>}
+                                            <span class="n-text">: {line.text}</span>
+                                        </p>
+                                    ) : line.kind === "hint" ? (
+                                        <p class="n-hint">
+                                            <span class="n-label">Hint</span>
+                                            {line.text}
+                                        </p>
+                                    ) : line.kind === "details" ? (
+                                        <p class="fields n-details">
+                                            <span class="n-label">Details</span>
+                                            {line.fields.map((field) => (
+                                                <span class="kv">
+                                                    <span class="key">{field.key}=</span>
+                                                    <span class="value">{field.value}</span>
+                                                </span>
+                                            ))}
+                                        </p>
+                                    ) : (
+                                        <p class={`n-${line.kind}`}>{line.text}</p>
+                                    ),
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ))
+        }
+    </div>
+</figure>
+
+<style>
+    .log-panel {
+        min-width: 0;
+        margin: 0;
+        overflow: hidden;
+    }
+
+    .bar {
+        display: flex;
+        align-items: center;
+        min-height: 47px;
+        padding: 0 22px;
+        border-bottom: 1px solid rgb(160 190 255 / 0.12);
+    }
+
+    .file {
+        font-family: var(--font-mono);
+        font-size: var(--type-small);
+        color: var(--color-muted);
+    }
+
+    /* The level and the category are fixed columns, so they read down the panel like a gutter, and everything else
+       starts in the same column under the category */
+    .records {
+        --level: 6ch;
+        --category: 11ch;
+
+        padding: 8px 22px 12px;
+        font-family: var(--font-mono);
+        font-size: var(--type-small);
+        line-height: 1.6;
+        color: var(--color-ink);
+    }
+
+    .records:focus-visible {
+        outline: 2px solid var(--color-cyan);
+        outline-offset: -4px;
+    }
+
+    .rec {
+        padding-block: 14px;
+    }
+
+    .rec + .rec {
+        border-top: 1px solid rgb(160 190 255 / 0.08);
+    }
+
+    .rec p {
+        margin: 0;
+    }
+
+    .rec-head {
+        display: grid;
+        grid-template-columns: var(--level) var(--category) minmax(0, 1fr);
+        align-items: baseline;
+    }
+
+    .rec-body {
+        padding-left: var(--level);
+    }
+
+    .lvl {
+        font-weight: var(--weight-display);
+    }
+
+    .lvl-info {
+        color: var(--color-success);
+    }
+
+    .lvl-warn {
+        color: var(--color-gold);
+    }
+
+    .lvl-error {
+        color: #ff8f9c;
+    }
+
+    .lvl-debug {
+        color: rgb(195 200 230 / 0.7);
+    }
+
+    .cat {
+        color: rgb(195 200 230 / 0.6);
+    }
+
+    /* Not the site's .code block style: a record code in cyan, which breaks only before its dots */
+    .rec-code {
+        color: var(--color-cyan);
+    }
+
+    .msg {
+        margin-top: 4px;
+        color: var(--color-ink);
+        text-wrap: pretty;
+    }
+
+    /* The fields: one quieter row of key and value pairs, each pair kept whole when the row wraps. Not named
+       .field: that is the star layer of space, and a span by that name would be laid out as one */
+    .fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 18px;
+        margin-top: 6px;
+    }
+
+    .kv {
+        white-space: nowrap;
+    }
+
+    .key {
+        color: rgb(195 200 230 / 0.5);
+    }
+
+    .value {
+        color: rgb(214 220 245 / 0.92);
+    }
+
+    /* Lines printed under a record: the error with its code, then a hint and details labeled, then quiet frames */
+    .nest {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+        padding-left: 16px;
+        border-left: 1px solid rgb(160 190 255 / 0.16);
+    }
+
+    .n-name {
+        font-weight: var(--weight-display);
+        color: #ff8f9c;
+    }
+
+    .n-text {
+        color: var(--color-ink);
+    }
+
+    .n-label {
+        margin-right: 12px;
+        font-weight: var(--weight-display);
+        color: var(--color-ink);
+    }
+
+    .n-hint {
+        color: rgb(214 220 245 / 0.92);
+        text-wrap: pretty;
+    }
+
+    .n-details {
+        margin-top: 0;
+    }
+
+    .n-frame,
+    .n-note,
+    .n-plain {
+        color: rgb(195 200 230 / 0.6);
+        overflow-wrap: anywhere;
+    }
+
+    .n-note {
+        font-style: italic;
+    }
+
+    /* Narrow panels: the head stays on one line as far as it fits, and the body uses the full width */
+    @container (max-width: 520px) {
+        .rec-head {
+            grid-template-columns: var(--level) minmax(0, auto) minmax(0, 1fr);
+            column-gap: 1ch;
+        }
+
+        .rec-body {
+            padding-left: 0;
+        }
+    }
+
+    .log-panel {
+        container-type: inline-size;
+    }
+</style>

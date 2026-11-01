@@ -1,0 +1,21 @@
+import assert from "node:assert/strict"
+import { test } from "node:test"
+import type { Client } from "@neontechspace/fluxerly"
+import { createTestClient } from "@neontechspace/fluxerly/testing"
+
+// The application passes its own client and welcome channel
+export function installWelcome(client: Client, channelId: string) {
+    return client.on("guildMemberAdd", (member) => client.messages.send(channelId, `Welcome, ${member.userId}!`))
+}
+
+test("new members are welcomed", async () => {
+    await using bot = createTestClient()
+    const sent = bot.rest.respond("POST /channels/:id/messages", { body: bot.fixtures.message() })
+    installWelcome(bot.client, bot.fixtures.ids.channel)
+
+    await bot.ready()
+    bot.emit("GUILD_MEMBER_ADD", bot.fixtures.member())
+
+    const request = await sent.next()
+    assert.match(String((request.body as { content?: unknown }).content), /^Welcome/)
+})

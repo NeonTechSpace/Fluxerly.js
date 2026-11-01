@@ -1,0 +1,18 @@
+---
+// Documentation Markdown. Inline drops the paragraph so a sentence can sit inside a row or a heading. Self is the
+// reference URL of the symbol the text documents, which its prose does not mark
+import { renderMarkdown } from "../../../lib/markdown"
+
+interface Props {
+    md?: string
+    inline?: boolean
+    class?: string
+    self?: string
+}
+
+const { md, inline = false, class: className, self } = Astro.props
+const html = md ? await renderMarkdown(md, { self }) : ""
+const body = inline ? html.trim().replace(/^<p>([\s\S]*)<\/p>$/, "$1") : html
+---
+
+{md && (inline ? <span class:list={["ref-inline", className]} set:html={body} /> : <div class:list={["ref-prose", className]} set:html={body} />)}

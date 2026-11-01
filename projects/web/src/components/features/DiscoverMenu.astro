@@ -1,0 +1,502 @@
+---
+import { CaretDownIcon, CompassIcon } from "@phosphor-icons/react/ssr"
+import { iconSrc, type IconName } from "../../lib/art"
+import { featurePages, type FeatureSlug } from "../../lib/links"
+
+// The header's Discover menu: a button that opens one calm column of the feature pages. Each page is marked by its own
+// icon, the one its hero carries, with its name and one short line. The page being read has its station
+// lit beside its name. A pointer resting on the button opens it and leaving the button and the menu closes it, a
+// click or the arrow keys open it too. Escape, moving focus away or a click outside closes the menu, and the arrow
+// keys move up and down the column. On a phone the button shows a compass and keeps its word as its name
+const current = Astro.url.pathname.replace(/\/$/, "")
+
+// Each page's icon and its line for the menu, shorter than the page's own lead so the names stay the content.
+// No two lines share their key word, so the eight stay apart at a glance
+const marks = {
+    "first-reply": { icon: "first-reply-radio", line: "From an empty folder to a real bot" },
+    effect: { icon: "effect-plug", line: "The same SDK, for Effect code" },
+    results: { icon: "results-signpost", line: "Requests return a Result" },
+    commands: { icon: "commands-key", line: "Typed arguments, guards and help" },
+    logs: { icon: "logs-scroll", line: "Readable logs from the first run" },
+    testing: { icon: "testing-flask", line: "A real client on an in-memory Fluxer" },
+    production: { icon: "production-server", line: "Sharding and recovery, built in" },
+    data: { icon: "data-database", line: "Paged history and opt-in caches" },
+} satisfies Record<FeatureSlug, { icon: IconName; line: string }>
+---
+
+<div class="discover" data-discover>
+    <button class="trigger" type="button" aria-expanded="false" aria-controls="discover-menu" data-discover-trigger>
+        <CompassIcon className="compass" size={22} aria-hidden="true" />
+        <span class="word">Discover</span>
+        <CaretDownIcon className="caret" size={14} weight="bold" aria-hidden="true" />
+    </button>
+    <!-- Dims the page while the menu is open, so the menu is the one thing to take in. A press on it only closes -->
+    <div class="scrim" aria-hidden="true" data-discover-scrim></div>
+    <!-- Spans the gap between the button and the open menu, so a pointer crossing it never leaves the menu -->
+    <div class="bridge" aria-hidden="true" data-discover-bridge></div>
+    <div class="panel" id="discover-menu" hidden data-discover-panel>
+        <ul>
+            {
+                featurePages.map((page) => (
+                    <li>
+                        <a href={`/${page.slug}`} data-accent={page.accent} aria-current={current === `/${page.slug}` ? "page" : undefined}>
+                            <span class="mark" aria-hidden="true">
+                                <img src={iconSrc(marks[page.slug].icon, 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                            </span>
+                            <span class="text">
+                                <span class="title">
+                                    {page.title}
+                                    {current === `/${page.slug}` && <span class="here" aria-hidden="true" />}
+                                </span>
+                                <span class="line">{marks[page.slug].line}</span>
+                            </span>
+                        </a>
+                    </li>
+                ))
+            }
+        </ul>
+    </div>
+</div>
+
+<script>
+    const root = document.querySelector<HTMLElement>("[data-discover]")
+    const trigger = root?.querySelector<HTMLButtonElement>("[data-discover-trigger]")
+    const panel = root?.querySelector<HTMLElement>("[data-discover-panel]")
+    if (root && trigger && panel) {
+        const items = Array.from(panel.querySelectorAll<HTMLAnchorElement>("a"))
+        const isOpen = () => trigger.getAttribute("aria-expanded") === "true"
+
+        // The icons load once the reader shows interest in the menu, not with every page
+        const warm = () => {
+            for (const image of panel.querySelectorAll("img")) image.loading = "eager"
+        }
+        for (const type of ["pointerenter", "focus", "pointerdown"]) trigger.addEventListener(type, warm, { once: true })
+
+        const open = (focus?: "first" | "last") => {
+            warm()
+            panel.hidden = false
+            trigger.setAttribute("aria-expanded", "true")
+            if (focus) items[focus === "first" ? 0 : items.length - 1]?.focus()
+        }
+
+        const close = (restoreFocus = false) => {
+            window.clearTimeout(openTimer)
+            window.clearTimeout(closeTimer)
+            openedByPointer = false
+            if (!isOpen()) return
+            panel.hidden = true
+            trigger.setAttribute("aria-expanded", "false")
+            if (restoreFocus) trigger.focus()
+        }
+
+        // A pointer that rests on the button opens the menu after a short pause, so passing over the header does
+        // nothing, and the menu closes a moment after the pointer has left the button, the bridge over the gap and
+        // the menu. Only a menu the pointer opened closes this way: one opened by a click, a key or a touch keeps its
+        // own rules, and focus inside the menu holds it open
+        const bridge = root.querySelector<HTMLElement>("[data-discover-bridge]")
+        const hoverable = window.matchMedia("(hover: hover)")
+        let openTimer = 0
+        let closeTimer = 0
+        let openedByPointer = false
+        let hoverOpenedAt = -Infinity
+        // Someone reaching for the button often clicks it by reflex just as hovering opens the menu. That click meant open, so for a
+        // moment it doesn't close what just opened
+        const reflexClick = 800
+        const pointerIn = (event: PointerEvent) => {
+            if (event.pointerType === "touch" || !hoverable.matches) return
+            window.clearTimeout(closeTimer)
+            if (isOpen()) return
+            window.clearTimeout(openTimer)
+            openTimer = window.setTimeout(() => {
+                if (isOpen()) return
+                openedByPointer = true
+                hoverOpenedAt = performance.now()
+                open()
+            }, 50)
+        }
+        const pointerOut = (event: PointerEvent) => {
+            if (event.pointerType === "touch") return
+            window.clearTimeout(openTimer)
+            if (!openedByPointer || !isOpen()) return
+            window.clearTimeout(closeTimer)
+            closeTimer = window.setTimeout(() => {
+                if (!root.contains(document.activeElement)) close()
+            }, 90)
+        }
+        for (const part of [trigger, bridge, panel]) {
+            if (!part) continue
+            part.addEventListener("pointerenter", pointerIn)
+            part.addEventListener("pointerleave", pointerOut)
+        }
+
+        trigger.addEventListener("click", () => {
+            window.clearTimeout(openTimer)
+            if (!isOpen()) open()
+            else if (performance.now() - hoverOpenedAt > reflexClick) close()
+        })
+
+        trigger.addEventListener("keydown", (event) => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault()
+                open(event.key === "ArrowDown" ? "first" : "last")
+            }
+        })
+
+        panel.addEventListener("keydown", (event) => {
+            const index = items.indexOf(document.activeElement as HTMLAnchorElement)
+            if (index < 0) return
+            const move = (to: number) => {
+                event.preventDefault()
+                items[(to + items.length) % items.length]?.focus()
+            }
+            if (event.key === "ArrowDown") move(index + 1)
+            else if (event.key === "ArrowUp") move(index - 1)
+            else if (event.key === "Home") move(0)
+            else if (event.key === "End") move(items.length - 1)
+        })
+
+        root.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && isOpen()) {
+                event.preventDefault()
+                close(true)
+            }
+        })
+
+        // Moving focus or clicking anywhere outside closes the menu
+        root.addEventListener("focusout", (event) => {
+            if (!root.contains(event.relatedTarget as Node | null)) close()
+        })
+        const scrim = root.querySelector("[data-discover-scrim]")
+        document.addEventListener("pointerdown", (event) => {
+            if (!root.contains(event.target as Node) || event.target === scrim) close()
+        })
+
+        // Coming back to this page later finds the menu closed, not open where it was left
+        addEventListener("pagehide", () => close())
+    }
+</script>
+
+<style>
+    .trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 2px;
+        font: inherit;
+        font-size: var(--type-body);
+        font-weight: var(--weight-regular);
+        color: var(--color-muted);
+        background: none;
+        border: 0;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        cursor: pointer;
+        transition: color var(--speed-fast) ease;
+    }
+
+    .trigger:hover,
+    .trigger[aria-expanded="true"] {
+        color: var(--color-ink);
+    }
+
+    .trigger :global(.caret) {
+        opacity: 0.7;
+        transition: transform var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .trigger[aria-expanded="true"] :global(.caret) {
+        transform: rotate(180deg);
+    }
+
+    /* The compass stands in for the word on a phone only */
+    .trigger :global(.compass) {
+        display: none;
+        flex: none;
+    }
+
+    /* The panel opens under the Discover button it belongs to, its left edge in line with the button's. It is fully
+       opaque: the header is a view transition part, and a backdrop blur inside it would only see the header's own
+       empty layer, so any translucency would let the page's text show through sharp */
+    .discover {
+        position: relative;
+    }
+
+    .panel {
+        /* The panel unrolls down from under the header and rolls back up into it, opaque the whole way, so the page
+           never shows through it mid-motion. The open clip reaches past the edges to keep the shadow. Still and reduced
+           motion keep the panel where it is and fade it instead */
+        --shown: inset(-24px -64px -72px);
+        --shut: inset(0 0 100% 0 round 16px);
+        --lift: translateY(-6px);
+        --fade: 1;
+
+        position: absolute;
+        top: calc(100% + 14px);
+        left: -10px;
+        width: min(392px, calc(100vw - 2 * var(--page-margin)));
+        box-sizing: border-box;
+        max-height: calc(100dvh / var(--page-zoom, 1) - 100% - 16px);
+        padding: 8px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        background: linear-gradient(180deg, #0d1131, #080a22 70%);
+        border: 1px solid rgb(160 190 255 / 0.22);
+        border-radius: var(--corner-large);
+        corner-shape: squircle;
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.06),
+            0 30px 60px -28px rgb(0 0 0 / 0.95);
+        clip-path: var(--shown);
+        transition:
+            clip-path var(--speed-normal) cubic-bezier(0, 0, 0.58, 1),
+            transform var(--speed-normal) cubic-bezier(0, 0, 0.58, 1),
+            opacity var(--speed-fast) ease-out,
+            display var(--speed-normal) allow-discrete;
+    }
+
+    @starting-style {
+        .panel {
+            clip-path: var(--shut);
+            transform: var(--lift);
+            opacity: var(--fade);
+        }
+    }
+
+    /* Closing plays the opening backwards and quicker, easing in where the opening eased out */
+    .panel[hidden] {
+        display: none;
+        clip-path: var(--shut);
+        transform: var(--lift);
+        opacity: var(--fade);
+        pointer-events: none;
+        transition-duration: var(--speed-fast), var(--speed-fast), var(--speed-fast), var(--speed-fast);
+        transition-timing-function: cubic-bezier(0.42, 0, 1, 1), cubic-bezier(0.42, 0, 1, 1), ease-in, linear;
+    }
+
+    /* Covers the 14px between the button and the panel, as wide as the panel, while the menu is open */
+    .bridge {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: -10px;
+        width: min(392px, calc(100vw - 2 * var(--page-margin)));
+        height: 14px;
+    }
+
+    .trigger[aria-expanded="true"] ~ .bridge {
+        display: block;
+    }
+
+    :global(.site-header[data-instant]) .panel {
+        --shut: var(--shown);
+        --lift: none;
+        --fade: 0;
+    }
+
+    /* Under the header's own links, over the page. It fades with the panel, and only catches presses while open */
+    .scrim {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background: rgb(2 3 14 / 0.6);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity var(--speed-normal) ease;
+    }
+
+    .trigger[aria-expanded="true"] ~ .scrim {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    :global(.site-header[data-instant]) .trigger :global(.caret) {
+        transition: none;
+    }
+
+    ul {
+        display: grid;
+        gap: 2px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    a {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr);
+        align-items: center;
+        column-gap: 14px;
+        padding: 10px 14px 10px 10px;
+        color: inherit;
+        text-decoration: none;
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        transition: background-color var(--speed-fast) ease;
+    }
+
+    a[data-accent="cyan"] {
+        --accent: var(--color-cyan);
+    }
+
+    a[data-accent="violet"] {
+        --accent: var(--color-violet);
+    }
+
+    a:hover,
+    a:focus-visible {
+        background: color-mix(in srgb, var(--accent) 13%, transparent);
+    }
+
+    a:focus-visible {
+        outline-offset: -2px;
+    }
+
+    /* The icon. When the reader points at it, it brightens and glows in its page's voice, as the companions do
+       when the reader's light reaches them on the homepage */
+    .mark {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+    }
+
+    .mark::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--accent) 34%, transparent), transparent 68%);
+        opacity: 0;
+        transition: opacity var(--speed-normal) ease;
+    }
+
+    .mark img {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+        filter: drop-shadow(0 3px 4px rgb(0 0 0 / 0.5));
+        transition: filter var(--speed-normal) ease;
+    }
+
+    a:hover .mark::before,
+    a:focus-visible .mark::before {
+        opacity: 1;
+    }
+
+    a:hover .mark img,
+    a:focus-visible .mark img {
+        filter: drop-shadow(0 3px 4px rgb(0 0 0 / 0.5)) brightness(1.16);
+    }
+
+    .text {
+        display: grid;
+        gap: 1px;
+    }
+
+    .title {
+        font-size: var(--type-body);
+        font-weight: var(--weight-medium);
+        line-height: 1.3;
+        color: var(--color-ink);
+    }
+
+    a[aria-current="page"] .title {
+        color: color-mix(in srgb, var(--accent) 60%, white);
+    }
+
+    .line {
+        font-size: var(--type-small);
+        line-height: 1.4;
+        color: rgb(195 200 230 / 0.78);
+        text-wrap: pretty;
+    }
+
+    /* The page being read: its station, lit beside its name, as the signal line lights it beside the page's title */
+    .here {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-left: 10px;
+        vertical-align: 0.06em;
+        box-sizing: border-box;
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        box-shadow:
+            0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
+            0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .panel {
+            --shut: var(--shown);
+            --lift: none;
+            --fade: 0;
+        }
+
+        .trigger :global(.caret) {
+            transition: none;
+        }
+    }
+
+    /* On a phone the button shows its compass with the word kept for assistive technology, and the panel becomes a
+       sheet across nearly the whole width under the header, so every name and line keeps to one line */
+    /* Between a phone's sheet and a wide screen the button sits too far right for the panel to open rightward */
+    @media (min-width: 641px) and (max-width: 1500px) {
+        .panel {
+            left: auto;
+            right: -10px;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .trigger {
+            gap: 2px;
+        }
+
+        .trigger :global(.compass) {
+            display: block;
+        }
+
+        .word {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+
+        /* The sheet hangs from the header here, across the screen, not from the button */
+        .discover {
+            position: static;
+        }
+
+        .panel {
+            top: calc(100% - 6px);
+            left: 10px;
+            right: 10px;
+            width: auto;
+            padding: 6px;
+        }
+
+        /* The sheet covers most of the screen, so the page under it steps further back */
+        .scrim {
+            background: rgb(2 3 14 / 0.72);
+        }
+
+        a {
+            grid-template-columns: 40px minmax(0, 1fr);
+            column-gap: 12px;
+            padding: 11px 10px 11px 8px;
+        }
+
+        .mark,
+        .mark img {
+            width: 40px;
+            height: 40px;
+        }
+    }
+</style>

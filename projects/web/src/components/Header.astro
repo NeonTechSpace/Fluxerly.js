@@ -1,0 +1,528 @@
+---
+import { GithubLogoIcon } from "@phosphor-icons/react/ssr"
+import MotionControl from "../islands/MotionControl"
+import { links } from "../lib/links"
+import DiscoverMenu from "./features/DiscoverMenu.astro"
+import MotionTour from "./MotionTour.astro"
+---
+
+<header class="site-header" data-site-header>
+    <!-- The lockup: the conductor's two waves, the signal that runs through the whole site, then the name. The
+         waves run three periods long, one either side of the window, so a roll by one period loops without a seam. They
+         and their halo are drawn once, and only the picture moves, so a page never repaints for them -->
+    <a class="home" href="/" aria-label="Fluxerly.js, home">
+        <span class="home-mark" aria-hidden="true">
+            <svg class="home-waves" viewBox="-24 -6 72 34" focusable="false">
+                <defs>
+                    <filter id="home-halo" x="-10%" y="-40%" width="120%" height="180%">
+                        <feGaussianBlur stdDeviation="2.6" />
+                    </filter>
+                    <path id="home-wave-high" d="M-24 6.5c4-5.4 8-5.4 12 0s8 5.4 12 0 8-5.4 12 0 8 5.4 12 0 8-5.4 12 0 8 5.4 12 0" />
+                    <path id="home-wave-low" d="M-24 15.5c4-5.4 8-5.4 12 0s8 5.4 12 0 8-5.4 12 0 8 5.4 12 0 8-5.4 12 0 8 5.4 12 0" />
+                </defs>
+                <g class="home-wave home-halo" filter="url(#home-halo)">
+                    <use href="#home-wave-high" />
+                    <use href="#home-wave-low" />
+                </g>
+                <use class="home-wave" href="#home-wave-high" />
+                <use class="home-wave home-wave-low" href="#home-wave-low" />
+            </svg>
+        </span>
+        <span class="home-name">Fluxerly<span class="js">.js</span></span>
+    </a>
+    <nav class="nav" aria-label="Main">
+        <DiscoverMenu />
+        <a class="nav-item" href={links.docs}>Docs</a>
+        <a class="nav-item" href={links.github} target="_blank" rel="noopener">
+            <GithubLogoIcon className="nav-icon" size={22} aria-hidden="true" />
+            <span class="nav-label">GitHub</span>
+        </a>
+        <div class="modes" data-modes>
+            <MotionControl client:load />
+        </div>
+    </nav>
+</header>
+<MotionTour />
+
+<script>
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../lib/experience"
+
+    const header = document.querySelector<HTMLElement>("[data-site-header]")
+    if (header) watchHeader(header)
+
+    // Escape puts away the controls' tooltips, without moving the pointer or the focus, until the
+    // pointer leaves the controls or the focus moves on
+    const modes = document.querySelector<HTMLElement>("[data-modes]")
+    if (modes) {
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") modes.toggleAttribute("data-tips-away", true)
+        })
+        const back = () => modes.removeAttribute("data-tips-away")
+        modes.addEventListener("pointerleave", back)
+        modes.addEventListener("focusin", back)
+    }
+
+    // Hides the header while reading down the page and shows it again on the way up
+    function watchHeader(header: HTMLElement) {
+        // Scroll distance in one direction before the header changes, so small jitters do nothing
+        const threshold = 12
+        let lastY = window.scrollY
+        let travel = 0
+        let hidden = false
+        let frame = 0
+
+        // At the very top of the page the header always shows
+        const inTopArea = (y: number) => y <= threshold
+        // Focus inside the header, or an open menu or popover, keeps it shown
+        const isHeld = () => header.contains(document.activeElement) || header.querySelector('[aria-expanded="true"]') !== null
+
+        // Drawn from the position already read, so the attributes are written without reading the page's layout
+        // back in between
+        const render = (y: number) => {
+            header.toggleAttribute("data-hidden", hidden)
+            header.toggleAttribute("data-over-content", y > 8)
+        }
+
+        const update = () => {
+            frame = 0
+            const y = window.scrollY
+            const delta = y - lastY
+            lastY = y
+            if (inTopArea(y) || isHeld()) {
+                hidden = false
+                travel = 0
+            } else if (delta !== 0) {
+                travel = Math.sign(delta) === Math.sign(travel) ? travel + delta : delta
+                if (travel > threshold) hidden = true
+                else if (travel < -threshold) hidden = false
+            }
+            render(y)
+        }
+
+        const show = () => {
+            if (!isHeld() || !hidden) return
+            hidden = false
+            travel = 0
+            render(lastY)
+        }
+
+        window.addEventListener(
+            "scroll",
+            () => {
+                if (!frame) frame = requestAnimationFrame(update)
+            },
+            { passive: true },
+        )
+        header.addEventListener("focusin", show)
+        new MutationObserver(show).observe(header, { subtree: true, attributes: true, attributeFilter: ["aria-expanded"] })
+
+        const applyMotion = () => header.toggleAttribute("data-instant", getExperience() === "still" || prefersReducedMotion())
+        applyMotion()
+        subscribeExperience(applyMotion)
+        window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", applyMotion)
+        render(lastY)
+    }
+</script>
+
+<style>
+    .site-header {
+        position: fixed;
+        inset: 0 0 auto;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        height: 76px;
+        /* The wordmark and the links line up with the content's edges, not the window's */
+        padding-inline: var(--frame-inline);
+        transition:
+            transform var(--speed-normal) ease,
+            visibility 0ms linear;
+        /* Holds still while the page under it changes */
+    }
+
+    /* Moves the backdrop's fade out of view too. Once it is out of view it also leaves the tab order, so the keyboard
+       never lands on a link nobody can see. Showing it again makes it visible at once */
+    .site-header[data-hidden] {
+        visibility: hidden;
+        transform: translateY(calc(-100% - 32px));
+        transition:
+            transform var(--speed-normal) ease,
+            visibility 0ms linear 200ms;
+    }
+
+    /* Soft dark backdrop that keeps the header readable over content. It is dark enough on its own, without a
+       backdrop blur, which would be drawn again over the moving page on every frame of a scroll. The band stays
+       solid for the header's whole height, so nothing under the wordmark or the links reads through, and only
+       its reach below the header fades out */
+    .site-header::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 -28px;
+        z-index: -1;
+        pointer-events: none;
+        background: linear-gradient(to bottom, var(--color-night), var(--color-night) calc(100% - 28px), rgb(4 5 26 / 0));
+        opacity: 0;
+        transition: opacity var(--speed-normal) ease;
+    }
+
+    .site-header[data-over-content]::before {
+        opacity: 1;
+    }
+
+    .site-header[data-instant],
+    .site-header[data-instant]::before {
+        transition: none;
+    }
+
+    /* The lockup has the presence of a title in the bar: the mark the height of the name's capitals, the name a
+       size above the links and a weight above them, and .js in the site's own cyan, lighter, so the name reads
+       as Fluxerly first */
+    .home {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        gap: 11px;
+        color: var(--color-ink);
+        text-decoration: none;
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+    }
+
+    .home:focus-visible {
+        outline: 2px solid var(--color-cyan);
+        outline-offset: 6px;
+    }
+
+    /* The window shows the middle of the waves, which flow in and out softly at both sides. Its box runs past the mark's
+       own height, so their halo isn't cut */
+    .home-mark {
+        --mark: 32px;
+
+        position: relative;
+        flex: none;
+        box-sizing: content-box;
+        width: var(--mark);
+        height: calc(var(--mark) * 0.6875);
+        margin-block: calc(var(--mark) * -0.1875);
+        padding-block: calc(var(--mark) * 0.1875);
+        color: var(--color-cyan);
+        opacity: 0.88;
+        mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+        transition: opacity var(--speed-normal) ease;
+    }
+
+    .home-waves {
+        position: absolute;
+        top: 0;
+        left: calc(var(--mark) * -0.75);
+        width: calc(var(--mark) * 2.25);
+        height: calc(var(--mark) * 1.0625);
+        overflow: visible;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+        .home-waves {
+            animation: home-roll 3s linear infinite;
+            will-change: transform;
+        }
+    }
+
+    /* Lit like the signal line, a soft halo in its own light */
+    .home-halo {
+        opacity: 0.45;
+    }
+
+    .home-wave {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2.6;
+        stroke-linecap: round;
+    }
+
+    /* The two waves ride in step, the lower one a little quieter, as on the mascot */
+    .home-wave-low {
+        opacity: 0.62;
+    }
+
+    .home-name {
+        font-size: 26px;
+        font-weight: var(--weight-display);
+        line-height: 1;
+        letter-spacing: var(--tracking-tight);
+    }
+
+    .home .js {
+        font-weight: var(--weight-medium);
+        color: var(--color-cyan);
+    }
+
+    /* Pointed at, the lockup brightens */
+    .home:hover .home-mark {
+        opacity: 1;
+    }
+
+    /* In Still the waves rest */
+    .site-header[data-instant] .home-waves {
+        animation: none;
+    }
+
+    .site-header[data-instant] .home-mark {
+        transition: none;
+    }
+
+    @keyframes home-roll {
+        from {
+            transform: translateX(0);
+        }
+
+        to {
+            transform: translateX(calc(var(--mark) * 0.75));
+        }
+    }
+
+    .nav {
+        display: flex;
+        align-items: center;
+        gap: clamp(18px, 2vw, 34px);
+    }
+
+    .nav-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 2px;
+        font: inherit;
+        font-size: var(--type-body);
+        font-weight: var(--weight-regular);
+        color: var(--color-muted);
+        text-decoration: none;
+        background: none;
+        border: 0;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        cursor: pointer;
+        transition: color var(--speed-fast) ease;
+    }
+
+    .nav-item:not([aria-disabled="true"]):hover {
+        color: var(--color-ink);
+    }
+
+    /* The GitHub mark stands in for the word on narrow screens only */
+    .nav-icon {
+        display: none;
+        flex: none;
+    }
+
+    /* The motion switch */
+    .modes {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    /* The switch's tooltip. It says what a press does next and sits under its button,
+       aligned to the button's right edge so it never runs off the page, with a notch pointing up at the
+       button. The motion switch is a React island, so its parts are reached with :global */
+    .modes :global(.mode-control) {
+        position: relative;
+        display: flex;
+    }
+
+    .modes :global(.mode-tip) {
+        position: absolute;
+        top: calc(100% + 10px);
+        right: 0;
+        z-index: 1;
+        padding: 6px 11px;
+        font-size: var(--type-small);
+        font-weight: var(--weight-medium);
+        line-height: 1.3;
+        color: var(--color-ink);
+        white-space: nowrap;
+        background: rgb(8 11 40 / 0.96);
+        border: 1px solid rgb(160 190 255 / 0.24);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        box-shadow: 0 12px 30px -16px rgb(0 0 0 / 0.9);
+        visibility: hidden;
+        opacity: 0;
+        transform: translateY(-4px);
+        pointer-events: none;
+        transition:
+            opacity var(--speed-fast) ease,
+            transform var(--speed-fast) ease,
+            visibility 0ms linear 160ms;
+    }
+
+    /* Bridges the gap to the button, so the pointer can move onto the tooltip without losing it */
+    .modes :global(.mode-tip)::before {
+        content: "";
+        position: absolute;
+        inset: -11px 0 100%;
+    }
+
+    /* The notch, centred under the button whatever its width */
+    .modes :global(.mode-control)::after {
+        content: "";
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 50%;
+        z-index: 2;
+        width: 8px;
+        height: 8px;
+        background: rgb(8 11 40);
+        border: 1px solid rgb(160 190 255 / 0.24);
+        border-width: 1px 0 0 1px;
+        border-top-left-radius: 2px;
+        visibility: hidden;
+        opacity: 0;
+        transform: translate(-50%, -4px) rotate(45deg);
+        pointer-events: none;
+        transition:
+            opacity var(--speed-fast) ease,
+            transform var(--speed-fast) ease,
+            visibility 0ms linear 160ms;
+    }
+
+    .modes :global(.mode-control:has(:focus-visible) .mode-tip),
+    .modes :global(.mode-control:has(:focus-visible))::after {
+        visibility: visible;
+        opacity: 1;
+        transform: none;
+        transition-delay: 0ms;
+    }
+
+    .modes :global(.mode-control:has(:focus-visible))::after {
+        transform: translate(-50%, 0) rotate(45deg);
+    }
+
+    /* Pointing shows it after a short pause, so passing over the header stays quiet. Touch screens
+       skip it, a tap acts at once */
+    @media (hover: hover) {
+        .modes :global(.mode-control:hover .mode-tip),
+        .modes :global(.mode-control:hover)::after {
+            visibility: visible;
+            opacity: 1;
+            transform: none;
+            transition-delay: 250ms;
+        }
+
+        .modes :global(.mode-control:hover)::after {
+            transform: translate(-50%, 0) rotate(45deg);
+        }
+
+        .modes :global(.mode-control:hover .mode-tip) {
+            pointer-events: auto;
+        }
+    }
+
+    /* Escape put them away */
+    .modes[data-tips-away] :global(.mode-control .mode-tip),
+    .modes[data-tips-away] :global(.mode-control)::after {
+        visibility: hidden;
+        opacity: 0;
+    }
+
+    /* Without motion they appear and leave at once, after the same pause for pointing */
+    .site-header[data-instant] :global(.mode-tip),
+    .site-header[data-instant] :global(.mode-control)::after {
+        transition: visibility 0ms linear;
+    }
+
+    /* A phone keeps one row. Discover shows its compass, GitHub its mark, and the words stay as the controls' names.
+       Every control is at least 44 px tall for a finger */
+    @media (max-width: 640px) {
+        .site-header {
+            gap: 8px;
+        }
+
+        .home {
+            gap: 8px;
+        }
+
+        .home-mark {
+            --mark: 27px;
+        }
+
+        .home-name {
+            font-size: 22px;
+        }
+
+        /* The narrowest phones have room for the name or the mark beside the whole row of controls, and the name
+           is what a new visitor needs */
+        @media (max-width: 420px) {
+            .home-mark {
+                display: none;
+            }
+
+            .home-name {
+                font-size: 21px;
+            }
+        }
+
+        @media (max-width: 340px) {
+            .home-name {
+                font-size: 18px;
+            }
+        }
+
+        /* The touch areas are wider than what they show, so the gaps between them can stay small */
+        .nav,
+        .modes {
+            gap: 4px;
+        }
+
+        .nav-item,
+        .nav :global(.trigger) {
+            box-sizing: border-box;
+            min-width: 44px;
+            min-height: 44px;
+            justify-content: center;
+            padding: 0 2px;
+        }
+
+        .nav-icon {
+            display: block;
+        }
+
+        .nav-label {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+
+        /* The 36 px buttons reach 44 px for a finger, without growing on screen */
+        .modes :global(.motion)::before {
+            content: "";
+            position: absolute;
+            inset: -4px;
+        }
+
+        .modes :global(.motion) {
+            position: relative;
+        }
+    }
+
+    @media (any-pointer: coarse) {
+        .nav-item,
+        .nav :global(.trigger) {
+            min-height: 44px;
+        }
+
+        .modes :global(.motion)::before {
+            content: "";
+            position: absolute;
+            inset: -4px;
+        }
+
+        .modes :global(.motion) {
+            position: relative;
+        }
+    }
+</style>

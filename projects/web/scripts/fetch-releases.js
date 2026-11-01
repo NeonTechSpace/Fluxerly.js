@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, writeFile, readdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { parseVersion, retainedVersions, validateSnapshot } from "./versions.js"
+import { parseVersion, retainedVersions, snapshotSchema, validateSnapshot } from "./versions.js"
 
 const repository = "NeonTechSpace/Fluxerly.js"
 const webRoot = fileURLToPath(new URL("../", import.meta.url))
@@ -95,7 +95,10 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
             throw new Error("Docs asset checksum mismatch")
         let snapshot
         try {
-            snapshot = validateSnapshot(parseJson(bytes))
+            const parsed = parseJson(bytes)
+            // Written for an earlier site, so it stays on GitHub and this site doesn't serve that version
+            if (Number.isSafeInteger(parsed?.schemaVersion) && parsed.schemaVersion < snapshotSchema) continue
+            snapshot = validateSnapshot(parsed)
         } catch {
             throw new Error("Invalid docs snapshot")
         }

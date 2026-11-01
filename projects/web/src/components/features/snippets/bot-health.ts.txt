@@ -1,0 +1,15 @@
+import type { ClientDiagnostics, ConnectionState } from "@neontechspace/fluxerly";
+
+export interface BotHealth {
+    readonly gateway: ConnectionState;
+    readonly criticalWorker: "starting" | "running" | "failed" | "stopped";
+    readonly handlerFailures: number;
+}
+
+export type SupervisedOutcome =
+    | { readonly kind: "stopped" }
+    | { readonly kind: "connection-failed"; readonly failure: string }
+    | { readonly kind: "critical-worker-failed"; readonly failure: string };
+
+// The health callback receives both reports. Neither one stands in for the other
+export type ReportHealth = (health: BotHealth, diagnostics: ClientDiagnostics) => void;

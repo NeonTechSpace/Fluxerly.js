@@ -1,0 +1,19 @@
+import { Effect } from "effect"
+import { createTestBot } from "@neontechspace/fluxerly/effect/testing"
+
+export const pingTest = Effect.scoped(
+    Effect.gen(function* () {
+        const bot = yield* createTestBot({
+            token: process.env.FLUXER_BOT_TOKEN,
+            events: {
+                messageCreate: ({ message, reply }) =>
+                    message.content !== "!ping" ? Effect.void : reply("Pong!"),
+            },
+        })
+        yield* bot.ready()
+
+        const replies = yield* bot.say("!ping")
+        const ignored = yield* bot.say("hello")
+        return { replies: replies.map((message) => message.content), ignored: ignored.length }
+    }),
+)

@@ -1,0 +1,64 @@
+---
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import LogPanel from "../components/features/LogPanel.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import replyResult from "../components/features/snippets/reply-result.ts.txt?raw"
+import retryReply from "../components/features/snippets/retry-reply.ts.txt?raw"
+import onError from "../components/features/snippets/on-error.ts.txt?raw"
+import readError from "../components/features/snippets/read-error.ts.txt?raw"
+import failedReply from "../components/features/snippets/failed-reply.log.txt?raw"
+
+const accent = "violet"
+---
+
+<FeaturePage slug="results" companion="results-signpost" companionAlt="A signpost with one arm marked by a check and one by a cross">
+    <Fragment slot="title"><span class="hi">Read</span> Every Failure</Fragment>
+
+    <Scene id="result" step={1} side="left" {accent} guide={guide("core-concepts", "results")} guideLabel="Results in the Core Concepts">
+        <Fragment slot="title">Calls Return a Result</Fragment>
+        <Fragment slot="text">
+            <p>A request such as a reply does not throw when Fluxer refuses it or the network drops. It returns a Result, a value that holds either what the request produced or why it failed</p>
+            <p>Check <code class="inline-code">isErr()</code> first, then read <code class="inline-code">value</code>. A missing permission or a network error arrives as the Result's error, so no try and catch is needed</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Reply and check the Result" code={replyResult} />
+    </Scene>
+
+    <Scene id="retry" icon="retry-loop" iconAlt="A circular arrow on a stand" step={2} side="right" {accent} guide={guide("reliability", "return-the-replys-result")} guideLabel="Reliability in the Docs">
+        <Fragment slot="title">Retry Only When It Is Safe</Fragment>
+        <Fragment slot="text">
+            <p>A send that failed may still have been posted, for example when the answer was lost on its way back. Sending again would reply twice</p>
+            <p><code class="inline-code">errors.isRetryable</code> says yes only when repeating the call is safe, such as when the first attempt never left the bot. Any other failure is returned, and the SDK reports it with its message and suggested fix</p>
+            <p>The SDK keeps the same rule for itself. It sends a write again only after Fluxer asks it to wait for a rate limit, never a write whose outcome is unknown</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Retry a reply only when it is safe" code={retryReply} />
+    </Scene>
+
+    <Scene id="on-error" step={3} side="left" {accent} guide={guide("logging", "handle-failures-in-one-place")} guideLabel="Handle Failures in One Place">
+        <Fragment slot="title">Failures with No Caller Go to onError</Fragment>
+        <Fragment slot="text">
+            <p>A handler that throws or a command that fails has no caller to return to. The SDK sends each one to <code class="inline-code">onError</code>, a hook you pass to <code class="inline-code">runBot</code>, with the original error and the IDs of the message involved, never its content</p>
+            <p>Without a hook, the SDK logs the failure in full. Reports wait their turn while the hook is busy, and any that cannot wait are logged instead and counted, so none disappear</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Send every failure to one hook" code={onError} />
+    </Scene>
+
+    <Scene id="read-error" step={4} side="right" {accent} guide={guide("reliability", "read-an-sdk-error")} guideLabel="Read an SDK Error">
+        <Fragment slot="title">Errors with a Code and a Hint</Fragment>
+        <Fragment slot="text">
+            <p>Every SDK error has a fixed <code class="inline-code">code</code>, a <code class="inline-code">hint</code> with the next step when there is one, and <code class="inline-code">details</code> that are safe to log. <code class="inline-code">errors.apiCode</code> names Fluxer's own reason, such as <code class="inline-code">missingPermissions</code></p>
+            <p><code class="inline-code">describeError</code> prints all of it with the chain of causes, and masks credentials on the way</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Read the code, hint and details of a failed reply" code={readError} />
+    </Scene>
+
+    <Scene id="log" step={5} side="left" {accent} guide={guide("logging", "read-the-default-output")} guideLabel="Read the Default Output">
+        <Fragment slot="title">What the Log Says</Fragment>
+        <Fragment slot="text">
+            <p>When a handler fails, the log prints one Error record with the event, the IDs of the message and the error. An expected SDK error shows its code, hint and details instead of stack frames</p>
+            <p>This one is a reply the bot was not allowed to send. The hint names the permissions to grant and where, and no record ever contains the token</p>
+        </Fragment>
+        <LogPanel log={failedReply} label="The log record of a reply without permission" />
+    </Scene>
+</FeaturePage>

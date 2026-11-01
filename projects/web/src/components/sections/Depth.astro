@@ -1,0 +1,116 @@
+---
+// One body of the conductor's inner universe, far behind a section: the two crescents and the two lights of
+// its galaxy, cut from the face's own layers by scripts/prepare-art.mjs. It keeps
+// only part of the page's pace as the reader scrolls, so it sits deep in the space the sections hang in.
+// Placed in the margin beside its section, outside the reading, and softened once in the art, never by the page.
+// A body is drawn only where the margin holds it, whole for a crescent and at least by half for a soft light, and is
+// left out everywhere else, because a strip of it at the screen's edge reads as a mistake
+
+const art = {
+    "crescent-cyan": { width: 300, height: 304, soft: false },
+    "crescent-violet": { width: 300, height: 304, soft: false },
+} as const
+
+interface Props {
+    name: keyof typeof art
+    // Which margin it sits in
+    side: "left" | "right"
+    // Down from the section's top, or up from its bottom
+    top?: string
+    bottom?: string
+    // Width in CSS pixels on a wide screen
+    width: number
+    // Its share of the pace given up, as a multiple of the far plane's: above one is deeper
+    depth?: number
+    opacity?: number
+    // A page that barely scrolls, such as the 404, may place the body inside the frame where its words leave
+    // room, this far in from the screen's edge. A page that scrolls keeps every body in the margin: as the reader
+    // descends, a body lags behind the page and would pass under whatever follows its section. Phones have no
+    // such room either, there the body keeps to the margin
+    inset?: string
+}
+
+const { name, side, top, bottom, width, depth = 1, opacity = 1, inset } = Astro.props
+const size = art[name]
+const place = top !== undefined ? `top: ${top}` : `bottom: ${bottom ?? "0px"}`
+---
+
+<img
+    class="depth far"
+    src={`/art/depth/${name}.webp`}
+    width={size.width}
+    height={size.height}
+    alt=""
+    loading="lazy"
+    decoding="async"
+    data-side={side}
+    data-soft={size.soft ? "" : undefined}
+    data-inset={inset !== undefined ? "" : undefined}
+    style={`${place}; --width: ${width}px; --depth: calc(var(--depth-far) * ${depth}); --opacity: ${opacity}${inset !== undefined ? `; --inset: ${inset}` : ""}`}
+/>
+
+<style>
+    /* Under the nebula and the thread, over the star fields. A body keeps to the margin beside the reading: its
+       inner edge sits just outside the content's frame, so it never lies under text or a control */
+    .far {
+        z-index: -2;
+        width: min(var(--width), 26vw);
+        height: auto;
+        opacity: var(--opacity);
+    }
+
+    /* The signal line would pass through it on this screen, see Night.astro */
+    .far[data-clear] {
+        display: none;
+    }
+
+    .far[data-side="left"] {
+        right: calc(100% - var(--frame-inline) + 12px);
+    }
+
+    .far[data-side="right"] {
+        left: calc(100% - var(--frame-inline) + 12px);
+    }
+
+    /* Inside the frame, where the section leaves that side of its row empty */
+    @media (min-width: 900px) {
+        .far[data-inset][data-side="left"] {
+            right: auto;
+            left: var(--inset);
+        }
+
+        .far[data-inset][data-side="right"] {
+            left: auto;
+            right: var(--inset);
+        }
+    }
+
+    /* Narrower than the page frame with wide margins, the margin is thinner, so a body sits fainter and smaller */
+    @media (max-width: 1999px) {
+        .far {
+            width: min(calc(var(--width) * 0.8), 26vw);
+            opacity: calc(var(--opacity) * 0.7);
+        }
+    }
+
+    /* Where the margin cannot hold a body, the body is not there. The frame's margin holds the widest crescent from
+       1900 px and half of the widest light from 2200 px, the width the near clouds need as well. A body placed inside
+       the frame needs only the two-column layout */
+    @media (max-width: 1899px) {
+        .far:not([data-inset]) {
+            display: none;
+        }
+    }
+
+    @media (max-width: 2199px) {
+        .far[data-soft]:not([data-inset]) {
+            display: none;
+        }
+    }
+
+    @media (max-width: 899px) {
+        .far[data-inset] {
+            display: none;
+        }
+    }
+</style>

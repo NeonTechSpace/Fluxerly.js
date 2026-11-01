@@ -1,0 +1,349 @@
+---
+// An icon found in space where it means something, one of the conductor's companions. It floats
+// slowly, glows in the section's voice and drifts a little slower than the page scrolls
+import { iconSrc, type IconName } from "../../lib/art"
+import iconParts from "../../lib/icon-parts.json"
+
+interface IconPartSet {
+    shadow: string
+    shadowRoom: number
+    pieces: { src: string; left: number; top: number; width: number; height: number; move?: { kind: string; seconds: number; x: number; y: number; turn: number; aroundX: number; aroundY: number } }[]
+}
+
+interface Props {
+    name: IconName
+    alt: string
+    // Longest side in CSS pixels at 1920
+    size?: number
+    // Rests on the floor instead of floating
+    resting?: boolean
+    // The page's own icon, in view on arrival, comes with the page instead of when it nears the screen
+    eager?: boolean
+    class?: string
+}
+
+const { name, alt, size = 220, resting = false, eager = false, class: className } = Astro.props
+// You look through this one, and its glow would light the hole
+const hollow = name === "support-lifebuoy"
+// A multi-part icon moves part by part once the site is moving and it nears the screen. Still shows the whole picture alone and
+// never downloads its parts
+const parts = (iconParts as Partial<Record<IconName, IconPartSet>>)[name]
+const pct = (share: number) => `${(share * 100).toFixed(3)}%`
+const place = (piece: IconPartSet["pieces"][number]) => {
+    const box = `left: ${pct(piece.left)}; top: ${pct(piece.top)}; width: ${pct(piece.width)}; height: ${pct(piece.height)}`
+    const move = piece.move
+    if (!move) return box
+    const originX = (move.aroundX - piece.left) / piece.width
+    const originY = (move.aroundY - piece.top) / piece.height
+    return `${box}; transform-origin: ${pct(originX)} ${pct(originY)}; --x: ${move.x}; --y: ${move.y}; --turn: ${move.turn}deg; --seconds: ${move.seconds}s`
+}
+---
+
+<figure class:list={["companion", className, { resting }]} style={`--size: ${size}px`} data-float data-depth data-parts={parts ? "" : undefined}>
+    <!-- Each moving layer carries no filter of its own. Its blurred or shadowed art inside is painted once,
+         so the floating, breathing and drifting never redraw a blur on any frame -->
+    {!hollow && <span class="glow" aria-hidden="true"><span class="glow-light"></span></span>}
+    <span class="float">
+        <img class="whole" src={iconSrc(name, 640)} alt={alt} width="640" height="640" loading={eager ? "eager" : "lazy"} fetchpriority={eager ? "high" : undefined} decoding={eager ? "sync" : "async"} />
+        {
+            parts && (
+                <span class="parts" aria-hidden="true">
+                    <img class="part-shadow" data-src={parts.shadow} alt="" style={`left: ${pct(-parts.shadowRoom)}; top: ${pct(-parts.shadowRoom)}; width: ${pct(1 + 2 * parts.shadowRoom)}; height: ${pct(1 + 2 * parts.shadowRoom)}`} />
+                    {parts.pieces.map((piece) => (
+                        <img class="part" data-src={piece.src} data-move={piece.move?.kind} alt="" style={place(piece)} />
+                    ))}
+                </span>
+            )
+        }
+    </span>
+    {resting && <span class="floor-light" aria-hidden="true"></span>}
+</figure>
+
+<script>
+    import { getExperience, prefersReducedMotion, subscribeExperience } from "../../lib/experience"
+
+    // The parts come when a multi-part icon nears the screen and only show once they are all decoded, so it is never seen in pieces.
+    // They move only while it is on screen
+    const moving = () => getExperience() !== "still" && !prefersReducedMotion()
+    const near = new Set<HTMLElement>()
+    const wake = (figure: HTMLElement) => {
+        if (figure.dataset.partsLoading !== undefined || !moving()) return
+        figure.dataset.partsLoading = ""
+        const pictures = [...figure.querySelectorAll<HTMLImageElement>(".parts img")]
+        for (const picture of pictures) picture.src = picture.dataset.src ?? ""
+        Promise.all(pictures.map((picture) => picture.decode()))
+            .then(() => (figure.dataset.live = ""))
+            .catch((reason) => console.warn("An icon stays whole:", reason))
+    }
+    const nearby = new IntersectionObserver(
+        (entries) => {
+            for (const entry of entries) {
+                const figure = entry.target as HTMLElement
+                if (entry.isIntersecting) {
+                    near.add(figure)
+                    wake(figure)
+                } else near.delete(figure)
+            }
+        },
+        { rootMargin: "50% 0px" },
+    )
+    const seen = new IntersectionObserver((entries) => {
+        for (const entry of entries) (entry.target as HTMLElement).toggleAttribute("data-seen", entry.isIntersecting)
+    })
+    for (const figure of document.querySelectorAll<HTMLElement>("[data-parts]")) {
+        nearby.observe(figure)
+        seen.observe(figure)
+    }
+    subscribeExperience(() => near.forEach(wake))
+</script>
+
+<style>
+    .companion {
+        /* Its own size, held under the page's cap for short screens and phones */
+        --shown: min(var(--size), var(--companion-cap, var(--size)));
+        --tx: 0px;
+        --ty: 0px;
+        --lit: 0;
+        --depth: var(--depth-companion);
+        --anchor: 0px;
+
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: var(--shown);
+        height: var(--shown);
+        margin: 0;
+        pointer-events: none;
+        user-select: none;
+
+        /* The reader's light pulls it a little. It floats a little nearer than the reading: the page's scroll
+           timeline drifts it by its share of the scroll from its anchor, which the night's script sets with the
+           other layers of space, so it moves in step with the page instead of a frame behind it. Longhands
+           only: the build's CSS minifier folds a following animation-timeline into an animation shorthand,
+           which the browser then rejects whole */
+        transform: translate3d(var(--tx), var(--ty), 0);
+        transition: transform 600ms cubic-bezier(0.2, 0.7, 0.2, 1);
+        will-change: transform;
+        animation-name: depth-drift;
+        animation-duration: auto;
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+        animation-timeline: scroll(root);
+        animation-range: 0px var(--follow);
+    }
+
+    .glow,
+    .float {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+    }
+
+    .glow {
+        inset: 8%;
+        opacity: 0.25;
+        transition: opacity 1200ms ease;
+        animation: companion-breathe 7s ease-in-out infinite;
+    }
+
+    .glow-light {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        background: radial-gradient(circle, color-mix(in srgb, var(--accent, var(--color-cyan)) 28%, transparent), transparent 68%);
+        filter: blur(14px);
+    }
+
+    /* The thread reaching the section wakes its keepsake */
+    :global(section[data-reached]) .glow {
+        opacity: 1;
+    }
+
+    .float {
+        animation: companion-float 6.5s ease-in-out infinite;
+    }
+
+    /* The reader's light reaching a companion brightens it. On the moving layer the brightness is applied
+       as it is drawn, so the art and its shadow are not painted again while the light changes. Script marks
+       a lit companion, and only then does the layer carry the filter */
+    .companion[data-lit] .float {
+        filter: brightness(calc(1 + var(--lit) * 0.18));
+    }
+
+    img {
+        position: relative;
+        width: var(--shown);
+        height: var(--shown);
+        max-width: 100%;
+        object-fit: contain;
+        filter: drop-shadow(0 18px 24px rgb(0 0 0 / 0.5));
+    }
+
+    .resting .float {
+        animation: none;
+    }
+
+    /* The parts stacked over each other give the whole picture again. The shadow lies under them, baked */
+    /* The size of the icon as a page draws it, which a page may set apart from the companion's own size */
+    .parts {
+        position: absolute;
+        inset: 0;
+        container-type: size;
+        visibility: hidden;
+    }
+
+    .parts img {
+        position: absolute;
+        max-width: none;
+        filter: none;
+        object-fit: fill;
+    }
+
+    .companion[data-live] .parts {
+        visibility: visible;
+    }
+
+    .companion[data-live] .whole {
+        visibility: hidden;
+    }
+
+    :global(html[data-still]) .companion .whole {
+        visibility: visible;
+    }
+
+    :global(html[data-still]) .companion .parts {
+        visibility: hidden;
+    }
+
+    /* Every motion starts and ends on the painted place, so taking over from the whole picture shows no jump, and each part
+       keeps its own time, so they never move as one */
+    .companion[data-live] .part[data-move] {
+        will-change: transform;
+        animation-duration: var(--seconds);
+        animation-iteration-count: infinite;
+        animation-timing-function: ease-in-out;
+        animation-play-state: paused;
+    }
+
+    .companion[data-live][data-seen] .part[data-move] {
+        animation-play-state: running;
+    }
+
+    .companion[data-live] .part[data-move="sway"] {
+        animation-name: part-sway;
+    }
+
+    .companion[data-live] .part[data-move="pulse"] {
+        will-change: opacity;
+        animation-name: part-pulse;
+    }
+
+    .companion[data-live] .part[data-move="fall"] {
+        animation-name: part-fall;
+        animation-timing-function: linear;
+    }
+
+    @keyframes part-sway {
+        0%,
+        100% {
+            transform: none;
+        }
+        25% {
+            transform: translate(calc(100cqw * var(--x)), calc(100cqw * var(--y))) rotate(var(--turn));
+        }
+        75% {
+            transform: translate(calc(100cqw * var(--x) * -1), calc(100cqw * var(--y) * -1)) rotate(calc(var(--turn) * -1));
+        }
+    }
+
+    @keyframes part-pulse {
+        0%,
+        100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.3;
+        }
+    }
+
+    @keyframes part-fall {
+        0% {
+            opacity: 1;
+            transform: none;
+        }
+        72% {
+            opacity: 0;
+            transform: translateY(calc(100cqw * var(--y)));
+        }
+        73% {
+            opacity: 0;
+            transform: none;
+        }
+        100% {
+            opacity: 1;
+            transform: none;
+        }
+    }
+
+    /* The floor catches a little light under what rests on it */
+    .floor-light {
+        position: absolute;
+        left: 12%;
+        right: 12%;
+        bottom: 2%;
+        height: 12%;
+        border-radius: 50%;
+        background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent, var(--color-cyan)) 30%, transparent), transparent 70%);
+        filter: blur(8px);
+    }
+
+    @keyframes companion-float {
+        0%,
+        100% {
+            transform: translateY(0) rotate(-2deg);
+        }
+        50% {
+            transform: translateY(-9px) rotate(2deg);
+        }
+    }
+
+    @keyframes companion-breathe {
+        0%,
+        100% {
+            opacity: 0.7;
+        }
+        50% {
+            opacity: 1;
+        }
+    }
+
+    :global(.night[data-still]) .companion,
+    :global(.night[data-still]) .float,
+    :global(.night[data-still]) .glow,
+    :global(html[data-still]) .part {
+        animation: none;
+    }
+
+    /* With time stopped the whole line is drawn, so every keepsake is awake from the first frame, without a fade */
+    :global(.night[data-still]) .glow {
+        opacity: 1;
+        transition: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .companion,
+        .float,
+        .glow,
+        .part {
+            animation: none;
+        }
+    }
+
+    @media (max-width: 899px) {
+        .companion {
+            transform: none;
+            animation: none;
+        }
+    }
+</style>

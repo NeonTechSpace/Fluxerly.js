@@ -1,0 +1,67 @@
+---
+// The sidebar's course. A switch between the two parts of the docs, then the chosen part as stations along one signal
+// line. Each station opens and closes. The line is lit from the start of the course down to the bead, which sits on
+// the current page, so the reader sees where they are and how far along the course that is
+import CourseList from "./CourseList.astro"
+import type { CoursePart } from "../../lib/docs-nav"
+
+interface Props {
+    parts: CoursePart[]
+}
+
+const { parts } = Astro.props
+
+// The stations before the one holding the current page have been passed. The bead's own station is lit
+const view = parts.map((part) => {
+    const at = part.groups.findIndex((group) => group.current)
+    return { part, here: at >= 0, state: (index: number) => (at < 0 || index > at ? undefined : index < at ? "passed" : "here") }
+})
+---
+
+<div class="part-switch" role="tablist" aria-label="Part of the docs">
+    {
+        parts.map((part) => (
+            <button
+                class="part-tab"
+                type="button"
+                role="tab"
+                id={`part-tab-${part.id}`}
+                aria-controls={`part-${part.id}`}
+                aria-selected={part.current ? "true" : "false"}
+                tabindex={part.current ? 0 : -1}
+                data-part-tab={part.id}
+                data-tone={part.tone}
+            >
+                {part.title}
+            </button>
+        ))
+    }
+</div>
+<div class="course-scroll" data-course-scroll>
+    {
+        view.map(({ part, here, state }) => (
+            <div class="course" role="tabpanel" id={`part-${part.id}`} aria-labelledby={`part-tab-${part.id}`} hidden={!part.current} data-part={part.id} data-tone={part.tone}>
+                <nav aria-label={part.title}>
+                    {part.groups.map((group, index) => (
+                        <details class="course-station" open={group.current} data-group={group.id} data-reach={state(index)}>
+                            <summary class="station-head" data-here={group.current ? "" : undefined}>
+                                <span class="station-ring" aria-hidden="true" />
+                                <span class="station-title">{group.title}</span>
+                                <svg class="station-caret" viewBox="0 0 256 256" aria-hidden="true" focusable="false">
+                                    <path d="M181.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32l80,80A8,8,0,0,1,181.66,133.66Z" />
+                                </svg>
+                            </summary>
+                            <CourseList items={group.items} />
+                        </details>
+                    ))}
+                </nav>
+                {here && (
+                    <>
+                        <span class="signal" aria-hidden="true" data-signal />
+                        <span class="bead" aria-hidden="true" data-bead />
+                    </>
+                )}
+            </div>
+        ))
+    }
+</div>

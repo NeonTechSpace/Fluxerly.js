@@ -1,26 +1,16 @@
-import { glob } from "astro/loaders"
 import { defineCollection } from "astro:content"
+import { glob } from "astro/loaders"
 import { z } from "astro/zod"
+import { titleCase } from "./lib/title-case"
 
-export const collections = {
-    docs: defineCollection({
-        loader: glob({ pattern: "**/*.{md,mdx}", base: "./content/docs" }),
-        schema: z.object({
-            title: z.string(),
-            navTitle: z.string().trim().min(1).optional(),
-            description: z.string().optional(),
-            snapshotSchema: z.number().int().positive().optional(),
-        }),
+// The guides. index.md is the docs overview at /docs/. A published version's build reads the guides from its snapshot
+const guides = defineCollection({
+    loader: glob({ pattern: "*.md", base: `${process.env.DOCS_CONTENT ?? "./content"}/guides` }),
+    schema: z.object({
+        title: z.string().transform((title) => titleCase(title)),
+        navTitle: z.string().transform((title) => titleCase(title)).optional(),
+        description: z.string().optional(),
     }),
-    meta: defineCollection({
-        loader: glob({ pattern: "**/meta.json", base: "./content/docs" }),
-        schema: z.object({
-            title: z.string().optional(),
-            description: z.string().optional(),
-            pages: z.array(z.string()).optional(),
-            root: z.union([z.boolean(), z.string()]).optional(),
-            // Reference entry points list source-assigned categories for sidebar navigation
-            categories: z.record(z.string(), z.array(z.object({ title: z.string(), anchor: z.string() }))).optional(),
-        }),
-    }),
-}
+})
+
+export const collections = { guides }

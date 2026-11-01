@@ -1,0 +1,63 @@
+---
+import CommandChip from "../components/sections/CommandChip.astro"
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide, initCommand } from "../lib/links"
+import starterBot from "../components/features/snippets/starter-bot.js.txt?raw"
+import initTest from "../components/features/snippets/init-bot-test.js.txt?raw"
+import lifetimeBot from "../components/features/snippets/lifetime-bot.js.txt?raw"
+
+const accent = "cyan"
+---
+
+<FeaturePage slug="first-reply" companion="first-reply-radio" companionAlt="A handheld radio sending signal arcs from its antenna">
+    <Fragment slot="title">A Working Bot in <span class="hi">One File</span></Fragment>
+
+    <Scene id="token" step={1} side="left" {accent} guide={guide("create-a-bot")} guideLabel="Create a Bot in the Docs">
+        <Fragment slot="title">Create the Bot, Keep Its Token Private</Fragment>
+        <Fragment slot="text">
+            <p>A Fluxer bot is an application with its own bot account. Create one from your account settings in the Fluxer app, then copy the bot token it shows, the secret the bot signs in with. Fluxer shows it only right after you create the application or regenerate the token</p>
+            <p>Anyone holding the token can act as the bot. It goes in a file named <code class="inline-code">.env</code> that version control ignores, never in the code</p>
+        </Fragment>
+        <ol class="path glass" aria-label="Where to create the bot in the Fluxer app">
+            <li>User settings</li>
+            <li>Developer</li>
+            <li>Applications</li>
+            <li>Create application</li>
+        </ol>
+        <div class="pair">
+            <CodePanel file=".env" label="The .env file" code="FLUXER_BOT_TOKEN=paste-the-token-here" language="dotenv" />
+            <CodePanel file=".gitignore" label="The .gitignore file" code=".env" language="gitignore" />
+        </div>
+    </Scene>
+
+    <Scene id="one-file" step={2} side="right" {accent} guide={guide("quick-start")} guideLabel="Start a Bot in the Docs">
+        <Fragment slot="title">One File That Answers</Fragment>
+        <Fragment slot="text">
+            <p>This is the whole bot. It reads its token from the environment, and <code class="inline-code">runBot</code> connects and calls the handler for each new message from a person. Install the SDK and invite the bot to a community where it can view the channel and send messages. Start it with the command under the code and send <code class="inline-code">!ping</code>. It answers Pong!</p>
+            <p>The same call runs large bots. It reconnects on its own, stops cleanly on Ctrl+C and explains a failed start with a suggested fix. Returning the reply hands its outcome to the SDK, so a failed send shows up in the log</p>
+        </Fragment>
+        <CodePanel file="bot.js" label="A bot in one file" code={starterBot} />
+        <CommandChip command="node --env-file=.env bot.js" />
+    </Scene>
+
+    <Scene id="init" step={3} side="left" {accent} guide={guide("testing")} guideLabel="Test a Bot in the Docs">
+        <Fragment slot="title">Or Generate It, Test Included</Fragment>
+        <Fragment slot="text">
+            <p>In a new folder, <code class="inline-code">fluxerly init</code> asks for JavaScript, TypeScript or the optional Effect API and writes the same bot, shaped so a test can import it, with its <code class="inline-code">.env</code> and <code class="inline-code">.gitignore</code>, and a first test. Then it installs the dependencies and prints the steps that remain</p>
+            <p>The test runs the bot against an in-memory Fluxer, so it needs no token and no network</p>
+        </Fragment>
+        <CommandChip command={initCommand} />
+        <CodePanel file="bot.test.js" label="The test that init writes" code={initTest} />
+    </Scene>
+
+    <Scene id="lifetime" icon="shutdown-switch" iconAlt="A power switch with a clean off position" step={4} side="right" {accent} guide={guide("starter-lifetime")} guideLabel="Bot Lifetime in the Docs">
+        <Fragment slot="title">Start and Stop, Already Handled</Fragment>
+        <Fragment slot="text">
+            <p><code class="inline-code">runBot</code> checks every option before anything connects, registers the handlers, then connects. While it runs, it reconnects after a lost connection, and a handler that fails is logged while the bot keeps going</p>
+            <p>On Ctrl+C it stops taking new events, gives running handlers time to finish, closes the connection and waits for cleanup. Startup work and its timers can stop with the bot</p>
+        </Fragment>
+        <CodePanel file="bot.js" label="A bot with startup work and a longer drain" code={lifetimeBot} />
+    </Scene>
+</FeaturePage>

@@ -1,0 +1,12 @@
+import { describeError, type Client, type Message } from "@neontechspace/fluxerly"
+
+export async function replyHello(client: Client, message: Message) {
+    if (message.author.isBot) return
+
+    const result = await client.messages.reply(message, `Hello, ${message.author.username}!`)
+    if (result.isErr()) {
+        console.error(describeError(result.error))
+        return
+    }
+    return result.value
+}

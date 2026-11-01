@@ -1,0 +1,466 @@
+/* Shared pieces of the feature pages. They sit in the homepage's space and reuse its grid, voices and glass, at the
+   reading sizes of the homepage: body 19 px, leads 20 px, titles 48 px and code 15 px, nothing under 15 px */
+
+.space {
+    --code-size: 15px;
+}
+
+/* The hero band: the page's title, what it is for and its keepsake */
+.feature-hero {
+    --hero-top: clamp(148px, 10vw, 196px);
+
+    position: relative;
+    padding-top: var(--hero-top);
+}
+
+/* The title and the page's keepsake sit together as one lockup, the keepsake right after the words */
+.feature-hero .page-grid {
+    display: flex;
+    align-items: center;
+    gap: clamp(40px, 6vw, 112px);
+}
+
+.feature-hero .hero-text {
+    --title-scale: clamp(44px, 3.75vw, 72px);
+
+    position: relative;
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
+/* The signal line comes down from the top of the page and ends at this page's station, a ring beside the first
+   line of the title, as far outside the content's edge as the homepage's stations. The line draws itself once and
+   the station lights when it lands */
+.feature-hero .arrival {
+    --reach: 900px;
+
+    position: absolute;
+    top: calc(-1 * var(--reach));
+    left: calc(-1 * var(--station-reach) - 5px);
+    width: 10px;
+    height: calc(var(--reach) + 0.53 * var(--title-scale) + 5px);
+    pointer-events: none;
+}
+
+.feature-hero .arrival::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 10px;
+    left: 50%;
+    width: 1px;
+    background: linear-gradient(to bottom, transparent 55%, color-mix(in srgb, var(--accent) 75%, transparent));
+    transform-origin: top;
+    animation: arrival-draw 1100ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.feature-hero .arrival::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    box-shadow:
+        0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent),
+        0 0 14px color-mix(in srgb, var(--accent) 60%, transparent);
+    animation: arrival-light 700ms ease 900ms both;
+}
+
+@keyframes arrival-draw {
+    from {
+        transform: scaleY(0);
+    }
+    to {
+        transform: scaleY(1);
+    }
+}
+
+@keyframes arrival-light {
+    from {
+        opacity: 0.25;
+        box-shadow: none;
+    }
+}
+
+.space[data-still] .feature-hero .arrival::before,
+.space[data-still] .feature-hero .arrival::after {
+    animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .feature-hero .arrival::before,
+    .feature-hero .arrival::after {
+        animation: none;
+    }
+}
+
+/* Narrower screens draw no stations on the homepage, so the ring keeps 15 px from the screen's edge instead */
+@media (max-width: 1279px) {
+    .feature-hero .arrival {
+        left: calc(10px - var(--page-margin));
+    }
+}
+
+@media (max-width: 1023px) {
+    .feature-hero .arrival {
+        display: none;
+    }
+}
+
+.page-title {
+    max-width: 14em;
+    margin: 0;
+    font-size: var(--title-scale);
+    font-weight: var(--weight-display);
+    line-height: 1.06;
+    letter-spacing: var(--tracking-tight);
+    color: var(--color-ink);
+    text-wrap: balance;
+}
+
+.page-title .hi {
+    color: var(--accent);
+}
+
+.feature-hero .hero-line {
+    max-width: 44ch;
+    margin-top: 26px;
+    font-size: var(--type-lead);
+}
+
+.feature-hero .hero-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 32px;
+    margin-top: 30px;
+}
+
+.feature-hero .hero-companion {
+    flex: none;
+}
+
+.feature-hero figure.hero-companion,
+.feature-hero figure.hero-companion img,
+.feature-hero .hero-companion figure,
+.feature-hero .hero-companion figure img {
+    width: min(var(--size), 24vw);
+    height: min(var(--size), 24vw);
+}
+
+/* The richest hero: a larger keepsake with its orbits beside the title, in plain space */
+.feature-hero[data-rich] {
+    padding-bottom: clamp(24px, 2vw, 40px);
+}
+
+.feature-hero[data-rich] .hero-text {
+    --title-scale: clamp(48px, 4.4vw, 84px);
+}
+
+/* The scope ring around the richest hero's keepsake, tilted like an orbit */
+.feature-hero .orbit {
+    position: relative;
+    display: grid;
+    place-items: center;
+}
+
+.feature-hero .scope {
+    position: absolute;
+    top: 54%;
+    left: 50%;
+    /* Beside the title it takes what the title leaves, so its widest ring never reaches the words */
+    width: min(40vw, 560px);
+    height: auto;
+    overflow: visible;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+}
+
+.feature-hero .scope-far {
+    z-index: 0;
+}
+
+.feature-hero .scope-near {
+    z-index: 2;
+}
+
+.feature-hero .orbit > :not(svg) {
+    position: relative;
+    z-index: 1;
+}
+
+/* Each orbit is a band with a body: a broad faint underlay under a firm core line. The near half, in front of the
+   keepsake, is brighter than the far half behind it, which is what gives the rings their depth. The success orbit
+   is the widest, failure and requirements a little narrower */
+.feature-hero .scope-band,
+.feature-hero .scope-ring {
+    fill: none;
+}
+
+.feature-hero .scope-band {
+    stroke: color-mix(in srgb, var(--ring) 16%, transparent);
+    stroke-width: calc(9px * var(--weight, 1));
+}
+
+.feature-hero .scope-ring {
+    stroke: color-mix(in srgb, var(--ring) 82%, white 6%);
+    stroke-width: calc(2.6px * var(--weight, 1));
+    stroke-linecap: round;
+}
+
+/* Almost the same width behind, so the halves meet without a step at the ring's ends, only fainter */
+.feature-hero .scope-far .scope-band {
+    stroke: color-mix(in srgb, var(--ring) 8%, transparent);
+}
+
+.feature-hero .scope-far .scope-ring {
+    stroke: color-mix(in srgb, var(--ring) 38%, transparent);
+    stroke-width: calc(2.3px * var(--weight, 1));
+}
+
+/* Work running inside each orbit: a solid bead with a light core, a small halo only */
+.feature-hero .scope-bead {
+    fill: color-mix(in srgb, var(--ring) 55%, white);
+    stroke: color-mix(in srgb, var(--ring) 70%, transparent);
+    stroke-width: 2px;
+    filter: drop-shadow(0 0 3px color-mix(in srgb, var(--ring) 70%, transparent));
+}
+
+.feature-hero .orbit-success {
+    --ring: var(--color-violet);
+}
+
+.feature-hero .orbit-failure {
+    --ring: var(--color-gold);
+    --weight: 0.85;
+}
+
+.feature-hero .orbit-needs {
+    --ring: var(--color-cyan);
+    --weight: 0.8;
+}
+
+.space[data-still] .feature-hero .scope-bead {
+    display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .feature-hero .scope-bead {
+        display: none;
+    }
+}
+
+@media (max-width: 1023px) {
+    .feature-hero .scope {
+        width: 280px;
+        top: 50%;
+    }
+}
+
+/* Scenes hang off the page in the homepage's alternating split */
+.scene {
+    margin-top: var(--section-gap);
+}
+
+.feature-hero + .scene {
+    margin-top: clamp(64px, 5vw, 96px);
+}
+
+.scene .section-title {
+    font-size: var(--type-display);
+}
+
+.scene .step {
+    display: block;
+    margin-bottom: 18px;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    letter-spacing: var(--tracking-wide);
+    color: var(--accent);
+}
+
+.scene-text p {
+    max-width: 40ch;
+    margin: 20px 0 0;
+    font-size: var(--type-lead);
+    line-height: 1.6;
+    color: var(--color-muted);
+    text-wrap: pretty;
+}
+
+/* The scene's point in one sentence, in its voice */
+.scene .point {
+    display: flex;
+    gap: 14px;
+    max-width: 36ch;
+    margin: 26px 0 0;
+    font-size: var(--type-lead);
+    font-weight: var(--weight-medium);
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--accent) 55%, white);
+    text-wrap: balance;
+}
+
+.scene .point .wave-mark {
+    margin-top: 6px;
+}
+
+.scene .go-link {
+    margin-top: 26px;
+}
+
+/* Code panels and chips stack in the scene's body. A body shorter than its words sits level with them, so the two
+   read as one row. The body is a size container, so the path below can stack when it is too narrow for one line */
+.scene .body {
+    display: grid;
+    gap: 20px;
+    align-self: center;
+    container-type: inline-size;
+}
+
+.scene .body > .cmd-chip {
+    justify-self: start;
+}
+
+.scene .cmd-chip code {
+    font-size: var(--type-small);
+}
+
+/* A path through an app's menus, each step numbered and joined to the next by a short line in the scene's voice */
+.scene .path {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 0;
+    margin: 0;
+    padding: 20px 24px;
+    list-style: none;
+    counter-reset: step;
+}
+
+.scene .path li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: var(--type-body);
+    font-weight: var(--weight-medium);
+    color: var(--color-ink);
+    counter-increment: step;
+}
+
+.scene .path li::before {
+    content: counter(step);
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 50%;
+}
+
+.scene .path li:not(:last-child)::after {
+    content: "";
+    width: 28px;
+    height: 1px;
+    margin-inline: 4px 12px;
+    background: linear-gradient(to right, color-mix(in srgb, var(--accent) 70%, transparent), transparent);
+}
+
+/* The last step is the one that does something */
+.scene .path li:last-child {
+    color: color-mix(in srgb, var(--accent) 60%, white);
+}
+
+/* A body too narrow for the whole path on one line stacks the steps, each joined to the next by a short line
+   down from its number, so no step is ever left alone on a line */
+@container (max-width: 799px) {
+    .scene .path {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+    }
+
+    .scene .path li {
+        position: relative;
+    }
+
+    .scene .path li:not(:last-child)::after {
+        position: absolute;
+        top: 100%;
+        left: 13.5px;
+        width: 1px;
+        height: 14px;
+        margin: 0;
+        background: linear-gradient(to bottom, color-mix(in srgb, var(--accent) 70%, transparent), transparent);
+    }
+}
+
+/* Two short files side by side, such as .env and .gitignore, when the body is wide enough for both to show their
+   lines whole. In a narrower body they stack */
+.scene .pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 20px;
+}
+
+@container (max-width: 799px) {
+    .scene .pair {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 1023px) {
+    .feature-hero .page-grid {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 32px;
+    }
+
+    .scene .pair {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* A scene's number stays above its title on a phone, where the intro is a grid */
+@media (max-width: 899px) {
+    .scene .split > .intro > .step {
+        grid-row: 1;
+    }
+
+    .scene .split > .intro > .section-title,
+    .scene .split > .intro > .keepsake {
+        grid-row: 2;
+    }
+}
+
+/* On a stacked hero the orbits have a row of their own, in the middle and whole on the screen, clear of the links above them */
+@media (max-width: 1023px) {
+    .feature-hero .orbit {
+        --ring: min(86vw, 420px);
+
+        align-self: center;
+        width: var(--ring);
+        height: calc(var(--ring) * 0.74);
+        margin-top: 12px;
+    }
+
+    .feature-hero .scope {
+        top: 50%;
+        width: var(--ring);
+    }
+}
+
+/* An upright 4K screen zooms the page, so the rings ask for less of it */
+@media (min-width: 1800px) and (max-aspect-ratio: 4/5) {
+    .feature-hero .scope {
+        width: 480px;
+    }
+}

@@ -4,11 +4,11 @@ navTitle: History & cache
 description: Read recent messages with fetchHistory and iterateHistory, search the index and use locally cached copies
 ---
 
-After the [first reply bot](/docs/{{version}}/quick-start/) works, read earlier messages from a channel, search them or keep recent ones in a local [cache](/docs/{{version}}/glossary/#cache). Reading history is a request to Fluxer and does not need the [gateway](/docs/{{version}}/glossary/#gateway) connection
+After the [first reply bot](/docs/quick-start/) works, read earlier messages from a channel, search them or keep recent ones in a local [cache](/docs/glossary/#cache). Reading history is a request to Fluxer and does not need the [gateway](/docs/glossary/#gateway) connection
 
 ## Scan for one message
 
-Find the first recent message that matches a rule. Add this helper to a module that already has a bot [`Client`](/docs/{{version}}/api/interfaces/js-ts.Client/)
+Find the first recent message that matches a rule. Add this helper to a module that already has a bot [`Client`](/docs/api/js-ts/client/)
 
 ```ts
 import type { Client, Message } from "@neontechspace/fluxerly"
@@ -26,9 +26,9 @@ export async function findRecentMessage(
 }
 ```
 
-The helper returns a [Result](/docs/{{version}}/glossary/#result) with the matching message or the failure that stopped the read. It returns `undefined` if none of the 200 newest messages match
+The helper returns a [Result](/docs/glossary/#result) with the matching message or the failure that stopped the read. It returns `undefined` if none of the 200 newest messages match
 
-The [`iterateHistory`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratehistory) method reads newest first and requests the next page only when the loop needs it, so stopping early saves requests. The required `maxItems` bounds the scan, so older messages can remain unread. To read a single page of up to 100 messages instead, use [`fetchHistory`](/docs/{{version}}/api/interfaces/js-ts.Messages/#fetchhistory), as the [last section](/docs/{{version}}/history-and-cache/#wire-it-up) shows
+The [`iterateHistory`](/docs/api/js-ts/messages/#messages-iteratehistory) method reads newest first and requests the next page only when the loop needs it, so stopping early saves requests. The required `maxItems` bounds the scan, so older messages can remain unread. To read a single page of up to 100 messages instead, use [`fetchHistory`](/docs/api/js-ts/messages/#messages-fetchhistory), as the [last section](/docs/history-and-cache/#wire-it-up) shows
 
 ## Read pinned messages
 
@@ -53,7 +53,7 @@ The helper returns the matching messages, a failed Result, or `undefined` while 
 
 Search pages also include channel snapshots. An unnamed group DM has `name: null`, while another private channel may omit the name. The `includeNsfw` filter requests age-restricted channel results. In an age-restricted community, guild search includes those results for eligible callers, including bots, even when the filter is omitted or false. Channel access checks still apply
 
-To search several pages, use [`iterateSearch`](/docs/{{version}}/api/interfaces/js-ts.Messages/#iteratesearch) with `maxItems` as the limit. Results can shift while the index changes during the scan
+To search several pages, use [`iterateSearch`](/docs/api/js-ts/messages/#messages-iteratesearch) with `maxItems` as the limit. Results can shift while the index changes during the scan
 
 ## Limit the message cache
 
@@ -88,9 +88,9 @@ To release cached data while the bot runs, call `client.cache.clear("messages")`
 The cache stores data only in memory. A message may be missing because it was removed to make room, expired or conflicted with another observation of the same message. A lost gateway connection also clears the messages cached before it, even when the connection recovers, because changes during the gap may have been missed.
 The entry and byte limits do not count runtime overhead or copies held elsewhere in the application. To react to cache changes, register a listener with `client.cache.onChange`, which reports each stored, deleted or cleared entry. A listener that returns a promise has at most 256 unfinished calls, and up to 256 more changes wait for them. Beyond that, the oldest waiting change is dropped and logged as `cache.changesDropped`. Shutdown does not wait for unfinished calls, so changes still waiting then are dropped and logged the same way. Pass `{ concurrency, maxPendingChanges }` as the second argument to change these limits
 
-Deleting a channel or a [thread](/docs/{{version}}/threads/) removes its cached messages. Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no thread deletion for them. A message does not record which channel holds its thread, so the cache then also removes the messages of every channel in that community that the channel cache does not hold. Messages read through REST carry no community, so they count as possibly in that community. Without `cache.channels`, all of these messages go. With it, which also fills from each community's startup snapshot, messages in the channels and threads it still holds stay
+Deleting a channel or a [thread](/docs/threads/) removes its cached messages. Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no thread deletion for them. A message does not record which channel holds its thread, so the cache then also removes the messages of every channel in that community that the channel cache does not hold. Messages read through REST carry no community, so they count as possibly in that community. Without `cache.channels`, all of these messages go. With it, which also fills from each community's startup snapshot, messages in the channels and threads it still holds stay
 
-See [`ClientOptions.cache`](/docs/{{version}}/api/interfaces/js-ts.ClientOptions/#cache) and [`MessageCacheSettings`](/docs/{{version}}/api/interfaces/js-ts.MessageCacheSettings/) for the complete cache contract
+See [`ClientOptions.cache`](/docs/api/js-ts/options/#clientoptions-cache) and [`MessageCacheSettings`](/docs/api/js-ts/caching/#messagecachesettings) for the complete cache contract
 
 </details>
 
@@ -98,7 +98,7 @@ See [`ClientOptions.cache`](/docs/{{version}}/api/interfaces/js-ts.ClientOptions
 
 Use a cached message when a recent copy is good enough, and fetch it from Fluxer otherwise. Pass a `MessageReference` with both `channelId` and `id`
 
-The received `message.messageReference` is a different type, `MessageContextReference`, whose `id` is optional. Check `id` before building the `MessageReference`. An [announcement-channel follow notice](/docs/{{version}}/announcement-channels/#find-where-a-copy-came-from) identifies only a source channel, not a message to fetch
+The received `message.messageReference` is a different type, `MessageContextReference`, whose `id` is optional. Check `id` before building the `MessageReference`. An [announcement-channel follow notice](/docs/announcement-channels/#find-where-a-copy-came-from) identifies only a source channel, not a message to fetch
 
 ```ts
 import { orThrow, type Client, type MessageReference } from "@neontechspace/fluxerly"
@@ -111,9 +111,9 @@ export async function readCachedOrFetch(client: Client, message: MessageReferenc
 }
 ```
 
-A cached copy returns immediately without a request. Otherwise the helper [fetches](/docs/{{version}}/api/interfaces/js-ts.Messages/#fetch) the message with a five-second deadline, and `orThrow` throws if that fails
+A cached copy returns immediately without a request. Otherwise the helper [fetches](/docs/api/js-ts/messages/#messages-fetch) the message with a five-second deadline, and `orThrow` throws if that fails
 
-The [`get`](/docs/{{version}}/api/interfaces/js-ts.Messages/#get) method returns `undefined` when the client has no usable copy. A cached copy is a [frozen snapshot](/docs/{{version}}/glossary/#frozen-snapshot) of the message as it was when observed, so use `fetch` when the task needs its current state
+The [`get`](/docs/api/js-ts/messages/#messages-get) method returns `undefined` when the client has no usable copy. A cached copy is a [frozen snapshot](/docs/glossary/#frozen-snapshot) of the message as it was when observed, so use `fetch` when the task needs its current state
 
 ## Check whether the limits fit
 

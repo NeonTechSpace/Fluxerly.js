@@ -1,0 +1,289 @@
+---
+import { GithubLogoIcon } from "@phosphor-icons/react/ssr"
+import { links } from "../lib/links"
+---
+
+<div class="controls-wrap" data-controls data-reflect="off">
+    <div class="controls">
+        <a class="control primary" href={links.docs}>
+            <svg class="waves" viewBox="0 0 20 14" aria-hidden="true" focusable="false">
+                <path d="M1.5 4.2c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4" />
+                <path d="M1.5 10.4c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4" />
+            </svg>
+            Get Started
+        </a>
+        <a class="control secondary" href={links.firstReply} data-explore>Explore</a>
+        <a class="control github" href={links.github} target="_blank" rel="noopener" aria-label="Fluxerly.js on GitHub">
+            <span class="coin" aria-hidden="true">
+                <GithubLogoIcon size={22} weight="fill" aria-hidden="true" />
+            </span>
+        </a>
+    </div>
+</div>
+
+<style>
+    .controls-wrap {
+        /* Whole pixels, so the one pixel rims stay crisp */
+        --ctl-h: round(clamp(44px, min(2.8cqw, 4.9cqh), 54px), 1px);
+
+        position: relative;
+        margin-top: clamp(16px, 2.5cqh, 28px);
+    }
+
+    .controls {
+        display: flex;
+        align-items: center;
+        gap: clamp(10px, 0.8cqw, 14px);
+    }
+
+    .control {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        height: var(--ctl-h);
+        padding-inline: calc(var(--ctl-h) * 0.56);
+        font-size: clamp(15px, min(0.99cqw, 1.76cqh), 19px);
+        font-weight: var(--weight-medium);
+        letter-spacing: 0;
+        color: var(--color-ink);
+        text-decoration: none;
+        white-space: nowrap;
+        border-radius: var(--corner-round);
+        isolation: isolate;
+        transition:
+            color var(--speed-fast) ease,
+            box-shadow var(--speed-normal) ease;
+    }
+
+    /* Each glass control draws its rim as a one pixel ring in a pseudo element. The ring is a masked
+       gradient, so it can carry two colors, and the controls sit on whole pixel heights so it stays crisp */
+    .primary::before,
+    .secondary::before,
+    .coin::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        padding: 1px;
+        border-radius: inherit;
+        mask:
+            linear-gradient(#000 0 0) content-box exclude,
+            linear-gradient(#000 0 0);
+        pointer-events: none;
+    }
+
+    /* Primary: deep cyan glass with the horizon's light rising inside it, and a gold hairline that
+       catches the key light top left and bottom right */
+    .primary {
+        height: calc(var(--ctl-h) + 2px);
+        padding-inline: calc(var(--ctl-h) * 0.68) calc(var(--ctl-h) * 0.76);
+        gap: 13px;
+        font-weight: var(--weight-semibold);
+        color: #f4fdff;
+        background:
+            radial-gradient(120% 90% at 50% 120%, rgb(120 240 250 / 0.4), rgb(70 227 239 / 0) 62%),
+            linear-gradient(180deg, rgb(255 255 255 / 0.1), rgb(255 255 255 / 0) 42%),
+            linear-gradient(180deg, rgb(22 112 144 / 0.66), rgb(10 56 88 / 0.74));
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.28),
+            inset 0 -1px 0 rgb(120 240 250 / 0.25),
+            inset 0 -16px 26px -14px rgb(120 240 250 / 0),
+            0 10px 28px -16px rgb(70 227 239 / 0.45);
+        overflow: hidden;
+        transition:
+            color var(--speed-normal) ease,
+            box-shadow var(--speed-slow) ease;
+    }
+
+    .primary::before {
+        background: linear-gradient(
+            118deg,
+            rgb(250 220 140 / 0.95) 0%,
+            rgb(236 196 110 / 0.45) 22%,
+            rgb(140 236 246 / 0.3) 48%,
+            rgb(140 236 246 / 0.24) 62%,
+            rgb(236 196 110 / 0.4) 84%,
+            rgb(250 220 140 / 0.85) 100%
+        );
+        transition: filter var(--speed-slow) ease;
+    }
+
+    /* A soft light that travels across the glass on hover. Transform only, on its own layer */
+    .primary::after {
+        content: "";
+        position: absolute;
+        inset: -40% -30%;
+        background: linear-gradient(100deg, rgb(255 255 255 / 0) 38%, rgb(255 255 255 / 0.18) 50%, rgb(255 255 255 / 0) 62%);
+        transform: translateX(-70%);
+        pointer-events: none;
+        will-change: transform;
+    }
+
+    .primary:hover::after,
+    .primary:focus-visible::after {
+        transition: transform 900ms cubic-bezier(0.2, 0.7, 0.2, 1);
+        transform: translateX(70%);
+    }
+
+    .primary:hover,
+    .primary:focus-visible {
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.36),
+            inset 0 -1px 0 rgb(120 240 250 / 0.6),
+            inset 0 -16px 26px -14px rgb(120 240 250 / 0.6),
+            0 10px 28px -16px rgb(70 227 239 / 0.7);
+    }
+
+    .primary:hover::before,
+    .primary:focus-visible::before {
+        filter: brightness(1.3);
+    }
+
+    .waves {
+        width: 1.15em;
+        height: 0.8em;
+        fill: none;
+        stroke: var(--color-cyan-pale);
+        stroke-width: 1.7;
+        stroke-linecap: round;
+        filter: drop-shadow(0 0 4px rgb(70 227 239 / 0.6));
+        transition: stroke var(--speed-fast) ease;
+    }
+
+    .primary:hover .waves,
+    .primary:focus-visible .waves {
+        stroke: #ffffff;
+    }
+
+    /* Secondary: clear glass with a violet rim of light. On hover a brighter charge runs once around
+       the rim, the way a reader's eye runs around a page, and the glass fills with a little nebula.
+       Both are transitions, so leaving eases back instead of cutting */
+    @property --rim-angle {
+        syntax: "<angle>";
+        inherits: true;
+        initial-value: 118deg;
+    }
+
+    @property --nebula {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+    }
+
+    .secondary {
+        --rim-angle: 118deg;
+        --nebula: 0;
+
+        color: var(--color-violet-mist);
+        background:
+            radial-gradient(90% 120% at 30% 0%, rgb(165 124 255 / calc(0.3 * var(--nebula))), rgb(165 124 255 / 0) 60%),
+            radial-gradient(70% 90% at 85% 100%, rgb(70 227 239 / calc(0.12 * var(--nebula))), rgb(70 227 239 / 0) 60%),
+            linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0) 50%),
+            rgb(165 124 255 / 0.06);
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1);
+        transition:
+            --rim-angle 900ms cubic-bezier(0.3, 0.6, 0.2, 1),
+            --nebula var(--speed-slow) ease,
+            color var(--speed-normal) ease,
+            box-shadow var(--speed-slow) ease;
+    }
+
+    .secondary::before {
+        background: conic-gradient(
+            from var(--rim-angle),
+            rgb(214 190 255 / 0.95) 0deg,
+            rgb(165 124 255 / 0.5) 90deg,
+            rgb(150 110 255 / 0.75) 180deg,
+            rgb(165 124 255 / 0.5) 270deg,
+            rgb(214 190 255 / 0.95) 360deg
+        );
+    }
+
+    .secondary:hover,
+    .secondary:focus-visible {
+        --rim-angle: 478deg;
+        --nebula: 1;
+
+        color: #fff;
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
+    }
+
+    /* GitHub: a clear glass coin with the mark alone. Same family as the npm coin at the water */
+    .github {
+        padding-inline: 2px;
+        margin-left: clamp(4px, 0.6cqw, 10px);
+        color: var(--color-muted);
+    }
+
+    .coin {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: var(--ctl-h);
+        height: var(--ctl-h);
+        color: var(--color-ink);
+        background:
+            radial-gradient(circle at 36% 28%, rgb(255 255 255 / 0.2), rgb(255 255 255 / 0) 46%),
+            linear-gradient(180deg, rgb(26 32 76 / 0.7), rgb(10 13 40 / 0.8));
+        border-radius: 50%;
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.2),
+            0 8px 22px -12px rgb(0 0 0 / 0.8);
+        transition: box-shadow var(--speed-normal) ease;
+    }
+
+    .coin::before {
+        background: linear-gradient(135deg, rgb(238 240 255 / 0.55), rgb(165 124 255 / 0.3) 55%, rgb(70 227 239 / 0.4));
+    }
+
+    .github:hover,
+    .github:focus-visible {
+        color: var(--color-ink);
+    }
+
+    .github:hover .coin,
+    .github:focus-visible .coin {
+        box-shadow:
+            inset 0 1px 0 rgb(255 255 255 / 0.3),
+            0 0 0 4px rgb(238 240 255 / 0.06),
+            0 8px 22px -10px rgb(70 227 239 / 0.5);
+    }
+
+    /* The mark turns a little, like a coin catching light */
+    .coin :global(svg) {
+        transition: transform var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    .github:hover .coin :global(svg),
+    .github:focus-visible .coin :global(svg) {
+        transform: rotate(-12deg) scale(1.06);
+    }
+
+    @media (max-width: 899px), (max-height: 480px), (max-aspect-ratio: 4/5) {
+        .controls {
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+    }
+
+    @media (max-width: 400px) {
+        .controls {
+            flex-wrap: nowrap;
+            gap: 8px;
+        }
+
+        .control,
+        .primary {
+            gap: 8px;
+            padding-inline: 14px;
+            font-size: var(--type-small);
+        }
+
+        .github {
+            flex: none;
+            padding-inline: 0;
+        }
+    }
+
+</style>

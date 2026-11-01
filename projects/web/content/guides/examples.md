@@ -4,15 +4,15 @@ navTitle: Examples
 description: Small, complete bots for moderation, reaction roles, welcomes and tickets, ready to copy and run
 ---
 
-Each example on this page is one complete file shaped like the [quick start](/docs/{{version}}/quick-start/)'s bot: It exports its options as `bot` with `defineBot` and passes them to `runBot` when Node.js runs the file. Copy it, set a few environment variables and run it. Every example logs failures in full and stops cleanly on Ctrl+C
+Each example on this page is one complete file shaped like the [quick start](/docs/quick-start/)'s bot: It exports its options as `bot` with `defineBot` and passes them to `runBot` when Node.js runs the file. Copy it, set a few environment variables and run it. Every example logs failures in full and stops cleanly on Ctrl+C
 
-Start with the [small bot](/docs/{{version}}/small-bot/) for a guided tour of commands, arguments, embeds, events, guards and cooldowns in one file. The examples below each solve one common task
+Start with the [small bot](/docs/small-bot/) for a guided tour of commands, arguments, embeds, events, guards and cooldowns in one file. The examples below each solve one common task
 
 ## Run an example
 
-Set up a project as in the [quick start](/docs/{{version}}/quick-start/): A folder with `"type": "module"` in `package.json` and the SDK installed. Save the example as `bot.js`, or as `bot.ts` to keep the TypeScript version, which Node.js 24 runs directly
+Set up a project as in the [quick start](/docs/quick-start/): A folder with `"type": "module"` in `package.json` and the SDK installed. Save the example as `bot.js`, or as `bot.ts` to keep the TypeScript version, which Node.js 24 runs directly
 
-A generated project's test imports `bot` from that file, so it runs the example without a token or a network. The test checks `!ping`, which most examples do not have, so change it to the example's own commands or events, as [Testing a bot](/docs/{{version}}/testing/) shows. Examples with required variables read them in `setup`, so a test that calls `ready()` sets them first
+A generated project's test imports `bot` from that file, so it runs the example without a token or a network. The test checks `!ping`, which most examples do not have, so change it to the example's own commands or events, as [Testing a bot](/docs/testing/) shows. Examples with required variables read them in `setup`, so a test that calls `ready()` sets them first
 
 Put the token and the example's other variables in a `.env` file, one `KEY=value` line each, and keep that file out of version control
 
@@ -27,11 +27,11 @@ Start the bot with Node.js loading that file:
 {"kind":"run","command":"node --env-file=.env bot.js"}
 ```
 
-A missing variable stops the bot at startup with an explanation. Channels, roles and messages are configured by their decimal [IDs](/docs/{{version}}/glossary/#id). The [deploying guide](/docs/{{version}}/deploying/) shows how to keep a bot running on a server
+A missing variable stops the bot at startup with an explanation. Channels, roles and messages are configured by their decimal [IDs](/docs/glossary/#id). The [deploying guide](/docs/deploying/) shows how to keep a bot running on a server
 
 ### Give the bot its permissions
 
-The invite in [Create a bot](/docs/{{version}}/create-a-bot/#3-invite-the-bot-to-a-community) grants only what the quick start needs. Each example below lists the permissions it needs, and without them its requests fail with a missing-permissions error
+The invite in [Create a bot](/docs/create-a-bot/#3-invite-the-bot-to-a-community) grants only what the quick start needs. Each example below lists the permissions it needs, and without them its requests fail with a missing-permissions error
 
 For a bot that is already in the community, edit the role Fluxer created for it, which has the application's name, and turn on the listed permissions in the community's role settings. For a bot that is not in the community yet, pass the listed names to the invite script instead, for example for the moderation example:
 
@@ -55,12 +55,12 @@ Some examples also change roles or members. Fluxer allows that only when the bot
 
 ## Moderation commands
 
-Five prefix commands for moderators: `!timeout @member 10m reason` stops a member from talking for 1 minute to 7 days, `!kick @member reason` removes a member from the community, `!ban @member reason` bans a member permanently, `!tempban @member 7d reason` bans a member for 1 minute to 2 years, and `!clear 20` deletes up to 20 recent messages in the channel. Each reason is optional. Each command has a [guard](/docs/{{version}}/glossary/#guard) that checks the moderator's own permission. The `!timeout`, `!kick`, `!ban` and `!tempban` commands also refuse a member who ranks at or above the moderator, which `members.fetchCanManage` checks with the moderator's ID as `actorUserId`. When a command fails, a [middleware](/docs/{{version}}/glossary/#middleware) function tells the moderator without showing error details in the channel
+Five prefix commands for moderators: `!timeout @member 10m reason` stops a member from talking for 1 minute to 7 days, `!kick @member reason` removes a member from the community, `!ban @member reason` bans a member permanently, `!tempban @member 7d reason` bans a member for 1 minute to 2 years, and `!clear 20` deletes up to 20 recent messages in the channel. Each reason is optional. Each command has a [guard](/docs/glossary/#guard) that checks the moderator's own permission. The `!timeout`, `!kick`, `!ban` and `!tempban` commands also check role hierarchy through `members.fetchCanManage`, with the moderator's ID as `actorUserId`. When a command fails, a [middleware](/docs/glossary/#middleware) function tells the moderator without showing error details in the channel
 
 - Variables: `FLUXER_BOT_TOKEN`
 - Bot permissions: `ViewChannel`, `SendMessages`, `ReadMessageHistory`, `ModerateMembers`, `KickMembers`, `BanMembers` and `ManageMessages`. The bot's highest role must also rank above the members it acts on
 - Moderator permissions: `ModerateMembers` for `!timeout`, `KickMembers` for `!kick`, `BanMembers` for `!ban` and `!tempban`, and `ManageMessages` for `!clear`
-- Two-factor authentication: In a community that requires it for moderation, every command fails with HTTP 400 unless the account that owns the bot's application has it enabled. See [communities that require two-factor authentication](/docs/{{version}}/guilds-and-permissions/#communities-that-require-two-factor-authentication)
+- Two-factor authentication: In a community that requires it for moderation, every command fails with HTTP 400 unless the account that owns the bot's application has it enabled. See [communities that require two-factor authentication](/docs/guilds-and-permissions/#communities-that-require-two-factor-authentication)
 
 ```ts
 {{example:moderation/bot.ts}}
@@ -79,7 +79,7 @@ Members react to one existing message to receive an opt-in role, and remove thei
 {{example:reaction-roles/bot.ts}}
 ```
 
-Configure only a role that members may give themselves. The bot sees only reactions made while it runs, so a member who reacted while it was offline removes the reaction and adds it again. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/reaction-roles) and [communities and permissions](/docs/{{version}}/guilds-and-permissions/) for more about role hierarchy
+Configure only a role that members may give themselves. The bot sees only reactions made while it runs, so a member who reacted while it was offline removes the reaction and adds it again. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/reaction-roles) and [communities and permissions](/docs/guilds-and-permissions/) for more about role hierarchy
 
 ## Welcome messages
 
@@ -92,11 +92,11 @@ The bot greets each new member in a configured channel with a mention and an emb
 {{example:welcome/bot.ts}}
 ```
 
-A welcome message that was sent but whose role grant failed stays posted, and the failure is logged. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/welcome) and [events and collectors](/docs/{{version}}/events-and-collectors/) for more about member and community events
+A welcome message that was sent but whose role grant failed stays posted, and the failure is logged. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/welcome) and [events and collectors](/docs/events-and-collectors/) for more about member and community events
 
 ## Support tickets
 
-A member sends `!ticket` to open a private channel that only they, the staff role and the bot can see. Anyone in that channel sends `!close` to delete it. Each member has at most one open ticket, and a [cooldown](/docs/{{version}}/glossary/#cooldown) allows one `!ticket` per member per minute
+A member sends `!ticket` to open a private channel visible to them, the staff role, the bot, the community owner and members with `Administrator`. Anyone in that channel sends `!close` to delete it. Each member has at most one open ticket, and a [cooldown](/docs/glossary/#cooldown) allows one `!ticket` per member per minute
 
 - Variables: `FLUXER_BOT_TOKEN`, `TICKET_CATEGORY_ID` for the category that holds tickets, and `TICKET_STAFF_ROLE_ID` for the role that answers them
 - Bot permissions: `ManageChannels` and `ManageRoles`, plus `ViewChannel`, `SendMessages` and `ReadMessageHistory` in the ticket category. Fluxer lets the bot grant only permissions it has itself
@@ -105,4 +105,4 @@ A member sends `!ticket` to open a private channel that only they, the staff rol
 {{example:tickets/bot.ts}}
 ```
 
-The bot reads its own user ID with `client.users.getSelf()`, which returns the account Fluxer reported when the bot connected, without a request. The `!close` command deletes only channels in the ticket category whose names start with `ticket-`. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/tickets) and [commands](/docs/{{version}}/commands/) for more about guards and cooldowns
+The bot reads its own user ID with `client.users.getSelf()`, which returns the account Fluxer reported when the bot connected, without a request. The `!close` command deletes only channels in the ticket category whose names start with `ticket-`. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/tickets) and [commands](/docs/commands/) for more about guards and cooldowns

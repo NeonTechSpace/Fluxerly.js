@@ -1,0 +1,20 @@
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    // On Ctrl+C or SIGTERM, running handlers get up to 10 seconds to finish
+    drainMs: 10_000,
+    // Runs before the bot connects. Its signal aborts once the bot begins stopping
+    setup: (client, { signal }) => {
+        const timer = setInterval(() => console.info("Still running"), 60_000)
+        signal.addEventListener("abort", () => clearInterval(timer))
+    },
+    events: {
+        messageCreate: ({ message, reply }) => {
+            if (message.content !== "!ping") return
+            return reply("Pong!")
+        },
+    },
+})
+
+// The bot has stopped and the SDK has cleaned up. Close what the application opened here

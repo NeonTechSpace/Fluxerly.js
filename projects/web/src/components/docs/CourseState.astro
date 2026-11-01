@@ -1,0 +1,176 @@
+---
+// The sidebar carried from one docs page to the next. The page being left records how its course looked. The next page
+// opens the same way before its first frame: the same part, the link the reader followed at the same height, and the
+// current page in view. Within one station every open station stays open. Moving to another station keeps only the
+// stations the reader opened by hand on the page they left, so the course stays short. Then the bead travels from the
+// page the reader came from to this one. It runs inline in the head
+// because the first frame comes before the page's modules run, and because a page rendered ahead of time reads the
+// record only when the reader actually arrives
+---
+
+<script is:inline>
+    ;(() => {
+        const key = "fluxerly.course.v1"
+        const root = document.documentElement
+        const pathOf = (url) => new URL(url, location.href).pathname
+        const shownPart = () => document.querySelector("[data-part]:not([hidden])")
+        const courseLinks = (scope) => [...scope.querySelectorAll("a[data-course-link]")]
+
+        // Positions in the course's own pixels, so the page zoom on wide screens never skews them
+        const scroller = () => document.querySelector("[data-course-scroll]")
+        const topIn = (element, container) => {
+            let top = 0
+            for (let node = element; node && node !== container; node = node.offsetParent) top += node.offsetTop
+            return top
+        }
+        const middleIn = (element, container) => topIn(element, container) + element.offsetHeight / 2
+        // A page inside a closed station is represented by the station's own row
+        const visibleRow = (link) => (link.checkVisibility() ? link : link.closest("details")?.querySelector("summary"))
+
+        function showPart(part) {
+            for (const panel of document.querySelectorAll("[data-part]")) panel.hidden = panel !== part
+            for (const tab of document.querySelectorAll("[data-part-tab]")) {
+                const selected = tab.dataset.partTab === part.dataset.part
+                tab.setAttribute("aria-selected", String(selected))
+                tab.tabIndex = selected ? 0 : -1
+            }
+        }
+
+        // Stations the reader opened by hand on this page. A click on a station's head comes before it toggles
+        const byHand = new Set()
+        addEventListener("click", (event) => {
+            const station = event.target instanceof Element ? event.target.closest("summary")?.parentElement : null
+            if (!station?.matches("details[data-group]")) return
+            if (station.open) byHand.delete(station.dataset.group)
+            else byHand.add(station.dataset.group)
+        })
+        const stationOf = (link) => link?.closest("details[data-group]")?.dataset.group
+
+        addEventListener("pageswap", (event) => {
+            const box = scroller()
+            const part = shownPart()
+            if (!box || !part) return
+            const to = event.activation?.entry?.url
+            const here = part.querySelector("a[aria-current='page']")
+            const followed = to ? courseLinks(part).find((link) => link.pathname === pathOf(to) && link.checkVisibility()) : undefined
+            const anchor = followed ?? (here?.checkVisibility() ? here : undefined)
+            const record = {
+                from: location.pathname,
+                part: part.dataset.part,
+                open: [...document.querySelectorAll("details[data-group][open]")].map((group) => group.dataset.group),
+                byHand: [...document.querySelectorAll("details[data-group][open]")].map((group) => group.dataset.group).filter((id) => byHand.has(id)),
+                station: stationOf(here),
+                scroll: box.scrollTop,
+                anchor: anchor?.pathname,
+                offset: anchor ? topIn(anchor, box) - box.scrollTop : 0,
+                bead: here?.pathname,
+            }
+            try {
+                sessionStorage.setItem(key, JSON.stringify(record))
+            } catch {
+                // Storage is blocked, the next page opens its course fresh
+            }
+        })
+
+        let opened = false
+        addEventListener("pagereveal", () => {
+            const moving = !root.hasAttribute("data-still")
+            const box = scroller()
+            if (!box) return
+            const fromUrl = window.navigation?.activation?.from?.url
+            const from = fromUrl ? pathOf(fromUrl) : null
+
+            // Moving along the course: forward when the new page comes later in it, back when earlier. The homepage
+            // sits above the whole course
+            let direction = "on"
+            if (from) {
+                const order = courseLinks(document).map((link) => link.pathname)
+                const was = from === "/" ? -1 : order.indexOf(from)
+                const now = order.indexOf(location.pathname)
+                if (now >= 0 && (was >= 0 || from === "/") && was !== now) direction = now > was ? "forward" : "back"
+            }
+
+            // The article arrives in that direction, unless time stands still, the link opens at a place in the page, or Back or
+            // Forward returns the reader to where they were
+            const article = document.querySelector(".docs-article")
+            const followedLink = ["push", "replace"].includes(window.navigation?.activation?.navigationType ?? "")
+            if (moving && followedLink && from && from !== location.pathname && !location.hash && article) {
+                root.dataset.arrive = direction
+                const settle = (event) => {
+                    if (event.target !== article) return
+                    delete root.dataset.arrive
+                    article.removeEventListener("animationend", settle)
+                    article.removeEventListener("animationcancel", settle)
+                }
+                article.addEventListener("animationend", settle)
+                article.addEventListener("animationcancel", settle)
+            }
+
+            // A page restored from the back and forward cache is still exactly as the reader left it
+            if (opened) return
+            opened = true
+
+            let record = null
+            try {
+                record = JSON.parse(sessionStorage.getItem(key) ?? "null")
+                sessionStorage.removeItem(key)
+            } catch {
+                // Storage is blocked
+            }
+            if (record && record.from !== from) record = null
+
+            // The part the reader was browsing stays, as long as this page is in it
+            const parts = [...document.querySelectorAll("[data-part]")]
+            let part = shownPart()
+            const kept = record && parts.find((panel) => panel.dataset.part === record.part)
+            if (kept && kept.querySelector("a[aria-current='page']")) part = kept
+            if (!part) return
+            showPart(part)
+            // Arriving from outside the docs, or into the other part, the course itself changes
+            const samePart = record?.part === part.dataset.part
+            // The page arrives with only its own station open. Staying in the same station keeps the stations that
+            // were open, moving to another keeps those the reader opened by hand. They open at once, without the
+            // opening transition, so the first frame already has the final layout and every position below is real
+            const here = part.querySelector("a[aria-current='page']")
+            const sameStation = !!record && samePart && !!here && record.station === stationOf(here)
+            root.dataset.courseSettling = ""
+            requestAnimationFrame(() => requestAnimationFrame(() => delete root.dataset.courseSettling))
+            for (const id of (sameStation ? record.open : record?.byHand) ?? []) document.querySelector(`details[data-group="${CSS.escape(id)}"]`)?.setAttribute("open", "")
+
+            // The followed link keeps its height, so the course does not move under the pointer
+            if (record && samePart) {
+                const anchor = record.anchor && courseLinks(part).find((link) => link.pathname === record.anchor && link.checkVisibility())
+                box.scrollTop = anchor ? topIn(anchor, box) - record.offset : record.scroll
+            }
+            // The current page is always in view, clear of the faded top and bottom edges
+            const row = here && visibleRow(here)
+            if (row) {
+                const top = topIn(row, box) - box.scrollTop
+                if (top < 56 || top + row.offsetHeight > box.clientHeight - 48) box.scrollTop += top - (box.clientHeight - row.offsetHeight) / 2
+            }
+
+            // The bead travels from the page the reader came from, and the lit line grows or shrinks with it
+            const origin = record && samePart && record.bead && record.bead !== location.pathname ? courseLinks(part).find((link) => link.pathname === record.bead) : undefined
+            const bead = part.querySelector("[data-bead]")
+            const signal = part.querySelector("[data-signal]")
+            if (!moving || !origin || !row || !bead || !signal) return
+            const course = bead.offsetParent
+            const start = visibleRow(origin)
+            if (!start || !course) return
+            const shift = middleIn(start, course) - middleIn(row, course)
+            const length = signal.offsetHeight
+            bead.style.translate = `0 ${shift}px`
+            if (length > 2) signal.style.scale = `1 ${Math.max(0, (length + shift) / length)}`
+            part.dataset.travel = "from"
+            const travel = () => {
+                part.dataset.travel = "go"
+                bead.style.translate = ""
+                signal.style.scale = ""
+                bead.addEventListener("transitionend", () => delete part.dataset.travel, { once: true })
+                // A travel that never runs, such as in a hidden tab, still lands
+                setTimeout(() => delete part.dataset.travel, 900)
+            }
+            requestAnimationFrame(travel)
+        })
+    })()
+</script>

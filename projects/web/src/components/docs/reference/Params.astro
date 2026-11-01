@@ -1,0 +1,39 @@
+---
+// Parameters as a definition list: the name, then its summary and type
+import type { Parameter } from "../../../lib/reference"
+import { leadParagraphs } from "../../../lib/markdown"
+import { documentedFields, fitted, narrowTypeWidth, typeHtml } from "../../../lib/reference-format"
+import Code from "../Code.astro"
+import Md from "./Md.astro"
+import Members from "./Members.astro"
+
+interface Props {
+    parameters: Parameter[]
+}
+
+const { parameters } = Astro.props
+---
+
+<dl class="ref-list ref-params">
+    {
+        parameters.map((parameter) => {
+            // An options object whose fields are documented lists them instead of printing one long type
+            const fields = documentedFields(parameter.t)
+            return (
+                <div class="ref-row">
+                    <dt>
+                        <Code class="ref-name" text={parameter.r ? `...${parameter.n}` : parameter.n} />
+                        {parameter.o && <> <span class="ref-flag">optional</span></>}
+                    </dt>
+                    <dd>
+                        {" "}
+                        <Md md={leadParagraphs(parameter.d)} class="ref-summary" />
+                        {!fields && <pre class="ref-type"><code set:html={fitted((width) => typeHtml(parameter.t, width), narrowTypeWidth)} /></pre>}
+                        {parameter.dv && <p class="ref-note">Default <Code text={parameter.dv} /></p>}
+                        {fields && <Members members={fields} nested />}
+                    </dd>
+                </div>
+            )
+        })
+    }
+</dl>

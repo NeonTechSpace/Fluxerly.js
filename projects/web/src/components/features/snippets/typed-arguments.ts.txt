@@ -1,0 +1,29 @@
+import { commands, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        parse: commands.parseQuoted,
+        commands: {
+            greet: {
+                description: "Greet a name",
+                arguments: { name: { type: "text" } },
+                execute: ({ values, reply }) => reply(`Hello, ${values.name}!`),
+            },
+            remind: {
+                description: "Repeat a note after a delay",
+                arguments: {
+                    delay: { type: "duration", min: 1_000, max: 3_600_000 },
+                    note: { type: "text", rest: true },
+                },
+                execute: ({ client, message, values, reply }) => {
+                    client.schedule((signal) => client.messages.reply(message, values.note, { signal }), {
+                        delayMs: values.delay,
+                    })
+                    return reply("Reminder set")
+                },
+            },
+        },
+    },
+})

@@ -1,0 +1,267 @@
+---
+import { ArrowRightIcon } from "@phosphor-icons/react/ssr"
+import CodeBlock from "./CodeBlock.astro"
+import Companion from "./Companion.astro"
+import Depth from "./Depth.astro"
+import { iconSrc, type IconName } from "../../lib/art"
+import { guide } from "../../lib/links"
+
+interface Item {
+    icon: IconName
+    title: string
+    // Static HTML, for inline code
+    text: string
+    // Real code from the guides and examples, or a log record's level, category and code
+    code?: string
+    log?: { level: string; category: string; code: string }
+    href: string
+    link: string
+}
+
+const items: Item[] = [
+    {
+        icon: "results-signpost",
+        title: "Failures You Can Read",
+        text: "Network calls return a Result, a success or a failure, instead of throwing, so your code handles expected errors where they happen. The SDK masks the bot token in everything it logs",
+        code: "if (sent.isErr()) throw sent.error",
+        href: guide("reliability"),
+        link: "Reliability Guide",
+    },
+    {
+        icon: "commands-key",
+        title: "Commands with the Plumbing Done",
+        text: "Prefix commands such as <code class=\"inline-code\">!greet</code> come with typed arguments, guards, cooldowns and groups. Help is generated from the same definitions",
+        code: 'arguments: { name: { type: "text", rest: true } },\ncooldown: { durationMs: 5_000, per: "user" },',
+        href: guide("commands"),
+        link: "Commands Guide",
+    },
+    {
+        icon: "testing-flask",
+        title: "Tests Without a Token",
+        text: "<code class=\"inline-code\">createTestBot</code> runs the bot's own options against an in-memory Fluxer, so tests need no network or account",
+        code: 'const replies = await bot.say("!ping")',
+        href: guide("testing"),
+        link: "Testing Guide",
+    },
+    {
+        icon: "cooldown-hourglass",
+        title: "Rate Limits, Handled",
+        text: "When Fluxer answers 429, the SDK waits and retries within the request's deadline. A write with an uncertain outcome is never repeated automatically",
+        log: { level: "WARN", category: "ratelimit", code: "ratelimit.wait" },
+        href: guide("reliability", "limits-and-retry-rules"),
+        link: "Limits and Retry Rules",
+    },
+    {
+        icon: "shutdown-switch",
+        title: "Clean Restarts",
+        text: "Ctrl+C gives running handlers time to finish, then stops cleanly. A bot that saves its sessions at that stop can pick up missed events if it restarts within a minute, and the optional supervisor restarts crashed processes",
+        log: { level: "INFO", category: "lifecycle", code: "lifecycle.shutdownComplete" },
+        href: guide("sharding", "resume-after-a-restart"),
+        link: "Session Resume Guide",
+    },
+    {
+        icon: "production-server",
+        title: "Sharding and Metrics",
+        text: "Automatic sharding splits the connection to Fluxer, one shard per 2,000 communities. The <code class=\"inline-code\">observe</code> option reports requests and handlers for metrics and traces",
+        code: 'sharding: "auto",',
+        href: guide("sharding"),
+        link: "Sharding Guide",
+    },
+]
+
+// The six parts in short, under the lead, in the order they are listed
+const facts = ["Results instead of throws", "Prefix commands with typed arguments", "Tests against an in-memory Fluxer", "Rate limits waited out", "A clean stop on Ctrl+C", "Automatic sharding and metrics"]
+---
+
+<section class="already" id="already-there" aria-labelledby="already-title" data-accent="violet">
+    <!-- The cyan crescent of the conductor's face, far out in the left margin -->
+    <Depth name="crescent-cyan" side="left" top="38%" width={150} depth={0.9} />
+    <div class="split" data-side="right">
+        <div class="intro" data-rise>
+            <h2 class="section-title" id="already-title"><span class="station" data-station="already-there" aria-hidden="true"></span>The Usual Bot Parts, <span class="hi">Already Built</span></h2>
+            <p class="lead">Six parts that come with the SDK, each with the guide that explains it</p>
+            <ul class="facts">
+                {
+                    facts.map((fact) => (
+                        <li>
+                            <span class="wave-mark" aria-hidden="true" />
+                            {fact}
+                        </li>
+                    ))
+                }
+            </ul>
+            <Companion class="keepsake" name="retry-loop" alt="A circular arrow on a stand, the Fluxer waves at its center" size={230} />
+        </div>
+        <ol class="body items" data-rise>
+            {
+                items.map((item) => (
+                    <li class="item">
+                        <img class="item-icon" src={iconSrc(item.icon, 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
+                        <div class="content">
+                            <h3>{item.title}</h3>
+                            <p class="text" set:html={item.text} />
+                            <div class="row">
+                                <div class="snippet glass">
+                                    {item.code ? (
+                                        <CodeBlock code={item.code} label={`${item.title}, example`} />
+                                    ) : (
+                                        item.log && (
+                                            <p class="log" aria-label={`Log record ${item.log.code}`}>
+                                                <span class="level" data-level={item.log.level}>
+                                                    {item.log.level}
+                                                </span>
+                                                <span class="category">{item.log.category}</span>
+                                                <span class="record">[{item.log.code}]</span>
+                                            </p>
+                                        )
+                                    )}
+                                </div>
+                                <a class="prose-link go-link" href={item.href}>
+                                    {item.link}
+                                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                                </a>
+                            </div>
+                        </div>
+                    </li>
+                ))
+            }
+        </ol>
+    </div>
+</section>
+
+<style>
+    /* No margin reset here: on a phone the shared rule spaces the list from the lead */
+    .items {
+        padding: 0;
+        list-style: none;
+    }
+
+
+    .item:hover .item-icon {
+        transform: translateX(3px);
+        filter: brightness(1.15) drop-shadow(0 4px 6px rgb(0 0 0 / 0.45));
+    }
+
+    .item-icon {
+        flex: none;
+        width: 64px;
+        height: 64px;
+        object-fit: contain;
+        filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.45));
+        transition:
+            transform var(--speed-normal) ease,
+            filter var(--speed-normal) ease;
+    }
+
+    /* One column, read top to bottom. The icon marks the start of each part */
+    .item {
+        display: flex;
+        gap: 22px;
+        padding: 30px 0 34px;
+        border-top: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .item:last-child {
+        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+    }
+
+    .content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    h3 {
+        margin: 0;
+        font-size: var(--type-title);
+        font-weight: var(--weight-semibold);
+        line-height: 1.3;
+        color: var(--color-ink);
+    }
+
+    .text {
+        max-width: 58ch;
+        margin: 10px 0 0;
+        font-size: var(--type-lead);
+        line-height: 1.6;
+        color: var(--color-muted);
+        text-wrap: pretty;
+    }
+
+    .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 14px 24px;
+        margin-top: 18px;
+    }
+
+    .snippet {
+        min-width: 0;
+        max-width: 100%;
+        overflow: hidden;
+        border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+    }
+
+    .snippet :global(.code) {
+        --code-pad: 16px;
+
+        padding-block: 10px;
+        font-size: var(--code-size);
+    }
+
+    .log {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0 10px;
+        margin: 0;
+        padding: 10px 16px;
+        font-family: var(--font-mono);
+        font-size: var(--code-size);
+        line-height: 1.7;
+        white-space: nowrap;
+    }
+
+    .level[data-level="WARN"] {
+        color: var(--color-gold);
+    }
+
+    .level[data-level="INFO"] {
+        color: var(--color-success);
+    }
+
+    .category {
+        color: rgb(195 200 230 / 0.66);
+    }
+
+    .record {
+        color: var(--accent);
+    }
+
+
+    @media (max-width: 899px) {
+        .item {
+            gap: 16px;
+        }
+    }
+
+    /* Time stopped: the marks keep still when pointed at */
+    :global(.night[data-still]) .wave-mark {
+        transition: none;
+    }
+
+    :global(.night[data-still]) .item:hover .wave-mark {
+        transform: none;
+        filter: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .wave-mark {
+            transition: none;
+        }
+
+        .item:hover .wave-mark {
+            transform: none;
+            filter: none;
+        }
+    }
+</style>

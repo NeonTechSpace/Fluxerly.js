@@ -1,0 +1,52 @@
+---
+// Client methods by task, derived from each client's namespaces and the first sentence of each method's summary
+import "../../../styles/reference.css"
+import Docs from "../../../layouts/Docs.astro"
+import Code from "../../../components/docs/Code.astro"
+import Heading from "../../../components/docs/reference/Heading.astro"
+import Md from "../../../components/docs/reference/Md.astro"
+import { model, referenceUrl, tasksUrl, type TocItem } from "../../../lib/reference"
+
+const entries = model.entries.filter((entry) => entry.tasks?.length)
+const groupId = (entry: string, group: string) => `${entry}-${group.replaceAll(".", "-").toLowerCase()}`
+const toc: TocItem[] = entries.flatMap((entry) => [
+    { depth: 2 as const, text: entry.title, id: entry.key },
+    ...entry.tasks!.map((group) => ({ depth: 3 as const, text: group.name, id: groupId(entry.key, group.name) })),
+])
+---
+
+<Docs
+    title="Find a Method by Task"
+    description="Each client method with the first sentence of its documentation"
+    section="reference"
+    current={tasksUrl}
+    toc={toc}
+    crumbs={[{ title: "Reference", href: referenceUrl }]}
+>
+    <div class="ref">
+        {
+            entries.map((entry) => (
+                <section class="ref-group">
+                    <Heading level={2} id={entry.key}>{entry.title}</Heading>
+                    {entry.tasks!.map((group) => (
+                        <section class="ref-tasks">
+                            <Heading level={3} id={groupId(entry.key, group.name)} code>{group.name}</Heading>
+                            <dl class="ref-list ref-index">
+                                {group.rows.map((row) => (
+                                    <div class="ref-row">
+                                        <dt>
+                                            <a href={row.url}><Code text={row.method} /></a>
+                                        </dt>
+                                        <dd>
+                                            <Md md={row.task} inline />
+                                        </dd>
+                                    </div>
+                                ))}
+                            </dl>
+                        </section>
+                    ))}
+                </section>
+            ))
+        }
+    </div>
+</Docs>

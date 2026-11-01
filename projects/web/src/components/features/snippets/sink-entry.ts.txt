@@ -1,0 +1,15 @@
+import { createClient } from "@neontechspace/fluxerly"
+
+/** A logger with one log method that reads the level from the entry */
+interface EntryLogger {
+    log(entry: { level: string; message: string; [key: string]: unknown }): void
+}
+
+export function createEntryLoggerClient(token: string, logger: EntryLogger) {
+    return createClient({
+        token,
+        logging: {
+            sink: (record) => logger.log({ ...record, level: record.level === "fatal" ? "error" : record.level }),
+        },
+    })
+}

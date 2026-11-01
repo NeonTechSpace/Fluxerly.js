@@ -4,14 +4,14 @@ navTitle: Logging & debugging
 description: Read the default log output, adjust levels and categories, and send records to an existing logger
 ---
 
-Every client prints what it is doing by default: Startup, each [shard](/docs/{{version}}/glossary/#shard) (gateway connection) becoming ready, lost connections with their close code and next step, long rate-limit waits, shutdown, and every application error in full. Adjust the level for the whole client or one area, turn on Debug records while investigating, or send records to an existing logger. Records never contain tokens or other credentials
+Every client prints what it is doing by default: Startup, each [shard](/docs/glossary/#shard) (gateway connection) becoming ready, lost connections with their close code and next step, long rate-limit waits, shutdown, and every application error in full. Adjust the level for the whole client or one area, turn on Debug records while investigating, or send records to an existing logger. Records never contain tokens or other credentials
 
 ## Read the default output
 
 On a terminal the client prints one readable line per record: Time, level, category, the record's code in brackets, a message and its facts. Warnings and errors go to standard error, everything else to standard output. A two-shard bot that starts, loses one connection and stops prints lines like these
 
 ```text
-2026-09-27 03:14:20.850 INFO  lifecycle  [lifecycle.starting] Starting Fluxerly 1000.0.0-rc.0 for fluxer.app with 2 shards version=1000.0.0-rc.0 instance=fluxer.app shards=2 totalShards=2
+2026-09-27 03:14:20.850 INFO  lifecycle  [lifecycle.starting] Starting Fluxerly <version> for fluxer.app with 2 shards version=<version> instance=fluxer.app shards=2 totalShards=2
 2026-09-27 03:14:20.853 INFO  lifecycle  [lifecycle.startupDeadline] Startup of 2 shards may take up to 31.0 s: The configured 30.0 s (connection.startupTimeoutMs) plus 1 s per additional shard, because the SDK starts shard sessions 1 s apart startupTimeoutMs=31000 configuredMs=30000 shards=2
 2026-09-27 03:14:20.891 INFO  lifecycle  [lifecycle.ready] Shard 0 is ready shardId=0 attempt=1 durationMs=36 mode=identify shards=2
 2026-09-27 03:14:21.890 INFO  lifecycle  [lifecycle.ready] Shard 1 is ready shardId=1 attempt=1 durationMs=1033 mode=identify shards=2
@@ -23,7 +23,7 @@ On a terminal the client prints one readable line per record: Time, level, categ
 2026-09-27 03:14:23.742 INFO  lifecycle  [lifecycle.shutdownComplete] Shutdown complete in 3 ms durationMs=3
 ```
 
-When a stream is not a terminal, such as under a process manager or in a container, its records are printed as one JSON object per line instead. Standard output and standard error decide separately. Set `format` to choose explicitly, or set the `FLUXERLY_LOG_FORMAT` environment variable to `pretty` or `json` for a client without `format`. A [supervisor](/docs/{{version}}/glossary/#supervisor) prints forwarded child records in the format of the stream they go to
+When a stream is not a terminal, such as under a process manager or in a container, its records are printed as one JSON object per line instead. Standard output and standard error decide separately. Set `format` to choose explicitly, or set the `FLUXERLY_LOG_FORMAT` environment variable to `pretty` or `json` for a client without `format`. A [supervisor](/docs/glossary/#supervisor) prints forwarded child records in the format of the stream they go to
 
 Readable output is colored on a terminal. Set `FLUXERLY_LOG_COLOR` to `1`, `true`, `yes` or `on` to force color, or to `0`, `false`, `no` or `off` to turn it off. The `NO_COLOR` variable also turns color off
 
@@ -45,9 +45,11 @@ An expected SDK error, such as a rejected request, prints its code, hint and det
       Details: operation=send reason=rejected outcome=rejected status=403 apiError=MISSING_PERMISSIONS requiredPermissions=["ViewChannel","SendMessages"]
 ```
 
-A 401 or 403 rejection waits up to one second for its handler to finish. If the handler fails with that same rejection, directly or in its cause chain, and no `onError` hook receives it, only the handler's failure record appears. A handler that fails more than one second later also logs its failure, because the `rest.rejected` Warn has already appeared. Different requests with the same status and code remain separate rejections
+A 401 or 403 rejection waits up to one second for its handler to finish. If the handler fails with that same rejection, directly or in its cause chain, before the Warn is logged and no `onError` hook is configured for that failure, only the handler's failure record appears. A handler that fails more than one second later also logs its failure, because the `rest.rejected` Warn has already appeared
 
-When the handler handles such a rejection itself, or passes it to an `onError` hook, the `rest.rejected` Warn still appears, because it usually points at a token or permission problem that persists. Repeats of it [collapse](/docs/{{version}}/logging/#collapse-repeated-errors) like other Warn records
+Different requests with the same status and code remain separate rejections
+
+When the handler handles such a rejection itself, or passes it to an `onError` hook, the `rest.rejected` Warn still appears, because it usually points at a token or permission problem that persists. Repeats of it [collapse](/docs/logging/#collapse-repeated-errors) like other Warn records
 
 ```text
 2026-09-26 21:27:52.802 WARN  rest       [rest.rejected] POST /channels/:id/messages was rejected for channel 1456074443980800002: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) route=/channels/:id/messages status=403 method=POST apiError=MISSING_PERMISSIONS hint="Grant the bot's role View channel and Send messages in this channel, plus Embed links or Attach files when the message has them, in the community settings or the channel's permission overrides"
@@ -55,11 +57,11 @@ When the handler handles such a rejection itself, or passes it to an `onError` h
 
 ## Look up a record code
 
-Every record has a stable code, shown in brackets in readable output. The [error and log codes](/docs/{{version}}/error-and-log-codes/) page lists every code with its meaning and next step. These Warn records often surprise a new bot:
+Every record has a stable code, shown in brackets in readable output. The [error and log codes](/docs/codes/) page lists every code with its meaning and next step. These Warn records often surprise a new bot:
 
 | Code | Meaning |
 | --- | --- |
-| `rest.rejected` | Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem. It is logged even when the application handles the Result. A handler that fails with the rejection within one second and has no `onError` hook logs only its own failure record. A later failure logs both. A bot that expects these rejections can set the `rest` [category](/docs/{{version}}/logging/#choose-levels-and-categories) to `error` |
+| `rest.rejected` | Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem. It is logged even when the application handles the Result. A handler that fails with the rejection within one second and has no `onError` hook logs only its own failure record. A later failure logs both. A bot that expects these rejections can set the `rest` [category](/docs/logging/#choose-levels-and-categories) to `error` |
 | `rest.responseRejected` | A successful response to an SDK operation did not match the expected shape. The failing field is in `fields.field` |
 | `sdk.unknownEnvironmentValue` | The `FLUXERLY_LOG_FORMAT` or `FLUXERLY_LOG_COLOR` variable has a value the SDK does not recognize, so it is ignored |
 
@@ -91,7 +93,7 @@ export function createQuietClient(token: string) {
 
 The `silent` level turns a category or the whole client off, including application errors that have no `onError` hook and unsafe payload records
 
-To change levels while the bot runs, for example to investigate a problem without a restart, pass new `level` and `categories` settings to `client.logging.configure`. Omitted `level` and `categories` return to their defaults. A `debug` setting there replaces the current Debug categories, as described in [Turn on debug output without changing code](/docs/{{version}}/logging/#turn-on-debug-output-without-changing-code), and an omitted one keeps them. The other `logging` settings stay as the client was created
+To change levels while the bot runs, for example to investigate a problem without a restart, pass new `level` and `categories` settings to `client.logging.configure`. Omitted `level` and `categories` return to their defaults. A `debug` setting there replaces the current Debug categories, as described in [Turn on debug output without changing code](/docs/logging/#turn-on-debug-output-without-changing-code), and an omitted one keeps them. The other `logging` settings stay as the client was created
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -123,7 +125,7 @@ export function stopDebugOutput(client: Client) {
 
 ## Handle failures in one place
 
-Pass `onError` to receive every failure that has no returned result: Handler and command failures, [collector](/docs/{{version}}/glossary/#collector) callbacks and filters, cleanup progress callbacks, subscriptions closed by a full queue with `overflow: "stop"`, message cache callbacks and failed state observers. The report holds the original error and the IDs of the message involved, never its content. With a hook in place the SDK keeps those failures at Debug instead of printing them again
+Pass `onError` to receive every failure that has no returned result: Handler and command failures, [collector](/docs/glossary/#collector) callbacks and filters, cleanup progress callbacks, subscriptions closed by a full queue with `overflow: "stop"`, message cache callbacks and failed state observers. The report holds the original error and the IDs of the message involved, never its content. With a hook in place the SDK keeps those failures at Debug instead of printing them again
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -142,7 +144,7 @@ export function runReportedBot(token: string | undefined, report: (text: string)
 }
 ```
 
-A subscription's own `onError` takes precedence for that subscription. The [reliability guide](/docs/{{version}}/reliability/#report-failures-that-have-no-result) explains which failures produce reports
+A subscription's own `onError` takes precedence for that subscription. The [reliability guide](/docs/reliability/#report-failures-that-have-no-result) explains which failures produce reports
 
 <details>
 <summary>How reports are delivered</summary>
@@ -247,7 +249,11 @@ export function createPayloadDebugClient(token: string) {
 
 ## Use the Effect logger in native programs
 
-A native client, created from the [Effect](/docs/{{version}}/glossary/#effect) entry point `@neontechspace/fluxerly/effect`, sends records through the running program's Effect logger with `Effect.logWithLevel`. Each record carries a `Cause` with the original structure, whose errors are masked copies with credentials removed, and `fluxerly.*` annotations such as `fluxerly.code`, `fluxerly.category` and `fluxerly.shardId`, so any Effect logger, span and tracer applies. A record with an SDK error also carries `fluxerly.error.code`, `fluxerly.error.hint` and one `fluxerly.error.<detail>` annotation per safe detail, such as `fluxerly.error.status`. Each error in its cause chain adds the same annotations with one more `cause.` in the prefix, such as `fluxerly.error.cause.code`, `fluxerly.error.cause.hint` and `fluxerly.error.cause.<detail>`. Native clients accept the same `logging` settings. A `sink` or an explicit `format` replaces the Effect logger with SDK output
+A native client, created from the [Effect](/docs/glossary/#effect) entry point `@neontechspace/fluxerly/effect`, sends records through the running program's Effect logger with `Effect.logWithLevel`. Each record carries `fluxerly.*` annotations such as `fluxerly.code`, `fluxerly.category` and `fluxerly.shardId`, so any Effect logger, span and tracer applies. Records with errors also carry a `Cause` with credentials masked
+
+A record with an SDK error also carries `fluxerly.error.code`, `fluxerly.error.hint` and one `fluxerly.error.<detail>` annotation per safe detail, such as `fluxerly.error.status`. Each error in its cause chain adds the same annotations with one more `cause.` in the prefix, such as `fluxerly.error.cause.code`, `fluxerly.error.cause.hint` and `fluxerly.error.cause.<detail>`
+
+Native clients accept the same `logging` settings. A `sink` or an explicit `format` replaces the Effect logger with SDK output
 
 ```ts
 import { Effect, Logger } from "effect"
@@ -315,7 +321,11 @@ export function runObservedBot(token: string | undefined, meter: Meter) {
 
 The SDK calls `observe` while it finishes the measured work, so the function should only record values and leave sending them to the exporter. An `observe` function that throws does not change what the bot does, and each throw is counted in `diagnostics().counters.sinkFailures`
 
-In a native program, the SDK also opens spans named `fluxerly.gateway.connect`, `fluxerly.rest.request`, `fluxerly.event.handle` and `fluxerly.command.execute`, and updates the metrics `fluxerly_rest_duration_ms`, `fluxerly_ratelimit_wait_ms`, `fluxerly_gateway_reconnects_total`, `fluxerly_events_dropped_total` and `fluxerly_handler_failures_total`. The dropped-events metric carries the attribute `reason` and, where the event name is known, `event`. A command span covers its middleware, guards, argument conversion, cooldown and execution. Command failure metrics use the canonical command name. Without a tracer or metric exporter they cost almost nothing. Provide the Layer from `@effect/opentelemetry`, the Effect value that supplies the exporter, to the native program to export them
+In a native program, the SDK also opens spans named `fluxerly.gateway.connect`, `fluxerly.rest.request`, `fluxerly.event.handle` and `fluxerly.command.execute`, and updates the metrics `fluxerly_rest_duration_ms`, `fluxerly_ratelimit_wait_ms`, `fluxerly_gateway_reconnects_total`, `fluxerly_events_dropped_total` and `fluxerly_handler_failures_total`. The dropped-events metric carries the attribute `reason` and, where the event name is known, `event`
+
+A command span covers its middleware, guards, argument conversion, cooldown and execution. Command failure metrics use the canonical command name
+
+Without a metric exporter, metrics stay in memory. Provide the Layer from `@effect/opentelemetry`, the Effect value that supplies the exporter, to the native program to export them
 
 ```ts
 import { Effect, type Layer } from "effect"
@@ -327,4 +337,4 @@ export function runTracedBot(token: string | undefined, telemetry: Layer.Layer<n
 }
 ```
 
-Use [`client.diagnostics()`](/docs/{{version}}/api/interfaces/js-ts.Client/#diagnostics) for a current snapshot of connection state, request counts and cache accounting, and the [troubleshooting guide](/docs/{{version}}/troubleshooting/) to match common log lines with fixes
+Use [`client.diagnostics()`](/docs/api/js-ts/client/#diagnostics) for a current snapshot of connection state, request counts and cache accounting, and the [troubleshooting guide](/docs/troubleshooting/) to match common log lines with fixes

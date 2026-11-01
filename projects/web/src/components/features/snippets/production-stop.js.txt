@@ -1,0 +1,20 @@
+import { runBot } from "@neontechspace/fluxerly"
+
+// Something the application opened itself, such as a database connection or a timer
+const heartbeat = setInterval(() => console.info("Still running"), 60_000)
+
+// Ctrl+C, or SIGTERM from a process manager, asks the bot to stop, and running
+// handlers then get up to 10 seconds to finish
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    drainMs: 10_000,
+    events: {
+        messageCreate: ({ message, reply }) => {
+            if (message.content !== "!ping") return
+            return reply("Pong!")
+        },
+    },
+})
+
+// runBot never exits the process. Close what the application opened, then Node.js ends
+clearInterval(heartbeat)

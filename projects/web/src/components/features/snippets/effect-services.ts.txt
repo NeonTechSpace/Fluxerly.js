@@ -1,0 +1,43 @@
+import { Config, Context, Effect, Layer } from "effect";
+import { FluxerClient, type Message } from "@neontechspace/fluxerly/effect";
+
+export class GreetingStore extends Context.Service<
+    GreetingStore,
+    { readonly greetingFor: (userId: string) => Effect.Effect<string> }
+>()("example/GreetingStore") {}
+
+export class BotReplies extends Context.Service<
+    BotReplies,
+    {
+        readonly reply: (
+            message: Message,
+            content: string,
+        ) => Effect.Effect<void, unknown>;
+    }
+>()("example/BotReplies") {}
+
+export const handlePing = (message: Message) =>
+    Effect.gen(function* () {
+        if (message.author.isBot || message.content !== "!ping") return;
+        const store = yield* GreetingStore;
+        const replies = yield* BotReplies;
+        yield* Effect.sleep("100 millis");
+        yield* replies.reply(
+            message,
+            yield* store.greetingFor(message.author.id),
+        );
+    });
+
+export const clientLayer = FluxerClient.layerConfig({
+    token: Config.Redacted("FLUXER_BOT_TOKEN"),
+});
+
+export const repliesLayer = Layer.effect(
+    BotReplies,
+    FluxerClient.use((client) =>
+        Effect.succeed({
+            reply: (message: Message, content: string) =>
+                client.messages.reply(message, content).pipe(Effect.asVoid),
+        }),
+    ),
+).pipe(Layer.provideMerge(clientLayer));

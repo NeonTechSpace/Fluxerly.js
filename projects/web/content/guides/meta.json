@@ -1,45 +1,69 @@
 {
-    "pages": [
-        "---Getting started---",
-        "index",
-        "create-a-bot",
-        "quick-start",
-        "small-bot",
-        "core-concepts",
-        "examples",
-        "---Bot guides---",
-        "messages",
-        "announcement-channels",
-        "threads",
-        "forum-channels",
-        "commands",
-        "events-and-collectors",
-        "guilds-and-permissions",
-        "history-and-cache",
-        "emoji-and-stickers",
-        "webhooks-and-oauth",
-        "---Running in production---",
-        "configuration",
-        "logging",
-        "reliability",
-        "starter-lifetime",
-        "deploying",
-        "sharding",
-        "application-supervision",
-        "testing",
-        "---Effect---",
-        "effect-first-bot",
-        "effect-workflows",
-        "effect-application-testing",
-        "---Help---",
-        "where-do-i",
-        "troubleshooting",
-        "error-and-log-codes",
-        "faq",
-        "glossary",
-        "support-and-compatibility",
-        "---Reference---",
-        "api",
-        "changelog"
+    "groups": [
+        {
+            "title": "Getting started",
+            "items": [
+                "index",
+                "create-a-bot",
+                "quick-start",
+                "small-bot",
+                "core-concepts",
+                "examples"
+            ]
+        },
+        {
+            "title": "Bot guides",
+            "items": [
+                "messages",
+                "announcement-channels",
+                "threads",
+                "forum-channels",
+                "commands",
+                "events-and-collectors",
+                "guilds-and-permissions",
+                "history-and-cache",
+                "emoji-and-stickers",
+                "webhooks-and-oauth"
+            ]
+        },
+        {
+            "title": "Running in production",
+            "items": [
+                "configuration",
+                "logging",
+                "reliability",
+                "starter-lifetime",
+                "deploying",
+                "sharding",
+                "application-supervision",
+                "testing"
+            ]
+        },
+        {
+            "title": "Effect",
+            "items": [
+                "effect-first-bot",
+                "effect-workflows",
+                "effect-application-testing"
+            ]
+        },
+        {
+            "title": "Help",
+            "items": [
+                "where-do-i",
+                "troubleshooting",
+                {
+                    "title": "Error and log codes",
+                    "href": "/docs/codes/"
+                },
+                "faq",
+                "glossary",
+                "support-and-compatibility",
+                {
+                    "title": "Changelog",
+                    "href": "/docs/changelog/"
+                }
+            ]
+        }
     ]
 }

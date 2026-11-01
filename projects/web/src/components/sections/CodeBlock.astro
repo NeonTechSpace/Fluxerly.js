@@ -1,0 +1,19 @@
+---
+import { codeIndentStyle, codeLines } from "../../islands/code-wrap"
+import type { Language } from "../../islands/highlight"
+
+interface Props {
+    code: string
+    // Accessible name of the scrollable block
+    label: string
+    // What the block holds, JavaScript unless named. Output such as a terminal's reply is text and keeps one color
+    language?: Language
+    class?: string
+}
+
+const { code, label, language = "js", class: className } = Astro.props
+const raw = code.replace(/\n$/, "").split("\n")
+const lines = codeLines(code, language)
+---
+
+<pre class:list={["code", className]} tabindex="0" role="group" aria-label={label}><code>{lines.map((pieces, index) => <span class="ln" style={codeIndentStyle(raw[index])}>{pieces.map((piece) => piece.space ? piece.text : <>{piece.seam && <wbr />}<span class={piece.kind === "plain" ? "tw" : `tw tk-${piece.kind}`}>{piece.text}</span></>)}</span>)}</code></pre>

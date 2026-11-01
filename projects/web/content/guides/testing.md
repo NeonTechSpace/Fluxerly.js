@@ -4,11 +4,11 @@ navTitle: Testing a bot
 description: Run commands and handlers against an in-memory Fluxer with the testing entry points, without a token or network
 ---
 
-The `@neontechspace/fluxerly/testing` entry point creates a real client connected to an in-memory Fluxer. A test sends the bot a fake message or event and checks the requests the bot made. No token, network or Fluxer account is needed, and the events pass through the SDK's own decoding, [caches](/docs/{{version}}/glossary/#cache) and [handlers](/docs/{{version}}/glossary/#handler)
+The `@neontechspace/fluxerly/testing` entry point creates a real client connected to an in-memory Fluxer. A test sends the bot a fake message or event and checks the requests the bot made. No token, network or Fluxer account is needed, and the events pass through the SDK's own decoding, [caches](/docs/glossary/#cache) and [handlers](/docs/glossary/#handler)
 
 ## Share the bot's options with its tests
 
-A bot started with [`runBot`](/docs/{{version}}/starter-lifetime/) is tested with `createTestBot`, which takes the same options. The bot file that `fluxerly init` writes, shown in the [quick start](/docs/{{version}}/quick-start/), exports those options without the token as `bot` and starts the bot only when Node.js runs the file:
+A bot started with [`runBot`](/docs/starter-lifetime/) is tested with `createTestBot`, which takes the same options. It covers handlers, commands and setup but not `runBot`'s supervision, so a stopped subscription, such as one set to `overflow: "stop"` whose queue fills, does not stop the test bot. The Effect test bot has the same limit. Test `runBot`'s terminal failures and process-signal handling separately, and call `testBot.client.shutdown({ drainMs })` to test a drain. The bot file that `fluxerly init` writes, shown in the [quick start](/docs/quick-start/), exports those options without the token as `bot` and starts the bot only when Node.js runs the file:
 
 ```js
 {{starter:bot.js}}
@@ -105,7 +105,7 @@ A `timeoutMs` on `next()`, `idle()` or `say` uses real timers, so faking the glo
 
 </details>
 
-The third test passes its own options with a command that throws. Without an `onError` hook (see [handle failures in one place](/docs/{{version}}/logging/#handle-failures-in-one-place)), the failure is logged as `commands.failed`. The `failures()` method returns such unhandled failures and marks them as expected. When a handler or command throws or returns a failed Result without `onError` and the test never reads the failure from `failures()`, shutdown rejects with `UnhandledTestFailuresError`, so a broken handler fails the test even without an assertion
+The third test passes its own options with a command that throws. Without an `onError` hook (see [handle failures in one place](/docs/logging/#handle-failures-in-one-place)), the failure is logged as `commands.failed`. The `failures()` method returns such unhandled failures and marks them as expected. When a handler or command throws or returns a failed Result without `onError` and the test never reads the failure from `failures()`, shutdown rejects with `UnhandledTestFailuresError`, so a broken handler fails the test even without an assertion
 
 <details>
 <summary>Requests without a registered response</summary>
@@ -167,13 +167,13 @@ Each `rest.respond` call returns a route whose `requests()` lists only the reque
 
 Each test client has its own `fixtures`, whose builders return snake_case wire payloads for users, the bot user, guilds, `GUILD_CREATE` bodies, channels, roles, members and messages. Their defaults refer to one community, one channel and one author, and `fixtures.ids` holds those IDs. The IDs are deterministic, so the same calls produce the same IDs in every run.
 The shared `fixtures` export and `createFixtures()` build payloads outside a test client.
-Pass `{ shardId }` to `emit` to choose the receiving [shard](/docs/{{version}}/glossary/#shard) in a sharded client. Call `disconnect({ code })` to close a shard's connection from the gateway side and watch the client resume, or fail for a code that ends the session. Every recoverable code resumes the same session, including 4007, so `sessionEpoch` stays the same. Pass `endSession: true` to make the test gateway forget the session first, so the client identifies a new one and the next event's `context.sessionEpoch` is higher.
+Pass `{ shardId }` to `emit` to choose the receiving [shard](/docs/glossary/#shard) in a sharded client. Call `disconnect({ code })` to close a shard's connection from the gateway side and watch the client resume, or fail for a code that ends the session. Every recoverable code resumes the same session, including 4007, so `sessionEpoch` stays the same. Pass `endSession: true` to make the test gateway forget the session first, so the client identifies a new one and the next event's `context.sessionEpoch` is higher.
 The `createTestClient` function accepts every `createClient` option except `transport` and `instance`, which the test transport owns. The `createTestBot` function accepts the bot's `runBot` options and ignores `signal`, `processSignals`, `reportFailure` and `drainMs`
 
 </details>
 
 ## Test Effect programs
 
-The `@neontechspace/fluxerly/effect/testing` entry point provides the same `createTestBot` and `createTestClient` for the Effect API. Its test clients are scoped: Closing the Scope shuts the client down, and `ready`, `emit`, `next` and `idle` are Effects. The [Effect application testing guide](/docs/{{version}}/effect-application-testing/) covers testing Effect bots, including time-based behavior
+The `@neontechspace/fluxerly/effect/testing` entry point provides the same `createTestBot` and `createTestClient` for the Effect API. Its test clients are scoped: Closing the Scope shuts the client down, and `ready`, `emit`, `next` and `idle` are Effects. The [Effect application testing guide](/docs/effect-application-testing/) covers testing Effect bots, including time-based behavior
 
-The reference lists every control and option: [Testing](/docs/{{version}}/api/modules/testing/) for the default API and [Effect testing](/docs/{{version}}/api/modules/Effect-testing/) for the Effect API
+The reference lists every control and option: [Testing](/docs/api/testing/) for the default API and [Effect testing](/docs/api/effect-testing/) for the Effect API

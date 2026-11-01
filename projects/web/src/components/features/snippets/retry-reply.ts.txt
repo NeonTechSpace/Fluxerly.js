@@ -1,0 +1,14 @@
+import { errors, runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    events: {
+        messageCreate: async ({ message, reply }) => {
+            if (message.content !== "!ping") return undefined
+            const first = await reply("Pong!")
+            if (first.isOk() || !errors.isRetryable(first.error)) return first
+            await new Promise((resolve) => setTimeout(resolve, errors.retryAfterMs(first.error) ?? 1_000))
+            return reply("Pong!")
+        },
+    },
+})

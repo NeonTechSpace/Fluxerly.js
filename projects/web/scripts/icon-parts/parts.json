@@ -1,0 +1,130 @@
+{
+    "star-drop": [
+        { "name": "drop", "layers": ["Glass shell", "Water inside the drop"] },
+        { "name": "back-wave", "layers": ["Back wave"], "move": { "x": -30, "y": 10, "turn": 2, "seconds": 4.2, "around": [1065,1540] } },
+        { "name": "front-wave", "layers": ["Front wave"], "move": { "x": 28, "y": -10, "turn": -2, "seconds": 3.3, "around": [1050,1300] } },
+        { "name": "star", "layers": ["Four-point star"], "move": { "y": -78, "turn": 25, "seconds": 5.4, "around": [1042,983] } }
+    ],
+    "toolbox": [
+        { "name": "lid", "layers": ["Open lid"], "move": { "turn": -4, "seconds": 5.8, "around": [1200,1000] } },
+        { "name": "box", "layers": ["Inside of the box", "Box front", "Box side", "Fluxer medallion on the end panel", "Soft shade across the end panel and medallion", "Box rim", "Back latches"] },
+        { "name": "wrench", "layers": ["Wrench"], "move": { "y": -24, "turn": 12.5, "seconds": 3.8, "around": [950,1120] } },
+        { "name": "vial", "layers": ["Star vial", "Vial star", "Vial specks", "Vial neck and cork"], "move": { "y": -42, "turn": -8.7, "seconds": 4.7, "around": [1300,1200] } },
+        { "name": "front", "layers": ["Front latches", "Rivets", "Carry handle"] }
+    ],
+    "neonflux-bot": [
+        { "name": "legs", "layers": ["Left foot", "Left leg joint", "Right foot", "Right leg joint"] },
+        { "name": "left-arm", "layers": ["Left shoulder", "Left claw", "Left forearm"], "move": { "turn": 15, "seconds": 3.4, "around": [680,1180] } },
+        { "name": "body", "layers": ["Body", "Fluxer medallion on the chest", "Soft shade across the chest and medallion"] },
+        { "name": "head", "layers": ["Neck", "Head", "Screen face", "Eyes", "Antenna"], "move": { "y": -24, "turn": 4, "seconds": 4.9, "around": [1010,1040] } },
+        { "name": "antenna-star", "layers": ["Antenna star"], "move": { "y": -36, "turn": 17.5, "seconds": 3, "around": [1178,320] } },
+        { "name": "key", "layers": ["Wind-up key"], "move": { "turn": 25, "seconds": 4.1, "around": [1450,800] } },
+        { "name": "right-arm", "layers": ["Right shoulder", "Right claw", "Right forearm"], "move": { "turn": -12.5, "seconds": 4.5, "around": [1300,1230] } }
+    ],
+    "deploy-balloon": [
+        { "name": "balloon", "layers": ["Balloon envelope", "Seam stitches", "Fluxer medallion on the center panel of the balloon", "Soft shade across the medallion", "Balloon mouth", "Copper ring"], "move": { "y": -27, "turn": 3.5, "seconds": 5.7, "around": [1040,1230] } },
+        { "name": "parcel", "layers": ["Parcel", "Teal ribbon", "Copper buckle", "Left rope", "Right rope", "Rope eyelets"], "move": { "y": -12, "turn": -5.5, "seconds": 4.2, "around": [1040,1290] } }
+    ],
+    "support-lifebuoy": [
+        { "name": "ring", "layers": ["Ring body", "Rope", "Gold straps"] },
+        { "name": "knot", "layers": ["Rope knot"], "move": { "turn": 15, "seconds": 3.9, "around": [1034,1650] } }
+    ],
+    "sdk-package": [
+        { "name": "parcel", "layers": ["Parcel body", "Lid", "Wave ribbon", "Fluxer shipping stamp on the lid", "Soft shade across the stamp on the lid"] },
+        { "name": "plate", "layers": ["Copper plate", "Plate rivets"], "move": { "turn": 7.5, "seconds": 3.4, "around": [850,1139] } }
+    ],
+    "retry-loop": [
+        { "name": "rod", "layers": ["Violet thickness of the rod"], "move": { "turn": 7.5, "seconds": 5, "around": [1030,1440] } },
+        { "name": "stand", "layers": ["Enamel base disc", "Gold piping on the base", "Post"] },
+        { "name": "loop", "layers": ["Enamel tube", "Gold bands on the tube", "Gold cap on the tube end", "Gold and enamel arrowhead", "Riveted plate", "Plate rivets"], "move": { "turn": 7.5, "seconds": 5, "around": [1030,1440] } },
+        { "name": "clamp", "layers": ["Enamel clamp on the post", "Gold piping on the clamp", "Clamp rivet"] },
+        { "name": "medallion", "layers": ["Fluxer medallion floating in the loop"], "move": { "y": -48, "turn": 20, "seconds": 3.7, "around": [1064,856] } }
+    ],
+    "first-reply-radio": [
+        { "name": "arcs", "layers": ["Signal arcs"], "move": { "kind": "pulse", "seconds": 2.1 } },
+        { "name": "antenna", "layers": ["Antenna"], "move": { "turn": 6, "seconds": 4.1, "around": [860,540] } },
+        { "name": "knob", "layers": ["Tuning knob"], "move": { "turn": 35, "seconds": 5, "around": [1353,505] } },
+        { "name": "button", "layers": ["Push-to-talk button"], "move": { "x": 18, "y": 6, "seconds": 3 } },
+        { "name": "radio", "layers": ["Radio body", "Dark screen", "Fluxer waves on the screen", "Controls under the screen", "Speaker grille"] }
+    ],
+    "effect-plug": [
+        { "name": "socket", "layers": ["Socket body", "Socket face", "Socket holes", "Socket screws"] },
+        { "name": "plug", "layers": ["Cable", "Plug body", "Strain relief", "Engraved Fluxer waves", "Soft shade across the plug front and waves", "Copper collar", "Prongs"], "move": { "x": -34, "turn": 1, "seconds": 3.9, "around": [740,1040] } }
+    ],
+    "results-signpost": [
+        { "name": "post", "layers": ["Post base", "Post", "Top ball", "Post cap"] },
+        { "name": "yes", "layers": ["Yes sign pointing left", "Checkmark"], "move": { "turn": -6, "seconds": 4.6, "around": [1030,780] } },
+        { "name": "upper-band", "layers": ["Upper copper band"] },
+        { "name": "no", "layers": ["No sign pointing right", "Copper X"], "move": { "turn": 5.5, "seconds": 5.5, "around": [1030,1270] } },
+        { "name": "bands", "layers": ["Lower copper band", "Band rivets"] }
+    ],
+    "commands-key": [
+        { "name": "base", "layers": ["Key base lip", "Right skirt", "Left skirt", "Front skirt", "Fluxer waves on the front face", "Soft shade across the front face and waves"] },
+        { "name": "top", "layers": ["Top rim", "Top face", "Slash cut into the top"], "move": { "y": 26, "seconds": 2.5 } }
+    ],
+    "logs-scroll": [
+        { "name": "bracket", "layers": ["Wall bracket", "Bracket rivet", "Spool rod, right end", "Right spool flange", "Roll collar, right end", "Roll collar, left end", "Left spool flange", "Left spool rod", "Left knob"] },
+        { "name": "paper", "layers": ["Hanging paper", "Printed prompt", "Lines of output", "Soft shade across the paper and lines", "Bottom roll", "Roll opening"], "move": { "y": 18, "turn": 3, "seconds": 4.7, "around": [1100,500] } },
+        { "name": "top-roll", "layers": ["Top roll"] }
+    ],
+    "testing-flask": [
+        { "name": "flask", "layers": ["Glass wall of the flask", "Dark inside of the flask"] },
+        { "name": "water", "layers": ["Water in the flask", "Water surface"], "move": { "x": 16, "turn": 2, "seconds": 3.5, "around": [1030,1650] } },
+        { "name": "check", "layers": ["Large checkmark"], "move": { "y": -48, "turn": 6.3, "seconds": 4.2, "around": [1025,1220] } },
+        { "name": "glass", "layers": ["Glass highlights", "Bottle lip", "Cork plug in the neck"] },
+        { "name": "stopper", "layers": ["Copper stopper"], "move": { "y": -15, "turn": 5, "seconds": 4.9, "around": [1024,420] } }
+    ],
+    "production-server": [
+        { "name": "rack", "layers": ["Rack side panel", "Fluxer medallion on the side panel", "Soft shade across the side panel and medallion", "Rack top face", "Rack front face"] },
+        { "name": "drawer-1", "layers": ["Server drawer 1"], "move": { "x": -24, "y": 9, "seconds": 4.1 } },
+        { "name": "drawer-3", "layers": ["Server drawer 3"], "move": { "x": -24, "y": 9, "seconds": 5.4 } },
+        { "name": "drawer-2", "layers": ["Server drawer 2"], "move": { "x": -24, "y": 9, "seconds": 3.4 } },
+        { "name": "fittings", "layers": ["Copper corner brackets", "Rivets"] }
+    ],
+    "data-database": [
+        { "name": "base", "layers": ["Base under the bottom disc"] },
+        { "name": "bottom", "layers": ["Bottom disc"], "move": { "y": 18, "seconds": 5 } },
+        { "name": "third", "layers": ["Third disc"], "move": { "y": -21, "seconds": 4.1 } },
+        { "name": "second", "layers": ["Second disc"], "move": { "y": 24, "seconds": 5.8 } },
+        { "name": "top", "layers": ["Top disc", "Fluxer waves on the water", "Soft shade across the water and waves"], "move": { "y": -27, "seconds": 3.8 } },
+        { "name": "stars", "layers": ["Stars in the water", "Tiny sparks in the water"], "move": { "kind": "pulse", "seconds": 2.5 } }
+    ],
+    "cooldown-hourglass": [
+        { "name": "glass", "layers": ["Enamel bottom stand", "Gold piping on the stand", "Turned pillars", "Glass bulbs", "Dark inside of the glass", "Star sand above", "Star sand below", "Glass bulb bottom", "Stars in the sand"] },
+        { "name": "falling", "layers": ["Falling stars"], "move": { "kind": "fall", "y": 61, "seconds": 1.9 } },
+        { "name": "top", "layers": ["Sand grains", "Glass highlights", "Enamel top cap", "Gold piping on the cap"] }
+    ],
+    "cache-disc": [
+        { "name": "bottom", "layers": ["Bottom disc"], "move": { "y": 15, "seconds": 4.6 } },
+        { "name": "top", "layers": ["Top disc"], "move": { "y": -27, "seconds": 3.9 } },
+        { "name": "bolt", "layers": ["Cut through the discs", "Lightning bolt"], "move": { "y": -12, "seconds": 2.6 } }
+    ],
+    "shutdown-switch": [
+        { "name": "panel", "layers": ["Panel side and back", "Panel front", "Power symbol plate", "Plate rivets", "Terminal blocks", "Right contact fork", "Left hinge post"] },
+        { "name": "lever", "layers": ["Lever arm", "Lever hinge", "Handle ferrule", "Lever handle"], "move": { "turn": 6.3, "seconds": 3.3, "around": [812,1140] } },
+        { "name": "screws", "layers": ["Corner screws", "Terminal screws"] }
+    ],
+    "errors-beacon": [
+        { "name": "dome", "layers": ["Glass dome", "Tiny stars in the dome"] },
+        { "name": "mark", "layers": ["Glowing exclamation mark"], "move": { "y": -24, "seconds": 2.7 } },
+        { "name": "rays", "layers": ["Warning rays"], "move": { "kind": "pulse", "seconds": 1.8 } },
+        { "name": "base", "layers": ["Enamel lamp base", "Gold piping on the base", "Fluxer symbol in mint on the front of the base"] }
+    ],
+    "events-bell": [
+        { "name": "bell", "layers": ["Violet shadow side behind the bell", "Gold hanging loop", "Bell body", "Bell crown", "Gold piping on the shoulder", "Inside of the bell"] },
+        { "name": "clapper", "layers": ["Clapper stem", "Gold clapper ball"], "move": { "turn": 22.5, "seconds": 2.2, "around": [966,1344] } },
+        { "name": "rim", "layers": ["Bell rim", "Gold piping on the rim", "Gold piping down the bell", "Violet rim light"] },
+        { "name": "bolt", "layers": ["Lightning bolt"], "move": { "y": -24, "turn": 10, "seconds": 3.1, "around": [1487,868] } }
+    ],
+    "messages-plane": [
+        { "name": "trail", "layers": ["Wave trail", "Spray dots"], "move": { "y": 30, "turn": 3.8, "seconds": 4.2, "around": [900,1100] } },
+        { "name": "keel", "layers": ["Folded keel", "Left underwing"] },
+        { "name": "right-wing", "layers": ["Right wing"], "move": { "turn": -4, "seconds": 3, "around": [1200,900] } },
+        { "name": "left-wing", "layers": ["Left wing"], "move": { "turn": 4, "seconds": 3, "around": [1100,900] } },
+        { "name": "clip", "layers": ["Copper center clip"] }
+    ],
+    "announce-megaphone": [
+        { "name": "waves", "layers": ["Sound waves"], "move": { "kind": "pulse", "seconds": 1.5 } },
+        { "name": "horn", "layers": ["Rear tube", "Cone", "Fluxer waves stamped on the cone", "Soft form shade across the lower cone and the waves", "Bell inside", "Inner tube", "Copper bell rim", "Seam rivets", "Copper tube band", "Pistol grip", "Grip screws"] }
+    ]
+}

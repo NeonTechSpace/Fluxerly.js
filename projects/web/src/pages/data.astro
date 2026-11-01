@@ -1,0 +1,67 @@
+---
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import iterateHistory from "../components/features/snippets/iterate-history.ts.txt?raw"
+import searchIndex from "../components/features/snippets/search-index.ts.txt?raw"
+import cacheSettings from "../components/features/snippets/cache-settings.ts.txt?raw"
+import cachedOrFetch from "../components/features/snippets/cached-or-fetch.ts.txt?raw"
+import askName from "../components/features/snippets/ask-name.ts.txt?raw"
+import confirmReaction from "../components/features/snippets/confirm-reaction.ts.txt?raw"
+import skippedEvents from "../components/features/snippets/skipped-events.ts.txt?raw"
+
+const accent = "violet"
+---
+
+<FeaturePage slug="data" companion="data-database" companionAlt="A database of stacked glass discs holding starry water">
+    <Fragment slot="title"><span class="hi">Reading and Caching</span> Data</Fragment>
+
+    <Scene id="history" step={1} side="left" {accent} guide={guide("history-and-cache", "scan-for-one-message")} guideLabel="History in the Docs">
+        <Fragment slot="title">History Without the Gateway</Fragment>
+        <Fragment slot="text">
+            <p>Reading earlier messages is a request to Fluxer, so it works without the gateway connection. <code class="inline-code">iterateHistory</code> reads newest first and asks for the next page only when the loop needs it, within the <code class="inline-code">maxItems</code> bound you set</p>
+            <p>When the text is known, <code class="inline-code">search</code> asks Fluxer's search index for a page of results. While Fluxer is still preparing that index, the helper returns <code class="inline-code">undefined</code> instead of an empty answer that looks final</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Scan recent messages for one that matches" code={iterateHistory} />
+        <CodePanel file="TypeScript" label="Search the message index" code={searchIndex} />
+    </Scene>
+
+    <Scene id="cache" icon="cache-disc" iconAlt="A stack of cached discs" step={2} side="right" {accent} guide={guide("configuration", "cache")} guideLabel="Cache Settings in the Docs">
+        <Fragment slot="title">Caches You Size and Choose</Fragment>
+        <Fragment slot="text">
+            <p>A cache is a local copy of Fluxer data, and the client keeps none unless asked. Each category you turn on is bounded, by default to 1,000 entries and 4 MiB (8 MiB for messages), and a <code class="inline-code">maxAgeMs</code> function decides per entry. The value <code class="inline-code">null</code> keeps it and <code class="inline-code">0</code> skips it</p>
+            <p>Community data stays when a session resumes, except cached threads, which are cleared. A new session clears community data. Messages that a lost connection could have changed are cleared either way</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="A client with bounded caches" code={cacheSettings} />
+    </Scene>
+
+    <Scene id="get-fetch" step={3} side="left" {accent} guide={guide("history-and-cache", "use-the-cache-then-fetch-if-needed")} guideLabel="Use the Cache, Then Fetch">
+        <Fragment slot="title">Local Get, Remote Fetch</Fragment>
+        <Fragment slot="text">
+            <p><code class="inline-code">messages.get</code> returns the copy the client already holds, without a request, or <code class="inline-code">undefined</code>. <code class="inline-code">fetch</code> asks Fluxer for the current state. The two stay separate calls, so the code always shows which one it uses</p>
+            <p>A cached copy is a snapshot of what the client last saw, and Fluxer still decides what a request may do. After a clear, a read already in flight cannot put the removed entry back</p>
+        </Fragment>
+        <Fragment slot="point">Fluxer still checks every request, whatever the cache holds</Fragment>
+        <CodePanel file="TypeScript" label="Read the cached copy, or fetch it" code={cachedOrFetch} />
+    </Scene>
+
+    <Scene id="collect" step={4} side="right" {accent} guide={guide("events-and-collectors", "ask-a-question-without-missing-a-fast-reply")} guideLabel="Events and Collectors">
+        <Fragment slot="title">Ask, Then Collect the Answer</Fragment>
+        <Fragment slot="text">
+            <p><code class="inline-code">waitFor</code> returns the next matching event, or a failed Result if none arrives within <code class="inline-code">timeoutMs</code>, 30 seconds by default. A collector gathers matching messages or reactions for a limited time, and created before the question is sent, it cannot miss a fast reply</p>
+            <p><code class="inline-code">await using</code> closes the collector when the helper returns or throws, and waits for its cleanup. A lost connection fails the collection instead of returning answers that may be incomplete</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Ask a question and collect one reply" code={askName} />
+        <CodePanel file="TypeScript" label="Wait for a confirmation reaction" code={confirmReaction} />
+    </Scene>
+
+    <Scene id="rejected" step={5} side="left" {accent} guide={guide("reliability", "limits-and-retry-rules")} guideLabel="Limits and Retry Rules">
+        <Fragment slot="title">Invalid Events Are Logged and Skipped</Fragment>
+        <Fragment slot="text">
+            <p>When Fluxer sends a known event that fails validation, the SDK logs <code class="inline-code">gateway.dispatchRejected</code> with the event type and the failing field, skips the event and keeps the session running</p>
+            <p>It also clears the cache entries that event could have changed. A bot that would rather stop can set <code class="inline-code">gateway.onMalformedDispatch</code> to <code class="inline-code">"terminate"</code></p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Count the skipped gateway events" code={skippedEvents} />
+    </Scene>
+</FeaturePage>

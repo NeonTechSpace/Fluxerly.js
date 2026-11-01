@@ -1,0 +1,11 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+export function healthSnapshot(client: Client) {
+    const { counters, state } = client.diagnostics()
+    return {
+        state,
+        reconnects: counters.reconnects,
+        droppedEvents: Object.values(counters.eventsDropped).reduce((total, count) => total + count, 0),
+        handlerFailures: counters.handlerFailures,
+    }
+}

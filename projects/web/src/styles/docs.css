@@ -1,0 +1,2471 @@
+/* The chart room: the documentation's reading layout. Calm and still, the same night and voices as the homepage.
+   Guides speak in cyan, what you do. Reference speaks in violet, what the SDK knows.
+
+   The palette follows the conductor's art: cyan is light, violet is shadow, and gold is the badge on the cap, kept for
+   the reader's own place and next step. Green and coral are the two outcomes, a record that went well and one that
+   failed, as the site's terminal panels print them. Every other color is a shade of these.
+
+   Depth comes from three planes, never from cards or backgrounds. The night is the base plane, and everything the
+   reader reads sits directly on it: the title, headings, prose, folds, tables, entries and rows, parted by hairlines
+   where they need parting. A well is cut into the night, darker, with a soft shade along its top edge, for code,
+   signatures and inputs. A raised plane floats above the page only where something really does: the frosted header
+   the article passes under, the search dialog, a hover peek and the phone's menu sheet. Those are a little lighter
+   than the night, blurred, with a soft shadow and one hairline of light along their top edge.
+
+   Chrome is quiet and content is vivid. Hairlines, separators and control outlines are white at a low alpha. The
+   part's hue marks only what belongs to the part: links, the chosen tab's underline, the current outline entry, focus
+   rings and fold chevrons. Gold marks one place on a page, the current page in the course. Color lives in the code
+   wells, where every kind of token has its own hue, and in the meaning colors of levels, methods and warnings */
+
+.docs {
+    --side-w: 300px;
+    --outline-w: 240px;
+    --wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 14' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round'%3E%3Cpath d='M1.5 4.2c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4'/%3E%3Cpath d='M1.5 10.4c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4'/%3E%3C/svg%3E");
+
+    /* The two voices, each with its light and its shade */
+    --cyan: var(--color-cyan);
+    --cyan-bright: var(--color-cyan-light);
+    --cyan-deep: #1aa9b8;
+    --violet: var(--color-violet);
+    --violet-bright: var(--color-violet-pale);
+    --violet-deep: #7152d6;
+    /* The badge: where the reader is, and the one step after this page */
+    --gold: var(--color-gold);
+    --gold-bright: #f8dfa0;
+    /* The two outcomes, as the terminal panels print them */
+    --ok: var(--color-success);
+    --bad: #ff8f9c;
+
+    /* Text in clear steps: the title and headings brightest, running text a step below, secondary text and labels
+       below that. Navigation sits a step below the article, so the content comes forward. Every step reads at 15px
+       on the night and in every well */
+    --ink-high: #f7f8ff;
+    --ink-body: var(--color-ink-soft);
+    --ink-muted: var(--color-faint);
+    --ink-faint: var(--color-faint);
+    --nav-ink: var(--color-faint);
+    --nav-head: var(--color-muted);
+
+    /* The three planes. The well is darker than the night with a shade along its top edge, the night itself carries
+       the content, and the raised plane is a little lighter, frosted, lit along its top edge */
+    --well: #02030f;
+    --well-shade:
+        inset 0 1px 0 rgb(0 0 0 / 0.7),
+        inset 0 3px 10px rgb(0 0 0 / 0.5),
+        inset 0 -1px 0 rgb(255 255 255 / 0.035);
+    --raised: rgb(17 20 48 / 0.84);
+    --raised-blur: blur(18px);
+    --raised-shade:
+        inset 0 1px 0 rgb(255 255 255 / 0.12),
+        0 24px 64px -24px rgb(0 0 0 / 0.95);
+
+    /* Quiet chrome: hairlines, outlines and tints are white at a low alpha, never a hue */
+    --hair: rgb(255 255 255 / 0.22);
+    --hair-strong: rgb(255 255 255 / 0.32);
+    --tint: rgb(255 255 255 / 0.06);
+
+    --accent: var(--cyan);
+    --accent-bright: var(--cyan-bright);
+    --accent-deep: var(--cyan-deep);
+    --accent-soft: rgb(70 227 239 / 0.12);
+    --line: var(--hair);
+    /* The reading column's measure in pixels, 76 characters of the article's 19px type, so the frame can add it up */
+    --read-w: 947px;
+    --room-gap: clamp(40px, 3.4vw, 72px);
+    /* The header and footer line up with the room on wide screens: sidebar, reading column, outline and the gaps.
+       Declared again here because a variable built from others takes the values where it is declared */
+    --frame: calc(var(--side-w) + var(--read-w) + var(--outline-w) + 2 * var(--room-gap));
+    --frame-pad: 0px;
+    --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
+
+    background: transparent;
+}
+
+.docs:not([data-section="guides"]) {
+    --accent: var(--violet);
+    --accent-bright: var(--violet-bright);
+    --accent-deep: var(--violet-deep);
+    --accent-soft: rgb(165 124 255 / 0.14);
+}
+
+[data-tone="cyan"] {
+    --tone: var(--cyan);
+    --tone-bright: var(--cyan-bright);
+    --tone-deep: var(--cyan-deep);
+}
+
+[data-tone="violet"] {
+    --tone: var(--violet);
+    --tone-bright: var(--violet-bright);
+    --tone-deep: var(--violet-deep);
+}
+
+/* The night behind the reading room: deep water with light coming down from the surface. Painted here for Still, and in
+   Animated long soft shafts sway and crystal bubbles rise, very slowly, behind the reading. Each is painted once and only
+   its transform and opacity change, so the browser moves them without the page doing any work. None of it follows the scroll */
+.docs-night {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background:
+        linear-gradient(to bottom, rgb(4 5 26 / 0) 12%, var(--color-night) 82%),
+        linear-gradient(101deg, rgb(62 158 190 / 0) 12%, rgb(62 158 190 / 0.09) 19%, rgb(62 158 190 / 0) 27%),
+        linear-gradient(94deg, rgb(62 158 190 / 0) 38%, rgb(62 158 190 / 0.06) 47%, rgb(62 158 190 / 0) 56%),
+        linear-gradient(83deg, rgb(62 158 190 / 0) 66%, rgb(62 158 190 / 0.08) 74%, rgb(62 158 190 / 0) 83%),
+        linear-gradient(to bottom, rgb(8 21 58), var(--color-night));
+}
+
+.ray {
+    position: absolute;
+    border-radius: 50%;
+    will-change: transform;
+    animation-delay: calc(-1 * var(--from-start, 0s) - var(--water-t, 0ms));
+    animation-iteration-count: infinite;
+    animation-direction: alternate;
+    animation-timing-function: ease-in-out;
+}
+
+/* A shaft of light is a tall soft ellipse hung from above the screen, which fades out at both ends */
+.ray {
+    top: -42vh;
+    width: clamp(180px, 22vw, 460px);
+    height: 142vh;
+    background: radial-gradient(closest-side, rgb(96 190 224 / 0.13), rgb(96 190 224 / 0.05) 58%, rgb(96 190 224 / 0));
+    transform-origin: 50% 0;
+    animation-name: docs-ray;
+}
+
+.ray-a {
+    --from: 9deg;
+    --to: 14deg;
+
+    left: 6%;
+    animation-duration: 45s;
+}
+
+.ray-b {
+    --from: 2deg;
+    --to: 7deg;
+
+    left: 33%;
+    animation-duration: 60s;
+    --from-start: 21s;
+}
+
+.ray-c {
+    --from: -4deg;
+    --to: 1deg;
+
+    left: 56%;
+    animation-duration: 50s;
+    --from-start: 38s;
+}
+
+.ray-d {
+    --from: -13deg;
+    --to: -8deg;
+
+    left: 76%;
+    animation-duration: 75s;
+    --from-start: 12s;
+}
+
+@keyframes docs-ray {
+    from {
+        transform: rotate(var(--from));
+    }
+    to {
+        transform: rotate(var(--to));
+    }
+}
+
+/* The sea floor's crystal bubbles, fainter and slower here, rising the whole height of the screen. They fade in low and out high, so none
+   appears or ends suddenly */
+.docs-bubble {
+    position: absolute;
+    bottom: -48px;
+    left: var(--x);
+    width: var(--size);
+    height: var(--size);
+    opacity: 0;
+    will-change: transform, opacity;
+    animation: docs-bubble var(--rise-for) linear infinite;
+    animation-delay: calc(-1 * var(--from-start, 0s) - var(--water-t, 0ms));
+}
+
+.docs-bubble svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Without the outline beside it, the reading column has no free side, so the bubbles are fewer and fainter */
+@media (max-width: 1279px) {
+    .docs-bubble {
+        --bubble-light: 0.25;
+
+        left: var(--x-narrow);
+    }
+
+    .docs-bubble:nth-of-type(2n) {
+        display: none;
+    }
+}
+
+@keyframes docs-bubble {
+    0% {
+        opacity: 0;
+        transform: translate3d(0, 0, 0) rotate(0deg) scale(0.75);
+    }
+    10% {
+        opacity: var(--bubble-light, 0.55);
+    }
+    50% {
+        transform: translate3d(var(--sway), -56vh, 0) rotate(calc(var(--turn) * 0.5)) scale(1);
+    }
+    85% {
+        opacity: var(--bubble-light, 0.55);
+    }
+    100% {
+        opacity: 0;
+        transform: translate3d(calc(var(--sway) * -0.4), -116vh, 0) rotate(var(--turn)) scale(1.04);
+    }
+}
+
+.docs[data-still] :is(.ray, .docs-bubble) {
+    display: none;
+}
+
+.docs .site-footer {
+    position: relative;
+}
+
+/* The header is the raised plane: frosted and a little lighter than the night, with a soft shadow where the article
+   passes under it. Scoped to the docs, where a page is read by scrolling under it */
+body.docs .site-header::before {
+    inset: 0;
+    background: var(--raised);
+    mask-image: none;
+    box-shadow:
+        0 1px 0 rgb(255 255 255 / 0.06),
+        0 18px 44px -24px rgb(0 0 0 / 0.9);
+}
+
+/* Sidebar, page and outline on wide screens */
+.docs-room {
+    position: relative;
+    display: grid;
+    grid-template-columns: var(--side-w) minmax(0, var(--read-w)) var(--outline-w);
+    justify-content: center;
+    column-gap: var(--room-gap);
+    min-height: 100vh;
+    padding-inline: var(--page-margin);
+    font-size: var(--type-lead);
+}
+
+/* Sidebar: search, the switch between the two parts of the docs, then the part's course in its own scroll. It floats
+   at the side of the reading column, under the header, and holds still while the article changes. It is fixed rather
+   than sticky so a short page's footer never pushes it up and out of reach: the footer passes over it instead.
+   When the header hides on the way down, the sidebar rises to the top edge with it */
+
+.docs {
+    --room-top: 76px;
+}
+
+/* Set on the two floating parts themselves, not on the whole page: a change here is a change to their styles
+   alone, not a recalculation of every element under the page */
+.docs:has(.site-header[data-hidden]) :is(.docs-side, .docs-outline) {
+    --room-top: 0px;
+}
+
+.docs-side {
+    position: fixed;
+    top: var(--room-top);
+    left: var(--frame-inline);
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    width: var(--side-w);
+    /* The page zoom on wide screens scales viewport units too, so they are divided back out. Where the footer has
+       risen into view the sidebar ends above it, so nothing focused in it is ever under the footer */
+    height: calc(100vh / var(--page-zoom, 1) - var(--room-top) - var(--footer-cut, 0px));
+    padding-top: 28px;
+    transition: top var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* The footer rides over the floating sidebar and outline, on the night's own color */
+.docs .site-footer {
+    z-index: 2;
+    background: var(--color-night);
+    border-top: 1px solid var(--line);
+}
+
+/* A station opened before the first frame opens at once, so the course never shifts under the reader after load */
+html[data-course-settling] .course-station::details-content {
+    transition: none;
+}
+
+.side-top {
+    display: flex;
+    flex: none;
+    gap: 8px;
+}
+
+.side-close,
+.side-open,
+.side-scrim {
+    display: none;
+}
+
+.search-open {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    height: 46px;
+    padding: 0 8px 0 14px;
+    font: inherit;
+    font-size: var(--type-small);
+    color: var(--nav-ink);
+    background: var(--well);
+    border: 0;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--well-shade);
+    cursor: pointer;
+    transition: color var(--speed-fast) ease;
+}
+
+.search-open:hover {
+    color: var(--ink-high);
+}
+
+.search-open:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.search-open-label {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.search-open kbd {
+    margin-left: auto;
+    padding: 2px 7px;
+    font-family: var(--font-sans);
+    font-size: var(--type-small);
+    color: var(--nav-ink);
+    white-space: nowrap;
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+/* Guides or reference: two words on one hairline. The chosen part is written in white and underlined in its own
+   voice, cyan for what you do, violet for what the SDK knows */
+.part-switch {
+    display: grid;
+    flex: none;
+    grid-template-columns: 1fr 1fr;
+    margin-top: 14px;
+    border-bottom: 1px solid var(--hair);
+}
+
+.part-tab {
+    position: relative;
+    height: 42px;
+    padding: 0 4px;
+    font: inherit;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: var(--nav-ink);
+    background: none;
+    border: 0;
+    cursor: pointer;
+    transition: color var(--speed-fast) ease;
+}
+
+.part-tab::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 -1px;
+    height: 2px;
+    background: var(--tone);
+    opacity: 0;
+    transition: opacity var(--speed-fast) ease;
+}
+
+.part-tab:focus-visible {
+    outline: 2px solid var(--tone);
+    outline-offset: -2px;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.part-tab[aria-selected="true"] {
+    color: var(--ink-high);
+}
+
+.part-tab[aria-selected="true"]::after {
+    opacity: 1;
+}
+
+/* The course scrolls on its own. Its edges fade only where more of it lies beyond */
+@property --fade-top {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0px;
+}
+
+@property --fade-bottom {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0px;
+}
+
+/* It reaches a little past the rail on the left, so the bead's glow is never cut by the scroll box. The top fade
+   starts with the first pixel of scroll, so a row passing under the switch is never cut off sharp */
+.course-scroll {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    margin: 8px 0 0 -16px;
+    padding: 18px 4px 48px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--hair-strong) transparent;
+    /* A row cut by the top edge is fully gone in the first stretch of the fade, so no half line of text shows
+       under the switch */
+    mask-image: linear-gradient(to bottom, transparent calc(var(--fade-top) * 0.35), #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+    animation:
+        course-fade-top linear both,
+        course-fade-bottom linear both;
+    animation-timeline: scroll(self), scroll(self);
+    animation-range:
+        0 12px,
+        calc(100% - 40px) 100%;
+}
+
+@keyframes course-fade-top {
+    to {
+        --fade-top: 56px;
+    }
+}
+
+@keyframes course-fade-bottom {
+    from {
+        --fade-bottom: 48px;
+    }
+
+    to {
+        --fade-bottom: 0px;
+    }
+}
+
+/* One part's course: stations on one signal line. The rail runs through every station ring, and pages hang beside it */
+.course {
+    --rail-x: 10px;
+    --text-x: 36px;
+    --row-middle: 21px;
+
+    position: relative;
+    isolation: isolate;
+    interpolate-size: allow-keywords;
+    anchor-scope: --here;
+}
+
+.course::before {
+    content: "";
+    position: absolute;
+    top: var(--row-middle);
+    bottom: 0;
+    left: calc(var(--rail-x) - 0.5px);
+    z-index: -1;
+    width: 1px;
+    background: linear-gradient(to bottom, var(--line), var(--line) calc(100% - 40px), transparent);
+}
+
+.course nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* A station: its ring on the rail, its name, and a caret that turns when it opens */
+.station-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 42px;
+    padding: 0 12px 0 var(--text-x);
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    line-height: 1.3;
+    color: var(--nav-head);
+    list-style: none;
+    cursor: pointer;
+    outline: none;
+    transition: color var(--speed-fast) ease;
+}
+
+.station-head::-webkit-details-marker {
+    display: none;
+}
+
+.station-head::after {
+    content: "";
+    position: absolute;
+    inset: 2px 0 2px calc(var(--text-x) - 11px);
+    z-index: -1;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    transition: background-color var(--speed-fast) ease;
+}
+
+.station-head:focus-visible::after {
+    outline: 2px solid var(--tone);
+}
+
+.station-ring {
+    position: absolute;
+    top: 50%;
+    left: calc(var(--rail-x) - 7px);
+    z-index: 1;
+    width: 14px;
+    height: 14px;
+    margin-top: -7px;
+    background: var(--color-night);
+    border: 1.5px solid rgb(255 255 255 / 0.3);
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px var(--color-night);
+    transition: border-color var(--speed-fast) ease;
+}
+
+/* Stations the signal has passed on its way to the current page are lit in the tone, and the one it has reached
+   glows from inside */
+.course-station[data-reach="passed"] .station-ring {
+    border-color: color-mix(in srgb, var(--tone) 75%, transparent);
+    box-shadow:
+        0 0 0 3px var(--color-night),
+        0 0 8px color-mix(in srgb, var(--tone) 30%, transparent);
+}
+
+.course-station[data-reach="here"] .station-ring {
+    background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--tone) 55%, var(--color-night)), color-mix(in srgb, var(--tone) 18%, var(--color-night)) 70%);
+    border-color: var(--tone);
+    box-shadow:
+        0 0 0 3px var(--color-night),
+        0 0 12px color-mix(in srgb, var(--tone) 45%, transparent);
+}
+
+.station-caret {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin-left: auto;
+    fill: rgb(255 255 255 / 0.45);
+    transition:
+        rotate var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1),
+        fill var(--speed-fast) ease;
+}
+
+.course-station[open] .station-caret {
+    rotate: 90deg;
+}
+
+.course-station::details-content {
+    block-size: 0;
+    overflow: clip;
+    transition:
+        block-size var(--speed-normal) cubic-bezier(0.2, 0.7, 0.2, 1),
+        content-visibility var(--speed-normal) allow-discrete;
+}
+
+.course-station[open]::details-content {
+    block-size: auto;
+}
+
+/* Pages */
+.course-list {
+    margin: 0;
+    padding: 0 0 10px;
+    list-style: none;
+}
+
+.course-list.nested {
+    --indent: 18px;
+
+    position: relative;
+    padding: 0 0 6px;
+}
+
+/* Class pages hang from their category on a short thread of their own, one or many, so the indent always has a
+   line that explains it */
+.course-list.nested::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    bottom: 10px;
+    left: calc(var(--text-x) + 3px);
+    width: 1px;
+    background: var(--hair);
+}
+
+.course-list a {
+    position: relative;
+    display: block;
+    padding: 7px 12px 7px calc(var(--text-x) + var(--indent, 0px));
+    font-size: var(--type-small);
+    line-height: 1.35;
+    color: var(--nav-ink);
+    text-decoration: none;
+    overflow-wrap: break-word;
+    outline: none;
+    transition: color var(--speed-fast) ease;
+}
+
+.course-list a::after {
+    content: "";
+    position: absolute;
+    inset: 1px 0 1px calc(var(--text-x) + var(--indent, 0px) - 11px);
+    z-index: -1;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    transition: background-color var(--speed-fast) ease;
+}
+
+.course-list a:focus-visible::after {
+    outline: 2px solid var(--tone);
+}
+
+/* Pointing at a page marks its place on the rail, where the bead would go. While a slow page is on its way the mark
+   stays and breathes */
+.course-list a::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: calc(var(--rail-x) - 4.5px);
+    z-index: 1;
+    box-sizing: border-box;
+    width: 9px;
+    height: 9px;
+    margin-top: -4.5px;
+    background: var(--color-night);
+    border: 1.5px solid var(--tone);
+    border-radius: 50%;
+    opacity: 0;
+    scale: 0.5;
+    transition:
+        opacity var(--speed-fast) ease,
+        scale var(--speed-fast) ease;
+}
+
+.course-list a:is(:focus-visible, [data-pending])::before {
+    opacity: 1;
+    scale: 1;
+}
+
+.course-list a[data-pending]::before {
+    animation: course-pending 1100ms ease-in-out 200ms infinite;
+}
+
+@keyframes course-pending {
+    50% {
+        background: color-mix(in srgb, var(--tone) 40%, var(--color-night));
+        box-shadow: 0 0 10px var(--tone);
+    }
+}
+
+/* The current page is written in the badge's gold, the one warm word on the page */
+.course-list a[aria-current="page"] {
+    font-weight: var(--weight-semibold);
+    color: var(--gold);
+}
+
+.course-list a[aria-current="page"]::before {
+    display: none;
+}
+
+/* Pointing, on screens with a pointer. On touch a tapped row would otherwise stay lit */
+@media (hover: hover) {
+    .part-tab:not([aria-selected="true"]):hover {
+        color: var(--ink-high);
+    }
+
+    .station-head:hover,
+    .course-list a:not([aria-current="page"]):hover {
+        color: var(--ink-high);
+    }
+
+    :is(.station-head, .course-list a):hover::after {
+        background: var(--tint);
+    }
+
+    .station-head:hover .station-caret {
+        fill: var(--ink-high);
+    }
+
+    .course-list a:hover::before {
+        opacity: 1;
+        scale: 1;
+    }
+}
+
+/* The current page anchors the bead. A closed station holding it lends its own row instead */
+.course-list a[aria-current="page"],
+.station-head[data-here] {
+    anchor-name: --here;
+}
+
+/* The lit line from the start of the course down to the bead */
+.signal {
+    position: absolute;
+    top: var(--row-middle);
+    bottom: anchor(--here center);
+    left: calc(var(--rail-x) - 1px);
+    width: 2px;
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--tone) 30%, transparent), var(--tone));
+    border-radius: 1px;
+    box-shadow: 0 0 10px color-mix(in srgb, var(--tone) 45%, transparent);
+    transform-origin: top;
+    pointer-events: none;
+}
+
+/* The bead: the one mark of the current page, the badge on the conductor's cap, gold where the signal arrives */
+.bead {
+    position: absolute;
+    top: calc(anchor(--here center) - 5.5px);
+    left: calc(var(--rail-x) - 5.5px);
+    z-index: 2;
+    width: 11px;
+    height: 11px;
+    background: radial-gradient(circle at 38% 34%, #fff, var(--gold-bright) 35%, var(--gold) 70%, #c9962e);
+    border-radius: 50%;
+    box-shadow:
+        0 0 0 3px var(--color-night),
+        0 0 16px 2px rgb(236 196 110 / 0.55);
+    pointer-events: none;
+}
+
+/* Arriving from another page of the course, the bead travels the line and the lit part follows it. The page's name
+   lights up when the bead reaches it */
+.course[data-travel="go"] .bead {
+    transition: translate 460ms cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.course[data-travel="go"] .signal {
+    transition: scale 460ms cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.course[data-travel] a[aria-current="page"] {
+    font-weight: var(--weight-regular);
+    color: var(--nav-ink);
+}
+
+.course a[aria-current="page"] {
+    transition:
+        color var(--speed-normal) ease,
+        font-weight var(--speed-normal) ease;
+}
+
+/* Switching parts by hand brings the other course in softly */
+.course[data-switched] {
+    animation: course-in 220ms ease both;
+}
+
+@keyframes course-in {
+    from {
+        opacity: 0;
+        translate: 0 6px;
+    }
+}
+
+/* The page */
+
+/* The sidebar and the outline float, so the page takes its own column by name */
+.docs-main {
+    position: relative;
+    grid-column: 2;
+    min-width: 0;
+    padding: 128px 0 96px;
+}
+
+.crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 0;
+    margin-bottom: 18px;
+    font-size: var(--type-small);
+}
+
+.crumbs a {
+    color: var(--ink-muted);
+    text-decoration: none;
+}
+
+.crumbs a:hover {
+    color: var(--accent-bright);
+}
+
+.crumbs a + a::before {
+    content: "/";
+    margin-inline: 10px;
+    color: var(--ink-faint);
+}
+
+/* Copying the page as Markdown stays quiet under the lead. It's a tool, not part of the reading */
+.docs-copy-page {
+    margin: 10px 0 0;
+}
+
+.docs-copy-markdown {
+    position: relative;
+    display: inline-grid;
+    grid-template-columns: auto auto;
+    column-gap: 7px;
+    align-items: center;
+    min-height: 34px;
+    margin-inline-start: -8px;
+    padding: 0 8px;
+    font: inherit;
+    font-size: var(--type-small, 0.875rem);
+    color: var(--ink-faint);
+    background: none;
+    border: 0;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition:
+        color var(--speed-fast) ease,
+        background-color var(--speed-fast) ease;
+}
+
+/* A clear layer makes the touch target 44 px without moving the text below */
+.docs-copy-markdown::after {
+    content: "";
+    position: absolute;
+    inset: -5px 0;
+}
+
+.docs-copy-markdown:hover {
+    color: var(--ink-high);
+    background: rgb(195 200 230 / 0.08);
+}
+
+.docs-copy-markdown svg {
+    grid-area: 1 / 1;
+}
+
+.docs-copy-markdown .icon-done {
+    color: var(--color-cyan);
+    visibility: hidden;
+}
+
+.docs-copy-markdown[data-copied] .icon-copy {
+    visibility: hidden;
+}
+
+.docs-copy-markdown[data-copied] .icon-done {
+    visibility: visible;
+}
+
+/* The title is the largest and brightest thing on the page. Its size and its light are its whole focus */
+.docs-title {
+    margin: 0;
+    font-size: var(--type-display);
+    font-weight: var(--weight-semibold);
+    line-height: 1.1;
+    letter-spacing: var(--tracking-tight);
+    color: var(--ink-high);
+    text-wrap: balance;
+}
+
+/* The title with the page's icon at the end of its line, held clear of a long title */
+.docs-heading.has-icon {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.docs-heading .docs-title {
+    min-width: 0;
+}
+
+.docs-icon {
+    flex: none;
+    width: clamp(56px, 5vw, 80px);
+    height: clamp(56px, 5vw, 80px);
+    object-fit: contain;
+    filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.5));
+}
+
+.docs-lead {
+    max-width: 34em;
+    margin: 18px 0 0;
+    font-size: var(--type-lead);
+    line-height: 1.55;
+    color: var(--ink-high);
+    text-wrap: pretty;
+}
+
+.docs-prose {
+    margin-top: 44px;
+    font-size: var(--type-body);
+    line-height: 1.7;
+    color: var(--ink-body);
+}
+
+.docs-prose > :first-child {
+    margin-top: 0;
+}
+
+/* Running text keeps a reading measure of about 70 characters. Code, entries and tables may use the column's full
+   width, which wide screens give them */
+.docs-article {
+    --measure: 38em;
+
+    container: article / inline-size;
+}
+
+.docs-prose > :is(p, ul, ol, blockquote, h2, h3, h4),
+.docs-prose details > :not(summary) {
+    max-width: var(--measure);
+}
+
+.docs-prose :is(p, ul, ol, table, details, blockquote) {
+    margin: 0 0 1.1em;
+}
+
+.docs-prose :is(h2, h3, h4) {
+    color: var(--ink-high);
+    font-weight: var(--weight-semibold);
+    text-wrap: balance;
+    scroll-margin-top: 104px;
+}
+
+.docs-prose h2 {
+    position: relative;
+    margin: 2.1em 0 0.6em;
+    font-size: var(--type-heading);
+    line-height: 1.2;
+    letter-spacing: var(--tracking-snug);
+}
+
+.docs-prose h3 {
+    margin: 1.8em 0 0.5em;
+    font-size: var(--type-title);
+    line-height: 1.3;
+    letter-spacing: var(--tracking-snug);
+}
+
+.docs-prose h4 {
+    margin: 1.6em 0 0.4em;
+    font-size: var(--type-lead);
+    line-height: 1.35;
+}
+
+.docs-prose strong {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+}
+
+.docs-prose a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1.5px;
+    text-decoration-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    text-underline-offset: 4px;
+    border-radius: 3px;
+    transition:
+        text-decoration-color var(--speed-fast) ease,
+        color var(--speed-fast) ease;
+}
+
+.docs-prose a:hover {
+    color: var(--accent-bright);
+    text-decoration-color: currentColor;
+}
+
+/* Inline code holds together: a span that fits on a line moves to the next line whole, and one longer than a line
+   wraps only at the seams the build marks with <wbr>, such as before a dot or at a camelCase hump. A wrapped span
+   leaves room at the line's end for the comma or period after it. Breaking inside a word part stays as the last
+   resort for a part wider than the whole column */
+.docs-prose :not(pre, .cmd-chip) > code {
+    display: inline;
+    padding: 0.08em 0.36em;
+    box-decoration-break: clone;
+    font-family: var(--font-mono);
+    font-size: max(0.84em, 15px);
+    line-height: 1.6;
+    color: var(--ink-high);
+    overflow-wrap: break-word;
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+/* In running text the room is taken from the paragraph's width. Flex items and table cells size to their content, so
+   they keep the span's own width */
+.docs-prose :is(p, li) > code {
+    max-width: calc(100% - 0.4em);
+}
+
+.docs-prose .ref-failures > li > code {
+    max-width: none;
+}
+
+/* A held-together span does not take its link's underline, so it draws its own. Inside a link the span takes the
+   link's hue, and its tint is that hue too */
+.docs-prose a > code {
+    color: inherit;
+    text-decoration: inherit;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+/* Lists carry the conductor's two waves instead of bullets, and a sequence of steps carries its numbers. Both
+   marks are drawn by the list itself, since the page's base styles leave lists without the browser's markers, and
+   both hang in the same gutter, so every indent has a visible mark that explains it */
+.docs-prose ul,
+.docs-prose ol {
+    padding-left: 32px;
+    list-style: none;
+}
+
+.docs-prose :is(ul, ol) > li {
+    position: relative;
+}
+
+.docs-prose ul > li::before {
+    content: "";
+    position: absolute;
+    top: 0.6em;
+    left: -30px;
+    width: 16px;
+    height: 11px;
+    background: var(--ink-faint);
+    mask: var(--wave) center / contain no-repeat;
+}
+
+.docs-prose ol {
+    counter-reset: step;
+}
+
+.docs-prose ol > li {
+    counter-increment: step;
+}
+
+.docs-prose ol > li::before {
+    content: counter(step) ".";
+    position: absolute;
+    top: 0;
+    right: calc(100% + 10px);
+    font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-muted);
+    white-space: nowrap;
+}
+
+.docs-prose li + li {
+    margin-top: 0.45em;
+}
+
+.docs-prose li > :is(ul, ol) {
+    margin: 0.45em 0 0;
+}
+
+/* A note: a rule on its left and its text on the night, no box. A note that opens with a bold word, such as Tip
+   or Warning, is one of the three kinds, and the rule and the word take the kind's meaning color */
+.docs-prose blockquote,
+.docs-prose .note {
+    --note: var(--ink-faint);
+
+    margin-left: 0;
+    padding: 2px 0 2px 18px;
+    color: var(--ink-body);
+    border-left: 3px solid var(--note);
+}
+
+.docs-prose :is(blockquote, .note) > :first-child > strong:first-child {
+    color: var(--note);
+}
+
+.docs-prose :is(blockquote, .note)[data-kind="tip"] {
+    --note: var(--ok);
+}
+
+.docs-prose :is(blockquote, .note)[data-kind="warning"] {
+    --note: var(--gold);
+}
+
+.docs-prose :is(blockquote, .note)[data-kind="failure"] {
+    --note: var(--bad);
+}
+
+.docs-prose hr {
+    margin: 2.4em 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+}
+
+.docs-prose img {
+    max-width: 100%;
+    height: auto;
+}
+
+.docs-prose table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    font-size: var(--type-body);
+    line-height: 1.5;
+    border-collapse: collapse;
+    scrollbar-width: thin;
+}
+
+.docs-prose :is(th, td) {
+    padding: 10px 16px 10px 0;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+}
+
+.docs-prose th {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+    white-space: nowrap;
+    border-bottom-color: var(--hair-strong);
+}
+
+/* Entries: a table whose cells hold sentences, rebuilt by scripts/docs/remark-entries.mjs. Each entry gives its term
+   a line of its own, then its parts in the table's column order, so one entry reads like every other and the reader
+   takes in one thing at a time. Hairlines and space keep entries apart, never boxes */
+.docs-prose .entries {
+    margin: 1.5em 0 1.9em;
+}
+
+.entry {
+    padding: 22px 0 24px;
+    scroll-margin-top: 96px;
+}
+
+/* A line only between two entries, so an entry is never framed by two */
+.entry + .entry {
+    border-top: 1px solid var(--hair);
+}
+
+.entry-term {
+    max-width: var(--measure);
+    margin: 0 0 12px;
+    font-size: var(--type-lead);
+    line-height: 1.6;
+    color: var(--ink-muted);
+}
+
+/* A term's code may be wrapped in its peek mark. The term is the entry's name, so it is the brightest thing in it */
+.docs-prose .entry-term > code,
+.docs-prose .entry-term > a.peek > code {
+    font-size: var(--type-body);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+}
+
+/* A record code reads as the console prints it, in brackets after the category, so the reader recognizes their log
+   line. The brackets are drawn, never copied, indexed or read aloud */
+.docs-prose .entry-term > code.record::before,
+.docs-prose .entry-term > code.record::after,
+.docs-prose .entry-term > a.peek > code.record::before,
+.docs-prose .entry-term > a.peek > code.record::after {
+    font-weight: var(--weight-regular);
+    color: rgb(255 255 255 / 0.5);
+}
+
+.docs-prose .entry-term > code.record::before,
+.docs-prose .entry-term > a.peek > code.record::before {
+    content: "[" / "";
+}
+
+.docs-prose .entry-term > code.record::after,
+.docs-prose .entry-term > a.peek > code.record::after {
+    content: "]" / "";
+}
+
+.docs-prose .entry-mark {
+    margin-left: 10px;
+    color: var(--accent);
+    text-decoration: none;
+    user-select: none;
+    opacity: 0;
+    transition: opacity var(--speed-fast) ease;
+}
+
+.entry:hover .entry-mark,
+.docs-prose .entry-mark:focus-visible {
+    opacity: 1;
+}
+
+.entry-part {
+    margin: 0;
+}
+
+.entry-part + .entry-part {
+    margin-top: 12px;
+}
+
+.docs-prose :is(.entry-part, .entry-text) > p {
+    max-width: var(--measure);
+    margin: 0;
+    line-height: 1.6;
+}
+
+.docs-prose .entry-text > p + p {
+    margin-top: 6px;
+}
+
+.entry-label {
+    display: block;
+    margin-bottom: 2px;
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    line-height: 1.6;
+    color: var(--ink-faint);
+}
+
+/* The two voices of the site: what the SDK reports in violet, what the reader does in cyan. Each label is written
+   in its voice's light so the eye finds the answer it came for */
+.entry-part[data-voice="sdk"] > .entry-label {
+    color: var(--violet-bright);
+}
+
+.entry-part[data-voice="you"] > .entry-label {
+    color: var(--cyan-bright);
+}
+
+/* With room, the labels stand in a quiet column of their own and the parts line up beside them */
+@container article (min-width: 620px) {
+    .entry-part:has(> .entry-label) {
+        display: grid;
+        grid-template-columns: 8.4rem minmax(0, 1fr);
+        column-gap: 20px;
+        align-items: baseline;
+    }
+
+    .entry-label {
+        margin: 0;
+    }
+}
+
+/* A linked entry, or one holding a linked code, is marked by a rule in the part's hue, like the current entry of
+   the outline */
+.entry:target,
+.entry:has(:target) {
+    margin-left: -18px;
+    padding-left: 15px;
+    border-left: 3px solid var(--accent);
+}
+
+/* The link mark of an entry, a heading or a row shows the focus ring the rest of the page uses */
+.docs-prose .entry-mark:focus-visible,
+.ref-mark:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    opacity: 1;
+}
+
+/* Questions and side notes fold away on the night. The question is a row with a chevron in the part's hue, folds
+   that follow each other are parted by a hairline, and the open answer lines up with the question's text */
+.docs-prose details {
+    --fold-indent: 24px;
+}
+
+.docs-prose details:has(+ details) {
+    margin-bottom: 0;
+}
+
+.docs-prose details + details {
+    border-top: 1px solid var(--hair);
+}
+
+.docs-prose details > :not(summary) {
+    margin-left: var(--fold-indent);
+}
+
+/* While the site moves, a fold opens and closes smoothly */
+.docs:not([data-still]) :is(.docs-prose details, .toc-fold) {
+    interpolate-size: allow-keywords;
+}
+
+.docs:not([data-still]) :is(.docs-prose details, .toc-fold)::details-content {
+    height: 0;
+    overflow: clip;
+    transition:
+        height var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1),
+        content-visibility var(--speed-slow) allow-discrete;
+}
+
+.docs:not([data-still]) :is(.docs-prose details[open], .toc-fold[open])::details-content {
+    height: auto;
+}
+
+.docs-prose details[open] > :last-child {
+    margin-bottom: 0;
+}
+
+.docs-prose details[open] {
+    padding-bottom: 16px;
+}
+
+.docs-prose summary {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 12px 0;
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+    list-style: none;
+    cursor: pointer;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.docs-prose summary::-webkit-details-marker {
+    display: none;
+}
+
+.docs-prose summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.docs-prose summary::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin-left: 2px;
+    border-right: 2px solid var(--accent);
+    border-bottom: 2px solid var(--accent);
+    transform: translateY(-3px) rotate(-45deg);
+    transition: transform var(--speed-fast) ease;
+}
+
+.docs-prose details[open] > summary::before {
+    transform: translateY(-4px) rotate(45deg);
+}
+
+/* Code */
+
+/* A code block is one well cut into the night: no frame around it and no strip across its top. The file name, the
+   language tabs and the copy button sit inside the well's top edge, on the same ground as the code */
+.code-frame {
+    position: relative;
+    margin: 1.4em 0;
+    overflow: hidden;
+    background: var(--well);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--well-shade);
+}
+
+.code-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px 10px;
+    min-height: 44px;
+    padding: 8px 8px 0 22px;
+}
+
+.code-file {
+    margin-right: auto;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+}
+
+.code-corner {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+}
+
+/* Over a long first line the button keeps the well's own ground behind it */
+.code-corner .copy-button {
+    background: var(--well);
+    box-shadow: 0 0 0 6px var(--well);
+}
+
+.code-corner .copy-button:hover {
+    background: rgb(255 255 255 / 0.08);
+}
+
+/* The code in its well. The well's shade is drawn once by the frame, so the pre adds no edge of its own. A line
+   longer than the well wraps at a seam and its continuation hangs in by three characters, so the eye still reads one
+   statement per line and nothing scrolls sideways. Copying reads the text, which the wrapping leaves whole */
+.docs .code-frame pre.astro-code,
+.docs .docs-prose pre.astro-code,
+.docs .ref pre.astro-code {
+    margin: 0;
+    padding: 18px 22px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: var(--well) !important;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    tab-size: 4;
+    scrollbar-width: thin;
+    scrollbar-color: var(--hair-strong) transparent;
+}
+
+.code-frame.has-bar pre.astro-code {
+    padding-top: 8px;
+}
+
+/* A long block shows its start, and the rest is a press away. The rest stays findable: the browser's own find opens it */
+.code-rest {
+    display: block;
+}
+
+.code-more {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 16px;
+    font: inherit;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    color: var(--accent);
+    cursor: pointer;
+    background: var(--well);
+    border: 0;
+    border-top: 1px solid var(--hair);
+}
+
+.code-more:hover {
+    color: var(--accent-bright);
+}
+
+.code-more:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -4px;
+}
+
+/* The code fades into the button, so it reads as carrying on */
+.code-more::before {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 100%;
+    left: 0;
+    height: 72px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--well));
+    transition: opacity var(--speed-slow) ease;
+}
+
+.code-more[aria-expanded="true"]::before {
+    opacity: 0;
+}
+
+.docs[data-still] .code-more::before {
+    transition: none;
+}
+
+.code-more::after {
+    content: "↓" / "";
+}
+
+.code-more[aria-expanded="true"]::after {
+    content: "↑" / "";
+}
+
+/* The turned part of a long line hangs past the line's own indent, which the build marks on each line */
+.docs pre.astro-code .line {
+    display: inline-block;
+    width: 100%;
+    padding-left: calc(var(--indent, 0ch) + 3ch);
+    text-indent: calc(-1 * (var(--indent, 0ch) + 3ch));
+}
+
+/* A phone column would wrap almost every line, which breaks the shape of the code, so there the code scrolls */
+@container article (max-width: 639.98px) {
+    .docs .code-frame pre.astro-code,
+    .docs .docs-prose pre.astro-code,
+    .docs .ref pre.astro-code {
+        white-space: pre;
+    }
+
+    .docs pre.astro-code .line {
+        display: inline;
+        width: auto;
+        padding-left: 0;
+        text-indent: 0;
+    }
+}
+
+/* A bare pre outside a frame is a well of its own. A pre inside a frame, in one of its language variants, is not */
+.docs .docs-prose > pre.astro-code,
+.docs .ref :not(.code-frame, .code-variant) > pre.astro-code {
+    margin: 18px 0 24px;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--well-shade);
+}
+
+/* Without a bar the copy button floats over the corner, so the first line wraps before it and a scrolling line ends
+   clear of it */
+.code-frame:not(.has-bar) pre.astro-code {
+    padding-right: 56px;
+}
+
+.code-frame:not(.has-bar) pre.astro-code .line:first-child {
+    width: calc(100% - 40px);
+}
+
+/* Which published version the docs show: one menu with the version on screen, the way a reader expects to find it */
+.version-menu {
+    position: relative;
+    z-index: 3;
+    margin: 12px 0 0;
+    font-size: var(--type-small);
+}
+
+.version-menu summary,
+.version-single {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 14px;
+    color: var(--ink-high);
+    background: var(--well);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: inset 0 0 0 1px var(--hair);
+}
+
+.version-menu summary {
+    cursor: pointer;
+    list-style: none;
+    transition: box-shadow var(--speed-fast) ease;
+}
+
+.version-menu summary::-webkit-details-marker {
+    display: none;
+}
+
+.version-menu summary:hover,
+.version-menu[open] summary {
+    box-shadow: inset 0 0 0 1px var(--hair-strong);
+}
+
+.version-menu summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.version-label {
+    flex: none;
+    font-weight: var(--weight-medium);
+}
+
+.version-number {
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    color: var(--ink-muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.version-caret {
+    flex: none;
+    color: var(--ink-muted);
+    transition: rotate var(--speed-fast) ease;
+}
+
+.version-menu[open] .version-caret {
+    rotate: 180deg;
+}
+
+.docs[data-still] .version-caret {
+    transition: none;
+}
+
+.version-list {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    left: 0;
+    /* However many versions there are, the list scrolls by itself and its end stays on a short screen. Its scroll doesn't carry over to the page */
+    max-height: max(132px, min(320px, calc(100dvh / var(--page-zoom, 1) - 230px)));
+    padding: 6px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--hair-strong) transparent;
+    background: var(--color-night-2);
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow:
+        inset 0 0 0 1px var(--hair),
+        var(--raised-shade);
+}
+
+.version-list a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 8px;
+    color: var(--ink-muted);
+    text-decoration: none;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.version-list a:hover {
+    color: var(--ink-high);
+    background: rgb(255 255 255 / 0.06);
+}
+
+.version-list a[aria-current] {
+    color: var(--ink-high);
+    background: rgb(255 255 255 / 0.08);
+}
+
+/* An older version is only its number, so it starts on the left like the heading above it */
+.version-group ~ a .version-number {
+    margin-left: 0;
+}
+
+.version-group {
+    margin: 8px 0 2px;
+    padding: 6px 8px 0;
+    color: var(--ink-muted);
+    border-top: 1px solid var(--hair);
+}
+
+/* Switches for the package manager and the code language: a few words in a row, the chosen one written in white
+   and underlined in the part's hue */
+.seg {
+    display: inline-flex;
+    flex: none;
+    gap: 2px;
+}
+
+.seg button {
+    position: relative;
+    height: 32px;
+    padding: 0 7px;
+    font: inherit;
+    font-size: var(--type-small);
+    font-weight: var(--weight-medium);
+    line-height: 1;
+    color: var(--ink-muted);
+    background: none;
+    border: 0;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    cursor: pointer;
+    transition: color var(--speed-fast) ease;
+}
+
+.seg button::after {
+    content: "";
+    position: absolute;
+    inset: auto 7px 3px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity var(--speed-fast) ease;
+}
+
+.seg button:hover {
+    color: var(--ink-high);
+}
+
+.seg button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.seg button[aria-pressed="true"] {
+    color: var(--ink-high);
+}
+
+.seg button[aria-pressed="true"]::after {
+    opacity: 1;
+}
+
+/* A command chip in the docs is a well like the code, not the homepage's glass */
+.docs .cmd-chip {
+    background: var(--well);
+    border: 0;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+    box-shadow: var(--well-shade);
+}
+
+/* Fingers need room: on a touch screen the switches and the breadcrumb links grow to 44px */
+@media (hover: none) and (pointer: coarse) {
+    .seg button {
+        height: 44px;
+        padding: 0 10px;
+    }
+
+    .seg button::after {
+        inset: auto 10px 8px;
+    }
+
+    .crumbs a {
+        padding: 12px 0;
+    }
+
+    .search-open kbd {
+        display: none;
+    }
+}
+
+/* A command with its package manager forms */
+.cmd-block {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    margin: 1.3em 0;
+}
+
+.cmd-block .cmd-chip {
+    min-width: 0;
+}
+
+/* Only the chosen package manager and language show. The head script sets the choice before the first paint */
+html:not([data-pm]) [data-pm-variant]:not([data-pm-variant="npm"]),
+html[data-pm="pnpm"] [data-pm-variant]:not([data-pm-variant="pnpm"]),
+html[data-pm="bun"] [data-pm-variant]:not([data-pm-variant="bun"]),
+html:not([data-lang="ts"]) [data-lang-variant="ts"],
+html[data-lang="ts"] [data-lang-variant="js"] {
+    display: none;
+}
+
+/* Previous and next page: two raised plates at the end of the page, one main choice each, the next page's title in the part's hue */
+.pager {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 72px;
+}
+
+.pager-link {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 44px;
+    padding: 20px 24px 22px;
+    text-decoration: none;
+    background: var(--raised);
+    border-radius: var(--corner-large);
+    corner-shape: squircle;
+    box-shadow:
+        inset 0 0 0 1px var(--hair),
+        var(--raised-shade);
+    transition: box-shadow var(--speed-fast) ease;
+}
+
+.pager-link:hover {
+    box-shadow:
+        inset 0 0 0 1px var(--accent),
+        var(--raised-shade);
+}
+
+.pager-link.next {
+    grid-column: 2;
+    text-align: right;
+}
+
+.pager-link.next:only-child {
+    grid-column: 1 / -1;
+}
+
+.pager-dir {
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+}
+
+.pager-link.next .pager-dir::after {
+    content: " →" / "";
+}
+
+.pager-link:not(.next) .pager-dir::before {
+    content: "← " / "";
+}
+
+.pager-title {
+    font-size: var(--type-lead);
+    font-weight: var(--weight-medium);
+    color: var(--ink-high);
+    transition: color var(--speed-fast) ease;
+}
+
+.pager-link.next .pager-title {
+    color: var(--accent);
+}
+
+.pager-link:hover .pager-title {
+    color: var(--accent-bright);
+}
+
+/* Outline. It floats at the side of the reading column and follows the header: when the header hides on the way
+   down the outline and the sidebar rise to the top edge. It is its own part of a page transition, like the sidebar,
+   so it holds still while the page changes and its entries are simply the next page's. Its own scroll stays its
+   own: at its end the wheel does not go on to scroll the page, which would move the mark it was just reading */
+
+.docs-outline {
+    position: fixed;
+    top: var(--room-top);
+    right: var(--frame-inline);
+    width: var(--outline-w);
+    max-height: calc(100vh / var(--page-zoom, 1) - var(--room-top) - var(--footer-cut, 0px));
+    padding: 56px 0 48px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--hair-strong) transparent;
+    /* Like the course, the outline fades at the edges where more of it lies beyond */
+    mask-image: linear-gradient(to bottom, transparent calc(var(--fade-top) * 0.35), #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent);
+    animation:
+        course-fade-top linear both,
+        course-fade-bottom linear both;
+    animation-timeline: scroll(self), scroll(self);
+    animation-range:
+        0 12px,
+        calc(100% - 40px) 100%;
+    transition: top var(--speed-slow) cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.outline-title {
+    margin: 0 0 12px;
+    font-size: var(--type-small);
+    font-weight: var(--weight-semibold);
+    color: var(--nav-head);
+}
+
+.toc-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-left: 1px solid var(--hair);
+}
+
+.toc-list a {
+    display: block;
+    margin-left: -1px;
+    padding: 5px 0 5px 16px;
+    font-size: var(--type-small);
+    line-height: 1.4;
+    color: var(--nav-ink);
+    text-decoration: none;
+    border-left: 1px solid transparent;
+    border-radius: 0 var(--corner-small) var(--corner-small) 0;
+    corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        border-color var(--speed-fast) ease;
+}
+
+.toc-list li[data-depth="3"] a {
+    padding-left: 30px;
+}
+
+.toc-list a:hover {
+    color: var(--ink-high);
+}
+
+.toc-list a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+/* The heading under the reader is written in white, with a mark in the part's hue on the line */
+.toc-list a[aria-current] {
+    color: var(--ink-high);
+    border-left: 2px solid var(--accent);
+    margin-left: -1.5px;
+}
+
+.toc-fold {
+    display: none;
+}
+
+/* Search. The dialog is the raised plane above the dimmed page: frosted, a little lighter than the night, with a
+   hairline of light along its top edge and a deep shade under it */
+
+.search-dialog {
+    width: min(680px, calc(100vw - 32px));
+    max-height: min(640px, calc(100vh - 96px));
+    margin: 11vh auto auto;
+    padding: 0;
+    overflow: hidden;
+    color: var(--color-ink);
+    visibility: visible;
+    background: var(--raised);
+    border: 0;
+    border-radius: var(--corner-large);
+    corner-shape: squircle;
+    box-shadow: var(--raised-shade);
+    backdrop-filter: var(--raised-blur);
+}
+
+.search-dialog[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+.search-dialog::backdrop {
+    background: rgb(2 3 14 / 0.66);
+    backdrop-filter: blur(3px);
+}
+
+.search-field {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 12px;
+    height: 62px;
+    padding: 0 12px 0 18px;
+    color: var(--ink-muted);
+    border-bottom: 1px solid var(--hair);
+}
+
+.search-field:focus-within {
+    color: var(--tone, var(--accent));
+}
+
+.search-field input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    font: inherit;
+    font-size: var(--type-lead);
+    color: var(--color-ink);
+    background: none;
+    border: 0;
+    outline: none;
+}
+
+.search-field input::placeholder {
+    color: var(--nav-ink);
+}
+
+.search-field input::-webkit-search-cancel-button {
+    display: none;
+}
+
+.search-close {
+    padding: 4px 9px;
+    font: inherit;
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+    background: var(--tint);
+    border: 0;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    cursor: pointer;
+}
+
+.search-close:hover {
+    color: var(--ink-high);
+}
+
+.search-results {
+    margin: 0;
+    padding: 8px;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.search-results:empty {
+    display: none;
+}
+
+.search-results a {
+    display: block;
+    padding: 12px 14px;
+    color: inherit;
+    text-decoration: none;
+    border-radius: var(--corner-medium);
+    corner-shape: squircle;
+}
+
+/* The chosen result is marked on its left edge in the tone, like the current entry of the outline */
+.search-results li[aria-selected="true"] a {
+    background: var(--tint);
+    box-shadow: inset 2px 0 0 var(--tone, var(--accent));
+}
+
+.search-hit-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.search-hit-title {
+    font-size: var(--type-body);
+    font-weight: var(--weight-semibold);
+    color: var(--ink-high);
+}
+
+.search-hit-section {
+    font-weight: var(--weight-regular);
+    color: var(--ink-muted);
+}
+
+/* The group says which part a result comes from, in that part's voice: guides in cyan, reference and codes in
+   violet */
+.search-hit-group {
+    flex: none;
+    font-size: var(--type-small);
+    color: var(--ink-faint);
+}
+
+.search-hit-group[data-group="Guides"] {
+    color: var(--cyan);
+}
+
+.search-hit-group[data-group="API reference"] {
+    color: var(--violet-bright);
+}
+
+.search-hit-group[data-group="Error and log codes"] {
+    color: var(--violet-bright);
+}
+
+.search-hit-excerpt {
+    display: block;
+    margin-top: 4px;
+    font-size: var(--type-body);
+    line-height: 1.5;
+    color: var(--ink-muted);
+}
+
+.search-hit-excerpt mark {
+    font-weight: var(--weight-semibold);
+    color: var(--tone-bright, var(--accent-bright));
+    background: none;
+}
+
+.search-status {
+    margin: 0;
+    padding: 16px 22px 18px;
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+}
+
+.search-status:empty {
+    display: none;
+}
+
+/* Two columns: the outline folds into the top of the page */
+@media (max-width: 1279px) {
+    .docs-room {
+        grid-template-columns: var(--side-w) minmax(0, var(--read-w));
+    }
+
+    .docs-outline {
+        display: none;
+    }
+
+    .toc-fold {
+        display: block;
+        margin-bottom: 36px;
+        border-bottom: 1px solid var(--hair);
+    }
+
+    /* The same chevron as the folds in the prose, in place of the browser's own marker */
+    .toc-fold summary {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 0;
+        font-size: var(--type-small);
+        font-weight: var(--weight-semibold);
+        color: var(--ink-high);
+        list-style: none;
+        cursor: pointer;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+    }
+
+    .toc-fold summary:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+
+    .toc-fold summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .toc-fold summary::before {
+        content: "";
+        flex: none;
+        width: 8px;
+        height: 8px;
+        margin-left: 2px;
+        border-right: 2px solid var(--accent);
+        border-bottom: 2px solid var(--accent);
+        transform: rotate(-45deg);
+        transition: transform var(--speed-fast) ease;
+    }
+
+    .toc-fold[open] > summary::before {
+        transform: rotate(45deg);
+    }
+
+    .toc-fold .toc-list {
+        margin: 2px 0 16px 24px;
+    }
+}
+
+/* Laptops have little height, so the page starts closer to the header and its rhythm tightens. More of the content
+   shows in the first view, at the same text sizes */
+@media (min-width: 900px) and (max-height: 920px) {
+    .docs-main {
+        padding-top: 100px;
+    }
+
+    .docs-title {
+        font-size: var(--type-display);
+    }
+
+    /* The title with the page's icon at the end of its line, held clear of a long title */
+.docs-heading.has-icon {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.docs-heading .docs-title {
+    min-width: 0;
+}
+
+.docs-icon {
+    flex: none;
+    width: clamp(56px, 5vw, 80px);
+    height: clamp(56px, 5vw, 80px);
+    object-fit: contain;
+    filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.5));
+}
+
+.docs-lead {
+        margin-top: 12px;
+    }
+
+    .docs-prose {
+        margin-top: 32px;
+    }
+
+    .docs-prose h2 {
+        margin-top: 1.75em;
+    }
+
+    .docs-outline {
+        padding-top: 28px;
+    }
+}
+
+/* Between a laptop and a wide screen the sidebar and the outline draw in, so the reading column and its code keep
+   most of their width. Wide screens give them a little more room, so their long names wrap less */
+@media (min-width: 1280px) and (max-width: 1679px) {
+    .docs {
+        --side-w: 260px;
+        --outline-w: 200px;
+        --room-gap: 32px;
+    }
+}
+
+@media (min-width: 1680px) {
+    .docs {
+        --side-w: 320px;
+        --outline-w: 280px;
+    }
+}
+
+/* One column: the sidebar becomes a sheet behind the Docs menu button */
+@media (max-width: 899px) {
+    .docs-room {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .docs-main {
+        grid-column: 1;
+    }
+
+    .docs-side {
+        position: fixed;
+        inset: 0 auto 0 0;
+        z-index: 40;
+        width: min(360px, 90vw);
+        height: 100%;
+        padding: 20px 10px 0 18px;
+        visibility: hidden;
+        background: var(--raised);
+        box-shadow:
+            inset -1px 0 0 rgb(255 255 255 / 0.08),
+            24px 0 64px -24px rgb(0 0 0 / 0.95);
+        backdrop-filter: var(--raised-blur);
+        transform: translateX(-102%);
+        transition:
+            transform var(--speed-normal) ease,
+            visibility 0s linear var(--speed-normal);
+    }
+
+    .docs-side[data-open] {
+        visibility: visible;
+        transform: none;
+        transition: transform var(--speed-normal) ease;
+    }
+
+    .side-scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 39;
+        display: block;
+        background: rgb(2 3 14 / 0.72);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity var(--speed-normal) ease;
+    }
+
+    html[data-side-open] {
+        overflow: hidden;
+    }
+
+    html[data-side-open] .side-scrim {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .side-close {
+        display: grid;
+        flex: none;
+        place-items: center;
+        width: 46px;
+        height: 46px;
+        color: var(--ink-muted);
+        background: none;
+        border: 1px solid var(--hair-strong);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        cursor: pointer;
+    }
+
+    /* The menu button is a quiet outline the width of the column, over the outline fold's row */
+    .side-open {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        height: 48px;
+        margin-bottom: 12px;
+        padding: 0 16px;
+        font: inherit;
+        font-size: var(--type-small);
+        color: var(--ink-high);
+        background: none;
+        border: 1px solid var(--hair-strong);
+        border-radius: var(--corner-medium);
+        corner-shape: squircle;
+        cursor: pointer;
+    }
+
+    .side-open:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+
+    .side-open svg {
+        color: var(--ink-muted);
+    }
+
+    .docs-main {
+        padding-top: 104px;
+    }
+
+    .toc-fold {
+        margin-bottom: 28px;
+    }
+}
+
+@media (max-width: 640px) {
+    .docs-main {
+        padding-top: 100px;
+    }
+
+    .docs-title {
+        font-size: var(--type-display);
+    }
+
+    .docs-prose details {
+        --fold-indent: 0px;
+    }
+
+    .code-frame pre.astro-code {
+        padding-inline: 16px;
+    }
+
+    .code-bar {
+        padding-left: 16px;
+    }
+
+    .pager {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .pager-link.next {
+        grid-column: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .docs-side,
+    .side-scrim,
+    .station-caret,
+    .course-station::details-content {
+        transition: none;
+    }
+
+    .course-list a[data-pending]::before {
+        animation: none;
+    }
+}
+
+/* Moving between docs pages. The browser's own page transitions went blank for their whole length about one time in three, so a
+   page simply replaces the last. Inside the sidebar the bead travels to the new page while the article arrives along the course:
+   from below when the reader moves on, from above when they go back. CourseState sets data-arrive for the length of the arrival */
+/* While the next page is on its way the one being left recedes, so the wait reads as a move already under way */
+.docs-main {
+    transition: opacity var(--speed-normal) ease;
+}
+
+html[data-navigating] .docs-main {
+    opacity: 0.55;
+}
+
+html[data-navigating="held"] .docs-main {
+    transition: none;
+}
+
+html[data-arrive="forward"] {
+    --arrive-from: 28px;
+}
+
+html[data-arrive="back"] {
+    --arrive-from: -28px;
+}
+
+html[data-arrive] .docs-article {
+    animation: docs-arrive 280ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* The words are readable from the first frame, so the column is never empty between two pages */
+@keyframes docs-arrive {
+    from {
+        opacity: 0.45;
+        translate: 0 var(--arrive-from, 16px);
+    }
+}
+
+/* In Still nothing slides: the sidebar and the outline take their place under the header at once, the phone's menu
+   sheet and its scrim appear and leave at once, a station opens at once, and the mark of a page on its way holds
+   still. The body carries the state from before the first paint, set by the night's inline script */
+.docs[data-still] .docs-side,
+.docs[data-still] .docs-side[data-open],
+.docs[data-still] .docs-outline,
+.docs[data-still] .side-scrim,
+.docs[data-still] .station-caret,
+.docs[data-still] .course-station::details-content,
+.docs[data-still] .course[data-travel="go"] .bead,
+.docs[data-still] .course[data-travel="go"] .signal {
+    transition: none;
+}
+
+.docs[data-still] .course-list a[data-pending]::before,
+.docs[data-still] .course[data-switched] {
+    animation: none;
+}
+
+/* Phones get targets of 44 points in the sheet and the page's outline */
+@media (max-width: 899px), (any-pointer: coarse) {
+    .course-list a,
+    .toc-list a {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        padding-block: 10px;
+    }
+
+    .part-tab,
+    .station-head {
+        min-height: 44px;
+    }
+
+    /* The tab keeps its after layer for its underline */
+    .seg button::before {
+        content: "";
+        position: absolute;
+        inset: -6px 0;
+    }
+}
+
+/* A phone on its side: the page starts close under the header, so its words show in the first view */
+@media (max-width: 899px) and (max-height: 480px) {
+    .docs-main {
+        padding-top: 76px;
+    }
+
+    .side-open {
+        float: left;
+        width: calc(50% - 4px);
+        margin-bottom: 8px;
+    }
+
+    .toc-fold {
+        margin-bottom: 8px;
+        margin-left: calc(50% + 4px);
+    }
+
+    .toc-fold[open] {
+        clear: both;
+        margin-left: 0;
+    }
+
+    .side-open + *:not(.toc-fold),
+    .toc-fold + * {
+        clear: both;
+    }
+}

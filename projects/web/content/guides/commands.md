@@ -4,9 +4,9 @@ navTitle: Commands
 description: Register prefix commands, convert arguments, add guards and cooldowns, and generate help from the same definitions
 ---
 
-A [prefix command](/docs/{{version}}/glossary/#prefix-command) is a message such as `!ping` or `!greet Maya`. Fluxerly's [command router](/docs/{{version}}/glossary/#command-router) reads the name after the configured prefix and calls the matching handler. It uses the bot's existing client and does not open another connection. The SDK has no slash commands, buttons or other interaction components, so every command is a message the bot reads
+A [prefix command](/docs/glossary/#prefix-command) is a message such as `!ping` or `!greet Maya`. Fluxerly's [command router](/docs/glossary/#command-router) reads the name after the configured prefix and calls the matching handler. It uses the bot's existing client and does not open another connection. The SDK has no slash commands, buttons or other interaction components, so every command is a message the bot reads
 
-These examples extend [the starter bot](/docs/{{version}}/quick-start/). Pass commands in the `commands` option of `runBot`, and remove the starter's `!ping` message handler so the bot does not reply twice
+These examples extend [the starter bot](/docs/quick-start/). Add commands to its existing `commands.commands` object, or replace its `commands` option with an example below
 
 ## Register commands
 
@@ -33,7 +33,7 @@ await runBot({
 })
 ```
 
-Sending `!ping` now answers `Pong!`, and `!about` describes the bot. Returning the reply's [Result](/docs/{{version}}/glossary/#result) from `execute` is enough: If the reply fails, the router reports the failure with the command name without stopping other commands
+Sending `!ping` now answers `Pong!`, and `!about` describes the bot. Returning the reply's [Result](/docs/glossary/#result) from `execute` is enough: If the reply fails, the router reports the failure with the command name without stopping other commands
 
 <details>
 <summary>When do command definitions fail?</summary>
@@ -81,18 +81,18 @@ await runBot({
 })
 ```
 
-The `remind` command hands the wait to [`client.schedule`](/docs/{{version}}/starter-lifetime/#run-work-later-or-on-a-schedule), so it finishes at once instead of keeping a command slot busy, and the note arrives later as a reply. The bot owns the reminder, so stopping the bot cancels it, and a failed reply goes to the client-level `onError` or the log
+The `remind` command hands the wait to [`client.schedule`](/docs/starter-lifetime/#run-work-later-or-on-a-schedule), so it finishes at once instead of keeping a command slot busy, and the note arrives later as a reply. The bot owns the reminder, so stopping the bot cancels it, and a failed reply goes to the client-level `onError` or the log
 
 In TypeScript, `values.name` is a string and `values.delay` is a number of milliseconds. A missing, invalid or extra argument stops the command before `execute`, and `runBot` answers with the reason and the command's usage, such as `Missing name. Usage: !greet <name>`. That reply is the `onReject: "reply"` default of `runBot`. Set `onReject: "silent"` to send nothing, or pass a function for custom feedback. A router from `commands.create` gives no feedback unless `onReject` is set
 
-A `duration` argument reads text such as `90s`, `5m` or `1h30m` and produces milliseconds. Add `wholeSeconds: true` to reject a millisecond part such as `1m500ms`, for a value that must be whole seconds, like the `durationMs` of a [ban](/docs/{{version}}/guilds-and-permissions/#moderate-members). Its `default`, when given, must then be whole seconds too
+A `duration` argument reads text such as `90s`, `5m` or `1h30m` and produces milliseconds. Add `wholeSeconds: true` to reject a millisecond part such as `1m500ms`, for a value that must be whole seconds, like the `durationMs` of a [ban](/docs/guilds-and-permissions/#moderate-members). Its `default`, when given, must then be whole seconds too
 
 Other argument types include:
 
 - Whole and decimal numbers, with `integer` and `number` and optional `min`, `max` and `default`
 - One of a fixed list of strings, with `choice`
-- A decimal [ID](/docs/{{version}}/glossary/#id), with `id`. Add `mention: "user"`, `"channel"` or `"role"` to also accept that kind of mention, as in `{ type: "id", mention: "user" }`. The value is the ID either way
-- A member of the message's [community](/docs/{{version}}/glossary/#guild), with `member`, which turns a user ID or mention into a `{ guildId, userId }` reference
+- A decimal [ID](/docs/glossary/#id), with `id`. Add `mention: "user"`, `"channel"` or `"role"` to also accept that kind of mention, as in `{ type: "id", mention: "user" }`. The value is the ID either way
+- A member of the message's [community](/docs/glossary/#guild), with `member`, which turns a user ID or mention into a `{ guildId, userId }` reference
 - One entry from a fixed list of candidates given at registration, with `userChoice`, `channelChoice` or `roleChoice`. For any user, channel or role, use `id` or `member` instead
 - Any other format, with `custom` and a parse function of the application
 
@@ -148,7 +148,7 @@ Each unmatched message is also logged at Debug with the code `commands.unmatched
 
 ## Guard, limit and wrap commands
 
-A [guard](/docs/{{version}}/glossary/#guard) decides whether a matched command may run. A [cooldown](/docs/{{version}}/glossary/#cooldown) limits how often each user, channel or community can run it. [Middleware](/docs/{{version}}/glossary/#middleware) wraps every command, for example to measure how long it takes
+A [guard](/docs/glossary/#guard) decides whether a matched command may run. A [cooldown](/docs/glossary/#cooldown) limits how often each user, channel or community can run it. [Middleware](/docs/glossary/#middleware) wraps every command, for example to measure how long it takes
 
 ```ts
 import { guards, runBot } from "@neontechspace/fluxerly"
@@ -236,9 +236,9 @@ await runBot({
 })
 ```
 
-With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop waiting messages instead. With a `partition`, the drops come from the longest backlog, as the [events guide](/docs/{{version}}/events-and-collectors/) describes
+With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop waiting messages instead. With a `partition`, the drops come from the longest backlog, as the [events guide](/docs/events-and-collectors/) describes
 
-A partition can need its own setup before its commands run. With `partitionReady`, the SDK calls the hook with the key before the first waiting message of that key starts, and the key's messages wait in the queue, using no command slot, until the returned promise settles. Other keys keep running meanwhile. The hook needs `partition` and otherwise `runBot` throws `ConfigurationError`. A hook that throws, rejects or returns an `Err` result reports each waiting message of that key to the `onError` of the commands when they have one, otherwise to the client-level `onError` or the log, like a throwing `partition` function and an overflow that stops the router, and those messages run no command. The [events guide](/docs/{{version}}/events-and-collectors/#wait-for-a-communitys-setup) covers the timing rules, which are the same for commands
+A partition can need its own setup before its commands run. With `partitionReady`, the SDK calls the hook with the key before the first waiting message of that key starts, and the key's messages wait in the queue, using no command slot, until the returned promise settles. Other keys keep running meanwhile. The hook needs `partition` and otherwise `runBot` throws `ConfigurationError`. A hook that throws, rejects or returns an `Err` result reports each waiting message of that key to the `onError` of the commands when they have one, otherwise to the client-level `onError` or the log, like a throwing `partition` function and an overflow that stops the router, and those messages run no command. The [events guide](/docs/events-and-collectors/#wait-for-a-communitys-setup) covers the timing rules, which are the same for commands
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -261,7 +261,7 @@ export function pingAfterSetup(setups: Map<string, Promise<void>>) {
 
 ## Use the Effect entry point
 
-The [Effect](/docs/{{version}}/glossary/#effect) API accepts the same options, with `partitionReady` returning an Effect whose required services become requirements of the program. Each reply stops when the command handler is interrupted and keeps `SendError` in the Effect error channel. Services required by any command remain requirements of the returned program
+The [Effect](/docs/glossary/#effect) API accepts the same options, with `partitionReady` returning an Effect whose required services become requirements of the program. Each reply stops when the command handler is interrupted and keeps `SendError` in the Effect error channel. Services required by any command remain requirements of the returned program
 
 ```ts
 import { Effect } from "effect"
@@ -324,11 +324,11 @@ await runBot({
 
 Sending `!help` lists each command with its description. Each page holds up to 2,000 characters, which fits one message. The `sendHelp` function sends a single page as a plain message, and several pages as reaction pages that the command's author flips with ◀ and ▶. The `help` function only builds the pages, for a bot that sends them its own way. A router created with `commands.create` has the same `help` method
 
-The `paginate` function shows any list of pages the same way, as in `({ paginate }) => paginate(["Rules 1 to 5", "Rules 6 to 10"])`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. The pages stop listening after 60 seconds without a click or 5 minutes in total, and the bot then removes its arrows. Pass `users` to let other people flip them. [Reaction pages](/docs/{{version}}/events-and-collectors/#show-pages-with-reactions) explains the options
+The `paginate` function shows any list of pages the same way, as in `({ paginate }) => paginate(["Rules 1 to 5", "Rules 6 to 10"])`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. The pages stop listening after 60 seconds without a click or 5 minutes in total, and the bot then removes its arrows. Pass `users` to let other people flip them. [Reaction pages](/docs/events-and-collectors/#show-pages-with-reactions) explains the options
 
 To keep a command out of help and out of unknown-command suggestions, for example an owner-only tool, register it with `hidden: true`. Hidden commands still run when someone types their name, so hiding does not restrict access. Protect each command that needs it with a guard
 
-For a larger bot, split command definitions by feature and attach one combined router. [Groups](/docs/{{version}}/api/interfaces/js-ts.PrefixCommandRouter/) such as `admin` in `!admin inspect` add structure when needed. The `group` option of `help`, such as `help({ group: ["admin"] })`, describes one group. A group registered with `hidden: true` hides everything inside it, and selecting a hidden group throws `ConfigurationError` as for a missing one
+For a larger bot, split command definitions by feature and attach one combined router. [Groups](/docs/api/js-ts/commands/#prefixcommandrouter) such as `admin` in `!admin inspect` add structure when needed. The `group` option of `help`, such as `help({ group: ["admin"] })`, describes one group. A group registered with `hidden: true` hides everything inside it, and selecting a hidden group throws `ConfigurationError` as for a missing one
 
 ## Wire it up
 

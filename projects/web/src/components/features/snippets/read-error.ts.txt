@@ -1,0 +1,14 @@
+import { describeError, errors, type Client, type Message } from "@neontechspace/fluxerly"
+
+export async function replyOrExplain(client: Client, message: Message) {
+    const result = await client.messages.reply(message, "Pong!")
+    if (result.isOk()) return result.value
+
+    const error = result.error
+    console.warn(error.code) // A fixed code, such as message.send.rejected
+    console.warn(error.hint) // The suggested next step, when there is one
+    if (errors.apiCode(error) === "missingPermissions") {
+        console.warn(error.details.requiredPermissions) // Such as ["ViewChannel", "SendMessages"]
+    }
+    console.error(describeError(error)) // All of it, with the chain of causes
+}

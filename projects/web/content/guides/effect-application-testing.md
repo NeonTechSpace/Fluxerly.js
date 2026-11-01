@@ -67,7 +67,7 @@ A missing `FLUXER_BOT_TOKEN` fails the Layer with `ConfigError` before any clien
 
 ## Assemble the live program
 
-A bot that needs no custom Layer assembly can use `runBot` from the Effect entry point. Its handlers can require application services, and it watches its subscriptions and connection itself. See [first Effect bot](/docs/{{version}}/effect-first-bot/)
+A bot that needs no custom Layer assembly can use `runBot` from the Effect entry point. Its handlers can require application services, and it watches its subscriptions and connection itself. See [first Effect bot](/docs/effect-first-bot/)
 
 For full control, a worker service registers the handlers and runs the client. The worker Layer needs a client, which must stay available until the worker stops. `Layer.provideMerge` keeps both services available, and Layer memoization makes them share one client. This version creates its client service with `createClient` from a token argument
 
@@ -247,9 +247,9 @@ export const pingTest = Effect.scoped(
 
 Running `pingTest` with `Effect.runPromise` succeeds with the replies `["Pong!"]` and no reply to `hello`. The `say` Effect delivers a message from a fake user as Fluxer would send it, waits until the bot has stopped working and returns the messages the bot sent meanwhile. The fake Fluxer API answers each message the bot sends with that message, so no response needs registering. For other events, `emit` delivers a gateway event, `idle()` waits until the bot has stopped working, and `rest.respond` controls how the fake Fluxer API answers a request. These waits have no deadline unless `timeoutMs` is passed, so the test runner's timeout ends a test that hangs
 
-The test gateway enforces the Identify session's `gateway.ignoredEvents`: The `emit` Effect dies with `ConfigurationError` when Fluxer would suppress that dispatch, without consuming a sequence number. With automatic filtering, register handlers before running `ready()` so Identify sees them. Resume keeps the list, while a new Identify recomputes it. Suppressed message mentions and generated reaction batches follow Fluxer's exceptions, described in [Match gateway event filtering](/docs/{{version}}/testing/#match-gateway-event-filtering)
+The test gateway enforces the Identify session's `gateway.ignoredEvents`: The `emit` Effect dies with `ConfigurationError` when Fluxer would suppress that dispatch, without consuming a sequence number. With automatic filtering, register handlers before running `ready()` so Identify sees them. Resume keeps the list, while a new Identify recomputes it. Suppressed message mentions and generated reaction batches follow Fluxer's exceptions, described in [Match gateway event filtering](/docs/testing/#match-gateway-event-filtering)
 
-The `failures()` method returns handler and command failures that no `onError` hook received, including a failed SDK call such as a rejected reply, whatever the logging level. Closing the Scope dies with `UnhandledTestFailuresError` when such a failure happened and the test did not read it from `failures()`, so a broken handler fails the test. For code that registers handlers with `client.on`, `createTestClient` creates the same test client without bot options. See [Test a bot without Fluxer](/docs/{{version}}/testing/) and the [Effect testing reference](/docs/{{version}}/api/modules/Effect-testing/)
+The `failures()` method returns handler and command failures that no `onError` hook received, including a failed SDK call such as a rejected reply, whatever the logging level. Closing the Scope dies with `UnhandledTestFailuresError` when such a failure happened and the test did not read it from `failures()`, so a broken handler fails the test. For code that registers handlers with `client.on`, `createTestClient` creates the same test client without bot options. See [Test a bot without Fluxer](/docs/testing/) and the [Effect testing reference](/docs/api/effect-testing/)
 
 <details>
 <summary>Control SDK time with TestClock</summary>

@@ -4,9 +4,9 @@ navTitle: Events & collectors
 description: Handle gateway events, detect community joins, follow threads, wait for one event and collect replies or reactions for a limited time
 ---
 
-Fluxer sends live [events](/docs/{{version}}/glossary/#event), such as new messages, community joins and reactions, over the [gateway](/docs/{{version}}/glossary/#gateway) connection. A [handler](/docs/{{version}}/glossary/#handler) registered for an event name runs each time that event arrives. In a `runBot` bot, handlers go in the `events` option, as the [last section](/docs/{{version}}/events-and-collectors/#wire-it-up) shows
+Fluxer sends live [events](/docs/glossary/#event), such as new messages, community joins and reactions, over the [gateway](/docs/glossary/#gateway) connection. A [handler](/docs/glossary/#handler) registered for an event name runs each time that event arrives. In a `runBot` bot, handlers go in the `events` option, as the [last section](/docs/events-and-collectors/#wire-it-up) shows
 
-The helpers below take the `client` from the [first bot example](/docs/{{version}}/quick-start/). Register handlers before connecting so they also receive startup events. Unlike sending or fetching messages, waiting for future events needs a connected gateway
+The helpers below take the `client` from the [first bot example](/docs/quick-start/). Register handlers before connecting so they also receive startup events. Unlike sending or fetching messages, waiting for future events needs a connected gateway
 
 ## Distinguish a join from community availability
 
@@ -25,7 +25,7 @@ export function observeGuildJoins(client: Client, rememberGuild: (id: string) =>
 
 The `client.on` method returns a subscription. Call its `close()` method when the handler is no longer needed
 
-The event also carries `memberCount`, `onlineCount` and `joinedAt`, as Fluxer reported them when it delivered the event. They are a snapshot that neither `guildUpdate` nor the guild cache refreshes, so call `guilds.fetchCounts` for current totals. Here `onlineCount` is the guild-wide figure every recipient receives, while `guilds.fetchCounts` counts only the online members the bot can see, so the two can differ
+The event can also carry `memberCount`, `onlineCount` and `joinedAt`, as Fluxer reported them when it delivered the event. They are a snapshot that neither `guildUpdate` nor the guild cache refreshes, so call `guilds.fetchCounts` for current totals. Here `onlineCount` is the guild-wide figure every recipient receives, while `guilds.fetchCounts` counts only the online members the bot can see, so the two can differ
 
 <details>
 <summary>How reliable is isNewJoin?</summary>
@@ -40,13 +40,13 @@ A successful `connect()` means Fluxer accepted the session, not that every commu
 <details>
 <summary>What else does a handler receive?</summary>
 
-A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, `receipt` numbers events in the order the client received them, and `receivedBytes` is the size of the gateway message that carried it. Compare receipts to tell which of two events came first, as [`EventContext.receipt`](/docs/{{version}}/api/interfaces/js-ts.EventContext/#receipt) describes. Work that is not an event, such as a timer, can read `client.lastReceipt` when it starts and treat any event with a larger receipt as newer. For a change or removal, the context's `previous` holds the cached value from before it, as the [next section](/docs/{{version}}/events-and-collectors/#log-edits-and-deletions) shows
-Pass the signal to SDK operations inside the handler so they stop with it. To run code around every handler, such as timing or tracing, register event [middleware](/docs/{{version}}/glossary/#middleware) with `client.use`
+A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, `receipt` numbers events in the order the client received them, and `receivedBytes` is the size of the gateway message that carried it. Compare receipts to tell which of two events came first, as [`EventContext.receipt`](/docs/api/js-ts/events-and-collectors/#eventcontext-receipt) describes. Work that is not an event, such as a timer, can read `client.lastReceipt` when it starts and treat any event with a larger receipt as newer. For a change or removal, the context's `previous` holds the cached value from before it, as the [next section](/docs/events-and-collectors/#log-edits-and-deletions) shows
+Pass the signal to SDK operations inside the handler so they stop with it. To run code around every handler, such as timing or tracing, register event [middleware](/docs/glossary/#middleware) with `client.use`
 
 A handler runs one event at a time by default, except a `messageCreate` handler, which runs up to eight at a time so that one slow message does not stall the next ones. Those messages can finish out of order, and `{ concurrency: 1 }` or a `partition` keeps related messages in order. Later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead
 
 To handle several events at a time and still keep related events in order, pass a `partition` option. The value `"channel"` keys each event by its channel, `"guild"` by its community, and a function returns a key of its own. Events with different keys run side by side, up to eight at a time unless `concurrency` says otherwise, while events with the same key run one after another in the order they arrived.
-When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. The [`overflow`](/docs/{{version}}/api/interfaces/js-ts.HandlerOptions/#overflow) reference lists how the backlog to drop from is chosen
+When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. The [`overflow`](/docs/api/js-ts/events-and-collectors/#handleroptions-overflow) reference lists how the backlog to drop from is chosen
 
 </details>
 
@@ -77,7 +77,7 @@ export function logMessageChanges(client: Client, log: (line: string) => void) {
 }
 ```
 
-The snapshot is the client's own last observation, never fetched. It is `undefined` when the cache is off, never saw the entity, or already removed it, such as after an expiry, a capacity limit or a lost connection. The [`PreviousSnapshots`](/docs/{{version}}/api/interfaces/js-ts.PreviousSnapshots/) reference lists the events that carry one
+The snapshot is the client's own last observation, never fetched. It is `undefined` when the cache is off, never saw the entity, or already removed it, such as after an expiry, a capacity limit or a lost connection. The [`PreviousSnapshots`](/docs/api/js-ts/events-and-collectors/#previoussnapshots) reference lists the events that carry one
 
 ## Wait for a community's setup
 
@@ -101,7 +101,7 @@ A hook that throws or rejects reports every waiting event of that key as a failu
 
 ## Follow threads
 
-Five events report [threads](/docs/{{version}}/threads/). The `threadCreate` event arrives when a thread is created and also when the bot joins or is added to an existing thread, so check `isNewlyCreated` to react only to new threads
+Five events report [threads](/docs/threads/). The `threadCreate` event arrives when a thread is created and also when the bot joins or is added to an existing thread, so check `isNewlyCreated` to react only to new threads
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -121,7 +121,7 @@ Deleting a text, announcement, forum or media channel also deletes its threads, 
 <summary>What do thread events change in the cache?</summary>
 
 With `cache.channels` enabled, thread create and update events store the thread, a thread deletion removes it and a thread list replaces the cached threads it covers. A community's snapshot at startup also fills the cache with its active threads. When the bot's own membership of a thread changes, the SDK removes that cached thread, because its `membership` field would be out of date.
-Fluxer does not replay thread lists after a lost connection, so a resumed connection also removes its communities' cached threads. The [message cache](/docs/{{version}}/history-and-cache/#limit-the-message-cache) removes a deleted thread's messages
+Fluxer does not replay thread lists after a lost connection, so a resumed connection also removes its communities' cached threads. The [message cache](/docs/history-and-cache/#limit-the-message-cache) removes a deleted thread's messages
 
 </details>
 
@@ -149,7 +149,7 @@ If no matching event arrives within 10 seconds, `waitFor` returns a failed Resul
 
 ## Ask a question without missing a fast reply
 
-A [collector](/docs/{{version}}/glossary/#collector) gathers matching messages or reactions for a limited time. Create the collector first, then send the question. This helper collects one person's next message in the channel, waiting at most 30 seconds
+A [collector](/docs/glossary/#collector) gathers matching messages or reactions for a limited time. Create the collector first, then send the question. This helper collects one person's next message in the channel, waiting at most 30 seconds
 
 ```ts
 import { orThrow, type Client } from "@neontechspace/fluxerly"
@@ -174,7 +174,7 @@ The `await using` declaration closes the collector when the helper returns or th
 <details>
 <summary>When does a collector fail?</summary>
 
-A [gateway gap](/docs/{{version}}/glossary/#gateway-gap), such as a lost connection, fails collection because messages may have been missed, and so does a client that shuts down while the collector runs. A per-message or per-reaction callback that throws fails collection with a `CollectorError` whose reason is `handler`.
+A [gateway gap](/docs/glossary/#gateway-gap), such as a lost connection, fails collection because messages may have been missed, and so does a client that shuts down while the collector runs. A per-message or per-reaction callback that throws fails collection with a `CollectorError` whose reason is `handler`.
 Do not shut the client down or await the same collector's `result()` from inside its own callbacks
 
 </details>
@@ -200,7 +200,7 @@ export async function waitForConfirmation(client: Client, message: MessageRefere
 
 The helper returns `true` when the person adds ✅ within 20 seconds. It watches for new reactions, not reactions already on the message. Removing a reaction does not undo a collected one, and repeated additions are not a count of unique voters, so keep a poll's votes in application state
 
-For a community channel, pass its known `guildId` in the collector options so recovery is limited to that community's [shard](/docs/{{version}}/glossary/#shard). Do not assume a channel is private merely because an event omitted community context. See the [collector reference](/docs/{{version}}/api/interfaces/js-ts.Messages/#collectreactions) for buffer limits and subscription ownership
+For a community channel, pass its known `guildId` in the collector options so recovery is limited to that community's [shard](/docs/glossary/#shard). Do not assume a channel is private merely because an event omitted community context. See the [collector reference](/docs/api/js-ts/messages/#messages-collectreactions) for buffer limits and subscription ownership
 
 ## Show pages with reactions
 
@@ -214,9 +214,9 @@ export function showRules(client: Client, channelId: string, userId: string) {
 }
 ```
 
-The returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Like a collector, pages need a connected gateway
+With several pages, the returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Several pages need a connected gateway, while a single page is sent without a collector
 
-In a command, the context's `paginate(pages)` lets the command's author flip by default, and `sendHelp()` sends the help pages this way. See [help in Commands](/docs/{{version}}/commands/#add-help-from-the-registered-commands)
+In a command, the context's `paginate(pages)` lets the command's author flip by default, and `sendHelp()` sends the help pages this way. See [help in Commands](/docs/commands/#add-help-from-the-registered-commands)
 
 ## Wire it up
 
@@ -254,4 +254,4 @@ await runBot({
 })
 ```
 
-A failing handler or command does not stop the bot. The `onError` hook receives its report with the original error, and without the hook the SDK logs it in full at Error. By default, `messageCreate` handlers and commands run up to eight at a time and other events one at a time. The [`events` option reference](/docs/{{version}}/api/interfaces/js-ts.BotOptions/#events) explains how to change that per event
+A failing handler or command does not stop the bot. The `onError` hook receives its report with the original error, and without the hook the SDK logs it in full at Error. By default, `messageCreate` handlers and commands run up to eight at a time and other events one at a time. The [`events` option reference](/docs/api/js-ts/client-and-lifecycle/#botoptions-events) explains how to change that per event

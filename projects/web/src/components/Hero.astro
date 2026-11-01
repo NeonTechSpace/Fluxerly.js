@@ -1,0 +1,604 @@
+---
+import mascotPreview from "../lib/mascot-preview.json"
+import HeroControls from "./HeroControls.astro"
+import NpmWaterline from "./NpmWaterline.astro"
+import { createStars } from "../lib/stars"
+import { faceArt, iconSrc, mascotArt, mascotSizes, mascotSrcset } from "../lib/art"
+import { looks, specs } from "../scene/companion-specs"
+
+const stars = createStars()
+const pct = (value: number) => `${(value * 100).toFixed(2)}%`
+const pct3 = (value: number) => `${(value * 100).toFixed(3)}%`
+
+// Places a box of the trimmed mascot inside the conductor box
+type ArtBox = { left: number, top: number, width: number, height: number }
+const place = (b: ArtBox) =>
+    `left: ${pct3(b.left / mascotArt.width)}; top: ${pct3(b.top / mascotArt.height)}; width: ${pct3(b.width / mascotArt.width)}; height: ${pct3(b.height / mascotArt.height)}`
+---
+
+<!-- The conductor's picture is not drawn until it is decoded, set here before the hero's markup so it never paints top down as it
+     arrives. The hero's script lifts it once the sky's icons are ready too, and they all fade in together -->
+<script is:inline>
+    document.documentElement.dataset.mascotWait = ""
+    document.documentElement.dataset.iconsWait = ""
+</script>
+<section class="hero" data-hero aria-labelledby="hero-title">
+    <div class="stage" style={`--eye-line: ${mascotArt.eyeLine}; --art-ratio: ${mascotArt.height / mascotArt.width}`}>
+        <div class="backdrop" aria-hidden="true">
+            <div class="sky"></div>
+            <svg class="stars" width="100%" height="100%" focusable="false">
+                <defs>
+                    <radialGradient id="star-halo">
+                        <stop offset="0" stop-color="#eef0ff" stop-opacity="0.5"></stop>
+                        <stop offset="1" stop-color="#eef0ff" stop-opacity="0"></stop>
+                    </radialGradient>
+                </defs>
+                {
+                    stars.map((star) => (
+                        <>
+                            {star.r > 1.3 && <circle cx={pct(star.x)} cy={pct(star.y)} r={star.r * 4} fill="url(#star-halo)" opacity={star.a * 0.6} />}
+                            <circle cx={pct(star.x)} cy={pct(star.y)} r={star.r} fill="#eef0ff" opacity={star.a} />
+                        </>
+                    ))
+                }
+            </svg>
+            <div class="water"></div>
+            <div class="horizon-glow"></div>
+            <div class="conductor-reflection" data-conductor-reflection>
+                <img src={mascotArt.small} srcset={mascotSrcset} sizes={mascotSizes} alt="" decoding="async" />
+            </div>
+            <svg class="filters" width="0" height="0" focusable="false">
+                <filter id="still-ripple" x="-4%" y="-4%" width="108%" height="108%">
+                    <feTurbulence type="fractalNoise" baseFrequency="0.005 0.07" numOctaves="2" seed="11" result="noise"></feTurbulence>
+                    <feDisplacementMap in="SourceGraphic" in2="noise" scale="10" xChannelSelector="R" yChannelSelector="G" result="moved"></feDisplacementMap>
+                    <feGaussianBlur in="moved" stdDeviation="1.4 2.6"></feGaussianBlur>
+                </filter>
+            </svg>
+        </div>
+
+        <!-- The conductor's companions, there from the first paint. The sky's canvas fades in over them and draws them itself -->
+        <div class="sky-icons" aria-hidden="true">
+            {
+                specs.map((spec) => (
+                    <img
+                        data-sky-icon
+                        hidden
+                        loading="lazy"
+                        src={iconSrc(spec.slug, 320)}
+                        srcset={`${iconSrc(spec.slug, 320)} 320w, ${iconSrc(spec.slug, 640)} 640w`}
+                        sizes={`${Math.round(spec.size * 100)}vh`}
+                        alt=""
+                        decoding="sync"
+                        fetchpriority="high"
+                        style={`opacity: ${looks[spec.depth].opacity}; filter: brightness(${1 - looks[spec.depth].haze * 0.7})`}
+                    />
+                ))
+            }
+        </div>
+
+        <div class="scene" data-scene-slot aria-hidden="true"></div>
+        <span class="horizon-marker" data-horizon aria-hidden="true"></span>
+
+        <div class="conductor-slot" data-conductor-slot aria-hidden="true">
+            <div class="conductor" data-conductor style={`--preview: url(${mascotPreview.src})`}>
+                <!-- The conductor, asked for from the head at a high priority, see Site.astro -->
+                <img
+                    class="mascot"
+                    src={mascotArt.small}
+                    srcset={mascotSrcset}
+                    sizes={mascotSizes}
+                    width={mascotArt.width}
+                    height={mascotArt.height}
+                    alt=""
+                    data-mascot
+                />
+                <!-- The picture shows as soon as it is whole. Until then its tiny preview, part of this page, stands in for it, so the
+                     conductor is there in the first frame with the words -->
+                <script is:inline>
+                    {
+                        const show = () => delete document.documentElement.dataset.mascotWait
+                        document.currentScript.previousElementSibling.decode().then(show, (reason) => {
+                            console.warn("The conductor's picture didn't load:", reason)
+                            show()
+                        })
+                    }
+                </script>
+                <!-- The living face, over the painted glass: see src/scene/face.ts. Still shows the painted mascot alone and
+                     never downloads its parts -->
+                <div class="face" style={place(faceArt.slot)} data-face-slot></div>
+            </div>
+        </div>
+
+        <div class="copy">
+            <h1 id="hero-title" class="wordmark" data-hero-text>Fluxerly<span class="js">.js</span></h1>
+            <p class="tagline" data-hero-text>From your first reply to <a class="dream" href="#neonflux">the bot of your dreams</a></p>
+            <p class="subline" data-hero-text>A Fluxer-native bot SDK for JavaScript, TypeScript and Effect that starts in one file and gives you full control when you need it</p>
+            <HeroControls />
+        </div>
+
+        <NpmWaterline />
+    </div>
+</section>
+
+<script is:inline>
+    // The sky's icons show when src/lib/hero-runtime.ts has them, and the conductor when its picture is whole, and a slow or failed
+    // picture or script never keeps them hidden for long
+    setTimeout(() => delete document.documentElement.dataset.iconsWait, 1000)
+    setTimeout(() => delete document.documentElement.dataset.mascotWait, 4000)
+</script>
+
+<script>
+    import { startHero } from "../lib/hero-runtime"
+
+    const hero = document.querySelector<HTMLElement>("[data-hero]")
+    if (hero) startHero(hero)
+</script>
+
+<style>
+    .hero {
+        position: relative;
+        /* One screen. Viewport units grow with the page zoom on wide screens, so divide it back out */
+        height: calc(100svh / var(--page-zoom, 1));
+        min-height: 560px;
+        overflow: hidden;
+        isolation: isolate;
+        container-type: size;
+        background: var(--color-night);
+    }
+
+    /* The conductor's picture waits unseen until it is decoded, see the inline scripts above, then comes in
+       as one picture instead of painting top down as it arrives, and its reflection with it. Its preview holds the place */
+    .conductor::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--preview) center / 100% 100% no-repeat;
+        opacity: 0;
+        transition: opacity 0s linear var(--speed-normal);
+    }
+
+    :global(html[data-mascot-wait]) .conductor::before {
+        opacity: 1;
+        transition: none;
+    }
+
+    .mascot,
+    .conductor-reflection img {
+        transition: opacity var(--speed-normal) ease-out;
+    }
+
+    :global(html[data-mascot-wait]) :is(.mascot, .conductor-reflection img) {
+        opacity: 0;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .mascot,
+        .conductor-reflection img {
+            transition: none;
+        }
+    }
+
+    /* The water deepens into the sections below. Nothing below the surface keeps its light for long */
+    .hero::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0;
+        z-index: 2;
+        height: 36cqh;
+        background: linear-gradient(to bottom, rgb(5 8 32 / 0), rgb(5 8 32 / 0.6) 55%, rgb(5 8 32 / 0.94) 85%, #050820);
+        pointer-events: none;
+    }
+
+    .stage {
+        /* Grid and composition, measured on the hero box */
+        --m: clamp(20px, 2.5cqw, 48px);
+        --g: clamp(14px, 1.25cqw, 24px);
+        --col: calc((100cqw - 2 * var(--m) - 11 * var(--g)) / 12);
+        --step: calc(var(--col) + var(--g));
+        --horizon: 62cqh;
+        --eye: 38cqh;
+
+        /* Conductor box: head spans columns 8 to 11, eyes on the eye line, and never so tall that its hat
+           runs under the header on a short screen */
+        --c-span: calc(4 * var(--col) + 3 * var(--g));
+        --c-clear: 84px;
+        --c-w: min(var(--c-span), 54cqh, calc((var(--eye) - var(--c-clear)) / (var(--eye-line) * var(--art-ratio))));
+        --c-h: calc(var(--c-w) * var(--art-ratio));
+        --c-left: calc(var(--m) + 7 * var(--step) + (var(--c-span) - var(--c-w)) / 2);
+        --c-top: calc(var(--eye) - var(--eye-line) * var(--c-h));
+        --c-bottom: calc(var(--c-top) + var(--c-h));
+        /* Height the conductor floats above the water. Its reflection mirrors around that water line */
+        --float-gap: max(2.4cqh, calc(var(--horizon) + 3cqh - var(--c-bottom)));
+
+        position: absolute;
+        inset: 0;
+    }
+
+    /* Short screens, such as laptops: the eye line and the copy move up so the controls clear the water */
+    @container (max-height: 860px) {
+        .stage {
+            --eye: 33cqh;
+        }
+    }
+
+    /* Very short: the water gives up its room, so the conductor stays large and the words stay clear of the header */
+    @container (max-height: 700px) {
+        .stage {
+            --eye: 42cqh;
+            --horizon: 76cqh;
+        }
+    }
+
+    .backdrop,
+    .scene {
+        position: absolute;
+        inset: 0;
+    }
+
+    .backdrop {
+        z-index: 0;
+    }
+
+    .scene {
+        z-index: 1;
+    }
+
+    .scene :global(canvas) {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+    }
+
+    /* The frozen frame of the scene for Still. Script sets its opacity */
+    .scene :global(canvas[data-scene-frame]) {
+        transition: opacity 0.8s ease;
+    }
+
+    /* Paint before the scene or its frozen frame is ready, and the fallback without WebGL */
+    .sky {
+        position: absolute;
+        inset: 0;
+        background:
+            radial-gradient(36cqw 38cqh at 74% 30%, rgb(150 118 255 / 0.17), rgb(110 105 235 / 0.06) 45%, transparent 76%),
+            radial-gradient(22cqw 20cqh at 86% 14%, rgb(132 98 240 / 0.1), transparent 70%),
+            linear-gradient(to bottom, #02040c 0%, #02040e 34%, #04051a 62%, #04051a 100%);
+    }
+
+    /* A soft stand-in for the ribbon that rises from the lower left */
+    .sky::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+            150deg,
+            transparent 42%,
+            rgb(40 70 160 / 0.05) 50%,
+            rgb(70 60 170 / 0.09) 55%,
+            transparent 63%
+        );
+    }
+
+    .stars {
+        position: absolute;
+        inset: 0;
+    }
+
+    .water {
+        position: absolute;
+        inset: var(--horizon) 0 0;
+        background:
+            radial-gradient(60cqw 9cqh at 62% 0%, rgb(70 227 239 / 0.26), transparent),
+            radial-gradient(14cqw 34cqh at 62% 0%, rgb(70 227 239 / 0.12), transparent),
+            radial-gradient(30cqw 32cqh at 73% 89%, rgb(165 124 255 / 0.06), transparent 72%),
+            linear-gradient(to bottom, #080d2a 0%, #050820 26%, #03051a 62%, #020412 100%);
+    }
+
+    .horizon-glow {
+        position: absolute;
+        inset: calc(var(--horizon) - 16cqh) 0 auto;
+        height: 32cqh;
+        background:
+            radial-gradient(54cqw 1.6cqh at 62% 50%, rgb(205 250 255 / 0.5), rgb(70 227 239 / 0.35) 40%, transparent),
+            radial-gradient(60cqw 6cqh at 62% 50%, rgb(70 227 239 / 0.18), transparent),
+            radial-gradient(70cqw 22cqh at 62% 50%, rgb(70 227 239 / 0.06), transparent);
+        mask-image: linear-gradient(to right, rgb(0 0 0 / 0.3), #000 35%, #000 80%, rgb(0 0 0 / 0.45));
+        /* The sky side of the light only. The water paints its own reflection of it */
+        clip-path: inset(0 0 calc(50% - 1px) 0);
+    }
+
+    .conductor-reflection {
+        position: absolute;
+        left: var(--c-left);
+        top: calc(var(--c-bottom) + 2 * var(--float-gap));
+        width: var(--c-w);
+        height: var(--c-h);
+        opacity: 0.3;
+        transform: scaleY(-1);
+        filter: url(#still-ripple) brightness(0.8);
+        /* The cap and the top of the head only: the mirror ends above where space takes over the water */
+        mask-image: linear-gradient(to top, #000 0%, rgb(0 0 0 / 0.5) 8%, transparent 18%);
+    }
+
+    .conductor-reflection img,
+    .conductor img {
+        width: 100%;
+        height: 100%;
+    }
+
+    .filters {
+        position: absolute;
+    }
+
+    .horizon-marker {
+        position: absolute;
+        top: var(--horizon);
+        left: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .conductor-slot {
+        position: absolute;
+        z-index: 2;
+        left: var(--c-left);
+        top: var(--c-top);
+        width: var(--c-w);
+        height: var(--c-h);
+        pointer-events: none;
+    }
+
+    .conductor {
+        position: absolute;
+        inset: 0;
+        transform-origin: 50% 50%;
+    }
+
+    /* Its own layer from the first paint when it will move, so its picture isn't redrawn a little softer as the scene starts */
+    :global(html:not([data-still])) .conductor {
+        will-change: transform;
+    }
+
+    .sky-icons {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        transition: opacity var(--speed-normal) ease-out;
+    }
+
+    :global(html[data-icons-wait]) .sky-icons {
+        opacity: 0;
+    }
+
+    :global(html[data-art-here]) :is(.mascot, .conductor-reflection img, .sky-icons) {
+        transition: none;
+    }
+
+    /* Under the sky's canvas, which covers them as it fades in. They go when it is whole, which frees their layers */
+    :global(.hero[data-scene]) .sky-icons {
+        visibility: hidden;
+        transition: visibility 0s linear 1.5s;
+    }
+
+    .sky-icons img {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: auto;
+        max-width: none;
+    }
+
+    .face {
+        position: absolute;
+    }
+
+    .face :global(canvas) {
+        display: block;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        transition: opacity 700ms ease-out;
+    }
+
+    .face :global(canvas[data-on]) {
+        opacity: 1;
+    }
+
+    .copy {
+        --wm: clamp(48px, min(5cqw, 8.9cqh), 96px);
+        /* What lies between the wordmark's line and the water, beyond the wordmark's own share: the words, the
+           controls, the npm row on the water and a gap above it */
+        --below: 170px;
+
+        position: absolute;
+        z-index: 3;
+        /* On the frame's edge under the header's wordmark, and never into the conductor's columns. The wordmark
+           stands on the conductor's eye line, and rises above it when a short screen would push the controls into
+           the npm row */
+        left: var(--frame-inline);
+        top: min(var(--eye), calc(var(--horizon) - var(--wm) - var(--below)));
+        width: min(calc(6 * var(--col) + 5 * var(--g)), calc(var(--c-left) - var(--frame-inline) - var(--g)));
+    }
+
+    /* The narrower column wraps the line under the promise once more */
+    @container (max-width: 1279px) {
+        .copy {
+            --below: 200px;
+        }
+    }
+
+    .wordmark {
+        position: absolute;
+        bottom: 100%;
+        left: -0.04em;
+        margin: 0;
+        font-size: var(--wm);
+        font-weight: var(--weight-display);
+        line-height: 1;
+        letter-spacing: -0.035em;
+        white-space: nowrap;
+        /* Trims the box to the baseline so the baseline sits on the eye line */
+        text-box: trim-both cap alphabetic;
+    }
+
+    .wordmark .js {
+        color: var(--color-cyan);
+    }
+
+    .dream {
+        color: inherit;
+        text-decoration: underline dotted;
+        text-decoration-color: color-mix(in srgb, var(--color-violet) 70%, transparent);
+        text-underline-offset: 5px;
+        transition: color var(--speed-fast) ease;
+    }
+
+    .dream:hover {
+        color: var(--color-violet-light);
+    }
+
+    .tagline {
+        text-wrap: balance;
+        margin: calc(var(--wm) * 0.22 + 6px) 0 0;
+        font-size: clamp(18px, min(1.41cqw, 2.5cqh), 27px);
+        font-weight: var(--weight-regular);
+        line-height: 1.35;
+        color: var(--color-muted);
+    }
+
+    /* What it is, in one quiet line under the promise */
+    .subline {
+        max-width: min(46ch, calc(100% - 2 * var(--g)));
+        margin: clamp(8px, 1.1cqh, 14px) 0 0;
+        font-size: clamp(17px, min(0.94cqw, 1.67cqh), 18px);
+        font-weight: var(--weight-regular);
+        line-height: 1.5;
+        color: rgb(195 200 230 / 0.72);
+        text-wrap: pretty;
+    }
+
+    /* Phones: the conductor over the words. The hero is as tall as what it holds, so the first section
+       follows the install row with no empty water between them */
+    @media (max-width: 899px), (max-height: 480px), (max-aspect-ratio: 4/5) {
+        .hero {
+            height: auto;
+            min-height: 0;
+            margin-bottom: 0;
+            container-type: inline-size;
+        }
+
+        .hero::after {
+            height: 96px;
+        }
+
+        .stage {
+            /* Stacked layout keeps the sky only, the waterline would cut through the controls */
+            --horizon: 100%;
+
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: min(28px, 3.4svh);
+            min-height: calc(100svh / var(--page-zoom, 1));
+            justify-content: center;
+            padding: clamp(84px, 14svh, 120px) 20px clamp(32px, 8svh, 72px);
+            text-align: center;
+        }
+
+        .conductor-slot,
+        .copy {
+            position: relative;
+            left: auto;
+            top: auto;
+        }
+
+        .conductor-slot {
+            /* Never so tall that a short or nearly square screen, such as a foldable's, loses the buttons below the first screen */
+            width: min(52vw, 27svh);
+            height: auto;
+            aspect-ratio: 1168 / 1676;
+        }
+
+        .copy {
+            width: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .wordmark {
+            position: static;
+            font-size: clamp(44px, 12vw, max(72px, 6.5svh));
+        }
+
+        .tagline {
+            margin-top: 18px;
+        }
+
+        .conductor-reflection {
+            display: none;
+        }
+    }
+
+    /* A short stacked screen, such as a folded phone's cover: the sentence under the promise gives way to the buttons */
+    @media (max-width: 899px) and (max-height: 740px), (max-width: 360px), (max-height: 480px) {
+        .subline {
+            display: none;
+        }
+    }
+
+    /* A phone on its side: the words and controls on the left and the conductor on the right, all on the first screen */
+    @media (max-height: 480px) {
+        .hero::after {
+            height: 24px;
+        }
+
+        .stage {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            grid-template-rows: auto auto;
+            align-content: center;
+            align-items: center;
+            gap: 10px 24px;
+            min-height: 100svh;
+            padding: 72px max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left));
+            text-align: left;
+        }
+
+        .conductor-slot {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            width: min(34vw, calc((100svh - 80px) / 1.435));
+        }
+
+        .copy {
+            grid-column: 1;
+            grid-row: 1;
+            align-items: flex-start;
+            align-self: end;
+        }
+
+        .wordmark {
+            font-size: clamp(32px, 11svh, 48px);
+        }
+
+        .tagline {
+            margin-top: 12px;
+            font-size: var(--type-small);
+        }
+
+        .stage :global([data-waterline]) {
+            grid-column: 1;
+            grid-row: 2;
+            align-self: start;
+            justify-content: flex-start;
+        }
+
+        .controls-wrap,
+        .stage :global(.controls-wrap) {
+            margin-top: 8px;
+        }
+    }
+</style>
