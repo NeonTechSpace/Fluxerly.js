@@ -41,7 +41,7 @@ jobs:
           # requires to be part of main. Other candidates build the selected source and wait for checksum review
           ref: ${{ (github.event_name == 'schedule' || inputs.nightly) && github.sha || inputs.source_ref }}
           persist-credentials: false
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         id: setup
         with:
           working-directory: projects
@@ -131,7 +131,7 @@ jobs:
         if: steps.candidate.outputs.skipped != 'true'
         working-directory: projects
         run: pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         id: floor_setup
         if: steps.ci.outputs.reused == 'false' && steps.candidate.outputs.skipped != 'true'
         with:
@@ -182,7 +182,7 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
-      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         id: setup
         with:
           working-directory: projects
