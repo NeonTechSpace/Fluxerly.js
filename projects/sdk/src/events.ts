@@ -997,7 +997,9 @@ export interface HandlerOptions<T = unknown> extends EventBufferOptions {
     /** Maximum active callbacks, a positive safe integer.
      * The default is 8 for messageCreate or when partition is set, and 1 for other events.
      * A messageCreate callback that must not overlap another needs concurrency 1 or a partition such as channel.
-     * Starts follow receive order. Values above 1 allow callbacks to finish out of order, except within one partition
+     * Without a partition, starts follow receive order and values above 1 allow callbacks to finish out of order.
+     * Within one partition, callbacks run one at a time in receive order, while a later event for another key may start
+     * first
      */
     readonly concurrency?: number
     /**

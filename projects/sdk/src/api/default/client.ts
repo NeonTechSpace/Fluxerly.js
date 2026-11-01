@@ -225,11 +225,14 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Handlers run one at a time by default, except messageCreate handlers and partitioned handlers, which run up to eight at a time as runBot does.
      * A slow messageCreate callback therefore does not stall later messages, but callbacks can finish out of order.
      * Pass concurrency 1 or a partition such as "channel" to keep related messages in order.
-     * Increasing concurrency keeps receive-order starts, but not completion order.
+     * Without a partition, increasing concurrency keeps receive-order starts but allows out-of-order completion. A
+     * partition keeps receive order within each key, while a later event for another key may start first.
      * Each subscription has its own ordering and queue, with no ordering across event types and no exactly-once delivery.
      * Default pending limits are 256 payloads or 4 MiB of full source JSON, not total process memory.
      * A bulk payload counts once, including all its bytes.
-     * A full queue drops its oldest waiting event by default, logs a Warn record and counts the drop, and the subscription keeps running.
+     * A full queue drops its oldest waiting events by default, logs a Warn record and counts the drop, and the
+     * subscription keeps running. With a partition, it drops from the longest backlog or the arriving event instead, as
+     * the overflow option describes. An event larger than maxPendingBytes that has to wait is itself dropped.
      * Choose overflow stop to close only this subscription instead, observable through the returned handle
      *
      * A failed handler is isolated and not retried.

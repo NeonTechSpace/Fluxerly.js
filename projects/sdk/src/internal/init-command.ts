@@ -179,7 +179,7 @@ const installed = {
 }
 
 // Where the token and the invite are explained, under the address that the SDK's other documentation links use
-const createBotGuide = "https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/"
+const createBotGuide = "https://fluxerly.neontechspace.com/docs/create-a-bot/"
 
 /** The SDK release that init installs, read from its own package.json */
 interface SdkRelease {

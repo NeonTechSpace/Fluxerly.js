@@ -126,7 +126,8 @@ export interface CollectorOptions<M extends MessageCore = Message> extends Event
      */
     readonly filter?: (message: M) => boolean
     /** Process accepted messages one at a time, after filtering and acceptance into the retained-byte budget.
-     * Return the asynchronous work so collection can wait for it. Inspect Result errors in the callback, because they do not throw automatically.
+     * Return the asynchronous work so collection can wait for it. If it returns an Err result, collection stops with
+     * that error, like a throw. To recover instead, check the Result inside the callback.
      * A throw or rejected Promise fails collection with CollectorError reason handler, whose cause is the thrown value. The callback is not retried.
      * The failure is also reported to the client-level onError with kind collector and the message IDs, or logged at Error.
      * Terminal completion aborts the callback's signal and waits for its returned Promise, including on stop, timeout and shutdown.
@@ -187,7 +188,8 @@ export interface ReactionCollectorOptions extends EventBufferOptions {
      */
     readonly filter?: (reaction: MessageReaction) => boolean
     /** Process accepted additions sequentially before accepting the next addition.
-     * Return asynchronous work so collection can await it. Handle Result errors in the callback.
+     * Return asynchronous work so collection can await it. If it returns an Err result, collection stops with that
+     * error, like a throw. To recover instead, check the Result inside the callback.
      * Throws and rejected Promises fail with CollectorError reason handler, whose cause is the thrown value, without retrying the callback.
      * The failure is also reported to the client-level onError with kind collector and the message IDs, or logged at Error.
      * Stop, deadlines, cancellation, recovery and shutdown abort the callback signal and wait for its returned Promise.

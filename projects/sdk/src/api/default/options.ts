@@ -43,7 +43,8 @@ export interface AuditedRequestOptions extends RequestOptions {
  * @category Guilds and members
  */
 export interface MemberChunkOptions extends OperationOptions {
-    /** Total milliseconds from dispatch until the final batch arrives, integer 1–2,147,483,647, default 30,000.
+    /** Total milliseconds from when the SDK accepts the request until the final batch arrives, including waits for
+     * gateway pacing, integer 1–2,147,483,647, default 30,000.
      * Pausing consumption does not pause this deadline or the provider. No timeout applies after the full response arrives
      */
     readonly timeoutMs?: number

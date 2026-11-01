@@ -8,3 +8,9 @@
 - Before using an alias, configure and verify source resolution in the build, test typecheck and Vitest. Source tests must exercise current source rather than stale build output
 - Validate alias changes with the [aggregate development check](/docs/REPOSITORY.md#development-checks), including emitted declarations and packed default/native JavaScript and TypeScript consumers
 - Verify that the documentation generator resolves the aliases before claiming compatibility
+
+# Feature review
+
+Before adding or expanding a feature, review realistic caller workflows in both APIs, including repeated use, failures, recovery and cleanup
+
+When a change adds or expands a resource API, assess optional caching and record why it's included or deferred in the pull request

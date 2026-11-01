@@ -17,8 +17,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { format } from "prettier"
 import { stageRelease } from "../../scripts/packages.js"
-import { authoredGuides } from "../../../web/scripts/generate.js"
-import { exampleVariants } from "../../../web/scripts/example-blocks.js"
+import { authoredGuides } from "../../../web/scripts/docs/guide-files.mjs"
+import { javascriptTwin } from "../../../web/scripts/docs/remark-guides.mjs"
 import { guideImportSpecifiers } from "./guide-imports.js"
 
 const sdk = fileURLToPath(new URL("../../", import.meta.url))
@@ -251,7 +251,7 @@ for (const folder of pairedExampleFolders) {
         repositoryExamples.find((example) => example.folder === folder && example.file === file).source
     assert.equal(
         await javascriptProgram(source("bot.js")),
-        await javascriptProgram(exampleVariants(source("bot.ts"), "ts").js),
+        await javascriptProgram(javascriptTwin(source("bot.ts"))),
         `examples/${folder}/bot.js must be the JavaScript variant the website derives from bot.ts`,
     )
 }

@@ -190,7 +190,9 @@ export interface TestRoute {
      * It rejects with ClientClosedError when the test client shuts down first. Invalid options throw ConfigurationError
      */
     next(options?: TestWaitOptions): Promise<TestRequest>
-    /** Stop answering requests. Earlier matching registrations and the default 404 apply again */
+    /** Stop answering requests. Earlier matching registrations apply again. Without a match, message sends and edits
+     * receive automatic message replies, and other requests receive the default 404
+     */
     remove(): void
 }
 

@@ -21,7 +21,8 @@ import type { RequestOptions, AuditedRequestOptions } from "./options.js"
 
 /**
  * Create threads and forum posts, change, list and search threads, and manage thread members.
- * Every method uses HTTP without a gateway connection and starts immediately.
+ * Every method uses HTTP without a gateway connection. Methods returning ResultAsync start immediately, while
+ * iterateMembers starts reading when iteration begins.
  * Bots can use threads in every community where Fluxer enables them, without a capability setting.
  * Read a thread with channels.fetch, delete it with channels.delete and send to it with messages.send and its ID
  *

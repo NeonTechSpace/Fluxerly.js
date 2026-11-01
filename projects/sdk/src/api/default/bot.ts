@@ -168,9 +168,10 @@ export interface BotEventOptions<K extends EventName, M extends MessageCore = Me
 }
 
 /** One optional handler per event, as a function or an object with a handler and delivery settings.
- * The runBot function delivers with overflow dropOldest, so a full queue drops the oldest waiting event with a Warn record and a
- * counter instead of stopping the bot. Handlers for messageCreate run up to eight at a time by default, so they can finish
- * out of order, and other events run one at a time.
+ * When a queue fills, runBot drops the oldest waiting event, logs a Warn record and counts the drop, and the bot keeps
+ * running. With a partition, the overflow option's rule decides which event is dropped.
+ * Handlers for messageCreate run up to eight at a time by default, so they can finish out of order, and other events run
+ * one at a time.
  * A failed handler is reported with its original error to onError, or logged in full, without stopping the
  * bot or retrying that handler
  *
@@ -186,7 +187,8 @@ export type BotEvents<M extends MessageCore = Message> = {
  * The router is attached before the gateway starts and closed when the bot stops.
  * The delivery settings concurrency, partition, partitionReady, overflow, maxPendingMessages and maxPendingBytes are passed to attach
  * unchanged and checked before any client exists. Omitted settings keep the attach defaults: Eight commands at a time
- * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With overflow "stop", a full
+ * and overflow dropOldest, so a burst drops the oldest waiting message. With a partition, it follows the rule of the
+ * overflow option, with a Warn record. With overflow "stop", a full
  * queue stops the bot with CriticalWorkerStoppedError.
  * Unlike commands.create, runBot replies to a rejected command by default, such as one with a missing argument, as
  * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback.
@@ -241,8 +243,9 @@ export interface BotOptions<
     /** Handlers registered before connecting and closed when the bot stops.
      * Own enumerable entries are read once when runBot is called. Undefined handlers are skipped.
      * Pass a function, or an object with a handler and its own delivery settings.
-     * By default messageCreate runs up to 8 callbacks at a time and other events 1, and a full queue drops the oldest
-     * waiting event with a Warn record instead of stopping the bot.
+     * By default messageCreate and partitioned handlers run up to 8 callbacks at a time and other events 1.
+     * When a queue fills, the oldest waiting event is dropped with a Warn record, and the bot keeps running.
+     * With a partition, the overflow option's rule decides which event is dropped.
      * Bot-authored messageCreate and messageUpdate events skip these handlers unless ignoreBots is false
      */
     readonly events?: BotEvents<SelectedMessage<F>>

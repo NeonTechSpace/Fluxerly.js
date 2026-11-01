@@ -54,7 +54,7 @@
  * Unexpected SDK or cleanup failures throw or reject with SdkDefect.
  * Use `await using` or try/finally to release client resources even when work fails
  *
- * The [glossary](https://preview.fluxerly.neontechspace.com/docs/latest/glossary/) defines terms such as guild, gateway,
+ * The [glossary](https://fluxerly.neontechspace.com/docs/glossary/) defines terms such as guild, gateway,
  * shard, frozen snapshot and uncertain write
  *
  * Coding agents: read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package

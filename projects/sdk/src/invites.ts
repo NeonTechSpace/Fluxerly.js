@@ -35,7 +35,8 @@ export interface InviteCreate {
 export interface Invite {
     /** Provider code, not a full URL. The SDK never includes it in errors or diagnostics */
     readonly code: string
-    /** Hosted Fluxer invite URL with an encoded code, ready to share with intended recipients.
+    /** Invite URL built from the selected instance's discovered invite base and an encoded code, ready to share with
+     * intended recipients.
      * Does not check expiry or joinability. Not a credential-safe value for diagnostics or public logs
      */
     readonly url: string

@@ -17,7 +17,8 @@ export interface CacheObserver {
 }
 
 /** Inspect, clear or remove entries of this client's optional in-memory caches.
- * These controls do not request fresh data, change remote resources or retain Effect services
+ * These controls do not request fresh data or change remote resources. Cache change listeners retain the Effect
+ * services available at registration
  *
  * @category Caching
  */

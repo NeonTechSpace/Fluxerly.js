@@ -26,7 +26,7 @@ const eventsDropped = Metric.counter("fluxerly_events_dropped_total", {
     incremental: true,
 })
 const handlerFailures = Metric.counter("fluxerly_handler_failures_total", {
-    description: "Event and command callbacks that threw or rejected, by event",
+    description: "Reported event and command failures, by event",
     incremental: true,
 })
 

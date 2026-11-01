@@ -44,7 +44,7 @@ export interface GatewayCommands {
      * ```ts
      * import type { Client, RawDispatch } from "@neontechspace/fluxerly"
      * // Commands with an SDK method, such as community counts through client.guilds.fetchCounts, use that method instead
-     * export function sendCustomCommand(
+     * export async function sendCustomCommand(
      *     client: Client,
      *     command: { op: number; data: unknown; replyType: string },
      *     onReply: (reply: RawDispatch) => void,
@@ -53,8 +53,15 @@ export interface GatewayCommands {
      *     const replies = client.on("raw", (dispatch) => {
      *         if (dispatch.t === command.replyType) onReply(dispatch)
      *     })
-     *     // Close the returned subscription once the reply has arrived
-     *     return client.gateway.send(0, command.op, command.data).map(() => replies)
+     *     try {
+     *         const result = await client.gateway.send(0, command.op, command.data)
+     *         if (result.isErr()) replies.close()
+     *         // Close the returned subscription once the reply has arrived
+     *         return result.map(() => replies)
+     *     } catch (error) {
+     *         replies.close()
+     *         throw error
+     *     }
      * }
      * ```
      */

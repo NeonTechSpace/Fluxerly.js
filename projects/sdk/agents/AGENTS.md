@@ -11,11 +11,11 @@ Paths starting with `node_modules/@neontechspace/fluxerly/` point into the insta
 
 1. Import only from `@neontechspace/fluxerly`, `@neontechspace/fluxerly/effect`, `@neontechspace/fluxerly/testing` or `@neontechspace/fluxerly/effect/testing`, never from its `dist` or `src` files
 2. Use `runBot` for a bot, as in the starter bot. Use `createClient` only when the application needs manual control of connection and shutdown
-3. Network calls return a Result instead of throwing. Check `result.isErr()` before reading `result.value`, or return the call from a handler so the SDK logs a failure
+3. In the default API, network calls return a Result for expected failures. Check `result.isErr()` before reading `result.value`, or return the call from a handler so the SDK reports the failure. In the Effect API, execute the Effect and handle its error channel
 4. Read the bot token from the environment, such as `FLUXER_BOT_TOKEN`, and keep it out of code, logs and commits
 5. The SDK is ESM-only and needs Node.js 24.15 or newer. Use `import` in a project whose `package.json` sets `"type": "module"`
 6. Use only methods declared in the installed type files, even when a familiar method name seems likely, and report a missing method instead of inventing one
-7. Test a bot with `createTestBot` from `@neontechspace/fluxerly/testing`, which needs no token or network
+7. Test a default API bot with `createTestBot` from `@neontechspace/fluxerly/testing`, or a native Effect bot with `createTestBot` from `@neontechspace/fluxerly/effect/testing`. Neither needs a token or network
 
 <!-- fluxerly-rules:end -->
 
@@ -103,8 +103,8 @@ Paths in the map are relative to `node_modules/@neontechspace/fluxerly/`. The Ef
 - Tests without a token or network: `dist/testing.d.ts`, starting with `createTestBot`
 
 When the declarations do not answer a question, the documentation website has Markdown files for AI tools.
-Start with the task index at https://preview.fluxerly.neontechspace.com/docs/latest/where-do-i.md, which links the guide section for each common task, or the list of every client method by task at https://preview.fluxerly.neontechspace.com/docs/latest/api/tasks.md.
-The index of all guides is https://preview.fluxerly.neontechspace.com/docs/latest/llms.txt, and its first lines name the SDK version it documents. `latest` follows the newest release, so when that version differs from the installed one, trust the installed declarations
+Start with the task index at https://fluxerly.neontechspace.com/docs/where-do-i.md, which links the guide section for each common task, or the list of every client method by task at https://fluxerly.neontechspace.com/docs/api/tasks.md.
+The index of all guides is https://fluxerly.neontechspace.com/docs/llms.txt, and its first lines name the SDK version it documents. These files follow the newest release, so when that version differs from the installed one, trust the installed declarations
 
 ## Project requirements
 
@@ -117,7 +117,7 @@ Keep the application's existing module and TypeScript settings when they work wi
 ## Build the bot
 
 - `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup(client, { signal })` callback for other startup work and `onError`. By default it skips messages written by bots, and the default API's `runBot` also stops cleanly on SIGINT and SIGTERM. Set `ignoreBots: false` or `processSignals: false` to turn either off. The native Effect `runBot` from `@neontechspace/fluxerly/effect` handles those signals only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` may already handle them.
-  It checks every option before creating a client, then connects and resolves only after the bot stopped and SDK cleanup finished. A failure that stops the bot is logged once and sets `process.exitCode` to 1, so `await runBot({...})` needs no try/catch. Pass `reportFailure: false` only when the application handles the returned failure itself
+  It checks every option before creating a client, then connects and resolves only after the bot stopped and SDK cleanup finished. By default, an expected runtime failure that stops the bot is logged once and sets `process.exitCode` to 1. In the default API, invalid options can throw synchronously and unexpected defects can throw or reject, so applications that need to recover from or report them must handle those errors. Pass `reportFailure: false` only when the application handles the returned failure itself
 - For prefix commands, pass `commands: { prefix, commands: { name: { arguments, guard, cooldown, hidden, execute } } }` to `runBot`.
   Guards come from `guards`: `guildOnly()`, `dmOnly()`, `ownerOnly()` for the application's owner, `ownerOnly(ids)` and `requirePermissions(names)`. A cooldown is `{ durationMs, per: "user" | "channel" | "guild" }`.
   A `hidden: true` command is left out of help and suggestions but still runs, so guard commands that need protection
@@ -137,7 +137,7 @@ Every SDK error extends `FluxerlyError` with a stable `code`, an optional `hint`
 Failures without a returned result, such as a handler that throws or returns an `Err`, go to the client's `onError` option or are logged at Error with the full error.
 Do not wrap every handler in a catch that only logs. Let the SDK report it, or pass `onError` to route reports to the application's own error tracking
 
-Keep shutdown in one place in the application. That code must also close the subscriptions, collectors and iterators it creates, with `close()` or `await using`.
+Keep shutdown in one place in the application. That code must also close the subscriptions and collectors it creates, with `close()` or `await using`. Paginated reads have neither: Consume them with `for await`, whose end or early exit releases them, and cancel pending work with the request's `signal`.
 A subscription registered after shutdown began is returned already closed with a Warn record, and a collector registered then reports `ClientClosedError` from its `result()`
 
 ## Tests
@@ -171,7 +171,7 @@ Check the result requested by the user. Report anything that could not be tested
 ## Only for native Effect applications
 
 Use an Effect version within the `peerDependencies.effect` range in the installed SDK's `package.json`.
-The SDK is tested against the lowest version in that range and a newer Effect 4 development version. Later Effect 4 releases are accepted, but Effect 3 and Effect 4 prereleases are not
+The SDK is tested against the lowest version in that range, and a daily check runs its tests against the newest Effect 4 release in the range. Later Effect 4 releases are accepted, but Effect 3 and Effect 4 prereleases are not
 
 Effect operations describe work but do not start it until executed.
 Compose them with `yield*` inside `Effect.gen`, keep the scope open while its resources are needed, and execute the program from the application's entry point.
@@ -207,7 +207,7 @@ Check each member's declaration rather than assuming every native member is an E
 - Use `client.use(middleware)` for event middleware around every later `on` handler
 - For Fluxer API routes without an SDK method, use `client.rest.request({ method, path })`, which shares the client's queue, rate limits and logging. For gateway commands without an SDK method, use `client.gateway.send(shardId, op, d)`. Check the installed declarations for an SDK method first
 - The client logs startup, readiness, lost connections, long rate-limit waits, event drops, shutdown and every application failure by default. Records never contain the token or other credentials.
-  Adjust output with the `logging` option rather than filtering console output, and change levels while running with `client.logging.configure`: `level`, per-category `categories`, `debug`, `format` (`"pretty"` or `"json"`), `sink` to forward records to another logger, and `dedupe`.
+  Adjust output with the `logging` option rather than filtering console output. Choose `format` (`"pretty"` or `"json"`), `sink` to forward records to another logger and `dedupe` when creating the client. Change `level`, per-category `categories` and `debug` while running with `client.logging.configure`.
   Set `FLUXERLY_DEBUG=1`, or a list of categories, for Debug records. Leave `unsafe` payload logging off unless explicitly authorized for local debugging.
   Each record has a stable `code`, such as `rest.rejected`. The documentation website lists every error and log code
 - Read `client.diagnostics().counters` for failure, drop, retry and reconnect totals

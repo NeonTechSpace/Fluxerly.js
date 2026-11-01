@@ -2,11 +2,12 @@
 
 A Fluxer bot SDK for JavaScript, TypeScript and Effect
 
-[Docs](https://preview.fluxerly.neontechspace.com/) ·
-[Quick start](https://preview.fluxerly.neontechspace.com/docs/latest/quick-start/) ·
-[API reference](https://preview.fluxerly.neontechspace.com/docs/latest/api/) ·
-[Changelog](https://preview.fluxerly.neontechspace.com/docs/latest/changelog/) ·
-[Examples](https://preview.fluxerly.neontechspace.com/docs/latest/examples/)
+[Docs](https://fluxerly.neontechspace.com/) ·
+[Quick start](https://fluxerly.neontechspace.com/docs/quick-start/) ·
+[API reference](https://fluxerly.neontechspace.com/docs/api/) ·
+[Changelog](https://fluxerly.neontechspace.com/docs/changelog/) ·
+[Examples](https://fluxerly.neontechspace.com/docs/examples/) ·
+[NeonFlux, a bot built with it](https://github.com/NeonTechSpace/NeonFlux)
 
 Fluxerly.js handles HTTP requests and gateway connections for messages, events, community resources and commands.
 Both APIs use the same underlying code
@@ -26,7 +27,7 @@ Applications that use Effect directly must install a version within the Effect r
 Fluxerly is built for developers at every skill level, from a first bot in one file to large bots that need full control
 
 - **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
-- **Visible errors:** Network calls return a Result instead of throwing, and logs show every failure in full without the token. `FLUXERLY_DEBUG=1` or the `logging` option changes what the logs show
+- **Visible errors:** In the default API, network calls return a Result for expected failures. Check it or return it from a handler so the SDK reports the failure. Logs never contain the token, and `FLUXERLY_DEBUG=1` or the `logging` option changes what they show
 - **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
 - **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server
 - **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
@@ -37,19 +38,18 @@ The result is less infrastructure to build, with testing and application structu
 
 ## Requirements
 
-This package is under development and has not reached its first stable release.
 Fluxerly is tested against Node.js 24.15 or newer.
 JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
 
 Keep the package manager's lockfile for reproducible installs and review the changelog before upgrading.
-Nightly and RC releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly or RC that breaks the API.
+Nightly releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API.
 The installed package also contains the changelog as `CHANGELOG.md`
 
 ## Start a bot
 
-This bot replies **Pong!** to **!ping**. A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://preview.fluxerly.neontechspace.com/docs/latest/create-a-bot/) walks through these steps and the permissions the bot needs
+This bot replies **Pong!** to **!ping**. A bot needs a Fluxer application, its bot token and an invite to a community. [Create a bot](https://fluxerly.neontechspace.com/docs/create-a-bot/) walks through these steps and the permissions the bot needs
 
-Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://preview.fluxerly.neontechspace.com/docs/latest/quick-start/) also sets up the same project by hand
+Generate a project with a test in the bot's folder with `npx @neontechspace/fluxerly init`, `pnpm dlx @neontechspace/fluxerly init` or `bunx @neontechspace/fluxerly init`, choose JavaScript, TypeScript or Effect, and follow the steps it prints. Adding `--template js`, `--template ts` or `--template effect` skips the question. An existing `.env` is kept, and missing `node_modules` and `.env` lines are added to an existing `.gitignore`. The [quick start](https://fluxerly.neontechspace.com/docs/quick-start/) also sets up the same project by hand
 
 This is the generated `bot.js`:
 
@@ -92,7 +92,7 @@ For direct control over connection and shutdown, use `createClient`. Both are av
 The Effect API also provides the one-object `runBot` configuration. Its handlers return Effects instead of Promises and Results. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
 Before running the Effect example, add Effect 4 to the bot project's dependencies with `npm install effect@4`, `pnpm add effect@4` or `bun add effect@4`.
-The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. The SDK is tested against the lowest version in that range and a newer Effect 4 development version, and later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
+The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. The SDK is tested against the lowest version in that range, and a daily check runs its tests against the newest Effect 4 release in the range. Later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
 
 Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project to inspect the installed version.
 Recheck the SDK manifest when upgrading the SDK
@@ -102,7 +102,7 @@ Recheck the SDK manifest when upgrading the SDK
 Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them.
 The complete guide is `agents/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
 
-Agents that read web pages can start from the docs' [llms.txt](https://preview.fluxerly.neontechspace.com/llms.txt), which links each documentation version's Markdown guides and condensed API reference
+Agents that read web pages can start from the docs' [llms.txt](https://fluxerly.neontechspace.com/llms.txt), which links the newest version's Markdown guides and condensed API reference
 
 The installed `package.json` lists the supported Node.js version and import paths.
 The files listed in the `types` entries inside `exports` contain the API reference and examples

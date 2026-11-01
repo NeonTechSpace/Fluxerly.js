@@ -302,7 +302,9 @@ export type GuildFeatureToggle = (typeof GuildFeatureToggles)[keyof typeof Guild
 export interface GuildVanityUrl {
     /** Lowercase custom code, or null when removed. Share only with intended recipients */
     readonly code: string | null
-    /** Hosted Fluxer invite URL, or null without a code. Never included in SDK diagnostics */
+    /** Invite URL built from the selected instance's discovered invite base, or null without a code. Never included in
+     * SDK diagnostics
+     */
     readonly url: string | null
 }
 

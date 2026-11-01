@@ -193,7 +193,7 @@ export type LogLevelSettings = Pick<LoggingOptions, "level" | "categories" | "de
  * @category Logging and diagnostics
  */
 export interface ClientCounters {
-    /** Event handler and command callbacks that threw or rejected */
+    /** Reported event handler and command failures, including a returned or resolved Err result */
     readonly handlerFailures: number
     /** Failed onError hooks, which threw or rejected while reporting a failure */
     readonly hookFailures: number

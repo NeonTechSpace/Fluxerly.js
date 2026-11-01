@@ -661,7 +661,9 @@ export interface Messages<M extends MessageCore = Message> {
      * Show several pages in one message that people flip with ◀ and ▶ reactions, because Fluxer has no buttons.
      * Sends the first page, adds both arrows as the bot, then shows the previous or next page on each click, wrapping
      * around at the ends. A single page is only sent, with reason singlePage and without arrows or listening.
-     * Pages and options are copied when the operation starts, and invalid ones fail with ConfigurationError before anything is sent
+     * Pages and options are copied when the operation starts, but embed objects stay shared with the caller. Invalid
+     * page-list shapes and options fail with ConfigurationError before the first send. Page bodies are validated when
+     * sent or shown, so an invalid later page can fail after the first message and arrows have been sent
      *
      * The users option is required here, because no message identifies an asker. Pass account IDs, or a check such as `() => true` to let anyone flip.
      * A command context's paginate defaults to the command's author instead.

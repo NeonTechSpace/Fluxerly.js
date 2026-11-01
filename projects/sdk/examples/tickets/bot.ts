@@ -42,7 +42,7 @@ export const bot = defineBot({
                             type: ChannelType.Text,
                             name,
                             parentId: categoryId,
-                            // Hide the channel from everyone except the member, the staff role and the bot
+                            // Hide the channel from other members. The member, the staff role and the bot can see it, as can the owner and Administrators
                             permissionOverwrites: [
                                 { id: guildId, type: "role", allow: 0n, deny: Permissions.ViewChannel },
                                 { id: staffRoleId, type: "role", allow: access, deny: 0n },

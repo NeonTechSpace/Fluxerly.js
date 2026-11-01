@@ -292,7 +292,7 @@ test.each(
     // Only a TypeScript starter has the check script, which a manager runs only through its run command
     expect(result.printed.includes(`Check the types: ${checkScripts[manager]}`)).toBe(template !== "js")
     // The next steps link the guide that explains the token and the invite
-    expect(result.printed).toMatch(/https:\/\/\S+\/docs\/latest\/create-a-bot\/(?:\s|$)/)
+    expect(result.printed).toMatch(/https:\/\/\S+\/docs\/create-a-bot\/(?:\s|$)/)
     // The install already ran, so the next steps do not repeat it
     expect(result.printed).not.toContain("@neontechspace/fluxerly@")
     expect(result.errors).toBe("")

@@ -44,6 +44,7 @@ function controlledClient(worker: (signal: AbortSignal) => Promise<Result>) {
     const client = {
         state: "Disconnected" as string,
         diagnostics: () => ({ state: "Disconnected" }),
+        observeState: () => ({ close: () => {} }),
         messages: { reply: async () => ok(undefined) },
         on: () => ({
             waitForClose: ({ signal }: { signal: AbortSignal }) => {

@@ -31,7 +31,7 @@ export interface FailureMessageReference {
  * Reports delivered to a hook log at Debug without repeating the error. A handler failure caused by an HTTP 401 or 403
  * rejection replaces that rejection's Warn only when reported within one second, otherwise both records appear.
  * The error is the real value that the application callback threw or rejected with, or the SDK error that stopped the work.
- * The report holds IDs only, never message content
+ * The message reference contains IDs only. The original error can contain message content or other application data
  *
  * @category Logging and diagnostics
  */

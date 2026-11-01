@@ -23,7 +23,7 @@
  * Keep a client and its listeners inside their scopes rather than returning handles after their scopes close.
  * Other required services come from the caller's Effect program, including services used by handlers
  *
- * The [glossary](https://preview.fluxerly.neontechspace.com/docs/latest/glossary/) defines terms such as guild, gateway,
+ * The [glossary](https://fluxerly.neontechspace.com/docs/glossary/) defines terms such as guild, gateway,
  * shard, gateway gap and REST
  *
  * Stream values describe sequences. Requests and listeners start when the caller consumes the Stream.
