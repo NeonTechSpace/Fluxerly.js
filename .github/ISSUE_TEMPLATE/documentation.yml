@@ -14,7 +14,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: This issue concerns a Stable release in the current major, or the newest nightly before the first Stable, not a previous major or any other nightly
+        - label: This issue concerns a Stable release in the current major, not a previous major or any nightly
           required: true
         - label: Existing issues have been searched for the same problem
           required: true
@@ -38,7 +38,7 @@ body:
     id: affected-page
     attributes:
       label: Affected page and documentation version
-      description: Include the page URL or repository file, heading, and exact documentation version. Before the first Stable, the newest nightly qualifies for maintainer reports
+      description: Include the page URL or repository file, heading, and exact documentation version.
       placeholder: |
         Page URL or repository file:
         Heading:

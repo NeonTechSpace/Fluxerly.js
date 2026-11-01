@@ -14,7 +14,7 @@ body:
     attributes:
       label: Before submitting
       options:
-        - label: This issue concerns a Stable release in the current major, or the newest nightly before the first Stable, not a previous major or any other nightly
+        - label: This issue concerns a Stable release in the current major, not a previous major or any nightly
           required: true
         - label: Existing issues have been searched for the same problem
           required: true
@@ -61,7 +61,7 @@ body:
     id: sdk-version
     attributes:
       label: Installed Fluxerly.js version
-      description: Copy the exact installed version from the lockfile or installed package, including its full ending. Before the first Stable release, the newest nightly qualifies for maintainer reports
+      description: Copy the exact installed version from the lockfile or installed package, including its full ending.
       placeholder: Exact installed version
     validations:
       required: true

@@ -79,7 +79,6 @@ The first stable public generation is called Epoch 1 and starts at `1000.0.0`, n
 These examples illustrate versioning, not the current release inventory.
 Use the [SDK source manifest](/projects/sdk/package.json) for the checkout's version and [npm registry metadata](https://registry.npmjs.org/@neontechspace%2ffluxerly) for published versions.
 The two release channels are Nightly and Stable, with the npm tags `nightly` and `latest`.
-Until the first Stable, `latest` is pointed at a nightly by hand.
 Release tooling moves only the published channel's tag, so nightlies never move `latest`.
 Release documentation snapshots use the matching exact package version, including its prerelease suffix
 

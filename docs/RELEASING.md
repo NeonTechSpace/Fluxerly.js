@@ -127,7 +127,7 @@ Nightlies carry that next number, such as `1000.1.0-nightly.20261101.5`, and Sta
 
 A new epoch is a deliberate choice. Run Release version PR with `epoch`, such as `2000`, with a major release note. It stores a target like `2000.0.0-nightly.0` on `main`, and nightlies then build toward it. A target never drops, even if notes are removed later.
 
-Before the first Stable, the stored version is the target `1000.0.0-nightly.0`, and `projects/.changeset/pre/` holds the notes of the releases so far. The first Stable collects all of them. `projects/.changeset/pre.json` keeps the last Stable as `releaseBase`, with `null` before the first one. Before the Stable version PR, edit or delete notes that later changes replaced, so the changelog never announces something the same release removes.
+Between Stables, the stored version is the last Stable and `projects/.changeset/` holds the notes for the next one. A new epoch target also uses `projects/.changeset/pre/` and `projects/.changeset/pre.json`, which keeps the last Stable as `releaseBase`. Before the Stable version PR, edit or delete notes that later changes replaced, so the changelog never announces something the same release removes.
 
 Source versioning is not atomic. After an interruption, reconcile the manifest, release state, notes and changelog before retrying. Missing or invalid state fails closed
 
@@ -150,7 +150,7 @@ Each nightly compares against the previous nightly on the same `major.minor` lin
 
 | Workflow | Trigger | Inputs and result |
 | --- | --- | --- |
-| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The `check` job requires all of them, or reuses an earlier passing run for identical content |
+| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The browser job tests every screen on manual and version-branch dispatches and on any push while the SDK's Stable version isn't on npm yet, and a few screens of each kind on pull requests and other pushes to `main`. The `check` job requires all of them, or reuses an earlier passing run for identical content |
 | [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref` and optional `line`. Opens the Stable version pull request, or with `epoch`, a pull request that sets a new epoch as the nightly target |
 | [Release prepare](/.github/workflows/release-prepare.yml) | Twice a day for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
 | [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the website |
@@ -168,7 +168,7 @@ Identical content needs one full Check. The first job of every Check run compare
 The newest conclusive matching run by completion time decides, regardless of its run ID. When it passed, the check jobs are skipped and the required `check` job passes with a summary that links that run.
 An unfinished matching attempt is awaited for up to 40 minutes only when it started before the current attempt, so matching runs never wait for each other. A failed or uncertain lookup runs the full Check.
 Pull request runs never serve as evidence, because they check a merge commit rather than the recorded branch head.
-A release therefore runs the full Check once, in the Check dispatched on the version branch. The version pull request run and the `main` push run after merging reuse it while `main` has not moved
+A release therefore runs the full Check once, in the Check dispatched on the version branch. Any run that reuses a passing Check, including a manual one, tests nothing new, so a run on content that already passed with a few screens does not test the others. The version pull request run and the `main` push run after merging reuse it while `main` has not moved
 
 Release prepare reuses the newest successful main-push Check for the exact source, waiting while it runs. A main-push Check that reused identical content counts as successful.
 Only a verified absence of such a run falls back to full workspace, browser and declared-minimum-Node checks.
@@ -200,8 +200,7 @@ The tags are `nightly` and `latest`, which is Stable.
 Recovery accepts a newer channel-tag version on the same `major.minor` line only when npm still serves the candidate's reviewed bytes. It never moves the channel tag backward.
 Older release lines publish under a line-specific staging tag, such as `nightly-1000-0`, and still require that tag for recovery
 
-No Stable exists yet, so `latest` is pointed at a nightly by hand. Nightlies never move it.
-The first Stable moves it to `1000.0.0`
+A Stable moves `latest` when it's the newest version, and nightlies never move it
 
 Trusted publishing cannot change tags, so tag corrections need an interactive npm login with two-factor authentication:
 

@@ -96,6 +96,16 @@ export async function releaseTrigger({ before, after, readVersion, registries })
     return { prepare: true, version, reason: "The push changed the SDK version to one that npm does not have" }
 }
 
+// Whether this commit holds a Stable version that npm doesn't have yet, which is how long a Stable is on its way out
+export async function stablePending({ after, readVersion, registries }) {
+    if (!commitPattern.test(after)) throw new Error("Pushed commit must be an exact commit")
+    const version = await readVersion(after)
+    const { major, channel } = parseVersion(version)
+    if (major < 1000 || channel !== "stable") return { pending: false, version }
+    const inventory = await registries.inventory(sdkName, { allowMissing: true })
+    return { pending: !inventory.npmVersions.includes(version), version }
+}
+
 export function validatePreparation(run, artifacts, { repository, runId, workflow }) {
     if (!repositoryPattern.test(repository) || !/^[1-9]\d*$/.test(String(runId)))
         throw new Error("Invalid preparation repository or run ID")
@@ -628,7 +638,15 @@ async function main() {
         })
         console.log(JSON.stringify(result))
         await writeOutputs({ prepare: result.prepare, version: result.version })
-    } else throw new Error("Use preparation, inspect, announce or prepare-trigger")
+    } else if (action === "stable-pending") {
+        const result = await stablePending({
+            after: environment("AFTER_SHA"),
+            readVersion: (commit) => github.sdkVersion(commit),
+            registries: createRegistries(),
+        })
+        console.log(JSON.stringify(result))
+        await writeOutputs({ pending: result.pending, version: result.version })
+    } else throw new Error("Use preparation, inspect, announce, prepare-trigger or stable-pending")
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

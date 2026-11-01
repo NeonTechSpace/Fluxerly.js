@@ -186,10 +186,26 @@ jobs:
             pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
           fi
         working-directory: projects
+      - name: Detect a Stable version that npm does not have yet
+        id: stable
+        if: github.event_name == 'push'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AFTER_SHA: ${{ github.sha }}
+        run: node projects/release/github.js stable-pending
       - name: Check documentation in a browser
         id: browser
+        env:
+          # Pull requests and ordinary pushes test a few screens of each kind. A manual run, a Stable's version branch and any
+          # push while a Stable isn't on npm yet test them all, and so does a push whose version lookup failed
+          ALL_SCREENS: ${{ github.event_name != 'pull_request' && steps.stable.outputs.pending != 'false' }}
         run: |
-          pnpm --filter fluxerly-docs test:browser
+          if [ "$ALL_SCREENS" = true ]; then
+            pnpm --filter fluxerly-docs test:browser
+          else
+            pnpm --filter fluxerly-docs test:browser --quick
+          fi
           pnpm --filter fluxerly-docs test:versions
         working-directory: projects
       - name: Summarize browser checks

@@ -50,8 +50,7 @@ Keep each report focused on one underlying problem
 
 ### Versions in scope
 
-Issues are accepted only for Stable releases in the current major. Before the
-first Stable release, the newest nightly is in scope for maintainer reports
+Issues are accepted only for Stable releases in the current major
 
 Previous majors and all nightly releases are out of scope. Before reporting a
 problem found on an excluded version, reproduce it on an in-scope version and

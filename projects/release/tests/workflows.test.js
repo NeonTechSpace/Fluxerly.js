@@ -184,6 +184,17 @@ test("Dependency notes execute only reviewed base code and treat the PR branch a
     assert.equal(workflow.concurrency["cancel-in-progress"], false)
 })
 
+test("Only pull requests and ordinary pushes shorten the browser sweep", () => {
+    const steps = workflows["ci.yml"].jobs["browser"].steps
+    const detect = steps.find((step) => step.id === "stable")
+    assert.equal(detect.if, "github.event_name == 'push'")
+    // A failed version lookup must not shorten the sweep for a Stable
+    assert.equal(detect["continue-on-error"], true)
+    const browser = steps.find((step) => step.id === "browser")
+    assert.equal(browser.env.ALL_SCREENS, "${{ github.event_name != 'pull_request' && steps.stable.outputs.pending != 'false' }}")
+    assert.match(browser.run, /if \[ "\$ALL_SCREENS" = true \]; then\s+pnpm --filter fluxerly-docs test:browser\s+else\s+pnpm --filter fluxerly-docs test:browser --quick\s+fi/)
+})
+
 test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped nightly candidate", () => {
     const workflow = workflows["release-prepare.yml"]
     const [schedule] = workflow.on.schedule
