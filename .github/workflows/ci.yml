@@ -167,7 +167,7 @@ jobs:
         working-directory: projects
       - name: Read the locked Playwright version
         id: playwright
-        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/playwright/package.json").version')" >> "$GITHUB_OUTPUT"
         working-directory: projects
       - name: Restore Playwright browsers
         id: browser_cache
@@ -192,23 +192,12 @@ jobs:
           pnpm --filter fluxerly-docs test:browser
           pnpm --filter fluxerly-docs test:versions
         working-directory: projects
-      - name: Retain failing browser evidence
-        id: browser_evidence
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: browser-failure
-          path: projects/web/test-results
-          retention-days: 7
-          if-no-files-found: ignore
       - name: Summarize browser checks
         if: always()
         uses: $/.github/actions/summary
         with:
           title: Documentation browser checks
           steps: ${{ toJSON(steps) }}
-          details: >-
-            {"Browser evidence artifact ID": ${{ toJSON(steps.browser_evidence.outputs.artifact-id) }}}
           next: Live sandbox checks remain opt-in and separate from CI
   consumers:
     name: ${{ matrix.name }}

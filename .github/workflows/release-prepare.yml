@@ -1,9 +1,9 @@
 name: Release prepare
 on:
-  # Every six hours a run prepares a nightly build of main and starts its publication. Berlin time keeps the runs at
-  # 00:00, 06:00, 12:00 and 18:00 local time through daylight saving changes
+  # Twice a day a run prepares a nightly build of main and starts its publication. Berlin time keeps the runs at
+  # midnight and midday local time through daylight saving changes
   schedule:
-    - cron: '0 0,6,12,18 * * *'
+    - cron: '0 0,12 * * *'
       timezone: Europe/Berlin
   workflow_dispatch:
     inputs:
@@ -102,7 +102,7 @@ jobs:
           if (nightly) {
             // The nightly version exists only in the candidate, so the docs snapshot receives it from the plan
             // Planning and preparation read the same date, so a run that crosses midnight UTC still plans one version.
-            // The helper loads only here, because an RC or Stable source from before dated nightlies lacks it
+            // The helper loads only here, because a source from before dated nightlies lacks it
             const { nightlyDateOf } = await import('./release/planning.js')
             const number = ['--date', nightlyDateOf(new Date().toISOString()), '--number', process.env.RELEASE_NIGHTLY_NUMBER]
             const plan = execFileSync('pnpm', ['release:plan', '--channel', 'nightly', ...number], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], timeout: 120000 })
@@ -161,7 +161,7 @@ jobs:
         if: always()
         uses: $/.github/actions/summary
         with:
-          title: Immutable release candidate preparation
+          title: Immutable release preparation
           steps: ${{ toJSON(steps) }}
           details: >-
             {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate artifact": ${{ toJSON(steps.candidate.outputs.name) }}, "Candidate artifact ID": ${{ toJSON(steps.artifact.outputs.artifact-id) }}, "Candidate retention": "90 days after upload", "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
@@ -204,4 +204,4 @@ jobs:
           steps: ${{ toJSON(steps) }}
           details: >-
             {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate SHA256": ${{ toJSON(needs.prepare.outputs.checksum) }}}
-          next: Follow the Release publish run, which publishes, checks registry installs, announces the prerelease and deploys the Docs preview, unless a nightly with the same content was published meanwhile
+          next: Follow the Release publish run, which publishes, checks registry installs, announces the prerelease and deploys the website, unless a nightly with the same content was published meanwhile

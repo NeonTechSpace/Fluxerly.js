@@ -88,6 +88,7 @@ export async function releaseTrigger({ before, after, readVersion, registries })
     if (!commitPattern.test(after)) throw new Error("Pushed commit must be an exact commit")
     const version = await readVersion(after)
     if (parseVersion(version).major < 1000) return { prepare: false, version, reason: "Not a public release version" }
+    if (parseVersion(version).channel !== "stable") return { prepare: false, version, reason: "A nightly target is not a release" }
     const previous = before && commitPattern.test(before) && !/^0+$/.test(before) ? await readVersion(before) : null
     if (previous === version) return { prepare: false, version, reason: "The push did not change the SDK version" }
     const inventory = await registries.inventory(sdkName, { allowMissing: true })

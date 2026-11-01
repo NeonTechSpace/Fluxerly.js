@@ -39,7 +39,7 @@ export async function readSourcePlan(workspace, options) {
     const releasePlan = assembleReleasePlan(fragments, packages, configResult.config, preState)
     if (releasePlan.releases.some((release) => release.name !== sdk.packageJson.name))
         throw new Error("Changesets attempted to release a non-SDK package")
-    // Archived notes retain cycle-wide compatibility impact. Pending notes determine new preview work
+    // Archived notes retain cycle-wide compatibility impact. Pending notes are what a nightly lists as unreleased
     const plan = planVersion({
         currentVersion: sdk.packageJson.version,
         channel: options.channel,
@@ -210,6 +210,8 @@ export async function applySourcePlan(workspace, options, prepared) {
 }
 
 export async function versionSource({ workspace, options, registries, stage }) {
+    if (options.channel === "nightly" && options.epoch === undefined)
+        throw new Error("Nightly builds need no version pull request. Only a new epoch sets a nightly target")
     const guardedOptions = { ...options, allowNoChanges: true }
     const prepared = await readSourcePlan(workspace, guardedOptions)
     const { guardVersionContent } = await import("./candidate.js")

@@ -19,14 +19,15 @@ test("A pending note added or edited during registry inspection leaves source an
             await assert.rejects(
                 versionSource({
                     workspace: root,
-                    options: { channel: "rc" },
+                    options: { channel: "stable" },
                     registries: {
                         inventory: async () => {
                             await note(root, concurrent.id, "patch", concurrent.text)
-                            return { npmVersions: [] }
+                            return { npmVersions: ["1000.0.0-nightly.1"] }
                         },
+                        baseline: async () => ({ contentFingerprint: contentFingerprint(packages("1000.0.0-nightly.1")) }),
                     },
-                    stage: () => assert.fail("A channel without a published baseline has nothing to stage"),
+                    stage: stageFixture(),
                 }),
                 /inputs changed during the content guard/,
                 concurrent.id,
@@ -41,23 +42,23 @@ test("A pending note added or edited during registry inspection leaves source an
     }
 })
 
-test("Changesets notes survive unchanged-code rc to stable promotion", async () => {
+test("Changesets notes survive unchanged-code nightly target to Stable promotion", async () => {
     const root = await fixture()
     try {
         await note(root, "first-generation", "major", "Introduce the first public SDK generation")
         const before = await readFile(join(root, "sdk/package.json"))
-        const { plan } = await readSourcePlan(root, { channel: "rc" })
-        assert.equal(plan.version, "1000.0.0-rc.1")
+        const { plan } = await readSourcePlan(root, { channel: "nightly" })
+        assert.equal(plan.version, "1000.0.0-nightly.1")
         assert.deepEqual(await readFile(join(root, "sdk/package.json")), before)
-        await applySourcePlan(root, { channel: "rc" })
+        await applySourcePlan(root, { channel: "nightly" })
         assert.deepEqual(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")), {
             mode: "pre",
-            tag: "rc",
+            tag: "nightly",
             releaseBase: null,
         })
         await access(join(root, ".changeset/pre/first-generation.md"))
         await note(root, "preview-fix", "patch", "Fix cancellation during reconnect")
-        assert.equal((await applySourcePlan(root, { channel: "rc" })).version, "1000.0.0-rc.2")
+        assert.equal((await applySourcePlan(root, { channel: "nightly" })).version, "1000.0.0-nightly.2")
         assert.equal((await applySourcePlan(root, { channel: "stable" })).version, "1000.0.0")
         const notes = changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), "1000.0.0")
         for (const copy of ["Introduce the first public SDK generation", "Fix cancellation during reconnect"])
@@ -72,11 +73,11 @@ test("Changesets notes survive unchanged-code rc to stable promotion", async () 
 
 test("Initial prerelease changes preserve their notes without moving the stable target", async () => {
     const versions = [
-        ["rc", "1000.0.0-rc.2"],
+        ["nightly", "1000.0.0-nightly.2"],
         ["stable", "1000.0.0"],
     ]
     for (const { type, companion } of [{ type: "patch" }, { type: "minor" }, { type: "major", companion: "patch" }]) {
-        const root = await fixture("1000.0.0-rc.1")
+        const root = await fixture("1000.0.0-nightly.1")
         try {
             const id = `${type}-preview-change`
             const copy = `Describe the ${type} preview change`
@@ -110,12 +111,12 @@ test("Later cycles retain their stable base, escalate once and preserve every cy
     const root = await fixture("1000.2.3")
     try {
         const changes = [
-            ["first-fix", "patch", "rc", "1000.2.4-rc.0"],
-            ["another-fix", "patch", "rc", "1000.2.4-rc.1"],
-            ["new-feature", "minor", "rc", "1000.3.0-rc.0"],
-            ["another-feature", "minor", "rc", "1000.3.0-rc.1"],
-            ["breaking-stable-api", "major", "rc", "1001.0.0-rc.0"],
-            ["another-breaking-change", "major", "rc", "1001.0.0-rc.1"],
+            ["first-fix", "patch", "nightly", "1000.2.4-nightly.0"],
+            ["another-fix", "patch", "nightly", "1000.2.4-nightly.1"],
+            ["new-feature", "minor", "nightly", "1000.3.0-nightly.0"],
+            ["another-feature", "minor", "nightly", "1000.3.0-nightly.1"],
+            ["breaking-stable-api", "major", "nightly", "1001.0.0-nightly.0"],
+            ["another-breaking-change", "major", "nightly", "1001.0.0-nightly.1"],
         ]
         for (const [id, type, channel, version] of changes) {
             await note(root, id, type, `Migration instructions for ${id}`)
@@ -133,7 +134,7 @@ test("Later cycles retain their stable base, escalate once and preserve every cy
         for (const [id] of changes) assert.equal(stable.split(`Migration instructions for ${id}`).length - 1, 1)
         await assert.rejects(access(join(root, ".changeset/pre.json")), { code: "ENOENT" })
         await note(root, "next-cycle", "minor", "Introduce a feature after the stable release")
-        assert.equal((await applySourcePlan(root, { channel: "rc" })).version, "1001.1.0-rc.0")
+        assert.equal((await applySourcePlan(root, { channel: "nightly" })).version, "1001.1.0-nightly.0")
         assert.equal(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")).releaseBase, "1001.0.0")
     } finally {
         await rm(root, { recursive: true })
@@ -141,49 +142,35 @@ test("Later cycles retain their stable base, escalate once and preserve every cy
 })
 
 test("Missing, invalid or changed cycle state fails before consuming release inputs", async () => {
-    const root = await fixture("1000.1.0-rc.0")
+    const root = await fixture("1000.1.0-nightly.0")
     try {
         await note(root, "preview-fix", "patch", "Fix the current preview")
-        for (const releaseBase of [undefined, null, "1000.1.0", "1001.0.0", "1000.0.0-rc.0", false]) {
-            await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase })
+        for (const releaseBase of [undefined, null, "1000.1.0", "1001.0.0", "1000.0.0-nightly.0", false]) {
+            await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "nightly", releaseBase })
             const before = exactFiles(await readDirectory(root))
-            await assert.rejects(applySourcePlan(root, { channel: "rc" }), /releaseBase/)
+            await assert.rejects(applySourcePlan(root, { channel: "nightly" }), /releaseBase/)
             assert.deepEqual(exactFiles(await readDirectory(root)), before)
         }
-        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: "1000.0.0" })
-        const prepared = await readSourcePlan(root, { channel: "rc" })
-        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: "1000.0.1" })
+        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "nightly", releaseBase: "1000.0.0" })
+        const prepared = await readSourcePlan(root, { channel: "nightly" })
+        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "nightly", releaseBase: "1000.0.1" })
         const before = exactFiles(await readDirectory(root))
-        await assert.rejects(applySourcePlan(root, { channel: "rc" }, prepared), /inputs changed/)
+        await assert.rejects(applySourcePlan(root, { channel: "nightly" }, prepared), /inputs changed/)
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
     } finally {
         await rm(root, { recursive: true })
     }
 })
 
-test("Target escalation cannot skip qualification of the new RC", async () => {
-    const root = await fixture("1000.0.0")
-    try {
-        await note(root, "feature", "minor", "Add a feature")
-        await applySourcePlan(root, { channel: "rc" })
-        await note(root, "breaking", "major", "Change the stable API")
-        const before = exactFiles(await readDirectory(root))
-        await assert.rejects(applySourcePlan(root, { channel: "stable" }), /pending changes as a release candidate/)
-        assert.deepEqual(exactFiles(await readDirectory(root)), before)
-        assert.equal((await applySourcePlan(root, { channel: "rc" })).version, "1001.0.0-rc.0")
-        assert.equal((await applySourcePlan(root, { channel: "stable" })).version, "1001.0.0")
-    } finally {
-        await rm(root, { recursive: true })
-    }
-})
+
 
 test("Removed channels cannot consume source versions or Changesets notes", async () => {
     const root = await fixture()
     try {
         await note(root, "first-generation", "major", "Introduce the first public SDK generation")
         const before = exactFiles(await readDirectory(root))
-        for (const channel of ["alpha", "beta", "canary", "nightly"]) {
-            await assert.rejects(applySourcePlan(root, { channel }), /Channel must be rc or stable/, channel)
+        for (const channel of ["alpha", "beta", "canary", "rc"]) {
+            await assert.rejects(applySourcePlan(root, { channel }), /Channel must be nightly or stable/, channel)
             assert.deepEqual(exactFiles(await readDirectory(root)), before)
         }
     } finally {
@@ -195,7 +182,7 @@ test("Explicit epoch entry conserves migration notes through stable", async () =
     const root = await fixture("1001.4.2")
     try {
         await note(root, "epoch-two", "major", "Introduce Epoch 2 with the migration guide")
-        assert.equal((await applySourcePlan(root, { channel: "rc", epoch: 2000 })).version, "2000.0.0-rc.0")
+        assert.equal((await applySourcePlan(root, { channel: "nightly", epoch: 2000 })).version, "2000.0.0-nightly.0")
         assert.equal((await applySourcePlan(root, { channel: "stable" })).version, "2000.0.0")
         assert.match(
             changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), "2000.0.0"),
@@ -206,7 +193,7 @@ test("Explicit epoch entry conserves migration notes through stable", async () =
     }
 })
 
-test("Reintroduced Changeset IDs cannot overwrite archived prerelease notes during RC preparation", async () => {
+test("Reintroduced Changeset IDs cannot overwrite archived prerelease notes during nightly target preparation", async () => {
     for (const reintroduced of [
         { type: "major", text: "Introduce the first public SDK generation" },
         { type: "patch", text: "Edited cherry-picked note with the same ID" },
@@ -214,44 +201,30 @@ test("Reintroduced Changeset IDs cannot overwrite archived prerelease notes duri
         const root = await fixture()
         try {
             await note(root, "same-id", "major", "Introduce the first public SDK generation")
-            await applySourcePlan(root, { channel: "rc" })
+            await applySourcePlan(root, { channel: "nightly" })
             await note(root, "same-id", reintroduced.type, reintroduced.text)
             const before = exactFiles(await readDirectory(root))
-            await assert.rejects(applySourcePlan(root, { channel: "rc" }), /Changeset ID collision.*same-id/)
+            await assert.rejects(applySourcePlan(root, { channel: "nightly" }), /Changeset ID collision.*same-id/)
             assert.deepEqual(exactFiles(await readDirectory(root)), before)
-            assert.equal(JSON.parse(await readFile(join(root, "sdk/package.json"), "utf8")).version, "1000.0.0-rc.1")
+            assert.equal(JSON.parse(await readFile(join(root, "sdk/package.json"), "utf8")).version, "1000.0.0-nightly.1")
         } finally {
             await rm(root, { recursive: true })
         }
     }
 })
 
-test("An unchanged-content cherry-pick with a pending note skips without consuming its fragment or version", async () => {
-    const root = await fixture("1000.0.0-rc.1")
+test("Version source refuses Nightly without an epoch before consuming inputs", async () => {
+    const root = await fixture("1000.2.3")
     try {
-        await note(root, "cherry-picked-fix", "patch", "Fix cancellation during reconnect")
-        const manifest = await readFile(join(root, "sdk/package.json"))
-        const fragment = await readFile(join(root, ".changeset/cherry-picked-fix.md"))
-        const registries = {
-            inventory: async () => ({ npmVersions: ["1000.0.0-rc.1"] }),
-            baseline: async () => ({ contentFingerprint: contentFingerprint(packages("1000.0.0-rc.1")) }),
-        }
-        const skipped = await versionSource({
-            workspace: root,
-            options: { channel: "rc" },
-            registries,
-            stage: stageFixture(),
-        })
-        assert.equal(skipped.skipped, true)
-        assert.equal(skipped.version, "1000.0.0-rc.1")
-        assert.equal(skipped.baseline, "1000.0.0-rc.1")
-        assert.deepEqual(await readFile(join(root, "sdk/package.json")), manifest)
-        assert.deepEqual(await readFile(join(root, ".changeset/cherry-picked-fix.md")), fragment)
-        await assert.rejects(access(join(root, "sdk/CHANGELOG.md")), { code: "ENOENT" })
+        await note(root, "fix", "patch", "Fix cancellation")
+        const before = exactFiles(await readDirectory(root))
+        await assert.rejects(versionSource({ workspace: root, options: { channel: "nightly" }, registries: {}, stage: () => assert.fail("Must not stage") }), /Only a new epoch/)
+        assert.deepEqual(exactFiles(await readDirectory(root)), before)
     } finally {
         await rm(root, { recursive: true })
     }
 })
+
 
 test("Partial source preparation cannot silently discard or consume leftover prerelease notes", async () => {
     const root = await fixture("1000.0.0")
@@ -266,50 +239,19 @@ test("Partial source preparation cannot silently discard or consume leftover pre
     }
 })
 
-test("A same-channel rebuild without notes is a verified successful skip, changed bytes need notes", async () => {
-    const version = "1000.0.0-rc.1"
-    const root = await fixture(version)
-    try {
-        const manifest = await readFile(join(root, "sdk/package.json"))
-        const registries = {
-            inventory: async () => ({ npmVersions: [version] }),
-            baseline: async () => ({ version, contentFingerprint: contentFingerprint(packages(version)) }),
-        }
-        const skipped = await versionSource({
-            workspace: root,
-            options: { channel: "rc" },
-            registries,
-            stage: stageFixture(),
-        })
-        assert.equal(skipped.skipped, true)
-        assert.equal(skipped.version, version)
-        assert.equal(skipped.baseline, version)
-        await assert.rejects(
-            versionSource({
-                workspace: root,
-                options: { channel: "rc" },
-                registries,
-                stage: stageFixture("export const value = 2\n"),
-            }),
-            /no pending Changesets fragment/,
-        )
-        assert.deepEqual(await readFile(join(root, "sdk/package.json")), manifest)
-    } finally {
-        await rm(root, { recursive: true })
-    }
-})
+
 
 test("An absent source publication safeguard is rejected before source versioning", async () => {
     const root = await fixture()
     try {
         await write(join(root, "sdk/package.json"), {
             name: "@neontechspace/fluxerly",
-            version: "1000.0.0-rc.0",
+            version: "1000.0.0-nightly.0",
             private: false,
         })
         await note(root, "first-generation", "major", "Introduce the first public SDK generation")
         const manifest = await readFile(join(root, "sdk/package.json"))
-        await assert.rejects(applySourcePlan(root, { channel: "rc" }), /private publication safeguard/)
+        await assert.rejects(applySourcePlan(root, { channel: "nightly" }), /private publication safeguard/)
         assert.deepEqual(await readFile(join(root, "sdk/package.json")), manifest)
         await assert.rejects(access(join(root, "sdk/CHANGELOG.md")), { code: "ENOENT" })
     } finally {
@@ -317,13 +259,13 @@ test("An absent source publication safeguard is rejected before source versionin
     }
 })
 
-test("Stable versioning promotes only the published RC bytes and never consumes source for other content", async () => {
-    const root = await fixture("1000.0.0-rc.1")
+test("Stable versioning promotes only the newest nightly bytes and never consumes source for other content", async () => {
+    const root = await fixture("1000.0.0-nightly.1")
     try {
         await note(root, "first-generation", "major", "Introduce the first public SDK generation")
-        await applySourcePlan(root, { channel: "rc" })
+        await applySourcePlan(root, { channel: "nightly" })
         const registries = {
-            inventory: async () => ({ npmVersions: ["1000.0.0-rc.1", "1000.0.0-rc.2"] }),
+            inventory: async () => ({ npmVersions: ["1000.0.0-nightly.1", "1000.0.0-nightly.2"] }),
             baseline: async (_name, version) => ({ version, contentFingerprint: contentFingerprint(packages(version)) }),
         }
         const before = exactFiles(await readDirectory(root))
@@ -334,16 +276,16 @@ test("Stable versioning promotes only the published RC bytes and never consumes 
                 registries,
                 stage: stageFixture("export const value = 2\n"),
             }),
-            /Stable content differs from 1000.0.0-rc.2/,
+            /Stable content differs from 1000.0.0-nightly.2/,
         )
         await assert.rejects(
             versionSource({
                 workspace: root,
                 options: { channel: "stable" },
-                registries: { ...registries, inventory: async () => ({ npmVersions: ["1000.0.0-nightly.4"] }) },
+                registries: { ...registries, inventory: async () => ({ npmVersions: ["1000.0.0-rc.4"] }) },
                 stage: stageFixture(),
             }),
-            /publish 1000.0.0-rc.N first/,
+            /No nightly of 1000.0.0/,
         )
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
         const promoted = await versionSource({ workspace: root, options: { channel: "stable" }, registries, stage: stageFixture() })
@@ -353,16 +295,16 @@ test("Stable versioning promotes only the published RC bytes and never consumes 
         const pending = exactFiles(await readDirectory(root))
         await assert.rejects(
             versionSource({ workspace: root, options: { channel: "stable" }, registries, stage: stageFixture() }),
-            /1000.0.0-rc.2 is pending, publish 1000.0.0 as Stable first/,
+            /No nightly of 1000.0.1/,
         )
         assert.deepEqual(exactFiles(await readDirectory(root)), pending)
-        // Once the RC is released as Stable, a patch goes straight to Stable with no RC and no content baseline
-        const released = { ...registries, inventory: async () => ({ npmVersions: ["1000.0.0-rc.1", "1000.0.0-rc.2", "1000.0.0"] }) }
+        // A patch also needs its own published nightly with matching content
+        const released = { ...registries, inventory: async () => ({ npmVersions: ["1000.0.0-nightly.1", "1000.0.0-nightly.2", "1000.0.0", "1000.0.1-nightly.1"] }) }
         const direct = await versionSource({
             workspace: root,
             options: { channel: "stable" },
             registries: released,
-            stage: stageFixture("export const value = 2\n"),
+            stage: stageFixture(),
         })
         assert.equal(direct.version, "1000.0.1")
         assert.match(changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), "1000.0.1"), /Fix cancellation/)
@@ -370,17 +312,17 @@ test("Stable versioning promotes only the published RC bytes and never consumes 
         await note(root, "stable-break", "major", "Change the stable API")
         await assert.rejects(
             versionSource({ workspace: root, options: { channel: "stable" }, registries: released, stage: stageFixture() }),
-            /1001.0.0 is a new major version or epoch, publish it as a release candidate/,
+            /No nightly of 1001.0.0/,
         )
     } finally {
         await rm(root, { recursive: true })
     }
 })
 
-test("A nightly plans above a pending RC without changing source, and a small release then goes straight to Stable", async () => {
+test("A nightly plans without changing source and qualifies matching Stable content", async () => {
     const root = await fixture("1000.2.3")
     try {
-        let npmVersions = ["1000.2.3", "1000.2.4-rc.0"]
+        let npmVersions = ["1000.2.3", "1000.2.4-nightly.0"]
         const registries = {
             inventory: async () => ({ npmVersions }),
             baseline: async (_name, version) => ({ version, contentFingerprint: contentFingerprint(packages(version)) }),
@@ -398,7 +340,7 @@ test("A nightly plans above a pending RC without changing source, and a small re
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
         await assert.rejects(
             versionSource({ workspace: root, options: { channel: "stable" }, registries, stage: stageFixture() }),
-            /1000.2.4-rc.0 is pending/,
+            /No nightly of 1000.3.0/,
         )
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
         npmVersions = [...npmVersions, "1000.2.4", nightly.version]
@@ -408,7 +350,7 @@ test("A nightly plans above a pending RC without changing source, and a small re
             workspace: root,
             options: { channel: "stable" },
             registries,
-            stage: stageFixture("export const value = 3\n"),
+            stage: stageFixture(),
         })
         assert.equal(stable.version, "1000.3.0")
         assert.match(changelogSection(await readFile(join(root, "sdk/CHANGELOG.md"), "utf8"), "1000.3.0"), /Add a feature/)
@@ -419,25 +361,25 @@ test("A nightly plans above a pending RC without changing source, and a small re
 })
 
 test("A nightly plan reads the source's release state without changing it and rejects inconsistent sources", async () => {
-    const root = await fixture("1000.0.0-rc.1")
+    const root = await fixture("1000.0.0-nightly.1")
     try {
         await write(join(root, ".changeset/pre/first-generation.md"), '---\n"@neontechspace/fluxerly": major\n---\n\nIntroduce the SDK\n')
         await note(root, "preview-fix", "patch", "Fix cancellation")
         const before = exactFiles(await readDirectory(root))
-        const npmVersions = ["1000.0.0-rc.0", "1000.0.0-rc.1", "1000.0.0-nightly.3", "1000.0.0-nightly.20261018.7", "1000.0.0-canary.9"]
+        const npmVersions = ["1000.0.0-nightly.0", "1000.0.0-nightly.1", "1000.0.0-nightly.3", "1000.0.0-nightly.20261018.7", "1000.0.0-canary.9"]
         assert.deepEqual(await readNightlyPlan(root, npmVersions, "20261019", 4), {
-            currentVersion: "1000.0.0-rc.1",
+            currentVersion: "1000.0.0-nightly.1",
             version: "1000.0.0-nightly.20261019.4",
             channel: "nightly",
             line: "1000.0",
         })
         assert.deepEqual(exactFiles(await readDirectory(root)), before)
         await assert.rejects(readNightlyPlan(root, undefined, "20261019", 4), /inventory is unavailable/)
-        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: "1000.0.1" })
+        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "nightly", releaseBase: "1000.0.1" })
         await assert.rejects(readNightlyPlan(root, npmVersions, "20261019", 4), /releaseBase/)
         await rm(join(root, ".changeset/pre.json"))
         await assert.rejects(readNightlyPlan(root, npmVersions, "20261019", 4), /prerelease state disagree/)
-        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "rc", releaseBase: null })
+        await write(join(root, ".changeset/pre.json"), { mode: "pre", tag: "nightly", releaseBase: null })
         await write(join(root, ".changeset/other.md"), '---\n"fluxerly-docs": patch\n---\n\nWebsite change\n')
         await assert.rejects(readNightlyPlan(root, npmVersions, "20261019", 4), /only the SDK package/)
         await rm(join(root, ".changeset/other.md"))
@@ -479,13 +421,31 @@ test("Unreleased notes format pending fragments as changelog sections and omit a
     } finally {
         await rm(root, { recursive: true })
     }
-    const cycle = await fixture("1000.0.0-rc.1")
+    const cycle = await fixture("1000.0.0-nightly.1")
     try {
-        await write(join(cycle, ".changeset/pre/released.md"), '---\n"@neontechspace/fluxerly": minor\n---\n\nAlready in an RC\n')
+        await write(join(cycle, ".changeset/pre/released.md"), '---\n"@neontechspace/fluxerly": minor\n---\n\nArchived target notes\n')
         assert.equal(await unreleasedNotes(cycle), "")
         await note(cycle, "fix", "patch", "Fix cancellation")
         assert.equal(await unreleasedNotes(cycle), "### Patch Changes\n\n- Fix cancellation\n")
     } finally {
         await rm(cycle, { recursive: true })
     }
+})
+
+test("Version source selects a new epoch as a nightly target only with a major note", async (t) => {
+    const root = await fixture("1001.4.2")
+    t.after(() => rm(root, { recursive: true }))
+    await note(root, "epoch", "minor", "Introduce the next epoch")
+    const options = { channel: "nightly", epoch: 2000 }
+    const registries = { inventory: async () => ({ npmVersions: [] }) }
+    const before = exactFiles(await readDirectory(root))
+    await assert.rejects(versionSource({ workspace: root, options, registries, stage: stageFixture() }), /major Changesets/)
+    assert.deepEqual(exactFiles(await readDirectory(root)), before)
+    await note(root, "epoch", "major", "Introduce the next epoch")
+    const result = await versionSource({ workspace: root, options, registries, stage: stageFixture() })
+    assert.equal(result.version, "2000.0.0-nightly.0")
+    assert.equal(JSON.parse(await readFile(join(root, "sdk/package.json"), "utf8")).version, result.version)
+    assert.deepEqual(JSON.parse(await readFile(join(root, ".changeset/pre.json"), "utf8")), {
+        mode: "pre", tag: "nightly", releaseBase: "1001.4.2",
+    })
 })

@@ -6,15 +6,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
+import { contentFingerprint } from "../content.js"
 import { prepareCandidate } from "../candidate.js"
 import { fixture, packages, stageFixture, tarball, write } from "./helpers.js"
 
 const cli = fileURLToPath(new URL("../cli.js", import.meta.url))
 const name = "@neontechspace/fluxerly"
-const version = "1000.0.0-rc.1"
-const nightlyVersion = "1000.0.0-nightly.20261019.2"
-const supersedingVersion = "1000.0.0-nightly.20261019.1"
-const higherVersion = "1000.0.0-nightly.20261019.3"
+const version = "1000.0.0"
+const nightlyVersion = "1000.0.1-nightly.20261019.2"
+const supersedingVersion = "1000.0.1-nightly.20261019.1"
+const higherVersion = "1000.0.1-nightly.20261019.3"
 const npmToken = `npm_${"a".repeat(36)}`
 
 async function candidateFixture({ nightly = false } = {}) {
@@ -34,7 +35,10 @@ async function candidateFixture({ nightly = false } = {}) {
         output: directory,
         docs,
         ...(nightly ? { channel: "nightly", date: "20261019", number: 2 } : {}),
-        registries: { inventory: async () => ({ npmVersions: [] }) },
+        registries: {
+            inventory: async () => ({ npmVersions: nightly ? [] : ["1000.0.0-nightly.1"] }),
+            baseline: async (_name, version) => ({ version, contentFingerprint: contentFingerprint(packages(version)) }),
+        },
         stage: stageFixture(),
     })
     return { root, directory, checksum: candidate.checksum, version: candidateVersion }
@@ -60,7 +64,7 @@ function preload({ trace, published, different, tarball, version, superseding, s
         const integrity = "sha512-" + createHash("sha512").update(served).digest("base64")
         const state = {
             published: ${JSON.stringify(Boolean(published))},
-            tags: ${JSON.stringify(published ? { rc: version } : {})},
+            tags: ${JSON.stringify(published ? { latest: version } : {})},
             requests: [],
             spawns: [],
         }
@@ -78,6 +82,7 @@ function preload({ trace, published, different, tarball, version, superseding, s
                 return new Response(JSON.stringify({ name, version: superseding, dist: supersedingDist }))
             if (url.origin === "https://registry.npmjs.org" && decodeURIComponent(url.pathname.slice(1)) === name) {
                 const versions = state.published ? { [version]: { dist } } : {}
+                if (!version.includes("nightly")) versions["1000.0.0-nightly.1"] = { dist }
                 if (superseding) versions[superseding] = { dist: supersedingDist }
                 return new Response(JSON.stringify({ name, versions, "dist-tags": state.tags }))
             }
@@ -159,7 +164,7 @@ test("npm publication passes only OIDC authentication to its publisher and surfa
         const output = JSON.parse(result.stdout)
         assert.equal(output.directory, candidate.directory)
         assert.equal(output.checksum, candidate.checksum)
-        assert.deepEqual([output.npm, output.complete, output.tag, output.published], ["published", true, "rc", "now"])
+        assert.deepEqual([output.npm, output.complete, output.tag, output.published], ["published", true, "latest", "now"])
         assert.equal(readFileSync(join(candidate.root, "output.txt"), "utf8"), "superseded=false\n")
         assert.deepEqual(result.trace.spawns.length, 1)
         assertNpmOnly(result.trace)
@@ -235,7 +240,7 @@ test("npm verification, status and publication reruns compare served bytes and n
             const output = JSON.parse(result.stdout)
             assert.equal(output.npm, "published")
             if (action === "publish") assert.equal(output.published, "already")
-            assert.deepEqual(output.distTags, { rc: version })
+            assert.deepEqual(output.distTags, { latest: version })
             assert.deepEqual(result.trace.spawns, [])
             assertNpmOnly(result.trace)
             assert.ok(result.trace.requests.some((request) => request.endsWith(".tgz")))

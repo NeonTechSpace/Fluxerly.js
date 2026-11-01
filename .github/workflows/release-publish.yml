@@ -234,12 +234,12 @@ jobs:
           steps: ${{ toJSON(steps) }}
           details: >-
             {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Tag target": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "Preparation run ID": ${{ toJSON(inputs.preparation_run_id) }}}
-          next: Docs preview runs next. Registry publication does not establish Preview delivery
-  docs-preview:
+          next: The website deploy runs next. Registry publication does not establish website delivery
+  website:
     needs: reconcile
     permissions:
       contents: read
       actions: read
-    uses: $/.github/workflows/docs-preview.yml
+    uses: $/.github/workflows/website.yml
     # Without inherited secrets the called job receives an empty website environment token
     secrets: inherit # zizmor: ignore[secrets-inherit]

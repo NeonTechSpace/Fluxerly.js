@@ -32,6 +32,15 @@ export async function guardVersionContent({ plan, registries, stage }) {
     }
 }
 
+// GitHub refuses a release body over 125,000 characters, after npm has already published. Longer notes point to the changelog
+const releaseNotesLimit = 120_000
+const changelogPage = "https://fluxerly.neontechspace.com/docs/changelog/"
+
+/** @param {string} notes */
+export function shortEnoughForGitHub(notes) {
+    return notes.length <= releaseNotesLimit ? notes : `This release has too many changes to list here. Read them all in the [changelog](${changelogPage})\n`
+}
+
 /**
  * Reads the version, channel, line and release notes that a reviewed source commit records
  * @param {string} workspace
@@ -42,8 +51,10 @@ async function reviewedRelease(workspace, line) {
     const version = parseVersion(source.version)
     if (source.name !== "@neontechspace/fluxerly" || source.private !== true || version.major < 1000)
         throw new Error("Prepare a reviewed SDK release version before staging")
+    if (version.channel !== "stable")
+        throw new Error("The source holds a nightly target, not a release. Run Release version PR to make the Stable version")
     if (line && version.line !== line) throw new Error("Requested release line does not match the reviewed version")
-    const notes = changelogSection(await readFile(join(workspace, "sdk", "CHANGELOG.md"), "utf8"), source.version)
+    const notes = shortEnoughForGitHub(changelogSection(await readFile(join(workspace, "sdk", "CHANGELOG.md"), "utf8"), source.version))
     const { readChangesets } = await import("@changesets/read")
     const fragments = await readChangesets(workspace)
     await assertSourceReleaseState(workspace, version, fragments)
@@ -63,14 +74,15 @@ async function nightlyRelease(workspace, registries, date, number) {
     const name = "@neontechspace/fluxerly"
     const plan = await readNightlyPlan(workspace, (await registries.inventory(name)).npmVersions, date, number)
     const changes = await unreleasedNotes(workspace)
-    const notes =
+    const notes = shortEnoughForGitHub(
         "Automatic nightly build of `main`. It can include breaking changes at any time\n\n" +
-        (changes || "No release notes are recorded for these changes yet\n")
+            (changes || "No release notes are recorded for these changes yet\n"),
+    )
     return { name, version: plan.version, channel: plan.channel, line: plan.line, notes, source: plan.currentVersion }
 }
 
 /**
- * Reads the published RC or Stable of a nightly's source version. A nightly with the same bytes is not published, unless
+ * Reads the published Stable of a nightly's source version. A nightly with the same bytes is not published, unless
  * a nightly on the line was published after it, because the nightly tag would then keep serving that newer build
  * @param {{ name: string, channel: string, source?: string }} release
  * @param {{ npmVersions: string[], npmTimes?: Record<string, string> }} inventory
@@ -81,7 +93,7 @@ async function nightlyRelease(workspace, registries, date, number) {
 async function publishedSource(release, inventory, baselineVersion, registries) {
     const { source } = release
     if (release.channel !== "nightly" || source === undefined || !inventory.npmVersions.includes(source)) return null
-    if (!["rc", "stable"].includes(parseVersion(source).channel)) return null
+    if (parseVersion(source).channel !== "stable") return null
     if (baselineVersion !== null) {
         const times = inventory.npmTimes ?? {}
         if (!(Date.parse(times[source] ?? "") > Date.parse(times[baselineVersion] ?? ""))) return null

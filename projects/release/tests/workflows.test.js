@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url"
 import test from "node:test"
 import { parse } from "yaml"
 import { renderSummary } from "../../../.github/actions/summary/summary.mjs"
-import { channels } from "../planning.js"
 
 const repository = fileURLToPath(new URL("../../../", import.meta.url))
 const read = (path) => parse(readFileSync(join(repository, path), "utf8"))
@@ -105,15 +104,15 @@ test("Release tooling runs from the workflow commit and the release App token st
     assert.deepEqual(reconcile.needs, ["inspect", "publish", "smoke"])
 })
 
-test("A superseded nightly publication skips the install checks, the announcement and the docs preview", () => {
+test("A superseded nightly publication skips the install checks, the announcement and the website deploy", () => {
     const { jobs } = workflows["release-publish.yml"]
     assert.deepEqual(Object.keys(jobs.publish.outputs).sort(), ["superseded", "superseded_by"])
     for (const name of Object.keys(jobs.publish.outputs))
         assert.equal(jobs.publish.outputs[name], `\${{ steps.publish.outputs.${name} }}`)
     // Without a status function, the default success requirement still applies to these conditions
     for (const id of ["smoke", "reconcile"]) assert.equal(jobs[id].if, "needs.publish.outputs.superseded != 'true'", id)
-    assert.equal(jobs["docs-preview"].needs, "reconcile")
-    assert.equal(jobs["docs-preview"].if, undefined)
+    assert.equal(jobs.website.needs, "reconcile")
+    assert.equal(jobs.website.if, undefined)
     const summary = jobs.publish.steps.find((step) => step.name === "Summarize npm publication")
     assert.match(summary.with.next, /steps\.publish\.outputs\.superseded == 'true'.*steps\.publish\.outputs\.superseded_by/)
 })
@@ -142,11 +141,11 @@ test("Checkouts drop credentials, scripts avoid expression interpolation and pri
             if (!reviewedCallback) assert.equal(workflow.on[trigger], undefined, `${file} must not use ${trigger}`)
         }
         for (const [id, job] of Object.entries(workflow.jobs))
-            if (`${file}/${id}` !== "release-publish.yml/docs-preview")
+            if (`${file}/${id}` !== "release-publish.yml/website")
                 assert.notEqual(job.secrets, "inherit", `${file}/${id} inherits secrets`)
     }
     // A called workflow receives no website environment secret unless its caller inherits secrets
-    assert.equal(workflows["release-publish.yml"].jobs["docs-preview"].secrets, "inherit")
+    assert.equal(workflows["release-publish.yml"].jobs.website.secrets, "inherit")
 })
 
 test("Contribution callbacks execute only trusted main code with no install or PR artifacts", () => {
@@ -185,10 +184,10 @@ test("Dependency notes execute only reviewed base code and treat the PR branch a
     assert.equal(workflow.concurrency["cancel-in-progress"], false)
 })
 
-test("Nightly preparation runs every six hours and starts only Release publish from main for an unskipped nightly candidate", () => {
+test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped nightly candidate", () => {
     const workflow = workflows["release-prepare.yml"]
     const [schedule] = workflow.on.schedule
-    assert.equal(schedule.cron, "0 0,6,12,18 * * *")
+    assert.equal(schedule.cron, "0 0,12 * * *")
     // GitHub reads schedules as UTC unless a timezone is named, so this keeps the runs at the same Berlin times all year
     assert.equal(schedule.timezone, "Europe/Berlin")
     assert.deepEqual(
@@ -253,14 +252,19 @@ test("Nightly preparation runs every six hours and starts only Release publish f
     ])
 })
 
-test("Version pull requests offer exactly the channels release planning accepts", () => {
-    assert.deepEqual(workflows["release-version.yml"].on.workflow_dispatch.inputs.channel.options, channels)
+test("Version pull requests have no channel input and derive readiness from the epoch", () => {
+    const workflow = workflows["release-version.yml"]
+    assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), ["epoch", "line", "source_ref"])
+    const version = workflow.jobs.version.steps.find((step) => step.id === "version")
+    assert.equal(version.env.RELEASE_CHANNEL, "${{ inputs.epoch && 'nightly' || 'stable' }}")
+    assert.equal(version.env.RELEASE_EPOCH, "${{ inputs.epoch }}")
 })
 
-test("Release and Preview work is serialized with read-only caches and never cancelled mid-run", () => {
-    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "docs-preview.yml"])
+
+test("Release and website work is serialized with read-only caches and never cancelled mid-run", () => {
+    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml"])
         assert.equal(workflows[file]["cache-mode"], "read", `${file} cache access`)
-    for (const file of ["release-prepare.yml", "release-version.yml", "docs-preview.yml"])
+    for (const file of ["release-prepare.yml", "release-version.yml", "website.yml"])
         assert.equal(workflows[file].concurrency["cancel-in-progress"], false, file)
     assertSerialized(workflows["release-publish.yml"].jobs.reconcile.concurrency, "release-publish.yml/reconcile")
     // Manual CI dispatches are never cancelled by a later run

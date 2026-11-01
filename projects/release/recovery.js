@@ -15,6 +15,7 @@ function validateVersion(candidate) {
     const version = parseVersion(candidate.version)
     if (version.major < 1000 || version.channel !== candidate.channel || version.line !== candidate.line)
         throw new Error("Candidate version must match its public release channel and line")
+    if (!["nightly", "stable"].includes(version.channel)) throw new Error(`The ${version.channel} channel is retired and takes no new releases`)
 }
 
 function reviewedTarballChecksum(candidate) {

@@ -6,13 +6,8 @@ on:
         description: Reviewed source branch for the version PR
         required: true
         type: string
-      channel:
-        description: Release readiness channel
-        required: true
-        type: choice
-        options: [rc, stable]
       epoch:
-        description: Optional explicit epoch boundary, such as 2000
+        description: Leave empty to make the Stable version PR. To move to a new epoch instead, enter it, such as 2000. Nightlies then build toward it
         type: string
       line:
         description: Optional expected major.minor release line
@@ -54,7 +49,7 @@ jobs:
         id: version
         working-directory: projects
         env:
-          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_CHANNEL: ${{ inputs.epoch && 'nightly' || 'stable' }}
           RELEASE_EPOCH: ${{ inputs.epoch }}
           RELEASE_LINE: ${{ inputs.line }}
         run: |
@@ -71,7 +66,7 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `skipped=${result.skipped === true}\n`)
           if (result.skipped === true) appendFileSync(process.env.GITHUB_OUTPUT, `reason=${String(result.reason ?? 'No content change').replace(/[\r\n]/g, ' ')}\n`)
           const { version } = JSON.parse(readFileSync('sdk/package.json', 'utf8'))
-          if (!/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version)) throw new Error('Unexpected SDK version format')
+          if (!/^\d+\.\d+\.\d+(?:-nightly\.\d+)?$/.test(version)) throw new Error('Unexpected SDK version format')
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`)
           NODE
       - name: Format the generated SDK changelog
@@ -154,7 +149,7 @@ jobs:
           body: |
             Review the SDK version, changelog and consumed Changesets
             The workflow dispatches Check on this branch, require it to pass before merging
-            After merging, Release prepare runs automatically for the merged source when npm lacks the version
+            For a Stable, Release prepare runs automatically after merging. A new epoch only sets the target for the next nightlies
           add-paths: |
             projects/sdk/package.json
             projects/sdk/CHANGELOG.md

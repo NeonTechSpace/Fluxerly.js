@@ -209,7 +209,7 @@ test("Supersession never bypasses verification of a candidate version that appea
 
 test("A superseded release on the same line recovers without republishing or restoring the channel tag", async () => {
     for (const [version, channel, newer] of [
-        ["1000.0.0-rc.1", "rc", "1000.0.0-rc.2"],
+        ["1000.0.0-nightly.20261001.1", "nightly", "1000.0.0-nightly.20261001.2"],
         ["1000.0.1-nightly.0", "nightly", "1000.0.2-nightly.0"],
         ["1000.0.1", "stable", "1000.0.2"],
     ]) {
@@ -225,7 +225,7 @@ test("A superseded release on the same line recovers without republishing or res
 })
 
 test("A superseded channel tag never bypasses verification of the candidate's served bytes", async () => {
-    const state = setup({ version: "1000.0.0-rc.1", channel: "rc", tags: { rc: "1000.0.0-rc.2" } })
+    const state = setup({ version: "1000.0.0-nightly.20261001.1", channel: "nightly", tags: { nightly: "1000.0.0-nightly.20261001.2" } })
     state.published = true
     state.served = Buffer.from("Unreviewed bytes")
     await assert.rejects(publishCandidate(state.candidate, state), /different bytes/)
@@ -233,13 +233,13 @@ test("A superseded channel tag never bypasses verification of the candidate's se
 })
 
 test("An older published line still requires its staging tag for recovery", async () => {
-    const state = setup({ version: "1000.0.0-rc.1", channel: "rc", tags: { rc: "1000.1.0-rc.2" } })
+    const state = setup({ version: "1000.0.0-nightly.20261001.1", channel: "nightly", tags: { nightly: "1000.1.0-nightly.20261001.2" } })
     state.published = true
-    await assert.rejects(publishCandidate(state.candidate, state), /rc-1000-0 tag does not point to it/)
+    await assert.rejects(publishCandidate(state.candidate, state), /nightly-1000-0 tag does not point to it/)
     assert.equal(state.calls, 0)
     state.tags[stagingTag(state.candidate)] = state.candidate.version
     assert.equal((await publishCandidate(state.candidate, state)).published, "already")
-    assert.equal(state.tags.rc, "1000.1.0-rc.2")
+    assert.equal(state.tags.nightly, "1000.1.0-nightly.20261001.2")
     assert.equal(state.calls, 0)
 })
 
@@ -306,6 +306,7 @@ test("Unsupported versions, inconsistent channels and unbound tarballs fail befo
         [{ version: "1000.0.0-beta.0" }, /numeric SemVer/],
         [{ version: "0.0.0", channel: "stable", line: "0.0" }, /public release channel and line/],
         [{ channel: "rc" }, /public release channel and line/],
+        [{ version: "1000.0.0-rc.0", channel: "rc" }, /retired/],
         [{ line: "1000.1" }, /public release channel and line/],
         [{ artifacts: {} }, /does not bind a reviewed npm tarball/],
     ]) {
@@ -314,7 +315,7 @@ test("Unsupported versions, inconsistent channels and unbound tarballs fail befo
         assert.equal(state.reads, 0)
         assert.equal(state.calls, 0)
     }
-    for (const [version, channel] of [["1000.0.0-rc.0", "rc"], ["1000.0.0", "stable"]]) {
+    for (const [version, channel] of [["1000.0.0-nightly.20261001.1", "nightly"], ["1000.0.0", "stable"]]) {
         const state = setup({ version, channel })
         assert.equal((await publishCandidate(state.candidate, state)).complete, true)
     }

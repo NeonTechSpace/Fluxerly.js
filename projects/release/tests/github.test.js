@@ -679,3 +679,9 @@ test("A conflicting preexisting tag is rejected before creating any release", as
     await assert.rejects(reconcileRelease(f.candidate, f.directory, f.github), /conflicts/)
     assert.deepEqual(f.mutations, [])
 })
+
+test("A nightly target push skips release preparation before registry inspection", async () => {
+    const result = await releaseTrigger({ before: "b".repeat(40), after: "a".repeat(40), readVersion: async () => "2000.0.0-nightly.0", registries: { inventory: () => assert.fail("Must not inspect registries") } })
+    assert.equal(result.prepare, false)
+    assert.equal(result.version, "2000.0.0-nightly.0")
+})
