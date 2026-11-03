@@ -20,7 +20,7 @@ import { wsTarget } from "../support/ws-redirect.js"
 import { sdkClock } from "../support/client-clock.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
-const hostedGateway = "wss://gateway.fluxer.app/?v=1&encoding=json"
+const hostedGateway = "wss://gateway.fluxer.com/?v=1&encoding=json"
 function sinkLogs(throws = false) {
     const records: LogRecord[] = []
     const sink = (record: LogRecord) => {
@@ -89,20 +89,15 @@ test("default lifecycle records are on by default, client-local and follow the c
         attempt: 1,
         fields: { mode: "identify" },
     })
-    expect(info.records[0]!.message).toMatch(/fluxer\.app/)
+    expect(info.records[0]!.message).toMatch(/fluxer\.com/)
     for (const record of info.records) expect(Object.isFrozen(record)).toBe(true)
 })
 
 test.each([
-    { guilds: 2, level: "info", message: "Connected to Fluxer as Fixture Bot in 2 communities" },
-    { guilds: 1, level: "info", message: "Connected to Fluxer as Fixture Bot in 1 community" },
-    {
-        guilds: 0,
-        level: "warn",
-        message:
-            "Connected to Fluxer as Fixture Bot, but the bot is not in any community yet. Invite it by opening https://fluxer.app/oauth2/authorize?client_id=1234567890123456789&scope=bot",
-    },
-])("the connected record names the bot and its $guilds communities at $level", async ({ guilds, level, message }) => {
+    { guilds: 2, level: "info" },
+    { guilds: 1, level: "info" },
+    { guilds: 0, level: "warn" },
+])("the connected record names the bot and its $guilds communities at $level", async ({ guilds, level }) => {
     await fixture({
         ready: () => ({
             user: { id: "1234567890123456789", username: "Fixture Bot" },
@@ -112,9 +107,16 @@ test.each([
     const logs = sinkLogs()
     const client = defaultApi(undefined, { sink: logs.sink })
     expect((await client.connect()).isOk()).toBe(true)
-    expect(logs.records.filter((record) => record.code === "lifecycle.connected")).toEqual([
-        expect.objectContaining({ level, category: "lifecycle", message, fields: { communities: guilds, shards: 1 } }),
+    const connected = logs.records.filter((record) => record.code === "lifecycle.connected")
+    expect(connected).toEqual([
+        expect.objectContaining({ level, category: "lifecycle", fields: { communities: guilds, shards: 1 } }),
     ])
+    expect(connected[0]!.message).toContain("Fixture Bot")
+    if (guilds > 0) return
+    // A bot in no community gets a link that invites it with the bot scope
+    const link = new URL(connected[0]!.message.match(/https:\/\/\S+/)![0])
+    expect(link.searchParams.get("client_id")).toBe("1234567890123456789")
+    expect(link.searchParams.get("scope")).toBe("bot")
 })
 
 test("default output needs no custom logger", async () => {
@@ -234,7 +236,8 @@ test.each(modes)(
                     ).toHaveLength(count),
                 { interval: 5 },
             )
-        server.sockets[0]!.close(4000, "private-close-sentinel")
+        // Fluxer's close reasons are fixed text worth logging, and a credential inside one is still masked
+        server.sockets[0]!.close(4000, "Session unavailable fixture-only-not-a-credential")
         const lost = await recorded("lifecycle.connectionLost")
         expect(lost).toMatchObject({
             closeCode: 4000,
@@ -255,13 +258,9 @@ test.each(modes)(
         await clock.advance(Number(retry.delayMs))
         await ready("identify", 2)
         const serialized = JSON.stringify(mode === "default" ? kept.records : captured.entries)
-        for (const privateValue of [
-            "fixture-only-not-a-credential",
-            "fixture-session",
-            "private-close-sentinel",
-            "gateway.fluxer.app",
-        ])
+        for (const privateValue of ["fixture-only-not-a-credential", "fixture-session", "gateway.fluxer.com"])
             expect(serialized).not.toContain(privateValue)
+        expect(serialized).toContain("(Fluxer's reason: Session unavailable ")
         expect(client.diagnostics().counters).toMatchObject({ reconnects: 3, resumes: 1 })
         // Every failing output is counted, but only the first is reported on standard error
         expect(client.diagnostics().counters.sinkFailures).toBeGreaterThan(1)
@@ -463,7 +462,7 @@ async function fixture(
     vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string, init: RequestInit) => {
-            expect(url).toBe("https://fluxer.app/.well-known/fluxer")
+            expect(url).toBe("https://fluxer.com/.well-known/fluxer")
             expect(init).toMatchObject({ method: "GET", redirect: "manual" })
             discoveryRequests++
             if (options.httpStatus === 429)

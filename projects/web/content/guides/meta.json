@@ -8,6 +8,7 @@
                 "quick-start",
                 "small-bot",
                 "core-concepts",
+                "different-patterns",
                 "examples"
             ]
         },
@@ -23,12 +24,14 @@
                 "guilds-and-permissions",
                 "history-and-cache",
                 "emoji-and-stickers",
-                "webhooks-and-oauth"
+                "webhooks-and-oauth",
+                "raw-requests-and-events"
             ]
         },
         {
             "title": "Running in production",
             "items": [
+                "production-checklist",
                 "configuration",
                 "logging",
                 "reliability",
@@ -62,6 +65,10 @@
                 {
                     "title": "Changelog",
                     "href": "/docs/changelog/"
+                },
+                {
+                    "title": "Docs for AI Tools",
+                    "href": "/docs/llms.txt"
                 }
             ]
         }

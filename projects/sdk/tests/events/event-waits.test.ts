@@ -183,6 +183,13 @@ test("event waits retain typed timeout and safe filter failures", async () => {
     const failure = await failed
     expect(failure.isErr() && failure.error).toMatchObject({ _tag: "EventWaitError", reason: "filter" })
     expect(JSON.stringify(failure)).toContain("private event-wait filter")
+    // The thrown value is kept as the cause, while a non-boolean result below keeps nothing
+    expect(failure.isErr() && failure.error.cause).toMatchObject({ message: "private event-wait filter" })
+    const nonBoolean = defaultApi.waitFor("messageCreate", { timeoutMs: 1_000, filter: () => "yes" as never })
+    server.dispatch("non-boolean", "201")
+    const notBoolean = await nonBoolean
+    expect(notBoolean.isErr() && notBoolean.error).toMatchObject({ _tag: "EventWaitError", reason: "filter" })
+    expect(notBoolean.isErr() && notBoolean.error.cause).toBeUndefined()
 
     const scope = Scope.makeUnsafe()
     const native = await Effect.runPromise(

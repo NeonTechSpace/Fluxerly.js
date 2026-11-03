@@ -167,10 +167,24 @@ export function detectPackageManager(userAgent: string | undefined): PackageMana
 
 // The test and start scripts have a short form in every manager, while any other script needs the run command
 const managers = {
-    npm: { add: "install", exact: "--save-exact", dev: "--save-dev", run: "npm", check: "npm run check" },
-    pnpm: { add: "add", exact: "--save-exact", dev: "--save-dev", run: "pnpm", check: "pnpm run check" },
+    npm: {
+        add: "install",
+        exact: "--save-exact",
+        dev: "--save-dev",
+        run: "npm",
+        check: "npm run check",
+        watch: "npm run dev",
+    },
+    pnpm: {
+        add: "add",
+        exact: "--save-exact",
+        dev: "--save-dev",
+        run: "pnpm",
+        check: "pnpm run check",
+        watch: "pnpm dev",
+    },
     // bun test is Bun's own test runner, so the package's scripts run through bun run
-    bun: { add: "add", exact: "--exact", dev: "--dev", run: "bun run", check: "bun run check" },
+    bun: { add: "add", exact: "--exact", dev: "--dev", run: "bun run", check: "bun run check", watch: "bun run dev" },
 }
 const installed = {
     js: "the SDK",
@@ -235,7 +249,7 @@ export interface InitEnvironment extends InitStreams {
 }
 
 function nextSteps(manager: PackageManager, template: StarterTemplate, install?: readonly (readonly string[])[]) {
-    const { run, check } = managers[manager]
+    const { run, check, watch } = managers[manager]
     const steps = [
         ...(install
             ? [[`Install ${installed[template]}:`, ...install.map((args) => `   ${args.join(" ")}`)].join("\n")]
@@ -243,7 +257,7 @@ function nextSteps(manager: PackageManager, template: StarterTemplate, install?:
         `Set FLUXER_BOT_TOKEN in .env to the bot's token and invite the bot to a community. Both are explained at\n   ${createBotGuide}`,
         `Check the bot without a token: ${run} test`,
         ...(template === "js" ? [] : [`Check the types: ${check}`]),
-        `Start the bot: ${run} start`,
+        `Start the bot: ${run} start\n   While changing the bot, ${watch} restarts it after each saved change`,
     ]
     return ["", "Next steps:", ...steps.map((step, index) => `${index + 1}. ${step}`)].join("\n")
 }
@@ -263,9 +277,11 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
         return 1
     }
 
+    // The manager is known before any file is written, so the starter's AGENTS.md names its refresh command
+    const manager = detectPackageManager(environment.userAgent)
     let result: StarterResult
     try {
-        result = writeStarterProject(project, packageRoot, template)
+        result = writeStarterProject(project, packageRoot, template, manager)
     } catch (error) {
         if (!(error instanceof StarterConflictError)) throw error
         errorOutput.write(
@@ -283,7 +299,6 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
                 : "Kept the existing .gitignore, which already ignores node_modules and .env",
         )
 
-    const manager = detectPackageManager(environment.userAgent)
     const release = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as SdkRelease
     const commands = installCommands(manager, template, release)
     if (!parsed.install) {

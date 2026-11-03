@@ -96,7 +96,7 @@ test.each(modes)("%s fetches filtered pages through the public client without re
         expect(requests).toHaveLength(2)
         for (const request of requests) {
             expect(request.method).toBe("GET")
-            expect(request.url.pathname).toBe("/v1/guilds/20/audit-logs")
+            expect(request.url.pathname).toBe("/api/v1/guilds/20/audit-logs")
             expect(Object.fromEntries(request.url.searchParams)).toEqual({ limit: "50", user_id: "30" })
         }
     } finally {

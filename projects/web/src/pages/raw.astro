@@ -1,0 +1,43 @@
+---
+import CodePanel from "../components/features/CodePanel.astro"
+import FeaturePage from "../components/features/FeaturePage.astro"
+import Scene from "../components/features/Scene.astro"
+import { guide } from "../lib/links"
+import restCall from "../components/features/snippets/rest-call.ts.txt?raw"
+import restRequest from "../components/features/snippets/rest-request.ts.txt?raw"
+import rawEvent from "../components/features/snippets/raw-event.ts.txt?raw"
+
+const accent = "cyan"
+---
+
+<FeaturePage slug="raw" companion="api-book" companionAlt="A closed book with a code sign on its cover and a ribbon bookmark">
+    <Fragment slot="title">Raw Access, <span class="hi">Still Typed</span></Fragment>
+
+    <Scene id="rest-call" step={1} side="left" {accent} guide={guide("raw-requests-and-events", "call-a-route-without-a-method")} guideLabel="Call a Route Without a Method">
+        <Fragment slot="title">Every Route That Takes a Bot Token</Fragment>
+        <Fragment slot="text">
+            <p>The <code class="inline-code">client.rest.call</code> method reaches a route of Fluxer's API that has no named method. The route is written the way Fluxer's documentation writes it, as its method and path template, and the editor offers every route that accepts a bot token</p>
+            <p>The <code class="inline-code">params</code>, <code class="inline-code">query</code> and <code class="inline-code">body</code> take Fluxer's own field names, and the response body has the route's type. A misspelled field, a missing required field or a route that is not listed fails to compile. The types come from Fluxer's OpenAPI document at the Fluxer commit the SDK pins</p>
+        </Fragment>
+        <Fragment slot="point">The types check what the bot sends, not what Fluxer answers</Fragment>
+        <CodePanel file="TypeScript" label="Read a channel's latest messages through a typed route" code={restCall} />
+    </Scene>
+
+    <Scene id="rest-request" step={2} side="right" {accent} guide={guide("raw-requests-and-events", "routes-newer-than-the-sdk")} guideLabel="Routes Newer Than the SDK">
+        <Fragment slot="title">Routes Newer Than the SDK</Fragment>
+        <Fragment slot="text">
+            <p>The <code class="inline-code">client.rest.request</code> method sends a route or field Fluxer added after the pinned commit, or a route that needs no token, such as this public application read. Its type argument only names the expected body, so each field is checked before it is used</p>
+            <p>Both methods send through the same queue, rate limits, deadline and logging as the named methods. A non-2xx answer fails the Result with <code class="inline-code">RestRequestError</code>, and invalid input fails before anything is sent</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Send an untyped route, naming the body it should return" code={restRequest} />
+    </Scene>
+
+    <Scene id="raw-events" step={3} side="left" {accent} guide={guide("raw-requests-and-events", "read-an-event-without-a-type")} guideLabel="Read an Event Without a Type">
+        <Fragment slot="title">Gateway Events in Fluxer's Own Form</Fragment>
+        <Fragment slot="text">
+            <p>Each gateway event the bot receives also arrives as the <code class="inline-code">raw</code> event, as Fluxer sent it. When <code class="inline-code">documented</code> is true, comparing <code class="inline-code">t</code> with a dispatch type gives <code class="inline-code">d</code> that type's documented fields, so a misspelled field fails to compile</p>
+            <p>The types come from Fluxer's gateway documentation and check nothing at runtime. A dispatch type the documentation does not describe still arrives, with <code class="inline-code">documented: false</code> and a <code class="inline-code">d</code> to validate</p>
+        </Fragment>
+        <CodePanel file="TypeScript" label="Notice when the bot's own thread membership changes" code={rawEvent} />
+    </Scene>
+</FeaturePage>

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -57,7 +58,10 @@ test.each(starters)(
         expect(manifest.type).toBe("module")
         // Node.js runs the bot file itself, so neither script needs a build step
         expect(manifest.scripts.start.split(" ")).toEqual(["node", expect.stringMatching(/^--env-file/), bot])
-        expect(manifest.scripts.test).toBe("node --test")
+        // The dev script restarts the same bot file with the same .env after each saved change
+        expect(manifest.scripts.dev).toBe(`node --watch --env-file-if-exists=.env ${bot}`)
+        // Node.js has no default test timeout, and without forcing the exit a timed-out test keeps the process running
+        expect(manifest.scripts.test).toBe("node --test --test-timeout=30000 --test-force-exit")
         // Node.js removes types without checking them, so only a TypeScript starter has a script that runs the compiler
         expect(manifest.scripts.check).toBe(template === "js" ? undefined : "tsc")
         expect(manifest).not.toHaveProperty("dependencies")
@@ -146,6 +150,58 @@ test.each([
     expect(result.ignored).toEqual(added)
     expect(read(project, ".gitignore")).toBe(after)
     expect(readdirSync(project)).toContain("bot.js")
+})
+
+/** Ask Git itself, ignoring this machine's settings, whether a project's rules ignore a path */
+function gitIgnores(project: string, path: string) {
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_")))
+    const git = (...args: string[]) =>
+        spawnSync("git", ["-c", `core.excludesFile=${join(project, "no-global-ignores")}`, ...args], {
+            cwd: project,
+            env: { ...environment, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(project, "no-global-config") },
+            encoding: "utf8",
+        })
+    expect(git("init", "--quiet", "--template=").status).toBe(0)
+    return git("check-ignore", "--no-index", path).status === 0
+}
+
+test.each([
+    ["negates the rule", ".env\nnode_modules\n!.env\n"],
+    ["negates the rule with a leading slash", ".env\nnode_modules\n!/.env\n"],
+    ["negates with a wildcard for .env files", ".env\nnode_modules\n!.env*\n"],
+    ["negates with a wildcard for everything", "node_modules\n.env\n!*\n"],
+    ["writes the rule with a leading space, which is another pattern for Git", " .env\nnode_modules\n"],
+    ["uses Windows line endings", "node_modules\r\n.env\r\n!.env\r\n"],
+    ["negates the rule with a backslash escape", ".env\nnode_modules\n!\\.env\n"],
+])("init ends with .env ignored when an existing .gitignore %s", (_, before) => {
+    const project = temporary()
+    writeFileSync(join(project, ".gitignore"), before)
+    const { ignored } = writeStarterProject(project, sdk)
+    expect(ignored).toContain(".env")
+    expect(read(project, ".gitignore").startsWith(before)).toBe(true)
+    expect(gitIgnores(project, ".env")).toBe(true)
+})
+
+test.each([
+    ["as a folder", ".env\nnode_modules\n!node_modules/\n"],
+    ["with a backslash escape", ".env\nnode_modules\n!node\\_modules\n"],
+])("init ends with node_modules ignored when an existing .gitignore negates it %s", (_, before) => {
+    const project = temporary()
+    writeFileSync(join(project, ".gitignore"), before)
+    expect(writeStarterProject(project, sdk).ignored).toEqual(["node_modules"])
+    expect(gitIgnores(project, "node_modules/x")).toBe(true)
+})
+
+test.each([
+    ["negates another path, as many projects do for the template", ".env\nnode_modules\n!.env.example\n"],
+    ["repeats the rule after its negation", "node_modules\n!.env\n.env\n"],
+    ["has trailing spaces, which Git ignores", ".env  \nnode_modules\t\n"],
+])("an existing .gitignore that %s already ignores .env and stays unchanged", (_, before) => {
+    const project = temporary()
+    writeFileSync(join(project, ".gitignore"), before)
+    expect(writeStarterProject(project, sdk).ignored).toEqual([])
+    expect(read(project, ".gitignore")).toBe(before)
+    expect(gitIgnores(project, ".env")).toBe(true)
 })
 
 test("an existing .env is not listed when other files conflict", () => {

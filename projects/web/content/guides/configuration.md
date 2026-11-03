@@ -40,7 +40,9 @@ await runBot({
 })
 ```
 
-Invalid options throw `ConfigurationError` from `runBot` before anything connects. If the other options are valid, a missing or empty token instead returns an Err containing `ConfigurationError` and is reported as a failed run. The error identifies the invalid setting. A misspelled option name gets a suggestion when it is close enough to a known name. A failure that stops the running bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the process ends with a failure status. Set `reportFailure: false` only when the application handles the returned [Result](/docs/glossary/#result) and the exit status itself
+Invalid options throw `ConfigurationError` from `runBot` before anything connects. If the other options are valid, a missing or empty token instead returns an Err containing `ConfigurationError` and is reported as a failed run. The error identifies the invalid setting. A misspelled option name gets a suggestion when it is close enough to a known name
+
+A failure that stops the running bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the process ends with a failure status. Set `reportFailure: false` only when the application handles the returned [Result](/docs/glossary/#result) and the exit status itself
 
 ## Options at a glance
 
@@ -76,22 +78,22 @@ The SDK removes surrounding spaces and one pair of matching quotes, which `.env`
 
 ## Events and the gateway
 
-Fluxer's [gateway](/docs/glossary/#gateway) has no [intents](/docs/glossary/#intent) setting to request. Each connection receives every event type unless `gateway.ignoredEvents` lists it, so registering a handler is enough to receive its event
+Fluxer's [gateway](/docs/glossary/#gateway) has no [intents](/docs/glossary/#intent) setting to request. Fluxer filters events by permissions, visibility, subscriptions and shard, and `gateway.ignoredEvents` removes more. Register handlers for the events the bot is allowed and subscribed to receive. Presence updates for chosen members need [`presence.setMembers`](/docs/api/js-ts/client-and-lifecycle/#presence-setmembers)
 
 Setting `ignoredEvents: "auto"` asks Fluxer to skip supported event types that no registered handler, enabled cache or SDK feature needs, which saves bandwidth and decoding on busy bots. The list is computed when the bot connects, so register handlers before that, as `runBot` does
 
 <details>
 <summary>Limits of automatic event filtering</summary>
 
-A handler registered after the bot connected receives the skipped types only after that shard starts a new session. A connection that resumes its session keeps the old list.
-A `raw` event subscriber turns automatic filtering off.
-Enabled cache categories keep the event types they need, so large caches reduce the savings.
-Fluxer still delivers a message that mentions the bot, @here or @everyone.
-An explicit array of upper-case dispatch names, such as `["TYPING_START"]`, is also accepted. The [`GatewayOptions`](/docs/api/js-ts/options/#gatewayoptions) reference lists the names that cannot be skipped
+A handler registered after the bot connected receives the skipped types only after that shard starts a new session. A connection that resumes its session keeps the old list. A `raw` event subscriber turns automatic filtering off
+
+Enabled cache categories keep the event types they need, so large caches reduce the savings. Fluxer still delivers a message that mentions the bot, @here or @everyone. An explicit array of upper-case dispatch names, such as `["TYPING_START"]`, is also accepted. The [`GatewayOptions`](/docs/api/js-ts/options/#gatewayoptions) reference lists the names that cannot be skipped
 
 </details>
 
-Each event handler has a small queue. By default `messageCreate` runs up to eight handlers at a time and other events one at a time, and a full queue drops the oldest waiting event with a Warn record instead of stopping the bot. Pass `{ handler, concurrency, maxPendingMessages, overflow }` instead of a function to change this for one event. The `overflow` setting is `"dropOldest"` by default, `"dropNewest"` to drop the arriving event instead, or `"stop"` to close that handler's subscription. See [bot lifetime](/docs/starter-lifetime/) for how the runner treats handlers
+Each event handler has a small queue. By default `messageCreate` runs up to eight handlers at a time and other events one at a time, and a full queue drops the oldest waiting event with a Warn record instead of stopping the bot
+
+Pass `{ handler, concurrency, maxPendingMessages, maxPendingBytes, overflow }` instead of a function to change this for one event. The `overflow` setting is `"dropOldest"` by default, `"dropNewest"` to drop the arriving event instead, or `"stop"` to close that handler's subscription. See [bot lifetime](/docs/starter-lifetime/) for how the runner treats handlers
 
 Running several handlers at a time can finish events out of order. The `partition` setting keeps related events in order: With `partition: "channel"`, the messages of one channel run one after another while other channels run beside them, and `partition: "guild"` does the same for each community, which the API calls a guild. A partitioned handler runs up to eight events at a time unless `concurrency` says otherwise
 
@@ -105,7 +107,9 @@ Pass `onError` to send handler and command failures to an error tracker. Each [`
 
 ## Cache
 
-The client keeps no [cache](/docs/glossary/#cache) unless asked. Enable a category with `true`, or pass `{ maxEntries, maxBytes, maxAgeMs }` to bound it. The `maxAgeMs` setting also accepts a function that receives each snapshot and returns its age limit, `null` for no limit or `0` to skip keeping it, so a category can keep only what the bot needs. Caching communities, channels, roles and members lets permission checks such as `guards.requirePermissions` answer without extra requests. Enabled community, role, channel, emoji and sticker caches fill from the community data Fluxer sends when the bot connects. The [history and cache guide](/docs/history-and-cache/) explains what a cached value can and cannot prove
+The client keeps no [cache](/docs/glossary/#cache) unless asked. Enable a category with `true`, or pass `{ maxEntries, maxBytes, maxAgeMs }` to bound it. The `maxAgeMs` setting also accepts a function that receives each snapshot and returns its age limit, `null` for no limit or `0` to skip keeping it, so a category can keep only what the bot needs
+
+Caching communities, channels, roles and members lets permission checks such as `guards.requirePermissions` answer without extra requests. Enabled community, role, channel, emoji and sticker caches fill from the community data Fluxer sends when the bot connects. The [history and cache guide](/docs/history-and-cache/) explains what a cached value can and cannot prove
 
 Each category keeps at most 1,000 entries and 4 MiB by default, and messages 1,000 entries and 8 MiB. The limits apply to the whole client, not per community. When a category is full, its least recently used entry is removed, so lookups start to miss. Size each category for the communities this process serves:
 
@@ -131,17 +135,19 @@ export function logCacheUsage(client: Client) {
 <details>
 <summary>When cached entries are cleared</summary>
 
-After a lost connection, community, member, role, channel, emoji and sticker entries stay when the session resumes, except cached threads, which are removed. These entries are cleared when the shard has to start a new session.
-A shard's first session clears them too, so entries read before connecting do not outlast the first READY.
-A lost connection clears the message, user and direct-message entries it could have changed, even when the session resumes.
-A process that resumes a session saved before a restart refills the community, role and channel caches through REST once every shard is ready, unless `sharding.refillCaches` is `false`.
-Byte counts measure the stored JSON, not process memory
+After a lost connection, community, member, role, channel, emoji and sticker entries stay when the session resumes, except cached threads, which are removed. These entries are cleared when the shard has to start a new session. A shard's first session clears them too, so entries read before connecting do not outlast the first READY
+
+A lost connection clears the message, user and direct-message entries it could have changed, even when the session resumes. A process that resumes a session saved before a restart refills the community, role and channel caches through REST once every shard is ready, unless `sharding.refillCaches` is `false`. Byte counts measure the stored JSON, not process memory
 
 </details>
 
 ## Connection and requests
 
-The defaults suit most bots: Startup may take 30 seconds with up to 3 attempts per [shard](/docs/glossary/#shard). A process with several shards starts them one second apart and adds that second to the deadline for each shard after the first. After that, a lost connection is retried with a growing random delay, capped at 30 seconds unless Fluxer asks for a longer wait, and transient failures never make the bot give up. The `connection` option changes those values. The `rest` option sets how many API requests run at once (by default 4 for each shard, up to 64), how many may wait (default 256) and the default deadline for each request (30 seconds). When the queue is full, a new request fails with reason `busy` and the SDK logs `rest.busy` at Warn. Raising `rest.concurrency` does not raise Fluxer's [rate limits](/docs/glossary/#rate-limit), which still apply per route
+The defaults suit most bots: Startup may take 30 seconds with up to 3 attempts per [shard](/docs/glossary/#shard). A process with several shards starts them one second apart and adds that second to the deadline for each shard after the first. When Fluxer rate-limits instance discovery with a wait, startup waits at least that long and tries again without using up an attempt, until the startup deadline. Discovery sends no further request during the wait
+
+After that, a lost connection is retried with a growing random delay, capped at 30 seconds unless Fluxer asks for a longer wait, and transient failures never make the bot give up. The `connection` option changes those values
+
+The `rest` option sets how many API requests run at once (by default 4 for each shard, up to 64), how many may wait (default 256) and the default deadline for each request (30 seconds). When the queue is full, a new request fails with reason `busy` and the SDK logs `rest.busy` at Warn. Raising `rest.concurrency` does not raise Fluxer's [rate limits](/docs/glossary/#rate-limit), which still apply per route
 
 The `transport` option is for advanced cases, such as sending traffic through a proxy or recording requests. The [testing entry point](/docs/testing/) uses it to connect a real client to an in-memory Fluxer
 

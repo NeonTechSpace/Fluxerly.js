@@ -1,5 +1,5 @@
 // Tests the docs' hover peeks: the index built from the reference model, the code catalogue and the glossary, the
-// curated meanings against the guides they quote, and the recogniser through the same Markdown pipeline the guides use
+// curated meanings' links to the sections they cite, and the recogniser through the same Markdown pipeline the guides use
 import assert from "node:assert/strict"
 import { readFileSync, readdirSync } from "node:fs"
 import { test } from "node:test"
@@ -41,6 +41,27 @@ async function render(markdown: string, page: string | undefined = "messages", s
     return { html: code.replaceAll("<wbr>", ""), marks: [...marks] }
 }
 
+// A published version's guides sit in a snapshot's own folder, which is where the public site reads them from
+const snapshotGuide = (page: string) => new URL(`../.astro/public-x/content/1000.0.0-nightly.1/guides/${page}.md`, import.meta.url)
+const hrefOf = (html: string, name: string) => new RegExp(`href="([^"]+)"[^>]*>(?:<code[^>]*>)?${name}\\b`).exec(html)?.[1]
+
+test("a guide in a published version's snapshot looks names up in its own entry point", async () => {
+    const { code } = await processor.render("Call `runBot` here", { fileURL: snapshotGuide("effect-first-bot") })
+    assert.match(hrefOf(code, "runBot") ?? "", /^\/docs\/api\/effect\//)
+})
+
+test("the glossary in a published version's snapshot does not mark its own terms", async () => {
+    marks = []
+    await processor.render(guides.glossary!, { fileURL: snapshotGuide("glossary") })
+    assert.deepEqual(marks.filter((mark) => mark.kind === "term"), [])
+})
+
+test("a reference comment looks names up in its page's entry point first", async () => {
+    const lookUp = async (entry?: string) => hrefOf((await processor.render("Call `runBot` here", { frontmatter: entry ? { peekEntry: entry } : {} })).code, "runBot") ?? ""
+    assert.match(await lookUp("effect"), /^\/docs\/api\/effect\//)
+    assert.match(await lookUp(), /^\/docs\/api\/js-ts\//)
+})
+
 test("a declaration's peek shows its signature with type names as links, and its summary's first sentence", () => {
     const commands = index.entries["/docs/api/js-ts/commands/#commands"]
     assert.ok(commands)
@@ -66,21 +87,48 @@ test("an error code of a family carries its reason's meaning and links to the fa
     assert.ok(index.entries["/docs/codes/#log-lifecycle-connectionended"]?.lv?.length)
 })
 
-test("every curated meaning still says what its sources quote", () => {
+// Only the cited sections are checked. Their wording is reviewed, not frozen, so rewording a guide passes
+test("every curated meaning cites a guide heading, reference declaration or codes reason that exists", () => {
     for (const meaning of [...httpStatuses, ...closeCodes, ...logLevels])
         for (const source of meaning.sources) {
             if ("guide" in source) {
                 const guide = guides[source.guide]
                 assert.ok(guide, `${meaning.key} cites a missing guide ${source.guide}`)
-                assert.ok(guide.includes(source.quote), `${meaning.key}: ${source.guide} no longer says "${source.quote}"`)
                 const anchors = [...guide.matchAll(/^#{2,3} +(.+)$/gm)].map((heading) => slug(heading[1]!))
                 if (source.anchor) assert.ok(anchors.includes(source.anchor), `${meaning.key}: ${source.guide} has no heading #${source.anchor}`)
             } else if ("codes" in source) {
-                assert.ok(codes.reasons.some((reason: { meaning: string }) => reason.meaning.includes(source.quote)), `${meaning.key}: the codes no longer say "${source.quote}"`)
+                const anchors = codes.reasons.map((reason: { reason: string }) => `reason-${reason.reason.toLowerCase()}`)
+                assert.ok(anchors.includes(source.codes), `${meaning.key}: the codes page has no reason #${source.codes}`)
             } else {
-                assert.ok(JSON.stringify(model).includes(source.quote), `${meaning.key}: the reference no longer says "${source.quote}"`)
+                const [name, member] = source.api.split(".")
+                const node = terms.declarations.get(name!)?.get(terms.entries[0]!)
+                assert.ok(member ? node?.members.get(member) : node, `${meaning.key}: the reference has no ${source.api}`)
             }
         }
+})
+
+// A request other than GET may opt into GET's retries. Unnamed, a reader takes it for one that is never sent again
+test("every request that retries like a GET is named in the retry rule and the 5xx peek", () => {
+    const sdk = new URL("../../sdk/src/", import.meta.url)
+    // The SDK function that builds the request, and the public method that sends it
+    const publicName: Record<string, string> = { threadPostData: "threads.fetchPostData" }
+    const rule = guides.reliability!.split(/\n\s*\n/).find((paragraph) => paragraph.includes("is retried at most twice"))
+    assert.ok(rule, "the reliability guide has no retry rule")
+    const peek = httpStatuses.find((meaning) => meaning.status === 503)!.meaning
+    const files = readdirSync(sdk, { recursive: true }).filter((file) => String(file).endsWith(".ts"))
+    let seen = 0
+    for (const file of files) {
+        const source = readFileSync(new URL(String(file), sdk), "utf8")
+        for (const match of source.matchAll(/retryRead: true/g)) {
+            seen++
+            const builder = [...source.slice(0, match.index).matchAll(/function (\w+)/g)].at(-1)?.[1]
+            const name = publicName[builder!]
+            assert.ok(name, `${file}: ${builder} retries like a GET. Name its public method in the reliability guide's retry rule and here`)
+            assert.ok(rule.includes(name), `the reliability guide's retry rule does not name ${name}`)
+            assert.ok(peek.includes(name), `the 5xx peek does not name ${name}`)
+        }
+    }
+    assert.ok(seen > 0, "no request in the SDK retries like a GET, so this list is out of date")
 })
 
 test("a name is marked in full at its first mention in a section, and quietly after that", async () => {
@@ -113,6 +161,13 @@ test("HTTP statuses and close codes become chips that peek their meaning", async
         ["http-401", "http-403", "http-404", "close-4004", "close-4011"],
     )
     assert.match(html, /HTTP <a class="peek peek-code" href="\/docs\/troubleshooting\/#a-webhook-or-oauth-call-fails-with-http-401" data-peek="http-401"><code>401<\/code><\/a> or/)
+})
+
+test("every HTTP 400 shares one card, so it links to reading the error rather than to one cause", async () => {
+    // Discovery that is turned off is one of several causes that have nothing to do with two-factor authentication
+    const { html, marks } = await render("Searching fails with HTTP 400 and details.providerCode `DISCOVERY_DISABLED`")
+    assert.deepEqual(marks.filter((mark) => mark.kind === "code").map((mark) => mark.key), ["http-400"])
+    assert.match(html, /href="\/docs\/reliability\/#read-an-sdk-error" data-peek="http-400"/)
 })
 
 test("a bare four-digit number is a close code only where the paragraph speaks of closing", async () => {
@@ -163,6 +218,11 @@ test("a lone lowercase word is an option only where the sentence makes it one", 
         option.marks.map((mark) => mark.key),
         ["/docs/api/js-ts/options/#clientoptions-cache", "/docs/api/js-ts/options/#clientoptions-sharding"],
     )
+})
+
+test("a parameter name is not a property of a parameter that is not an options object", async () => {
+    const { marks } = await render("Fetch one community member by decimal `guildId` and `userId`", undefined)
+    assert.deepEqual(marks.filter((mark) => mark.kind === "api"), [])
 })
 
 test("dotted paths follow the client, its parts and a namespace's type", async () => {

@@ -25,23 +25,27 @@ await runBot({
 })
 ```
 
-Handlers and commands work the same on every shard. The `client.shards` list shows the shards this client owns, and a handler registered with `client.on` receives an `EventContext` third argument whose `shardId` names the shard that delivered the event. A `runBot` handler finds the same object in its `context` field. When the bot outgrows its plan while it runs, Fluxer closes a shard with close code 4011 and the SDK moves every shard to a larger plan in the same process, so the bot keeps running
+Handlers and commands work the same on every shard. The `client.shards` list shows the shards this client owns, and a handler registered with `client.on` receives an `EventContext` third argument whose `shardId` names the shard that delivered the event
+
+A `runBot` handler finds the same object in its `context` field. Fluxer checks a shard's community count when it starts a new session, not while it runs. When Fluxer refuses a session with close code 4011, the SDK moves every shard to a larger plan in the same process, so the bot keeps running
 
 A bot without `sharding` settings makes the same move from its one shard when Fluxer refuses it with 4011, so it keeps running too. Until it sets `sharding: "auto"`, each start first opens a session that Fluxer refuses before the move. An explicit `totalShards`, including 1, never moves
 
-Each `client.shards` entry has a `sessionEpoch` number, which stays the same across a Resume and changes whenever that shard starts a new session, including after a move. A changed value means the shard's events in between may have been missed, and Fluxer then sends each of its communities again through `guildCreate`, so state kept from events can be rebuilt there. The `EventContext` also carries `sessionEpoch`, fixed when the client accepted the event, so an event still waiting in a handler's queue keeps its own session. Compare `context.sessionEpoch` rather than the shard's current value, and keep the last value seen per community, since one shard serves many communities
+Each `client.shards` entry has a `sessionEpoch` number, which stays the same across a Resume and changes whenever that shard starts a new session, including after a move. A changed value means the shard's events in between may have been missed, and Fluxer then sends each of its communities again through `guildCreate`, so state kept from events can be rebuilt there
+
+The `EventContext` also carries `sessionEpoch`, fixed when the client accepted the event, so an event still waiting in a handler's queue keeps its own session. Compare `context.sessionEpoch` rather than the shard's current value, and keep the last value seen per community, since one shard serves many communities
 
 <details>
 <summary>Details of automatic sizing</summary>
 
-The count pages through the bot's community list under its own deadline, as long as `connection.startupTimeoutMs`, and supports 1 through 16,384 shards.
-The shards then start one second apart, and the startup deadline grows by one second for each shard after the first.
-Until the count completes, `client.shards` and `diagnostics().shards` are empty.
-A failed count fails startup like a connection failure, and a page that does not move past the previous one fails it at once with a `ConnectionError` instead of waiting for the deadline.
-When Fluxer closes a shard with 4011 while the client runs, the SDK counts again and moves every shard to the plan for the new count, or to one more shard when the count still fits the old plan.
-Every shard then starts a new session, so events sent during the move are missed, and the community caches fill again from the new sessions.
-The move is logged once at Warn with code `lifecycle.resharded` and the old and new totals.
-After 3 moves within an hour, or at 16,384 shards, the next 4011 closure ends the client with a `ConnectionError`, as it does for an explicit `totalShards`.
+The count pages through the bot's community list under its own deadline, as long as `connection.startupTimeoutMs`, and supports 1 through 16,384 shards. The shards then start one second apart, and the startup deadline grows by one second for each shard after the first
+
+Until the count completes, `client.shards` and `diagnostics().shards` are empty. A failed count fails startup like a connection failure, and a page that does not move past the previous one fails it at once with a `ConnectionError` instead of waiting for the deadline
+
+When Fluxer closes a shard with 4011 while the client runs, the SDK counts again and moves every shard to the plan for the new count, or to one more shard when the count still fits the old plan. Every shard then starts a new session, so events sent during the move are missed, and the community caches fill again from the new sessions
+
+The move is logged once at Warn with code `lifecycle.resharded` and the old and new totals. After 3 moves within an hour, or at 16,384 shards, the next 4011 closure ends the client with a `ConnectionError`, as it does for an explicit `totalShards`
+
 Automatic sizing suits one process that owns every shard. Processes that split shards between them need an explicit total, unless the [supervisor](/docs/sharding/#run-shards-in-several-processes) sizes the plan for them
 
 </details>
@@ -54,7 +58,7 @@ Waiting custom commands fail when the connection is lost and are not replayed. R
 
 ## Resume after a restart
 
-A restarted bot normally starts new sessions and misses the events sent while it was down. Fluxer keeps a disconnected session for 60 seconds. A session store saves each shard's session at shutdown and offers it at the next startup, so a quick restart, such as a deploy, resumes and receives the missed events within Fluxer's replay limits
+A restarted bot normally starts new sessions and misses the events sent while it was down. Fluxer keeps a disconnected session for 60 seconds. A session store saves each connected shard's session at shutdown and offers it at the next startup, so a quick restart, such as a deploy, can resume and receive the missed events within Fluxer's replay limits
 
 ```ts
 import { fileSessionStore, runBot } from "@neontechspace/fluxerly"
@@ -71,18 +75,20 @@ await runBot({
 })
 ```
 
-The `fileSessionStore` function keeps each shard's snapshot in its own file in the given folder, relative to the current working directory, and replaces a file only once its new contents are fully written. A snapshot contains the session ID, which lets the token resume the session, so keep the folder out of version control and readable only by the bot's account. Separate processes need separate folders unless their shard IDs never overlap. The store works with one shard as well: Pass `{ totalShards: 1, sessions: fileSessionStore("sessions") }`. To keep snapshots elsewhere, such as in a database, pass an object with `load` and `save` methods instead, as the [`SessionStore`](/docs/api/js-ts/sharding-and-supervision/#sessionstore) reference describes
+The `fileSessionStore` function keeps each shard's snapshot in its own file in the given folder, relative to the current working directory, and replaces a file only once its new contents are fully written. A snapshot contains the session ID, which lets the token resume the session, so keep the folder out of version control and readable only by the bot's account
+
+Separate processes need separate folders unless their shard IDs never overlap. The store works with one shard as well: Pass `{ totalShards: 1, sessions: fileSessionStore("sessions") }`. To keep snapshots elsewhere, such as in a database, pass an object with `load` and `save` methods instead, as the [`SessionStore`](/docs/api/js-ts/sharding-and-supervision/#sessionstore) reference describes
 
 <details>
 <summary>When a saved session is not used</summary>
 
-Resumable snapshots are saved only during a clean shutdown, after each socket has closed.
-Before a shard resumes a snapshot, it marks the stored one as used, so a crash leaves no resumable snapshot and the same snapshot is never resumed twice.
-A snapshot older than 60 seconds, a malformed or used one, or one for another gateway address is ignored and logged at Warn.
-A failed `load` or `save`, or one that takes longer than 5 seconds, is logged in full at Error.
-In every case the shard starts a new session, so a store problem never stops the bot.
-If Fluxer no longer holds the session, the resume fails and the shard starts a new session as it would after any lost connection. If only part of the saved session's replay arrived first, the shard clears those cached community observations and their dependent resources before starting the new session. Reads cached during that wait are cleared again at READY. A successful resume retains the replayed observations.
-Resume replays missed dispatches but sends no fresh community snapshot. Once every shard is ready, the SDK refills the enabled community, role and channel caches through REST, one request at a time, and logs `lifecycle.cacheRefill`. Set `sharding.refillCaches` to `false` to keep only observations from replay, later events and requests
+Resumable snapshots are saved only during a clean shutdown, after each socket has closed. Before a shard resumes a snapshot, it marks the stored one as used, so a crash leaves no resumable snapshot and the same snapshot is never resumed twice. A snapshot older than 60 seconds, a malformed or used one, or one for another gateway address is ignored and logged at Warn
+
+A failed `load` or `save`, or one that takes longer than 5 seconds, is logged in full at Error. In every case the shard starts a new session, so a store problem never stops the bot. If Fluxer no longer holds the session, the resume fails and the shard starts a new session as it would after any lost connection
+
+If only part of the saved session's replay arrived first, the shard clears those cached community observations and their dependent resources before starting the new session. Reads cached during that wait are cleared again at READY. A successful resume retains the replayed observations
+
+Resume replays most missed dispatches but sends no fresh community snapshot. Once every shard is ready, the SDK refills the enabled community, role and channel caches through REST, one request at a time, and logs `lifecycle.cacheRefill`. Set `sharding.refillCaches` to `false` to keep only observations from replay, later events and requests
 
 </details>
 
@@ -114,11 +120,13 @@ To find the process that owns a community, pass its guild ID and the total to `s
 <details>
 <summary>Coordinate new sessions across processes</summary>
 
-Fluxer limits how quickly a bot may start new sessions: 300 Identify commands, the command that starts a session, per IP address in each 60 seconds. One client spaces its own shards' Identify commands by one second, but separate processes do not know about each other.
-Pass `sharding.identify` with a `permit(shardId, totalShards, signal)` function, backed for example by a shared lock service, to make every process wait for its turn.
-The SDK calls it before each new session, never before a resume, and sends Identify as soon as the permit resolves. The coordinator then owns the pacing, so it should space its permits. A rejected permit is logged at Error and retried like a connection failure.
-The [`IdentifyCoordinator`](/docs/api/js-ts/sharding-and-supervision/#identifycoordinator) reference describes the timing.
-Children of the [supervisor](/docs/sharding/#run-shards-in-several-processes) below are paced by their parent and cannot set `sharding.identify`. To share the budget with other hosts, pass the same coordinator to the supervisor's `identify.coordinator` option, and the parent asks it before each child's new session
+Fluxer limits how quickly a bot may start or resume sessions: 300 Identify and Resume commands together per IP address in each 60 seconds. One client spaces its own shards' Identify commands by one second, but not its Resume commands, and separate processes do not know about each other
+
+Pass `sharding.identify` with a `permit(shardId, totalShards, signal)` function, backed for example by a shared lock service, to make every process wait for its turn. The SDK calls it before each new session, never before a resume. Resumes still count toward Fluxer's limit, so leave room for them when spacing permits. The SDK sends Identify as soon as the permit resolves. The coordinator then owns the pacing, so it should space its permits
+
+Other gateway limits are shared by every client on one source IP address. Each Fluxer gateway node allows 256 open connections and 6,000 client payloads in each fixed 60-second window, counting heartbeats, session commands and traffic from other bots on that address. The SDK paces application commands per session, so many busy shards on one address can reach the payload limit together. Fluxer closes such a connection with code 4008. When a close with that code repeats, spread shards across outbound addresses or lower their combined traffic before adding more workers
+
+A rejected permit is logged at Error and retried like a connection failure. The [`IdentifyCoordinator`](/docs/api/js-ts/sharding-and-supervision/#identifycoordinator) reference describes the timing. Children of the [supervisor](/docs/sharding/#run-shards-in-several-processes) below are paced by their parent and cannot set `sharding.identify`. To share the budget with other hosts, pass the same coordinator to the supervisor's `identify.coordinator` option, and the parent asks it before each child's new session
 
 </details>
 
@@ -183,13 +191,17 @@ if (result.isErr()) {
 
 Start the parent with `node --env-file=.env supervisor.js`. Children inherit its environment and Node.js flags, so they read the same token. With TypeScript, point `entry` at `shard-worker.ts`
 
-The supervisor installs no signal handlers of its own, which is why the parent handles SIGINT and SIGTERM and calls `shutdown()`. That asks every child to stop, waits for them to exit and force-terminates a child that takes longer than 5 seconds. In both APIs, a child stopped by the parent first lets running handlers, queued handler events, running scheduled tasks and REST requests finish for up to 4 seconds, one second less than `shutdownTimeoutMs`. The same drain applies to children stopped while an automatic plan grows. A child stopped by its own failure or a lost parent message channel cancels running work without draining. Each child's output appears in the parent's output with a `[shard N]` or `[child id]` label, and the parent logs child starts, exits, crashes and restarts. Under systemd, add `KillMode=mixed` as described in [deploying](/docs/deploying/)
+The supervisor installs no signal handlers of its own, which is why the parent handles SIGINT and SIGTERM and calls `shutdown()`. That asks every child to stop, waits for them to exit and force-terminates a child that takes longer than 5 seconds
+
+In both APIs, a child stopped by the parent first lets running handlers, queued handler events, running scheduled tasks and REST requests finish for up to 4 seconds, one second less than `shutdownTimeoutMs`. The same drain applies to children stopped while an automatic plan grows
+
+A child stopped by its own failure or a lost parent message channel cancels running work without draining. Each child's output appears in the parent's output with a `[shard N]` or `[child id]` label, and the parent logs child starts, exits, crashes and restarts. Under systemd, add `KillMode=mixed` as described in [deploying](/docs/deploying/)
 
 A successful `start()` means every child accepted its shards and finished `configure`, not that every gateway session is ready. Use `workers.waitForReady()` to wait for connected sessions and `workers.status()` for a snapshot of each child. The Effect entry point exports a `supervisor` with the same options
 
 Unknown keys in supervisor creation, assignment, restart, Identify and child-run options fail with `ConfigurationError`, with a suggested name when one is close. Child-run options are checked before waiting for the parent. The default API also checks the options passed to `waitForReady`, which accepts only `signal`. The Effect wait is cancelled by interruption instead
 
-To resume sessions across a deploy, give each child the [session store](/docs/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` is the only sharding setting a child accepts
+To resume sessions across a deploy, give each child the [session store](/docs/sharding/#resume-after-a-restart) from above through `clientOptions: { sharding: { sessions } }` in `supervisor.child.run`. The parent still assigns the shards, so `sessions` and [`refillCaches`](/docs/sharding/#resume-after-a-restart) are the only sharding settings a child accepts
 
 Some of Fluxer's limits apply to the whole bot account rather than to one process, so the children share them through the parent:
 
@@ -201,24 +213,26 @@ A child that gets no answer from the parent within one second counts only its ow
 <details>
 <summary>Shard plans and assignments</summary>
 
-A numeric `totalShards` fixes the total. Use `processes` for a number of children, `shardsPerProcess` for a number of shards per child, or `assignments` to name each child and its shards, such as `[{ id: "a", shardIds: [0, 1] }, { id: "b", shardIds: [2, 3] }]`.
-Children created by `processes` or `shardsPerProcess` are named `process-0`, `process-1` and so on, and each owns a contiguous block of shards.
-An automatic plan is counted at `start()`, and restarts keep it. A failed count fails `start()` with `SupervisorError` reason `shardCount`.
-When Fluxer closes a child's shard with 4011 because the bot outgrew the plan, the supervisor stops every child, counts again and starts children for a larger plan, logging a `supervisor.resharded` record. After 3 such moves within an hour the supervisor fails instead.
-With `totalShards: "auto"`, the `instance` and `transport` options select the Fluxer instance and HTTP implementation for the count, as they do for a client
+A numeric `totalShards` fixes the total. Use `processes` for a number of children, `shardsPerProcess` for a number of shards per child, or `assignments` to name each child and its shards, such as `[{ id: "a", shardIds: [0, 1] }, { id: "b", shardIds: [2, 3] }]`
+
+Children created by `processes` or `shardsPerProcess` are named `process-0`, `process-1` and so on, and each owns a contiguous block of shards. An automatic plan is counted at `start()`, and restarts keep it. A failed count fails `start()` with `SupervisorError` reason `shardCount`
+
+With `totalShards: "auto"`, a child's close code 4011 makes the supervisor stop every child, count again and start children for a larger plan, logging a `supervisor.resharded` record. A numeric total stays fixed and follows the restart policy. After 3 such moves within an hour the supervisor fails instead. With `totalShards: "auto"`, the `instance` and `transport` options select the Fluxer instance and HTTP implementation for the count, as they do for a client
 
 </details>
 
 <details>
 <summary>Restart limits and timeouts</summary>
 
-A child that exits unexpectedly is replaced by default, up to `maxAttempts` times in a row (default 3), with a delay that starts at `minDelayMs` (default 1 second) and doubles up to `maxDelayMs` (default 30 seconds). Adjust them with `restart: { maxAttempts: 5 }`, for example.
-A child that ran for `healthyResetMs` (default 60 seconds) after finishing `configure` gets its full budget and the first delay back, so only a crash loop uses up the attempts.
-When a child uses up its attempts, the supervisor fails and stops the other children. With `restart: false`, the first unexpected exit does the same.
-Each child has `startupTimeoutMs` (default 30 seconds) to accept its assignment and finish `configure`, and `shutdownTimeoutMs` (default 5 seconds) to exit after a stop request.
-The parent logs why before it acts: `supervisor.startupTimeout` when a child misses its startup time, `supervisor.terminated` before it force-terminates a child and `supervisor.identifyUnacknowledged` when a child does not confirm a session start, which stops that child. When reading a child's output fails, `supervisor.outputFailed` records the error and that stream is no longer forwarded.
-A replacement is a new process with a new client. A crash leaves no resumable session, so the replacement starts new sessions.
-The [`SupervisorOptions`](/docs/api/js-ts/sharding-and-supervision/#supervisoroptions) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
+A child that exits unexpectedly is replaced by default, up to `maxAttempts` times in a row (default 3), with a delay that starts at `minDelayMs` (default 1 second) and doubles up to `maxDelayMs` (default 30 seconds). Adjust them with `restart: { maxAttempts: 5 }`, for example
+
+A child that ran for `healthyResetMs` (default 60 seconds) after finishing `configure` gets its full budget and the first delay back, so only a crash loop uses up the attempts. When a child uses up its attempts, the supervisor fails and stops the other children. With `restart: false`, the first unexpected exit does the same
+
+Each child has `startupTimeoutMs` (default 30 seconds) to accept its assignment and finish `configure`, and `shutdownTimeoutMs` (default 5 seconds) to exit after a stop request. The parent logs why before it acts: `supervisor.startupTimeout` when a child misses its startup time, `supervisor.terminated` before it force-terminates a child and `supervisor.identifyUnacknowledged` when a child does not confirm a session start, which stops that child
+
+The parent's Identify queue counts against each child's `connection.startupTimeoutMs`. With many shards, set it in `clientOptions` to at least 30,000 ms plus the total shard count times `identify.minimumSpacingMs`. The supervisor's `startupTimeoutMs` covers configuration and automatic shard counting, not gateway readiness
+
+When reading a child's output fails, `supervisor.outputFailed` records the error and that stream is no longer forwarded. A replacement is a new process with a new client. A crash leaves no resumable session, so the replacement starts new sessions. The [`SupervisorOptions`](/docs/api/js-ts/sharding-and-supervision/#supervisoroptions) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
 
 </details>
 

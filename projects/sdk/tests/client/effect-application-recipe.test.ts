@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs"
 import { stripTypeScriptTypes } from "node:module"
 import { join } from "node:path"
 import { describe, expect, test } from "vitest"
-import { Context, Effect, Fiber, Layer } from "effect"
+import { Config, Context, Effect, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { FluxerClient } from "../../src/effect.js"
-import { FluxerTestClient } from "../../src/effect-testing.js"
+import { createTestBot, FluxerTestClient } from "../../src/effect-testing.js"
 
 /** Import one TypeScript block of the Effect application guide, supplying its imports from the given modules */
 async function loadGuideBlock<T>(index: number, modules: Record<string, Record<string, unknown>>): Promise<T> {
@@ -34,13 +34,36 @@ async function loadGuideBlock<T>(index: number, modules: Record<string, Record<s
     }
 }
 
+/** A node:test stand-in that keeps the tests a guide block registers, so this suite can run them too */
+function guideTests() {
+    const registered: Array<() => Promise<unknown>> = []
+    return {
+        module: { test: (_name: string, body: () => Promise<unknown>) => void registered.push(body) },
+        run: async () => {
+            expect(registered.length).toBeGreaterThan(0)
+            for (const body of registered) await body()
+        },
+    }
+}
+
 type Ping = { readonly content: string; readonly author: { readonly id: string; readonly isBot: boolean } }
 
 describe("Effect application recipe", () => {
     test("the guide's test replaces application services and advances only application-owned time", async () => {
+        const tests = guideTests()
+        // The test imports the guide's own bot file, so it checks the handler readers keep, not a copy
+        const bot = await loadGuideBlock<Record<string, unknown>>(0, {
+            effect: { Config, Context, Effect, Layer },
+            "@neontechspace/fluxerly/effect": { FluxerClient },
+        })
         const recipe = await loadGuideBlock<{
             testPing(message: Ping, replies: Array<string>): Effect.Effect<void>
-        }>(2, { effect: { Context, Effect, Fiber, Layer }, "effect/testing": { TestClock } })
+        }>(2, {
+            effect: { Effect, Fiber, Layer },
+            "effect/testing": { TestClock },
+            "node:test": tests.module,
+            "./bot.ts": bot,
+        })
         const replies: string[] = []
         // The handler sleeps 100 ms on the TestClock, so the test completes only when it adjusts that time itself
         await Effect.runPromise(
@@ -55,6 +78,8 @@ describe("Effect application recipe", () => {
         const ignored: string[] = []
         await Effect.runPromise(recipe.testPing({ content: "!ping", author: { id: "43", isBot: true } }, ignored))
         expect(ignored).toEqual([])
+        // The test the guide registers asserts the same reply, so it passes here too
+        await tests.run()
     })
 
     test("the live guide fails on unexpected normal critical-worker closure and releases its client", async () => {
@@ -84,14 +109,40 @@ describe("Effect application recipe", () => {
     })
 
     test("the guide's service test runs application code that reads FluxerClient against the test client", async () => {
+        const tests = guideTests()
         const recipe = await loadGuideBlock<{
             serviceTest: Effect.Effect<{ readonly body: unknown }, unknown>
-        }>(4, {
+        }>(5, {
             effect: { Effect },
             "@neontechspace/fluxerly/effect": { FluxerClient },
             "@neontechspace/fluxerly/effect/testing": { FluxerTestClient },
+            "node:test": tests.module,
         })
         const reply = await Effect.runPromise(recipe.serviceTest)
         expect(reply.body).toMatchObject({ content: "Pong!" })
+        await tests.run()
+    })
+
+    // Catches: The guide's conversation recipe stops working, such as say waiting for a command that waits for its
+    // answer, so readers following it get a test that never finishes
+    test("the guide's conversation test answers a command that waits for a reply", async () => {
+        const tests = guideTests()
+        const recipe = await loadGuideBlock<{
+            conversationTest: Effect.Effect<{ readonly question: unknown; readonly replies: readonly unknown[] }>
+        }>(4, {
+            effect: { Effect },
+            "@neontechspace/fluxerly/effect/testing": { createTestBot },
+            "node:test": tests.module,
+        })
+        const result = await Effect.runPromise(
+            recipe.conversationTest.pipe(
+                Effect.timeoutOrElse({
+                    duration: "5 seconds",
+                    orElse: () => Effect.die(new Error("The guide's conversation test did not finish")),
+                }),
+            ),
+        )
+        expect(result).toEqual({ question: "What name should the bot use?", replies: ["Hello, Ada!"] })
+        await tests.run()
     })
 })

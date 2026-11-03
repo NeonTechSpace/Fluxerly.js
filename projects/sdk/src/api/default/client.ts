@@ -8,7 +8,7 @@ import { causeReasons, defectReason, suspendInput } from "#sdk/internal/defects"
 import { shutdownDrainMs } from "#sdk/internal/client/drain"
 import { scheduleTiming } from "#sdk/internal/scheduled-tasks"
 import { promiseHook, sharedReportQueue, throwIfErr } from "#sdk/internal/failures"
-import { fiberRejectionScope, inRejectionScope } from "#sdk/internal/rejection-scope"
+import { CallbackRun, fiberRejectionScope, inRejectionScope } from "#sdk/internal/rejection-scope"
 import { registerClientOwner } from "#sdk/internal/client-registry"
 import type {
     ClientDiagnostics,
@@ -74,7 +74,7 @@ import { type DirectMessages } from "./direct-messages.js"
  * If isErr() is true, read error.
  * Otherwise, read value, or call orThrow to get the value and throw the error instead.
  * Expected failures are Err values, and an Err returned from a handler is reported like a thrown error.
- * Local registration and cache lookups return their value directly and throw ConfigurationError when misused.
+ * Local registration and cache lookups return their values directly. Invalid registration arguments throw ConfigurationError, and an invalid ID or message target in a cache lookup throws that resource's input error, such as GuildOperationError.
  * Subscriptions and collectors registered after shutdown began, such as from a handler still running, return already-closed handles.
  * Middleware registration on a closing client throws ClientClosedError.
  * Unexpected SDK or cleanup failures reject with SdkDefect.
@@ -94,10 +94,12 @@ import { type DirectMessages } from "./direct-messages.js"
  * A valid global assertion wins over conflicting local metadata. Malformed scope values are ignored.
  * A global header with a valid Retry-After starts the pause before body inspection, including when
  * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
- * Without global metadata, only requests in the same rate-limit group wait. Without a usable delay, the rejection fails instead of guessing how long to wait.
+ * Without global metadata, an identified route limit pauses only its rate-limit group. A 429 that identifies no limiter pauses all API routes on this client, and repeated unidentified limits can lengthen the pause.
+ * Without a usable delay, the rejection fails instead of guessing how long to wait.
  * Waits remain within each call's original deadline. Cancelling a queued call removes only that call, not the shared pause.
  * A call whose known pause outlasts its deadline fails at once with reason rateLimit and the remaining wait as retryAfterMs instead of waiting.
- * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
+ * Clients under one supervisor share pauses Fluxer declares global. Other clients do not coordinate these waits, and an unidentified limit pauses only its own client.
+ * Attachment downloads do not wait for API rate limits.
  * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
  *
  * Valid X-RateLimit-Bucket metadata tells the client which requests share a rate limit, without application configuration.
@@ -264,7 +266,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      *     inspectFailure: (text: string) => void,
      * ) {
      *     return client.on("messageCreate", (event) => handle(event), {
-     *         // The report holds the original error and the message IDs, never its content
+     *         // The report holds the original error and the message IDs. The SDK adds no message content, but the error can hold some
      *         onError: (report) => inspectFailure(`${report.describe()}\n${describeError(report.error)}`),
      *     })
      * }
@@ -362,8 +364,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
      * Observation starts without connecting the client, reading history or cache, or making a remote request
      *
      * The default timeout is 30,000 ms from registration.
-     * A timeout or invalid or throwing filter fails with EventWaitError without input or exception text.
-     * Inspect a filter exception inside the filter before rethrowing if needed.
+     * A timeout, a throwing filter or a non-boolean filter result fails with EventWaitError.
+     * A thrown value is kept as the error's cause and can contain application data, while a non-boolean result is not kept.
      * Buffer limits match subscribe.
      * Reconnection can miss events and does not reset the deadline.
      * Overflow, invalid configuration and client closure remain distinct failures
@@ -395,7 +397,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
     /**
      * Read a frozen local report of active work, queues and cache occupancy.
      * No request, telemetry or persistent record is created.
-     * The report excludes tokens, routes, resource IDs and payloads.
+     * The report excludes tokens, raw request paths, resource IDs and payloads. A rate-limit hold may name a method and route template with IDs replaced, such as "POST /channels/:id/messages".
      * Counts cover only this client's assigned shards and local work.
      * Event counts include open sources, message and reaction collectors and executing subscription handlers, not an enforced client-wide admission quota.
      * Accounted cache and queue bytes are not heap memory, process memory or remote storage.
@@ -465,7 +467,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState, As
     waitForClose(options?: OperationOptions): ResultAsync<void, ConnectionFailure | CancelledError | ConfigurationError>
     /**
      * Permanently close this client and wait for startup, recovery, sockets and request cleanup.
-     * Credentials, cached references, presence intent and expiry timers are released.
+     * Shutdown stops credential use and releases cached references, presence intent and expiry timers.
+     * Keeping the client or a failure report keeps the token string used to mask logs in memory.
      * Active handlers and message and reaction collector callbacks are cancelled.
      * Pass drainMs to first stop accepting events and let running handlers and REST requests finish for up to that many
      * milliseconds, as runBot does when asked to stop. See ShutdownOptions.
@@ -562,7 +565,9 @@ export interface ScheduledTask {
  *
  * **Connection and sharding**
  *
- * Gateway startup defaults to a 30,000 ms overall budget and three total attempts per assigned shard.
+ * Gateway startup defaults to 30,000 ms, plus one second for each additional local shard when the SDK spaces Identify commands.
+ * Automatic sharding first counts communities under a separate deadline of the same length.
+ * Each assigned shard allows up to three startup attempts within that budget.
  * An explicit sharding plan fixes this client's assigned IDs for its lifetime, while automatic sharding and a client
  * without sharding settings may move to a larger plan when Fluxer asks for more shards.
  * Shard zero receives direct-message gateway traffic.
@@ -612,7 +617,7 @@ export function createClient<const F extends MessageFields | undefined = undefin
             },
         })
     }
-    // Registration misuse throws its ConfigurationError, as other local misuse does. A closing client is not misuse: the
+    // Registration misuse throws its ConfigurationError, as other local misuse does. A closing client is not misuse: The
     // event bus returns an already-closed source for it
     const register = <A, E>(effect: Effect.Effect<A, E>, operation: "on" | "subscribe"): A =>
         localValue(owner.logging.provide(effect), operation)
@@ -647,7 +652,14 @@ export function createClient<const F extends MessageFields | undefined = undefin
         }
         // @effect-diagnostics-next-line unknownInEffectCatch:off
         const run = Effect.tryPromise({
-            try: (signal) => Promise.resolve(task(signal)).then(throwIfErr),
+            try: (signal) => {
+                // Each run's code is a callback run, whose SDK calls a manual test clock can see
+                const callback = new CallbackRun()
+                const untrack = owner.tasks.callbackRuns.track(callback)
+                return new Promise((resolve) => resolve(inRejectionScope(callback, () => task(signal))))
+                    .finally(untrack)
+                    .then(throwIfErr)
+            },
             // Keep the thrown or rejected value itself for the failure report
             catch: (error) => error,
         })

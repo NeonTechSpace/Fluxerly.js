@@ -218,7 +218,7 @@ test.each(modes)("%s captures custom emoji identity before reaction dispatch", a
     }
     await api.add(changingEmoji)
     expect([nameReads, idReads]).toEqual([1, 1])
-    expect(calls).toEqual(["PUT /v1/channels/20/messages/10/reactions/party%3A50/@me"])
+    expect(calls).toEqual(["PUT /api/v1/channels/20/messages/10/reactions/party%3A50/@me"])
 
     const firstInvalid = {
         get name() {
@@ -879,7 +879,7 @@ test.each(modes)(
         mockRest(async (url, init) => {
             const path = new URL(url).pathname
             if (!path.includes("/reactions")) return Response.json(wire)
-            const parts = path.split("/").slice(7).map(decodeURIComponent)
+            const parts = path.split("/").slice(8).map(decodeURIComponent)
             if (init.method === "GET")
                 return Response.json({
                     items: (state.get(parts[0]!) ?? []).map((id) => ({ id, username: `user${id}` })),
@@ -911,9 +911,9 @@ test.each(modes)(
         expect((await api.users()).items).toEqual([])
         expect(await api.get()).toBe(cached)
         expect(paths).toEqual([
-            `/v1/channels/20/messages/10/reactions/${encodeURIComponent("👍")}/31`,
-            "/v1/channels/20/messages/10/reactions/party%3A45",
-            "/v1/channels/20/messages/10/reactions",
+            `/api/v1/channels/20/messages/10/reactions/${encodeURIComponent("👍")}/31`,
+            "/api/v1/channels/20/messages/10/reactions/party%3A45",
+            "/api/v1/channels/20/messages/10/reactions",
         ])
     },
 )
@@ -991,7 +991,7 @@ test.each(modes)(
         expect(last.hasMore).toBe(false)
         expect(last.nextAfter).toBeNull()
         expect(calls[1]).toBe(
-            "https://api.fluxer.app/v1/channels/20/messages/10/reactions/party%3A45/users?limit=100&after=9007199254740994",
+            "https://fluxer.com/api/v1/channels/20/messages/10/reactions/party%3A45/users?limit=100&after=9007199254740994",
         )
         expect(await api.users()).toEqual({ items: [], hasMore: false, nextAfter: null })
         expect(calls[2]).toContain("limit=25")
@@ -1119,6 +1119,51 @@ test.each(modes)(
         }
     },
 )
+
+test.each(modes)("%s keeps reactors' display names, avatars and flags on pages and iteration", async (mode) => {
+    // Fluxer returns each reactor as a partial user
+    const winner = {
+        id: "31",
+        username: "winner",
+        discriminator: "0042",
+        global_name: "Lucky Winner",
+        avatar: "avatar-hash",
+        avatar_color: 1234,
+        system: false,
+        flags: 4,
+        mention_flags: 2,
+    }
+    mockRest(async () =>
+        Response.json({ items: [winner, { id: "32", username: "minimal" }], has_more: false, next_after: null }),
+    )
+    const api = await setup(mode)
+    const page = await api.users()
+    expect(page.items[0]).toEqual({
+        id: "31",
+        username: "winner",
+        isBot: false,
+        discriminator: "0042",
+        displayName: "Lucky Winner",
+        avatar: "avatar-hash",
+        avatarColor: 1234,
+        isSystem: false,
+        flags: 4,
+        mentionFlags: 2,
+    })
+    expect(page.items[1]).toEqual({ id: "32", username: "minimal", isBot: false })
+    const users: unknown[] = []
+    if (api.defaultApi) {
+        for await (const result of api.defaultApi.messages.iterateReactionUsers(target, "👍", { maxItems: 10 }))
+            users.push(result._unsafeUnwrap())
+    } else {
+        users.push(
+            ...(await Effect.runPromise(
+                Stream.runCollect(api.native!.messages.iterateReactionUsers(target, "👍", { maxItems: 10 })),
+            )),
+        )
+    }
+    expect(users[0]).toMatchObject({ id: "31", displayName: "Lucky Winner" })
+})
 
 test.each(modes)("%s classifies reactor read failures and shares reaction rate limits", async (mode) => {
     const clock = sdkClock()
@@ -1736,7 +1781,7 @@ async function setup(mode: Mode) {
 function mockRest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(url, init),
     )
 }
@@ -1787,7 +1832,7 @@ test.each(modes)("%s reuses emoji markup, parsed values and snapshots across rea
     for (const emoji of inputs) {
         const unicode = typeof emoji === "object" && emoji.id === undefined
         const encoded = encodeURIComponent(unicode ? "👍" : "party:50")
-        const path = `/v1/channels/20/messages/10/reactions/${encoded}`
+        const path = `/api/v1/channels/20/messages/10/reactions/${encoded}`
         calls.length = 0
         await api.add(emoji)
         await api.remove(emoji)
@@ -1840,11 +1885,11 @@ test.each(modes)("%s encodes own reactions, leaves message cache intact and synt
         await api.remove(emoji)
     }
     expect(calls[0]).toEqual([
-        `https://api.fluxer.app/v1/channels/20/messages/10/reactions/${encodeURIComponent("👍🏽")}/@me`,
+        `https://fluxer.com/api/v1/channels/20/messages/10/reactions/${encodeURIComponent("👍🏽")}/@me`,
         "PUT",
     ])
     expect(calls.at(-1)).toEqual([
-        "https://api.fluxer.app/v1/channels/20/messages/10/reactions/party%3A45/@me",
+        "https://fluxer.com/api/v1/channels/20/messages/10/reactions/party%3A45/@me",
         "DELETE",
     ])
     expect(await api.get()).toBe(cached)

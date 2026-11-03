@@ -1,0 +1,9 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+export async function latestContents(client: Client, channelId: string) {
+    const result = await client.rest.call("GET /channels/{channel_id}/messages", {
+        params: { channel_id: channelId },
+        query: { limit: 10 },
+    })
+    return result.map((response) => response.body.map((message) => message.content))
+}

@@ -1,11 +1,11 @@
-import { afterEach, expect, test, vi } from "vitest"
-import { AuthenticationError, ConnectionError, type Client } from "../../../src/index.js"
+import { afterEach, describe, expect, test, vi } from "vitest"
+import { AuthenticationError, ConnectionError, RateLimitError, type Client } from "../../../src/index.js"
 import type { Client as NativeClient } from "../../../src/effect.js"
 import { Opcode } from "../../../src/internal/protocol/gateway.js"
 import { describeBothApis, setup, type Mode } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
 import type { GatewayServerOptions } from "../../support/gateway-server.js"
-import { startInstance } from "../../support/instance.js"
+import { instanceDocument, startInstance } from "../../support/instance.js"
 import { captureLogs } from "../../support/log-capture.js"
 import { sendJson, type RecordedRequest } from "../../support/rest-server.js"
 import { expectErr, settle } from "../../support/settle.js"
@@ -31,13 +31,19 @@ function guildPages(count: number) {
     }
 }
 
+type Route = (request: RecordedRequest, response: import("node:http").ServerResponse) => void
+
 async function start(
     mode: Mode,
-    guilds: (request: RecordedRequest, response: import("node:http").ServerResponse) => void,
+    guilds: Route,
     gateway: Omit<GatewayServerOptions, "server" | "redirect"> = {},
+    discovery?: Route,
 ) {
     const fixture = await startInstance({
-        routes: { "GET /v1/users/@me/guilds": guilds },
+        routes: {
+            "GET /v1/users/@me/guilds": guilds,
+            ...(discovery === undefined ? {} : { "GET /.well-known/fluxer": discovery }),
+        },
         gateway: { ready: (identify) => (identify.d.shard ? { shard: identify.d.shard } : {}), ...gateway },
     })
     const logs = captureLogs()
@@ -140,5 +146,61 @@ describeBothApis("automatic sharding", (mode) => {
         expect(listRequests).toBe(2)
         expect(client.state).toBe("Disconnected")
         expect(gateway.sockets).toEqual([])
+    })
+
+    describe("when instance discovery is rate-limited", () => {
+        /** Refuse the first discovery with a 429 that asks for this many seconds, then serve the document */
+        function discoveryRefusedOnce(seconds: number) {
+            const discovery = { requests: 0, route: undefined as unknown as Route }
+            discovery.route = (request, response) => {
+                discovery.requests += 1
+                if (discovery.requests === 1)
+                    return void response
+                        .writeHead(429, { "content-type": "application/json", "retry-after": String(seconds) })
+                        .end(JSON.stringify({ code: "RATE_LIMITED", message: "Rate limited", retry_after: seconds }))
+                sendJson(response, instanceDocument(`http://${request.headers.host}`))
+            }
+            return discovery
+        }
+
+        test("waits out a short Retry-After within the startup deadline, then counts the guilds", async () => {
+            const clock = sdkClock()
+            const discovery = discoveryRefusedOnce(1)
+            const { client } = await start(mode, guildPages(3), {}, discovery.route)
+            const connecting = settle((client as Client).connect())
+            await clock.waiting(1_000)
+            expect(discovery.requests).toBe(1)
+            await clock.advance(1_000)
+            await connecting
+            expect(discovery.requests).toBe(2)
+            expect(client.state).toBe("Connected")
+        })
+
+        test("fails at once with the wait when it does not fit the remaining startup deadline", async () => {
+            sdkClock()
+            const discovery = discoveryRefusedOnce(30)
+            const { gateway, client } = await start(mode, guildPages(3), {}, discovery.route)
+            const failure = await expectErr((client as Client).connect())
+            expect(failure).toBeInstanceOf(RateLimitError)
+            expect(failure).toMatchObject({ source: "http", retryAfterMs: 30_000 })
+            expect(discovery.requests).toBe(1)
+            expect(gateway.sockets).toEqual([])
+        })
+
+        test("stops waiting when the client shuts down", async () => {
+            const clock = sdkClock()
+            const discovery = discoveryRefusedOnce(5)
+            const { gateway, client } = await start(mode, guildPages(3), {}, discovery.route)
+            const connecting = settle((client as Client).connect()).then(
+                () => undefined,
+                (error: unknown) => error,
+            )
+            await clock.waiting(5_000)
+            await settle((client as Client).shutdown())
+            expect(await connecting).toBeDefined()
+            expect(clock.pending.size).toBe(0)
+            expect(discovery.requests).toBe(1)
+            expect(gateway.sockets).toEqual([])
+        })
     })
 })

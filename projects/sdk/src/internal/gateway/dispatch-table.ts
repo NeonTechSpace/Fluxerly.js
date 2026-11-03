@@ -112,7 +112,8 @@ function decodeTypingStart(value: unknown): EventMap["typingStart"] | undefined 
 function decodeRecipientChange(value: unknown) {
     if (!record(value) || !identifier(value.channel_id) || !record(value.user) || !identifier(value.user.id))
         return undefined
-    return Object.freeze({ channelId: value.channel_id, userId: value.user.id })
+    const user = decodeUser(value.user)
+    return Object.freeze({ channelId: value.channel_id, userId: value.user.id, ...(user ? { user } : {}) })
 }
 
 function decodeGuildHealthUpdate(value: unknown): EventMap["guildHealthUpdate"] | undefined {

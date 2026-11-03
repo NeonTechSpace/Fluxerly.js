@@ -14,9 +14,10 @@ import {
     openJournal,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -82,12 +83,13 @@ async function cleanup() {
     journal = undefined
     report("webhook_and_channels_cleanup_verified")
 }
-// Local checks of the deadline path can shorten the three-minute deadline, never extend it
+// Local checks of the deadline path can shorten the sized deadline, never extend it
 const watchdogOverride = Number(process.env.FLUXERLY_LIVE_WATCHDOG_MS)
+const sizedWatchdogMs = harnessWatchdogMs()
 const watchdogMs =
-    Number.isSafeInteger(watchdogOverride) && watchdogOverride > 0 && watchdogOverride < 180_000
+    Number.isSafeInteger(watchdogOverride) && watchdogOverride > 0 && watchdogOverride < sizedWatchdogMs
         ? watchdogOverride
-        : 180_000
+        : sizedWatchdogMs
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
@@ -106,6 +108,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { guildId, botId, marker: `fluxerly-wh-${randomUUID().replaceAll("-", "")}`, channels: [] }
@@ -249,11 +252,13 @@ try {
         const attachmentUrl = new URL(sent.attachments[0].url)
         assert.ok(
             attachmentUrl.protocol === "https:" &&
-                ["fluxer.app", "fluxerusercontent.com"].some(
-                    (host) => attachmentUrl.hostname === host || attachmentUrl.hostname.endsWith(`.${host}`),
-                ),
+                (attachmentUrl.hostname === "fluxerusercontent.com" ||
+                    attachmentUrl.hostname.endsWith(".fluxerusercontent.com")),
         )
-        const file = await rawFetch(attachmentUrl, { redirect: "error", signal: AbortSignal.timeout(15_000) })
+        const file = await rawFetch(attachmentUrl, {
+            redirect: "error",
+            signal: AbortSignal.timeout(pacedDeadlineMs(15_000, 1)),
+        })
         assert.ok(file.ok)
         assert.equal(await file.text(), "webhook fixture bytes")
         assert.equal((await value(hook.fetchMessage(sent.id))).id, sent.id)

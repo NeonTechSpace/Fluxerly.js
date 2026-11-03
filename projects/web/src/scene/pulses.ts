@@ -12,7 +12,7 @@ const travelSpread = 0.2
 // Where a message appears along the ribbon, as a share of the hero width
 const start = 0.02
 // How long the water under the conductor carries the ring a message leaves
-export const ringSeconds = 3.4
+export const ringSeconds = 4.2
 // Messages that can matter at one time: the ones of this breath and of its neighbours
 const nearby = 9
 

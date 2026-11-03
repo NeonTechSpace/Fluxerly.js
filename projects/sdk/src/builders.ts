@@ -195,7 +195,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
 
     /** Add one or more embeds in argument order and return this builder, copying each just as `embed` does. Message operations check the final count */
     addEmbeds(
-        ...values: readonly [first: EmbedInput | EmbedBuilder, ...rest: (EmbedInput | EmbedBuilder)[]]
+        ...values: [first: EmbedInput | EmbedBuilder, ...rest: (EmbedInput | EmbedBuilder)[]]
     ): MessageBuilder<true> {
         this.embedValues.push(
             ...values.map((value) => copyEmbed(value instanceof EmbedBuilder ? value.build() : value)),
@@ -214,7 +214,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
     }
 
     /** Add one or more attachments in argument order and return this builder. Metadata is copied, but bytes, file and stream sources stay shared just as with `attachment` */
-    addAttachments(...values: readonly [first: AttachmentInput, ...rest: AttachmentInput[]]): MessageBuilder<true> {
+    addAttachments(...values: [first: AttachmentInput, ...rest: AttachmentInput[]]): MessageBuilder<true> {
         this.attachmentValues.push(...values.map(copyAttachment))
         return this as unknown as MessageBuilder<true>
     }
@@ -226,7 +226,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
     }
 
     /** Add one or more decimal sticker IDs in argument order and return this builder. This does not look up or validate the stickers */
-    addStickers(...values: readonly [first: string, ...rest: string[]]): MessageBuilder<true> {
+    addStickers(...values: [first: string, ...rest: string[]]): MessageBuilder<true> {
         this.stickerValues.push(...values)
         return this as unknown as MessageBuilder<true>
     }
@@ -246,7 +246,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
     }
 
     /** Replace the numeric message flags and return this builder, without validating the value.
-     * Message operations accept only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications and reject other bits before dispatch
+     * Message sends and replies accept MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and MessageFlags.VoiceMessage. A voice note requires exactly one audio attachment with duration and waveform and no content, embeds or stickers
      */
     flags(value: number): this {
         this.flagsValue = value
@@ -364,6 +364,9 @@ function copyAttachment(value: AttachmentInput): AttachmentInput {
         "title",
         "description",
         "spoiler",
+        "explicitMedia",
+        "duration",
+        "waveform",
     ])
 }
 

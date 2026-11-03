@@ -77,7 +77,7 @@ export const text: TextHelpers = sharedText
 
 /**
  * Build links to Fluxer channels, direct messages, messages and bot installation pages.
- * These helpers use hosted Fluxer URLs.
+ * These helpers use hosted Fluxer URLs on fluxer.com.
  * Each helper returns the URL directly, and invalid route inputs throw HelperError.
  * Building a link does not check access or install the bot
  *

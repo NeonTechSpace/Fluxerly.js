@@ -1,19 +1,377 @@
 {
     "repository": "fluxerapp/fluxer",
     "branch": "main",
-    "commit": "b80ae44b7d629cc2770a0cf27d622e6e0563760d",
+    "commit": "f50792ae705cbba28fecace477253de534c627ef",
     "files": {
         "openapi": {
             "path": "fluxer_api/src/api/openapi/openapi.json",
-            "sha256": "d65ba1b485ac2f00b2eec4e5c9278473720a7dbccf026731a0284516339f615b"
+            "sha256": "82b93bb2c9db59e6b4865806a775bb7e34415e7de106e37f814bd6977df28a08"
         }
     },
+    "endpointDocs": [
+        {
+            "path": "fluxer_docs/astro.config.ts",
+            "sha256": "9221e25691f010c66ea67e8b50e008d38cbb16c082b85bc3c27ad3d502d4fe98"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/applications.mdx",
+            "sha256": "089fe7a8f7fba5c92247a456ab393f9c620211874ac89e4bd38a34288de413e6"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/authentication.mdx",
+            "sha256": "d6de0ea42630fde886fa9c48361dc950b702d5c3cb711458ac4e0b2cca4be328"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/billing.mdx",
+            "sha256": "7c048d084b5fc29d2a8d8786ce576109d672e179a395498e8945d9197cf9209b"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/calls.mdx",
+            "sha256": "b545778ad23e7fe1aff88051dfd7c3f7205b2c3c337d96f0ecf1c806c67cfb91"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/channels.mdx",
+            "sha256": "630ac9ad2936ab76a1be1a24242f5e0f56a16cd975ade757f10a945e538476c4"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/connections.mdx",
+            "sha256": "449df18d7a7929a7a1b11489f9cd459d122c48525f4cee95c3bf046017f9f3de"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/deployment-availability.md",
+            "sha256": "6ed89a55fc908be5077ea6f35939d3090514c582c8181c1d27d43dcbb796d4e7"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/discovery.mdx",
+            "sha256": "04f31b57163d93a8c639422e97571b2081ea8a448b250952cd9d49f926d4c762"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/entrance-sounds.mdx",
+            "sha256": "104d4157d6771f085c5aba7af1e3dd0ac313c412a7fcfdf2adcb550d12bfb63d"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/errors.md",
+            "sha256": "9451b6a35b885ac61f9ac77509c0bd95def0c4fa3b5f0ad858e2773bf64d5475"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/experiments.mdx",
+            "sha256": "095c8109237d344d3e5fdc226132c0a65d2f9bdc3363db3b16dd09bd9c0c2265"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/expressions.mdx",
+            "sha256": "1514507e1b99bab67394fadd0d2b17ab850b59f42741ff55485ee3dbfc047a3c"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/forums.mdx",
+            "sha256": "54b1262a51a64e9e6126a00e82087fb77b7ce713a22ce4c77fb245d9678237ca"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/gateway.mdx",
+            "sha256": "90e1a65eff7c796a95be037a9922d51dc4dfab207b6d6680ac3d3ed22ab35650"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/gifs.mdx",
+            "sha256": "a0b3b6fd4874753f858eeb726f50262376ca436ad802b48e507668e4a9026f50"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/gifts.mdx",
+            "sha256": "e9555cbcef956409ae383bc67ca9e17bca8c763d43efdf6fe65ec10f52a7d799"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-audit-logs.mdx",
+            "sha256": "a83ea8190dbda91ceadb66f94ff6254626de5a82d28563ef29d8c2c2d9c7d3db"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-channels.mdx",
+            "sha256": "0d088e0cb80d3859554bfab155646461d0942902b7b154bb7bab9ea817495e92"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-emojis.mdx",
+            "sha256": "9e43e7166fba5f250793a7b30ed73819996be0af11debdd53bf9277a091b1d72"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-member-search.mdx",
+            "sha256": "bce42940ba9a6f366976d3aef1e53de4a4f6015d5b4e491e283c2f825515216e"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-members.mdx",
+            "sha256": "4527365d43761825f43644bee23fcebc011b25486b194edf725166ad6790a2e5"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-moderation.mdx",
+            "sha256": "f98c8c067b26821ad6cca468d5553c433cbe63aad6fcb975b8eb334746ec3a12"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guild-stickers.mdx",
+            "sha256": "fc52219e3f9d39a36fe8a0c9690984fb98506954f6572fde3ab58281bb8e701f"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/guilds.mdx",
+            "sha256": "cfae4ce1c0732f9cce2b2a3e4d11da6c8733bbd628de2f8134015a178d0830e7"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/index.md",
+            "sha256": "09ff2aa314a9bd87d3be86652083945a0919ecb078c55a3ed6b412e119bfb1fc"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/instance.mdx",
+            "sha256": "c8de05ab97da1380478e50ec29c6aab231ae47f2ec633c9330ec94756600a53f"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/invites.mdx",
+            "sha256": "9795b13570b87df2fcc422453cd4c3ba8c610eb3d22177bdb55e6ac6d80a5ab1"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/memes.mdx",
+            "sha256": "aa872202af916b904452d4b303c5bdb65044e0fef33a0ae3a127d8287d35ae43"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/messages.mdx",
+            "sha256": "76ff8ba67ede86ac5864fdd007a6da76eca02fef06f874b34ec56576d21aa764"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/oauth2.mdx",
+            "sha256": "786fef87e87535e27545d36e98e3f0ff9fb0969d8d4ece7256ed88d8f4da12fe"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/peer-to-peer-voice.mdx",
+            "sha256": "3745c4418ec2bb331126691a88f21a1a547a394126336bfc9cf1e3f4ad682b3c"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/permissions.mdx",
+            "sha256": "03b7af781d32ad20deb134d3e814032100a865811d7a9ca6f72fa506ffd1d4b0"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/premium.mdx",
+            "sha256": "07058b98779c723911bea46c2497e3d92ea547e86e932ace84108bfb423b89c2"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/read-states.mdx",
+            "sha256": "2a04145d26a8c20540503b2f43fa36431aaf7593414615addc00a606f9162cad"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/reports.mdx",
+            "sha256": "770f6c54aa76b57462ebaa22f44b926a18cd653f6c3a4ad27759f059d694ce33"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/search.mdx",
+            "sha256": "a369ce4d0a9849cf735248ac4f470dea005255a6141e9586be4274615a7b3c93"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/streams.mdx",
+            "sha256": "bf33031d224806b7c7a45276fd59b16aa018c9a1a175464d075613385d99b48b"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/themes.mdx",
+            "sha256": "80c099c91951bd20fb7343b90de81a92e02871ae05a2bf96ff6c193a05d9d5c3"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/thread-members.mdx",
+            "sha256": "fe8a07cfe33865841d7ffaa29cd30a501b25357ba669b9a2cf3b0eeab4274be6"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/threads.mdx",
+            "sha256": "3ebc3f37338b8b3081005198e9bfff564a2089d5e042bfe00b983167ea6b0559"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/unfurl.mdx",
+            "sha256": "7d12a6794d06678832efa95bfef4741769f6c15cfd87a759f82aa1af8c2bee30"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users.mdx",
+            "sha256": "1bdf5829e900a9462f66b25c538e503978980fb956349a569d35dc03ab3ab5a7"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/content.mdx",
+            "sha256": "fc8de205f160afe589a061374d3ff30db2ba1d896f58a81666b9ef99afc34a28"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/current-user.mdx",
+            "sha256": "eaefa165ee114d74fe4f4c4d83b6256072d843fe40212f50754e880951915848"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/data-harvest.mdx",
+            "sha256": "db21463b57739ac2dcdf0d68a316a48affe385b94e26998a210e942f72271042"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/email-and-password.mdx",
+            "sha256": "a5657418802db48b4b1947871ba1ead8534a681b3b1894dd07c7de330e874493"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/gifts.mdx",
+            "sha256": "5f0d54f0561de7e2d6ded677b9505db23226b9100516b51cf032c8674a90ce11"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/mfa.mdx",
+            "sha256": "76a77ca7c704b1a23c36ef1ffd93556a1a866a4ae6c385ef9ac80b8690634316"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/notes.mdx",
+            "sha256": "861875769bd757d66e921a7160abe06ec7806a6f9716df8bba9edbc53c5eb994"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/private-channels.mdx",
+            "sha256": "ed5ceee44d0af7caec7ede73d3c7a4ce32cabfc8f3cb3b1e04dca124b0202629"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/push-notifications.mdx",
+            "sha256": "077f1321559ca53dc78754080856c58b07a4f122b66b8634cc810ca8c4e203c4"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/relationships.mdx",
+            "sha256": "843ab4d0ca9beedf8cfd4039e5bd2735b12e701032d6042e0072a20dbc1e65a9"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/settings-protobuf.md",
+            "sha256": "a7cb0b64badd6fd39ee687f900796d9a870c79209b72a9fa71ed1242ad027c2b"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/users/settings.mdx",
+            "sha256": "20b3b8e47a5198ae644a065e5c0ce76f685a322160514867106aa1ef6611833b"
+        },
+        {
+            "path": "fluxer_docs/src/content/docs/http-api/webhooks.mdx",
+            "sha256": "b5c6a406563cd6e6cafffc4e20422a9fa4ee8be095b8960aea3ba5d72269f106"
+        }
+    ],
     "gatewayDocs": {
         "path": "fluxer_docs/src/content/docs/gateway",
-        "sha256": "154a7df55aac2264478b9626da4c2a0b9f0c805048ecd86397f245538de84d79"
+        "sha256": "d7ccd93c4e4db0eb8ccc33c9ecd9e15b40392f8b55350d2125d8852b750dd167"
     },
     "rateLimits": {
         "path": "fluxer_api/src/api/rate_limit_configs",
         "sha256": "5c353b9996727147297b38846cf86e7137dacc9ef357a7e7cafcd3f40c91ffcc"
-    }
+    },
+    "sourceFacts": [
+        {
+            "path": "fluxer_app/src/features/voice/utils/VoiceMessageRecordingUtils.ts",
+            "sha256": "d799e1958d27af9b7c79708f9f941353eb72bfe37b07fe5c3f92dcf6c0cf6bb5"
+        },
+        {
+            "path": "packages/constants/src/ChannelConstants.ts",
+            "sha256": "9c55aa5bacb51b1eeeec3260a958bc6ebecbaf102269022f1070ae48bd55948d"
+        },
+        {
+            "path": "packages/constants/src/GuildConstants.ts",
+            "sha256": "5cf7c3e5fe60e529465fbc605da5d867048bd67afc33b5503ed963b740487bdd"
+        },
+        {
+            "path": "packages/constants/src/ThreadPermissionUtils.ts",
+            "sha256": "4c50d68e0b6297d5e013f65d59c6c9689c36786ee853c43a83b35ac1343f78a4"
+        },
+        {
+            "path": "packages/schema/src/domains/common/ErrorSchemas.ts",
+            "sha256": "7307b0be3508e08f9791810b3a8a8d4fbce92d1fdc1b4b1322bb5f83c2225421"
+        },
+        {
+            "path": "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
+            "sha256": "eb96a3b1ab8892d5d772003dec73fec430f7a2851da1b084e3a846bd6e9798f5"
+        },
+        {
+            "path": "packages/schema/src/domains/message/AttachmentSchemas.ts",
+            "sha256": "281df99c82fdba90ebf270aa4a245d174288dbf246744762d5a46e191250d78b"
+        },
+        {
+            "path": "packages/schema/src/domains/message/MessageRequestSchemas.ts",
+            "sha256": "94472531bbce60186c4a892333ef540d4f2ab75e1590ef3e31ee138f55a72b33"
+        },
+        {
+            "path": "packages/schema/src/domains/oauth/OAuthSchemas.ts",
+            "sha256": "35bba21646442756cca24fb13477e2b32643d2dfa657e1482b12c877f2f0323d"
+        },
+        {
+            "path": "packages/schema/src/domains/webhook/WebhookRequestSchemas.ts",
+            "sha256": "5920d9fe3669bf09624bfee5669e5fb652052a3318676d2ec8db660f5b2a6d67"
+        },
+        {
+            "path": "packages/schema/src/primitives/FileValidators.ts",
+            "sha256": "d5c6929c9bb3024db87b79a89bccc083b8fbea701bfa5bae20c69c8ed55bc934"
+        },
+        {
+            "path": "packages/schema/src/primitives/SchemaPrimitives.ts",
+            "sha256": "260cf94e2e5f4e206f716f9cfbeb8a05edb000ff797359a565d94d044c8ef506"
+        }
+    ],
+    "voice": [
+        {
+            "path": "fluxer_docs/src/content/docs/voice",
+            "sha256": "81f1493904c7e89ea257a51720d77a4d39b2add472f32c9d55b1601d575be4a6"
+        },
+        {
+            "path": "fluxer_api/src/api/infrastructure/LiveKitService.ts",
+            "sha256": "91779689b0fa6805aaeed20fd3c10316ad88b1510377e3d83fc12e2ad9f48f4c"
+        },
+        {
+            "path": "packages/voice_engine_v2",
+            "sha256": "7aba331bac5ff139508996f08b267dfd8c64013d16d036c5b2cb400d36f72cdc"
+        },
+        {
+            "path": "fluxer_app/pkgs/livekit-client",
+            "sha256": "924d962a054749a9e1f003513651387ae117b7709c114b5f775931701a8b9737"
+        }
+    ],
+    "folders": [
+        ".devcontainer",
+        ".github",
+        "config",
+        "deploy",
+        "fluxer_admin",
+        "fluxer_api",
+        "fluxer_api/pkgs/cache",
+        "fluxer_api/pkgs/captcha",
+        "fluxer_api/pkgs/cassandra",
+        "fluxer_api/pkgs/elasticsearch_search",
+        "fluxer_api/pkgs/email",
+        "fluxer_api/pkgs/geoip",
+        "fluxer_api/pkgs/http_client",
+        "fluxer_api/pkgs/kv_client",
+        "fluxer_api/pkgs/media_proxy_utils",
+        "fluxer_api/pkgs/mime_utils",
+        "fluxer_api/pkgs/nats",
+        "fluxer_api/pkgs/postgres",
+        "fluxer_api/pkgs/rate_limit",
+        "fluxer_api/pkgs/virus_scan",
+        "fluxer_api/pkgs/worker",
+        "fluxer_app",
+        "fluxer_app/pkgs/livekit-client",
+        "fluxer_app_proxy",
+        "fluxer_common",
+        "fluxer_desktop",
+        "fluxer_docs",
+        "fluxer_gateway",
+        "fluxer_gifs",
+        "fluxer_media_proxy",
+        "fluxer_messages",
+        "fluxer_push",
+        "fluxer_rexctl",
+        "fluxer_snowflakes",
+        "fluxer_static",
+        "fluxer_svc",
+        "fluxer_unfurl",
+        "fluxer_users",
+        "packages",
+        "packages/config",
+        "packages/constants",
+        "packages/date_utils",
+        "packages/desktop_ipc",
+        "packages/errors",
+        "packages/fonts",
+        "packages/geo_utils",
+        "packages/hono",
+        "packages/i18n",
+        "packages/instance_bootstrap",
+        "packages/ip_utils",
+        "packages/limits",
+        "packages/logger",
+        "packages/markdown_parser",
+        "packages/number_utils",
+        "packages/openapi",
+        "packages/record_utils",
+        "packages/schema",
+        "packages/snowflake",
+        "packages/voice_engine_v2",
+        "patches",
+        "tools",
+        "tsconfigs"
+    ]
 }

@@ -71,9 +71,9 @@ export interface ShardingOptions {
     readonly sessions?: SessionStore
     /**
      * Whether a shard that resumes a session loaded from sessions refills the enabled community, role and channel
-     * caches through REST, default true. Fluxer calls a community a guild. Resume replays missed dispatches but sends no
-     * fresh community snapshot, so without the refill those caches contain only observations from replay, later events
-     * and requests.
+     * caches through REST, default true. Fluxer calls a community a guild. Resume replays most missed dispatches but
+     * sends no fresh community snapshot, so without the refill those caches contain only observations from replay, later
+     * events and requests.
      * Once every shard is ready, the SDK lists the bot's communities and fetches each one on a resumed shard, one
      * request at a time, so application requests keep the other REST slots and every request respects rate limits.
      * It logs lifecycle.cacheRefill when done, at Warn when communities failed or the refill stopped early. A community list
@@ -97,7 +97,8 @@ export interface IdentifyCoordinator {
     /**
      * Resolve when the shard may send Identify now. The SDK calls this once per new-session attempt and sends Identify as
      * soon as the promise resolves, without spacing of its own, so pace permits within Fluxer's budget of 300 Identify
-     * commands per source IP address in each 60-second window.
+     * and Resume commands together per source IP address in each 60-second window. Resume never asks for a permit, so
+     * leave room for it.
      * Only one permit per client is outstanding at a time, so a slow permit delays this client's other shards.
      * The wait counts against the startup deadline during startup and against the recovery attempt timeout during recovery.
      * The signal aborts when the attempt ends first, for example on timeout or shutdown, so resolve or reject promptly then.
@@ -166,8 +167,9 @@ export interface SessionStore {
      */
     load(shardId: number): Promise<SessionSnapshot | undefined>
     /**
-     * Store a snapshot for this shard. The SDK calls this during shutdown for each shard that holds a resumable
-     * session, after its socket has closed and before shutdown completes, and allows each call 5,000 ms.
+     * Store a snapshot for this shard. The SDK calls this during shutdown for each shard that was connected when
+     * shutdown began, after its socket has closed and before shutdown completes, and allows each call 5,000 ms.
+     * A shard that was reconnecting is not saved and starts a new session after the restart.
      * Shutdown waits for these calls, then continues regardless of the outcome.
      * At startup, after load returns a resumable snapshot, the SDK also calls this once with a copy whose sessionId is
      * empty, with the same time limit as load. The shard resumes only after that call succeeds, and otherwise starts a
@@ -182,7 +184,7 @@ export interface SessionStore {
 
 /**
  * Create a SessionStore that keeps each shard's snapshot in its own file, shard-ID.json, inside one directory.
- * Pass it as sharding.sessions so a restart within Fluxer's 60-second window resumes instead of starting new sessions.
+ * Pass it as sharding.sessions so a restart within Fluxer's 60-second window can resume instead of starting new sessions.
  * Use a directory that only the bot's account can read, outside version control, because each file holds a session ID
  * that lets the bot's token resume that session. The store never logs snapshot contents
  *
@@ -277,9 +279,10 @@ export interface ShardState {
     /**
      * Identifies this shard's current gateway session within the client. It is 0 until the shard's first new session and
      * gets a new value, never used before by this client and larger than every earlier one, each time the shard starts a
-     * new session, including the shards of a larger plan after a move. A Resume, which replays every missed event, keeps it,
-     * and so does resuming a saved session after a restart, so a process that resumes a saved session reports 0 until that
-     * shard next starts a new session.
+     * new session, including the shards of a larger plan after a move. A successful Resume keeps it, and so does resuming a
+     * saved session after a restart, so a process that resumes a saved session reports 0 until that shard next starts a new
+     * session. Fluxer replays missed dispatches except member chunks, member-list updates, guild sync, thread-list sync and
+     * thread member-list updates, so an unchanged value does not prove that every event was delivered.
      * A changed value means the events of that shard's communities between the two sessions may have been missed.
      * Fluxer then sends each of those communities again as a guildCreate event, and a community that is unavailable sends
      * guildDelete instead.

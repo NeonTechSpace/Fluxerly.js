@@ -1,6 +1,11 @@
+import type { User } from "./users.js"
+
 /** Set how long an invite lasts, how many times it can be used and whether Fluxer may reuse an existing code.
  * Creating an invite does not join the recipient or create the destination. Omission requests a new code with
- * unlimited uses that expires after one day. Fluxer enforces destination access, invite permissions and capacity
+ * unlimited uses that expires after one day. Fluxer enforces destination access, invite permissions and capacity.
+ * Two SDK defaults differ from Fluxer's own. When they are omitted, the SDK sends max_age 86400 and unique true, while
+ * Fluxer by itself uses max_age 0, meaning no expiry, and unique false, which may return an existing invite. Pass
+ * maxAgeSeconds 0 and unique false to get Fluxer's behavior
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -15,11 +20,15 @@
  * @category Invites and webhooks
  */
 export interface InviteCreate {
-    /** Lifetime in seconds, integer 0–604800. Default 86400. Zero requests no expiry */
+    /** Lifetime in seconds, integer 0–604800. Default 86400, where Fluxer's own default is 0. Zero requests no expiry.
+     * Fluxer names it max_age
+     */
     readonly maxAgeSeconds?: number
     /** Maximum uses, integer 0–100. Default zero means unlimited uses until expiry */
     readonly maxUses?: number
-    /** Default true requests a new code. False permits Fluxer to reuse a matching existing invite */
+    /** Default true requests a new code, where Fluxer's own default is false. False permits Fluxer to reuse a matching
+     * existing invite
+     */
     readonly unique?: boolean
     /** Default false. True requests temporary community membership, which Fluxer can remove after disconnect */
     readonly temporary?: boolean
@@ -51,15 +60,27 @@ export interface Invite {
         /** Numeric Fluxer channel type. This can describe a community channel or a private group conversation */
         readonly type: number
     }
-    /** Present for community invites only. Not a full guild snapshot */
+    /** Present for community invites only. Not a full guild snapshot. Fluxer's banner, splash, image sizes and splash
+     * alignment are not kept, because an invite filter or preview rarely needs them. Fluxer's visits_enabled is not kept
+     * either, because it describes an experiment for the account that fetched the invite. The VISITS_ENABLED feature in
+     * features shows whether the community allows visits
+     */
     readonly guild?: {
         /** Decimal ID of the community this invitation leads to */
         readonly id: string
         /** Community name returned with this invitation */
         readonly name: string
+        /** Icon asset hash, not an image URL. Null means no icon, omission means Fluxer did not supply it */
+        readonly icon?: string | null
+        /** Feature names, such as VERIFIED, including names this SDK version does not know. Omission means Fluxer did not supply them */
+        readonly features?: readonly string[]
+        /** Decimal IDs of the community's custom badges. Read their names and images with client.instance.fetchBadges */
+        readonly badgeIds?: readonly string[]
     }
     /** Creator ID. Null means no creator, omission means unavailable */
     readonly inviterId?: string | null
+    /** Public identity of the creator, absent when there is no creator or Fluxer's account data is incomplete */
+    readonly inviter?: User
     /** Observed destination member count */
     readonly memberCount: number
     /** Observed presence count, available for community invites */
@@ -83,6 +104,8 @@ export interface InviteMetadata extends Invite {
     readonly uses: number
     /** Zero means unlimited uses until expiry */
     readonly maxUses: number
-    /** Configured lifetime in seconds. Zero means no expiry. Fluxer omits this for group invites */
+    /** Configured lifetime in seconds. Zero means no expiry. Fluxer omits this for group invites.
+     * Fluxer names it max_age
+     */
     readonly maxAgeSeconds?: number
 }

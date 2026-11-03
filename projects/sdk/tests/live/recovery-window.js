@@ -9,7 +9,9 @@ import WebSocket from "ws"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createFailureClassifier, createReporter } from "./support/reporting.js"
 import { fromExit, settle as value } from "./support/results.js"
+import { createMemberRequestPacing } from "./support/member-request-pacing.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const sessionRestart = process.argv[3] === "--session-restart"
@@ -25,6 +27,9 @@ const observationWindowMs = 165_000
 const recoveryTimeoutMs = 50_000
 const delayedHelloMs = 750
 const report = createReporter({ mode }, { passed: true })
+// Keeps this check and others that request members within Fluxer's member request limit, which drops an extra request
+// without a reply
+const reserveMemberRequest = createMemberRequestPacing()
 let stage = "configuration"
 let lock
 let client
@@ -91,7 +96,7 @@ function observeGateway() {
     const verifySocket = (socket) => {
         const url = new URL(socket.url)
         assert.equal(url.protocol, "wss:")
-        assert.equal(url.host, "gateway.fluxer.app")
+        assert.equal(url.host, "gateway.fluxer.com")
     }
 
     WebSocket.prototype.send = function (data, ...args) {
@@ -219,6 +224,7 @@ function observeGateway() {
 }
 
 async function selectedBotStream() {
+    await reserveMemberRequest()
     const batches = []
     const accept = (chunk) => {
         assert.equal(chunk.guildId, guildId)
@@ -251,7 +257,7 @@ async function selectedBotStream() {
 
 async function verifyPostRecovery(cycle) {
     stage = `cycle_${cycle}_self_read`
-    const self = await value(client.users.fetchSelf({ timeoutMs: 10_000 }))
+    const self = await value(client.users.fetchSelf({ timeoutMs: pacedDeadlineMs(10_000, 1) }))
     assert.equal(self.id, botId)
     assert.equal(self.isBot, true)
     report(stage, { freshRead: true })
@@ -265,7 +271,8 @@ async function createDriver(sdk) {
     const options = {
         token,
         observe,
-        connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 },
+        // Startup includes the client's discovery and its paced slot
+        connection: { startupTimeoutMs: pacedDeadlineMs(45_000, 1, { clients: 1 }), maxStartupAttempts: 3 },
         ...(sessionRestart ? { sharding: { totalShards: 1, sessions } } : {}),
     }
     if (mode === "default") {
@@ -295,21 +302,18 @@ async function createDriver(sdk) {
     }
 }
 
-const watchdog = setTimeout(
-    () => {
-        console.log(
-            JSON.stringify({
-                mode,
-                check: stage,
-                passed: false,
-                category: "process_timeout",
-                lockRetained: lock !== undefined,
-            }),
-        )
-        process.exit(1)
-    },
-    sessionRestart ? 120_000 : 240_000,
-).unref()
+const watchdog = setTimeout(() => {
+    console.log(
+        JSON.stringify({
+            mode,
+            check: stage,
+            passed: false,
+            category: "process_timeout",
+            lockRetained: lock !== undefined,
+        }),
+    )
+    process.exit(1)
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")

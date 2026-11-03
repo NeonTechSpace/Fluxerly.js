@@ -74,7 +74,7 @@ The gateway is the live WebSocket connection that carries [events](/docs/glossar
 
 ### Gateway gap
 
-A gateway gap is a period when the connection may have missed events, such as while it recovers from a lost connection. A collector stops with an error after a gap, because replies may have been missed. A collector given a guild ID stops only when that community's shard recovers, and one without a guild ID stops when any shard does. See [Reliability](/docs/reliability/)
+A gateway gap is a period when the connection may have missed events, such as while it recovers from a lost connection. A collector stops with an error after a gap, because replies may have been missed. A collector given a guild ID stops only when that community's shard recovers, and one without a guild ID stops when any shard does. See [Events and collectors](/docs/events-and-collectors/#ask-a-question-without-missing-a-fast-reply)
 
 ### Guard
 
@@ -108,7 +108,7 @@ The SDK sends no gateway intents when it connects. To ask Fluxer not to send eve
 
 ### Log level
 
-Each SDK log record has a level. From least to most severe: Trace and Debug for detail that is off by default, Info for normal milestones such as readiness, Warn for problems the bot survives, such as a dropped event, and Error and Fatal for failures, such as a failed handler. See [Logging](/docs/logging/)
+Each SDK log record has a level. From least to most severe: Trace and Debug for detail that is off by default, Info for normal milestones such as readiness, Warn for problems the bot survives, such as a dropped event, and Error for failures, such as a failed handler. Fatal is the highest level, so a Fatal threshold hides failed handlers. See [Logging](/docs/logging/)
 
 ## M
 
@@ -160,7 +160,7 @@ A ResultAsync is a Result that is still being computed. Default API requests ret
 
 ### Resume
 
-A resume continues an existing [session](/docs/glossary/#session) after a lost connection, and Fluxer then sends the events the bot missed. When a session cannot be resumed, the SDK starts a new one with [Identify](/docs/glossary/#identify). See [Reliability](/docs/reliability/)
+A resume continues an existing [session](/docs/glossary/#session) after a lost connection, and Fluxer then replays most events the bot missed. Member lists, member chunks and thread lists are not replayed. When a session cannot be resumed, the SDK starts a new one with [Identify](/docs/glossary/#identify). See [Reliability](/docs/reliability/)
 
 ### Role
 

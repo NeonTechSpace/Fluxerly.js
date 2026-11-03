@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url"
 import { afterEach, expect, test, vi } from "vitest"
 import { copyHarnessSupport } from "./support/fixture-root.js"
 import { jsonLines } from "./support/json-lines.js"
+import { recoveredOnlyExitCode } from "./support/reporting.js"
 
 const childTimeoutMs = 60_000
 // Allow every sequential child its own limit, plus one child limit for fixture setup and cleanup
@@ -106,20 +107,21 @@ globalThis.fetch = async (input, init = {}) => {
     const url = new URL(String(input))
     const method = init.method ?? "GET"
     state.requests.push(method + " " + url.pathname + url.search)
-    const parts = url.pathname.split("/").filter(Boolean)
+    // Hosted API paths start with /api/v1. Anything else matches no route below
+    const parts = url.pathname.startsWith("/api/") ? url.pathname.slice("/api".length).split("/").filter(Boolean) : []
     const loseCloseResponse =
         state.loseCloseResponse === true && parts[0] === "v1" && parts[1] === "channels" && parts.length === 3 && method === "DELETE"
-    if (state.failPrivateList === true && method === "GET" && url.pathname === "/v1/users/@me/channels") {
+    if (state.failPrivateList === true && method === "GET" && url.pathname === "/api/v1/users/@me/channels") {
         writeFileSync(statePath, JSON.stringify(state))
         throw new TypeError("Test-owned private-list response loss")
     }
     let response
-    if (method === "GET" && url.pathname === "/v1/applications/@me")
+    if (method === "GET" && url.pathname === "/api/v1/applications/@me")
         response = reply(200, { id: "200", bot: { id: "300" } })
-    else if (method === "GET" && url.pathname === "/v1/users/@me") response = reply(200, { id: "300", bot: true })
-    else if (method === "GET" && url.pathname === "/v1/users/@me/channels") response = reply(200, privateChannels())
-    else if (method === "GET" && url.pathname === "/v1/guilds/100") response = reply(200, { id: "100" })
-    else if (method === "GET" && url.pathname === "/v1/guilds/100/members/400")
+    else if (method === "GET" && url.pathname === "/api/v1/users/@me") response = reply(200, { id: "300", bot: true })
+    else if (method === "GET" && url.pathname === "/api/v1/users/@me/channels") response = reply(200, privateChannels())
+    else if (method === "GET" && url.pathname === "/api/v1/guilds/100") response = reply(200, { id: "100" })
+    else if (method === "GET" && url.pathname === "/api/v1/guilds/100/members/400")
         response = reply(200, { user: { id: "400" } })
     else if (
         parts[0] === "v1" && parts[1] === "channels" && parts[3] === "messages" && parts.length === 4 && method === "GET"
@@ -262,10 +264,10 @@ test("recovery deletes a journaled message buried behind 100 unrelated messages 
         },
     )
     const result = runRecovery(root)
-    expect(result.status).toBe(0)
+    expect(result.status).toBe(recoveredOnlyExitCode)
     const state = readState(root)
     expect(state.deleted).toEqual(["700"])
-    expect(state.requests).toContain("GET /v1/channels/500/messages/700")
+    expect(state.requests).toContain("GET /api/v1/channels/500/messages/700")
     expect(state.requests.some((request: string) => request.includes("/messages?limit="))).toBe(false)
     expect(() => readFileSync(join(root, ".env.test.users.local"), "utf8")).toThrow()
 })
@@ -273,11 +275,11 @@ test("recovery deletes a journaled message buried behind 100 unrelated messages 
 test("recovery reconciles one pending DM open and restores list-visible open state", () => {
     const root = recoveryFixture(recoveryJournal({ dm: { wasOpen: false, opening: true } }), { messages: {} })
     const result = runRecovery(root)
-    expect(result.status).toBe(0)
+    expect(result.status).toBe(recoveredOnlyExitCode)
     const state = readState(root)
-    expect(state.requests).toContain("DELETE /v1/channels/500")
+    expect(state.requests).toContain("DELETE /api/v1/channels/500")
     expect(
-        state.requests.filter((request: string) => request === "GET /v1/users/@me/channels").length,
+        state.requests.filter((request: string) => request === "GET /api/v1/users/@me/channels").length,
     ).toBeGreaterThanOrEqual(3)
     expect(state.privateChannels).toEqual([])
     expect(() => readFileSync(join(root, ".env.test.users.local"), "utf8")).toThrow()
@@ -288,9 +290,9 @@ test("recovery accepts a test-opened DM already closed after its close response 
         messages: {},
         privateChannels: [],
     })
-    expect(runRecovery(root).status).toBe(0)
+    expect(runRecovery(root).status).toBe(recoveredOnlyExitCode)
     const state = readState(root)
-    expect(state.requests).not.toContain("DELETE /v1/channels/500")
+    expect(state.requests).not.toContain("DELETE /api/v1/channels/500")
     expect(() => readFileSync(join(root, ".env.test.users.local"), "utf8")).toThrow()
 })
 
@@ -306,9 +308,9 @@ test("recovery records an uncertain close and finishes after its next list readb
     state.loseCloseResponse = false
     state.failPrivateList = false
     writeFileSync(join(root, "state.json"), JSON.stringify(state))
-    expect(runRecovery(root).status).toBe(0)
+    expect(runRecovery(root).status).toBe(recoveredOnlyExitCode)
     state = readState(root)
-    expect(state.requests.filter((request: string) => request === "DELETE /v1/channels/500")).toHaveLength(1)
+    expect(state.requests.filter((request: string) => request === "DELETE /api/v1/channels/500")).toHaveLength(1)
     expect(() => readFileSync(join(root, ".env.test.users.local"), "utf8")).toThrow()
 })
 
@@ -339,7 +341,7 @@ test("recovery rejects an unverified journaled message channel before any messag
     expect(runRecovery(root).status).toBe(1)
     const state = readState(root)
     expect(state.deleted).toEqual([])
-    expect(state.requests).not.toContain("GET /v1/channels/600/messages/700")
+    expect(state.requests).not.toContain("GET /api/v1/channels/600/messages/700")
     expect(readFileSync(join(root, ".env.test.users.local"), "utf8")).toContain('"600"')
 })
 
@@ -350,7 +352,7 @@ test("recovery retains a completed message entry without its journaled ID", () =
     expect(runRecovery(root).status).toBe(1)
     const state = readState(root)
     expect(state.deleted).toEqual([])
-    expect(state.requests).not.toContain("GET /v1/channels/500/messages/undefined")
+    expect(state.requests).not.toContain("GET /api/v1/channels/500/messages/undefined")
     expect(readFileSync(join(root, ".env.test.users.local"), "utf8")).toContain(":dm-hello")
 })
 
@@ -367,10 +369,10 @@ test("recovery finds one pending lost-response send with bounded backwards histo
         },
     )
     const result = runRecovery(root)
-    expect(result.status).toBe(0)
+    expect(result.status).toBe(recoveredOnlyExitCode)
     const state = readState(root)
-    expect(state.requests).toContain("GET /v1/channels/500/messages?limit=100")
-    expect(state.requests).toContain("GET /v1/channels/500/messages?limit=100&before=901")
+    expect(state.requests).toContain("GET /api/v1/channels/500/messages?limit=100")
+    expect(state.requests).toContain("GET /api/v1/channels/500/messages?limit=100&before=901")
     expect(state.deleted).toEqual(["900"])
 })
 
@@ -401,7 +403,7 @@ test("recovery preserves an ownership mismatch and succeeds on a later verified 
     const state = readState(root)
     state.messages["700"] = message("700", entry.marker)
     writeFileSync(join(root, "state.json"), JSON.stringify(state))
-    expect(runRecovery(root).status).toBe(0)
+    expect(runRecovery(root).status).toBe(recoveredOnlyExitCode)
     expect(readState(root).deleted).toEqual(["700"])
     expect(() => readFileSync(join(root, ".env.test.users.local"), "utf8")).toThrow()
 })

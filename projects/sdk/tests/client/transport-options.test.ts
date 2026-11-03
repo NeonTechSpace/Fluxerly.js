@@ -25,7 +25,7 @@ const manifest = JSON.parse(readFileSync(new URL("../../package.json", import.me
 }
 /** The documented default: product token, SDK version and homepage from the package manifest */
 const defaultAgent = `Fluxerly.js/${manifest.version} (+${manifest.homepage})`
-const discoveryUrl = "https://fluxer.app/.well-known/fluxer"
+const discoveryUrl = "https://fluxer.com/.well-known/fluxer"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -86,7 +86,7 @@ describeBothApis("transport option", (mode) => {
         expect(seen).toEqual([
             { url: discoveryUrl, userAgent: defaultAgent, authorization: null },
             {
-                url: "https://api.fluxer.app/v1/users/@me",
+                url: "https://fluxer.com/api/v1/users/@me",
                 userAgent: defaultAgent,
                 authorization: `Bot ${fixtureToken}`,
             },

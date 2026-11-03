@@ -30,8 +30,9 @@ A plain string sends a text-only message. On success, `value` is the message Flu
 <details>
 <summary>What does a failed send say?</summary>
 
-The error message names the operation and Fluxer's answer, then Fluxer's code and the HTTP status, for example `Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)`.
-The error's `hint` suggests a next step. For a missing permission, `details.requiredPermissions` lists the permissions Fluxer checks for the operation, such as `["ViewChannel", "SendMessages"]` for a send, and the hint names them. Fluxer does not report which one is missing, so the bot may already have some of them. When Fluxer answers with a code this SDK version does not know yet, `details.providerCode` holds it. When Fluxer's answer does not have the expected shape, `details.responseField` names the field that failed
+The error message names the operation and Fluxer's answer, then Fluxer's code and the HTTP status, for example `Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)`. The error's `hint` suggests a next step. For a missing permission, `details.requiredPermissions` lists the permissions Fluxer checks for the operation, such as `["ViewChannel", "SendMessages"]` for a send, and the hint names them
+
+Fluxer does not report which one is missing, so the bot may already have some of them. When Fluxer answers with a code this SDK version does not know yet, `details.providerCode` holds it. When Fluxer's answer does not have the expected shape, `details.responseField` names the field that failed
 
 A rejection with HTTP 401 or 403 that the application handles also logs a Warn record with the code `rest.rejected`, because it usually points at a lasting token or permission problem. The SDK holds that Warn for up to one second. A handler's failure record replaces it only if the handler fails with the same rejection while the Warn is held and no `onError` hook is configured for that failure
 
@@ -46,13 +47,17 @@ Fluxer also delivers notices, such as a member joining or a pinned message, as m
 
 </details>
 
-A `messageCreate` or `messageUpdate` event for a community message can carry `message.member`, the author's community membership as Fluxer held it when it sent the event, with roles, nickname and join time. It is absent on messages from REST reads, direct messages, webhooks and authors who left the community, and the message cache does not keep it, so read it in the handler. With `cache.members` enabled, `members.get` then answers for that author without a request. The same member arrives as `reaction.member` on `messageReactionAdd` and `messageReactionRemove` events and as `typing.member` on `typingStart` events. A member that Fluxer sends in a form the SDK cannot read is left off, and the event still arrives
+A `messageCreate` or `messageUpdate` event for a community message can carry `message.member`, the author's community membership as Fluxer held it when it sent the event, with roles, nickname and join time. It is absent on messages from REST reads, direct messages, webhooks and authors who left the community, and the message cache does not keep it, so read it in the handler
 
-A `messageCreate` event, and no other message event, can also carry `message.channelType`, the numeric type of the channel, with 1 for a direct message and 3 for a group direct message, `message.mentionedHere`, which Fluxer sends only as `true` for a here mention, and `message.nicknames`, the nicknames of a group direct message keyed by user ID. REST reads and `messageUpdate` events never carry them, and the message cache does not keep them. A `messageDelete` event can carry `deletion.member`, the author's community membership without a username or bot flag, because Fluxer removes the member's user from it. The member cache does not store it
+With `cache.members` enabled, `members.get` then answers for that author without a request. The same member arrives as `reaction.member` on `messageReactionAdd` and `messageReactionRemove` events and as `typing.member` on `typingStart` events. A member that Fluxer sends in a form the SDK cannot read is left off, and the event still arrives
+
+A `messageCreate` event, and no other message event, can also carry `message.channelType`, the numeric type of the channel, with 1 for a direct message and 3 for a group direct message, `message.mentionedHere`, which Fluxer sends only as `true` for a here mention, and `message.nicknames`, the nicknames of a group direct message keyed by user ID
+
+REST reads and `messageUpdate` events never carry them, and the message cache does not keep them. A `messageDelete` event can carry `deletion.member`, the author's community membership without a username or bot flag, because Fluxer removes the member's user from it. The member cache does not store it
 
 Received messages can carry `message.messageReference`, which points at a replied-to or forwarded message, or at the source of an announcement copy or follow notice. Its `channelId` is always present, but `id` is optional. Check `id`, then build a `MessageReference` from both fields for a fetch or reply. A follow notice identifies only the source channel. See [announcement channels](/docs/announcement-channels/) for publishing messages and handling their copies
 
-Sends and edits accept only `MessageFlags.SuppressEmbeds` and `MessageFlags.SuppressNotifications`. The SDK rejects any other flag before sending the request. Fluxer sets `Crossposted`, `IsCrosspost` and `SourceMessageDeleted` itself
+Sends and edits accept `MessageFlags.SuppressEmbeds` and `MessageFlags.SuppressNotifications`. Message sends also accept `MessageFlags.VoiceMessage` for a [voice note](#mark-media-as-explicit-or-send-a-voice-note). Message sends include replies, direct messages, the first message of a forum post and webhook sends. Edits and webhook forwards reject that flag, and the SDK rejects any other flag before sending the request. Fluxer sets `Crossposted`, `IsCrosspost` and `SourceMessageDeleted` itself
 
 ## Mention someone deliberately
 
@@ -127,9 +132,11 @@ export async function postSchedule(client: Client, channelId: string) {
 }
 ```
 
-The `inline` option places fields side by side. The `color` method accepts a hex string such as `"#8b7cf8"`, a number or an RGB tuple, and `timestamp` accepts a `Date`, epoch milliseconds or an ISO 8601 string with a time zone. The send checks the embed against Fluxer's limits. It reads the builder once, so later builder changes do not alter the sent message. Use `messages.edit` for that. The builder's `build()` method returns the same embed as a plain object, which could also be written by hand
+The `inline` option places fields side by side. The `color` method accepts a hex string such as `"#8b7cf8"`, a number or an RGB tuple, and `timestamp` accepts a `Date`, epoch milliseconds or an ISO 8601 string with a time zone
 
-An embed's `image.url` or `thumbnail.url` can use `attachment://filename` to show a new image or video uploaded in the same request. The name must match exactly one upload, including case, and its extension must map to an image or video MIME type in Fluxer's filename lookup, such as AVIF or MP4. Referencing an existing attachment ID is not supported
+The send checks the embed against Fluxer's limits. It reads the builder once, so later builder changes do not alter the sent message. Use `messages.edit` for that. The builder's `build()` method returns the same embed as a plain object, which could also be written by hand
+
+An embed's `image.url` or `thumbnail.url` can use `attachment://filename` to show a new image or video uploaded in the same request. Avoid two dots in a row and names such as CON or AUX, because Fluxer renames those files and the reference then fails. The name must match exactly one upload, including case, and its extension must map to an image or video MIME type in Fluxer's filename lookup, such as AVIF or MP4. Referencing an existing attachment ID is not supported
 
 In a community channel, sending or editing a message with embeds needs the `EmbedLinks` permission. New communities grant it to everyone, but where it is removed, Fluxer rejects the whole message with a missing-permissions error instead of sending it without the embeds
 
@@ -175,6 +182,30 @@ export async function sendReport(client: Client, channelId: string, path: string
 
 The send reads the file while it uploads, so keep the file unchanged until the send finishes
 
+## Mark media as explicit or send a voice note
+
+Set `explicitMedia: true` on an attachment to mark it as sensitive, next to `spoiler`. Fluxer's apps then treat it like media that Fluxer's own check flags. The mark does not make Fluxer refuse the file. Fluxer still checks media itself and refuses explicit media where the community's explicit content filter applies, with `apiError.code` `explicitContentCannotBeSent`
+
+On a received attachment, the explicit-media mark is `(attachment.flags & (1 << 4)) !== 0`. It can be present even when `attachment.nsfw` is false or absent
+
+A voice note is an uploaded audio file that Fluxer's apps show with a player and a waveform. It has nothing to do with voice channels, which the SDK does not connect to. Send one with `MessageFlags.VoiceMessage` and exactly one audio attachment that has `duration` in whole seconds and `waveform`, the Base64 amplitude bytes the player draws. The SDK does not record or decode audio. Decode the file into the samples of its first channel, the one Fluxer's apps read, and `voiceWaveform(samples, sampleRate)` computes both values the way Fluxer's apps do, so the bars match a note recorded in Fluxer
+
+```ts
+import { MessageFlags, voiceWaveform, type Client } from "@neontechspace/fluxerly"
+
+// The samples are one channel of the decoded file, at sampleRate samples per second
+export async function sendVoiceNote(client: Client, channelId: string, audio: Uint8Array, samples: Float32Array, sampleRate: number) {
+    return await client.messages.send(channelId, {
+        attachments: [{ data: audio, filename: "note.ogg", contentType: "audio/ogg", ...voiceWaveform(samples, sampleRate) }],
+        flags: MessageFlags.VoiceMessage,
+    })
+}
+```
+
+With ffmpeg, `ffmpeg -i note.ogg -af 'pan=mono|c0=c0' -ar 48000 -f f32le -` writes the first channel as 32-bit float samples at 48,000 samples per second. Mixing the channels, as `-ac 1` does, gives other bars for a stereo file. Copy the output into a `Float32Array`, for example with `new Float32Array(new Uint8Array(output).buffer)`, and pass 48000 as the rate. Exact parity with Fluxer's apps needs the same first-channel samples at the same sample rate, which another decoder or resampling can change slightly. Ordinary decoded sample scales work, such as floats from -1 through 1 or 16-bit integers from a WAV file, because the waveform is relative to the loudest part
+
+A voice note cannot have content, embeds or stickers, and the SDK refuses those before sending. Fluxer also checks that the file is audio and that it is no longer than the instance allows, 1,200 seconds by default. `messages.send`, `messages.reply`, direct message sends, the first message of a forum or media post and webhook sends and replies accept voice notes. A waveform holds at most 4,096 characters, except in a webhook send or reply. Webhook files always go as multipart, where Fluxer reads a waveform of at most 256 characters, so a longer waveform fails locally on `attachments[].waveform`. A `voiceWaveform` result fits for audio up to 19.2 seconds, and `voiceWaveform(samples, sampleRate, { maxPoints: 192 })` fits for audio of any length. For audio over 19.2 seconds, each of its bars covers more audio than in a note recorded in Fluxer. Edits and webhook forwards do not accept voice notes. To keep an existing voice note as a voice note, omit `flags` when editing it. On the bot's own message, and on a webhook message edited through its webhook, supplying flags, including 0, clears its voice-note flag, and an edit cannot set it again. When the bot client edits another author's message, Fluxer requires Manage Messages in a community and changes only `SuppressEmbeds`, keeping the other flags
+
 ## Download an attachment when needed
 
 Received messages describe their attachments but do not download them. Set a byte limit and handle a failed download before processing any content
@@ -199,6 +230,35 @@ Check the file type and contents before processing downloaded bytes. The downloa
 
 Buffered downloads and `attachments.stream` preserve a sanitized cause for discovery and transport failures, including a safe code such as `ECONNRESET` when available. The original transport error, attachment URL and response body are not retained in that cause
 
+Attachment links can expire while the file still exists. The SDK does not refresh links automatically. Before downloading a stored link, call `attachments.refreshUrls` and use the returned URL. Refreshing does not restore a deleted file
+
+```ts
+import type { Attachment, Client } from "@neontechspace/fluxerly"
+
+export async function downloadStored(client: Client, attachment: Attachment) {
+    if (attachment.url === undefined) return
+    const refreshed = await client.attachments.refreshUrls([attachment.url])
+    if (refreshed.isErr()) return refreshed
+    const url = refreshed.value[0]?.refreshed ?? attachment.url
+    return client.attachments.download({ ...attachment, url }, { maxBytes: 64 * 1024 })
+}
+```
+
+The same steps in the Effect API:
+
+```ts
+import { Effect } from "effect"
+import type { Attachment, Client } from "@neontechspace/fluxerly/effect"
+
+export const downloadStored = (client: Client, attachment: Attachment) =>
+    Effect.gen(function* () {
+        if (attachment.url === undefined) return
+        const [link] = yield* client.attachments.refreshUrls([attachment.url])
+        const url = link?.refreshed ?? attachment.url
+        return yield* client.attachments.download({ ...attachment, url }, { maxBytes: 64 * 1024 })
+    })
+```
+
 ## Send a requested direct message
 
 Send a private message only after the recipient asks for one, for example through an opt-in command. The `directMessages.send` method opens the conversation with that user and sends the message
@@ -211,7 +271,7 @@ export async function sendRequestedDm(client: Client, recipientId: string) {
 }
 ```
 
-A send can still fail when the recipient's privacy settings block it. To reuse the conversation, `directMessages.open` returns its channel, and existing group conversations use the normal message methods with their channel ID. Creating groups is outside the SDK's supported operations. See [private conversations](/docs/api/js-ts/users-and-dms/#directmessages) for reads and permitted management actions
+A send can still fail when the recipient's privacy settings block it. To reuse the conversation, `directMessages.open` returns its channel, and existing group conversations use the normal message methods with their channel ID. No method creates a group conversation. Fluxer lets a bot create one with `client.rest.request` and `POST /users/@me/channels` with a `recipients` list, for people who share a community with the bot and allow it. Where the instance turns on CAPTCHA, Fluxer also asks for a solved challenge, which a raw request cannot send, so it fails with `apiError.code` `captchaRequired`. See [private conversations](/docs/api/js-ts/users-and-dms/#directmessages) for reads and permitted management actions
 
 ## Wire it up
 

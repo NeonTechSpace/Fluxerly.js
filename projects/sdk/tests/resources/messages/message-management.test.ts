@@ -48,9 +48,9 @@ async function fixture(now = () => performance.now()) {
         },
     })
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
-        expect(url.startsWith("https://api.fluxer.app/v1/channels/")).toBe(true)
+        expect(url.startsWith("https://fluxer.com/api/v1/channels/")).toBe(true)
         expect(init.redirect).toBe("error")
-        return realFetch(url.replace("https://api.fluxer.app", rest.origin), init)
+        return realFetch(url.replace("https://fluxer.com/api", rest.origin), init)
     })
     return { requests, control }
 }
@@ -235,7 +235,7 @@ test("route limits group message IDs by method/channel without blocking other me
     const client = defaultApi({ token })
     server.control.respond = (response, body, method) => {
         if (method === "PATCH" && server.requests.filter((r) => r.method === "PATCH").length === 1) {
-            response.writeHead(429).end(JSON.stringify({ retry_after: 0.25 }))
+            response.writeHead(429).end(JSON.stringify({ retry_after: 0.25, global: false }))
         } else response.end(JSON.stringify(wire(body?.content)))
     }
     const edit = client.messages.edit(target, { content: "stable" })

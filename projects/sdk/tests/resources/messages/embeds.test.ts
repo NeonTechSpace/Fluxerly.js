@@ -34,9 +34,9 @@ test.each(modes)(
         expect((await api.edit({ content: "Plain text", embeds: [] })).embeds).toEqual([])
         expect(server.requests.map((r) => r.method)).not.toContain("GET")
         expect(server.requests.map((r) => r.url)).toEqual([
-            "https://api.fluxer.app/v1/channels/20/messages",
-            "https://api.fluxer.app/v1/channels/20/messages",
-            ...Array.from({ length: 5 }, () => "https://api.fluxer.app/v1/channels/20/messages/10"),
+            "https://fluxer.com/api/v1/channels/20/messages",
+            "https://fluxer.com/api/v1/channels/20/messages",
+            ...Array.from({ length: 5 }, () => "https://fluxer.com/api/v1/channels/20/messages/10"),
         ])
     },
 )

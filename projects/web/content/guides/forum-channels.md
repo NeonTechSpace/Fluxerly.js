@@ -55,9 +55,11 @@ export function postTagNames(forum: GuildForumChannel, post: GuildThreadChannel)
 }
 ```
 
+To read the creator and first message of up to 100 posts in one call, pass their IDs to [`threads.fetchPostData`](/docs/api/js-ts/channels/#threads-fetchpostdata)
+
 ## Create a forum or media channel
 
-A `channels.create` call takes `ChannelType.Forum` or `ChannelType.Media` together with the channel's tags and post settings. The bot needs `ManageChannels`, and Fluxer rejects forum and media channels in a community where threads are not active, which `threadsActive` on `guilds.fetchPage` reports
+A `channels.create` call takes `ChannelType.Forum` or `ChannelType.Media` together with the channel's tags and post settings. The bot needs `ManageChannels`
 
 ```ts
 import { ChannelFlags, ChannelType, ForumLayout, ForumSortOrder, type Client } from "@neontechspace/fluxerly"
@@ -90,7 +92,7 @@ These settings are specific to forum and media channels, and the SDK rejects a s
 
 ## Set thread defaults on any thread parent
 
-Text, announcement, forum and media channels accept `defaultAutoArchiveMinutes`, one of the `ThreadAutoArchiveMinutes` values, and `defaultThreadRateLimitPerUser`, a slowmode in seconds from 0 to 21,600. A new thread copies the slowmode when its creation sets none. Fluxer stores the archive period but does not apply it, so a new thread uses `ThreadAutoArchiveMinutes.ThreeDays` unless its creation sets another period. In a community where threads are not active, Fluxer ignores both settings on text and announcement channels. Pass null to clear a default
+Text, announcement, forum and media channels accept `defaultAutoArchiveMinutes`, one of the `ThreadAutoArchiveMinutes` values, and `defaultThreadRateLimitPerUser`, a slowmode in seconds from 0 to 21,600. A new thread copies the slowmode when its creation sets none. Fluxer stores the archive period but does not apply it, so a new thread uses `ThreadAutoArchiveMinutes.ThreeDays` unless its creation sets another period. Pass null to clear a default
 
 ## Change a forum channel
 

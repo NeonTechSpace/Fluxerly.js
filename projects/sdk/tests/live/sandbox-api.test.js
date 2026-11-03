@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
+import { defaultIntervalMs } from "./support/live-pacing.js"
 import {
     createDeadlineSandboxApi,
     createRetryingSandboxApi,
@@ -91,15 +92,22 @@ test("a retry_after body field sets the wait when the header is missing", async 
 })
 
 test.each(Object.keys(factories))(
-    "%s fails a 429 whose wait exceeds ten seconds with its status and no retry",
+    "%s stops on a 429 whose wait exceeds ten seconds with its status and no retry",
     async (factory) => {
         const { calls, fetch } = scripted([limited(60)])
 
         const failure = await factories[factory](fetch)("GET", "/users/@me").catch((error) => error)
-        expect(failure).toMatchObject({ name: "AssertionError", code: "ERR_ASSERTION", status: 429 })
+        expect(failure).toMatchObject({ name: "LiveThrottledError", check: "throttled", status: 429, waitMs: 60_000 })
         expect(calls).toHaveLength(1)
     },
 )
+
+test("a 429 without a wait stops instead of resolving like an ordinary status", async () => {
+    const { calls, fetch } = scripted([new Response(null, { status: 429 })])
+    const api = createSandboxApi({ fetch, token: () => "token", accept: () => true })
+    await expect(api("GET", "/users/@me")).rejects.toMatchObject({ name: "LiveThrottledError", status: 429 })
+    expect(calls).toHaveLength(1)
+})
 
 test("a refused status fails as an assertion that carries only the status", async () => {
     const { fetch } = scripted([new Response(null, { status: 503 }), new Response(null, { status: 404 })])
@@ -169,19 +177,22 @@ test("the run deadline aborts a 429 wait without another request", async () => {
     expect(calls).toHaveLength(1)
 })
 
-test("requests without a run deadline are bounded by the edge window plus one attempt", async () => {
+test("requests without a run deadline are bounded by one minute plus one paced attempt", async () => {
     const limit = new AbortController()
     const attempt = new AbortController()
+    // Each attempt covers its 1.2 s timeout, the paced slots of up to five raw requests sent together with the margin,
+    // and one longest pause
+    const attemptMs = Math.ceil(1_200 + 5 * defaultIntervalMs * 1.25 + 10_000)
     const timeout = vi
         .spyOn(AbortSignal, "timeout")
-        .mockImplementation((milliseconds) => (milliseconds === 60_000 + 1_200 ? limit.signal : attempt.signal))
+        .mockImplementation((milliseconds) => (milliseconds === 60_000 + attemptMs ? limit.signal : attempt.signal))
     const { calls, fetch } = scripted([limited(5)])
     const sleep = controlledWait()
     const api = createSandboxApi({ fetch, token: () => "token", timeoutMs: 1_200, wait: sleep.wait })
     const pending = api("GET", "/users/@me")
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" })
     const waiting = await sleep.waiting
-    expect(timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([61_200, 1_200])
+    expect(timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([60_000 + attemptMs, attemptMs])
     expect(waiting.signal).toBe(limit.signal)
     limit.abort()
     await rejected

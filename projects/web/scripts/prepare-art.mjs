@@ -1,6 +1,5 @@
-// Builds the web derivatives in public/art from the accepted originals, which are kept outside this repository.
-// FLUXERLY_DESIGN names the folder that holds them, by default one beside this repository: the mascot's parts in
-// 01-current/mascot/layers, its finished picture and the icons in the icon family's png folder.
+// Builds the web derivatives in public/art from the accepted originals in art-source: the mascot's parts in mascot/layers,
+// its finished picture in mascot, the icons in icons and the social preview. Only the originals this script reads are kept there.
 // The originals stay untouched. Run with: pnpm prepare:art
 // Name steps to run only those, for example: pnpm prepare:art face icons
 
@@ -9,10 +8,10 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 
 const art = (name) => fileURLToPath(new URL(`../public/art/${name}`, import.meta.url))
-const design = process.env.FLUXERLY_DESIGN ?? fileURLToPath(new URL("../../../../Design/", import.meta.url))
-const layer = (name) => `${design}/01-current/mascot/layers/${name}.png`
-const family = `${design}/02-reference/icon-family-2026-10-29/photoshop/png/`
-const finished = `${family}mascot-faceted-conductor.png`
+const originals = fileURLToPath(new URL("../art-source/", import.meta.url))
+const layer = (name) => `${originals}mascot/layers/${name}.png`
+const family = `${originals}icons/`
+const finished = `${originals}mascot/mascot-faceted-conductor.png`
 
 const canvas = 2048
 // Tight box around the visible mascot inside the 2048 canvas, with a small margin.
@@ -149,7 +148,7 @@ const icons = [
 
 // The icons in the hero's sky, src/scene/companion-specs.ts, and the ones that never appear at section size
 const skyIcons = new Set(["announce-megaphone", "commands-key", "deploy-balloon", "events-bell", "first-reply-radio", "messages-plane", "star-drop"])
-const menuOnlyIcons = new Set(["api-book", "config-sliders", "emoji-jack", "permission-lock", "roles-tags", "webhook-hook"])
+const menuOnlyIcons = new Set(["config-sliders", "emoji-jack", "permission-lock", "roles-tags", "webhook-hook"])
 
 // An icon's whole picture: a multi-part icon keeps it in a folder of its own, with its parts
 async function wholeIcon(slug) {
@@ -224,8 +223,6 @@ async function writeParts() {
             }
             outline[i + 3] = Math.round(under * 255)
         }
-        const outlinePng = await sharp(outline, { raw: rawCanvas }).png({ compressionLevel: 9 }).toBuffer()
-        await writeFile(`${source}0-outline.png`, outlinePng)
 
         // A moving part takes the outline around it along, so none is left behind where it was. What no moving part claims stays still
         const stillOutline = Buffer.from(outline)
@@ -441,7 +438,7 @@ const mascotWidths = [1168, 876, 584]
 
 // The share picture every page's link preview shows, from the social preview at the size link previews ask for, and the favicon at
 // the sizes browsers, phones and search results ask for, from the one drawing in public/favicon.svg
-const socialPreview = `${design}/01-current/social-previews/fluxerly-github-social.png`
+const socialPreview = `${originals}fluxerly-github-social.png`
 
 async function writeSiteIcons() {
     await sharp(socialPreview).resize(1200, 630, { fit: "cover", position: "centre" }).flatten().jpeg({ quality: 90, mozjpeg: true }).toFile(fileURLToPath(new URL("../public/og-image.jpg", import.meta.url)))
@@ -464,6 +461,17 @@ async function writeEnding() {
     for (const part of ["fan", "fold", "seat"]) await writeSizes(await sharp(layer(`cap-${part}`)).png().toBuffer(), `ending-${part}`, 92, [584])
 }
 
+// The hero conductor's bow tie, which wiggles from its knot: the bow itself, and what lies under it, the frame's rim and nothing
+// below, cut to the bow's own shape. The page hides the painted bow with the bow's shape and lays these over it, so the live bow
+// can turn without the painted one showing behind it. At the mascot's own sizes, so it is exactly as sharp
+async function writeBow() {
+    const bow = await pixels(layer("bow"))
+    const under = await stacked(["bow"])
+    for (let i = 3; i < under.length; i += 4) under[i] = Math.round((under[i] * bow[i]) / 255)
+    await writeSizes(await sharp(layer("bow")).png().toBuffer(), "bow", 92, mascotWidths)
+    await writeSizes(await png(under), "bow-under", 92, mascotWidths)
+}
+
 // The conductor at a tiny size, written into the page itself, so it holds the conductor's place from the first frame
 async function writeMascotPreview() {
     const picture = await sharp(fileURLToPath(new URL("../public/art/mascot-584.webp", import.meta.url))).resize({ width: 120 }).webp({ quality: 60, alphaQuality: 70, effort: 6 }).toBuffer()
@@ -478,6 +486,7 @@ const steps = {
     face: writeFace,
     parts: writeParts,
     ending: writeEnding,
+    bow: writeBow,
     site: writeSiteIcons,
     icons: writeIcons,
     depth: writeDepth,

@@ -57,7 +57,7 @@
  * The [glossary](https://fluxerly.neontechspace.com/docs/glossary/) defines terms such as guild, gateway,
  * shard, frozen snapshot and uncertain write
  *
- * Coding agents: read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package
+ * Coding agents: Read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package
  *
  * @packageDocumentation
  */
@@ -76,6 +76,8 @@ export type {
 } from "./counts.js"
 export type { ColorInput, RgbColor } from "./colors.js"
 export type { TextSplitOptions, TextTruncateOptions } from "./text.js"
+export { voiceWaveform } from "./voice-notes.js"
+export type { VoiceWaveform, VoiceWaveformOptions } from "./voice-notes.js"
 export { AssetFormats, AssetUrlError } from "./assets.js"
 export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
 export { HelperError, TimestampStyles } from "./helpers.js"
@@ -154,6 +156,7 @@ export {
     GuildDefaultMessageNotifications,
     GuildVerificationLevels,
     GuildMfaLevels,
+    GuildNsfwLevels,
     GuildExplicitContentFilters,
     GuildContentWarningLevels,
     GuildSplashCardAlignments,
@@ -164,6 +167,7 @@ export type {
     GuildDefaultMessageNotification,
     GuildVerificationLevel,
     GuildMfaLevel,
+    GuildNsfwLevel,
     GuildExplicitContentFilter,
     GuildContentWarningLevel,
     GuildSplashCardAlignment,
@@ -195,6 +199,7 @@ export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
 export { UserOperationError } from "./users.js"
 export type {
     User,
+    ProfileBadge,
     UserProfile,
     UserProfileFields,
     UserProfileQuery,
@@ -286,6 +291,7 @@ export { OAuthOperationError, OAuthScopes } from "./oauth.js"
 export type {
     OAuthAuthorizationInput,
     OAuthActiveIntrospection,
+    OAuthAuthorization,
     OAuthConnection,
     OAuthCodeExchangeInput,
     OAuthConfig,
@@ -462,11 +468,13 @@ export type {
     ThreadEdit,
     ArchivedThreadScope,
     ArchivedThreadQuery,
+    ArchivedThreadIterationQuery,
     ArchivedThreadPage,
     ThreadSearchQuery,
     ThreadSearchIndexingPage,
     ThreadSearchResultsPage,
     ThreadSearchPage,
+    ForumPostData,
     ThreadMemberQuery,
     ThreadMemberPageQuery,
     ThreadMemberIterationQuery,
@@ -571,6 +579,10 @@ export type {
     EventMap,
     EventName,
     RawDispatch,
+    RawDispatchEvent,
+    DocumentedRawDispatch,
+    UndocumentedRawDispatch,
+    GatewayErrorEvent,
     TypingStart,
     PresenceUpdate,
     ObservedPresenceStatus,
@@ -580,12 +592,14 @@ export type {
     VoiceState,
     VoiceStateSnapshot,
 } from "./events.js"
+export type { GatewayDispatchPayloads, GatewayErrorData, GatewayPayloadObjects } from "./gateway-payloads.js"
 export type {
     CacheDiagnostic,
     CacheEntriesOptions,
     CachedResources,
     CacheKind,
     ClientDiagnostics,
+    RestRateLimitHold,
     ClientOptions,
     ConnectionRecoveryOptions,
     ConnectionState,
@@ -611,6 +625,11 @@ export type {
     WebhookMessageOperationOptions,
 } from "./api/default/options.js"
 export type {
+    InstanceBadge,
+    InstanceBadgeLookup,
+    InstanceBadgePage,
+    InstanceBadgePageQuery,
+    InstanceBadgeQuery,
     InstanceDomainMigration,
     InstanceEndpoints,
     InstanceOptions,
@@ -694,15 +713,21 @@ export type { Webhooks } from "./api/default/webhooks.js"
 export { createWebhookClient } from "./api/default/webhook-client.js"
 export type { WebhookClient } from "./api/default/webhook-client.js"
 export type { ClientCache } from "./api/default/cache.js"
-export type { RestRequest, RestRequests } from "./api/default/rest.js"
+export type { RestCallInput, RestRequest, RestRequests } from "./api/default/rest.js"
 export type { GatewayCommands } from "./api/default/gateway.js"
 export type { ClientLogging } from "./api/default/logging.js"
 export { RestRequestError } from "./rest.js"
+export type { RestRoutes } from "./rest-routes.js"
 export type {
+    RestCallArguments,
     RestOperation,
     RestOptions,
     RestRequestFailure,
     RestResponse,
+    RestRoute,
+    RestRouteInput,
+    RestRouteOptions,
+    RestRouteResponse,
     TransportOptions,
     WebSocketLike,
     WebSocketOptions,

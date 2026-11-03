@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Scope } from "effect"
 import { err } from "neverthrow"
-import { expect, onTestFinished, test } from "vitest"
+import { describe, expect, onTestFinished, test, vi } from "vitest"
 import { ApplicationError, ClientClosedError } from "../../src/index.js"
 import {
     createTestBot as createDefaultTestBot,
@@ -165,6 +165,11 @@ test.each(modes)("%s say rejects misuse and use before ready", async (mode) => {
     await bot.ready()
     expect(await failure(() => bot.say(42 as never))).toMatchObject({ _tag: "ConfigurationError" })
     expect(await failure(() => bot.say("!ping", { timeoutMs: 0 }))).toMatchObject({ _tag: "ConfigurationError" })
+    // A misspelled timeout key fails instead of leaving the wait without a deadline
+    expect(await failure(() => bot.say("!ping", { timeOutMs: 20 } as never))).toMatchObject({
+        _tag: "ConfigurationError",
+        hint: expect.stringContaining('Did you mean "timeoutMs"?'),
+    })
     expect(await failure(() => bot.say("!ping", { message: "x" as never }))).toMatchObject({
         _tag: "ConfigurationError",
     })
@@ -172,6 +177,35 @@ test.each(modes)("%s say rejects misuse and use before ready", async (mode) => {
     expect(bot.requests()).toEqual([])
     await bot.shutdown()
     expect(await failure(() => bot.say("!ping"))).toBeInstanceOf(ClientClosedError)
+})
+
+describe("a rejected reply", () => {
+    const rejected = { status: 403, body: { code: "MISSING_PERMISSIONS", message: "fixture" } }
+    const commands: NonNullable<Parameters<typeof createDefaultTestBot>[0]>["commands"] = {
+        prefix: "!",
+        commands: { ping: { execute: ({ reply }) => reply("Pong!") } },
+    }
+
+    test("still appears in say, and fails the test through failures() without an onError hook", async () => {
+        await using bot = createDefaultTestBot({ commands })
+        await bot.ready()
+        bot.rest.respond("POST /channels/:id/messages", rejected)
+        expect((await bot.say("!ping")).map((message) => message.content)).toEqual(["Pong!"])
+        expect(bot.failures()).toEqual([expect.objectContaining({ code: "commands.failed" })])
+    })
+
+    test("still appears in say, and an onError hook takes it out of failures()", async () => {
+        const reports: unknown[] = []
+        await using bot = createDefaultTestBot({
+            commands,
+            onError: (report) => void reports.push(report),
+        })
+        await bot.ready()
+        bot.rest.respond("POST /channels/:id/messages", rejected)
+        expect((await bot.say("!ping")).map((message) => message.content)).toEqual(["Pong!"])
+        await vi.waitFor(() => expect(reports).toHaveLength(1))
+        expect(bot.failures()).toEqual([])
+    })
 })
 
 test.each(modes)("%s a failed test bot setup rejects ready before connecting", async (mode) => {

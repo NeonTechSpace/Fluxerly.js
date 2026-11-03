@@ -171,6 +171,9 @@ export type MessageCleanupErrorReason = "filter" | "closed" | "input" | MessageO
  */
 export type MessageCleanupOutcome = "notDispatched" | "rejected" | "unknown"
 
+/** Transient cleanup failures whose usual advice, to retry, does not work because the plan is single-use */
+const planUsedUpReasons: ReadonlySet<string> = new Set(["busy", "timeout", "network", "rateLimit"])
+
 /** A cleanup preview or deletion failed, with selected IDs and batch progress where available.
  * Preview never deletes. Cleanup can fail after earlier batches received successful responses.
  * The submittedBatches field describes only those earlier responses. The terminalBatchIds field identifies the failed or uncertain request when reached.
@@ -252,18 +255,24 @@ export class MessageCleanupError extends FluxerlyError {
                 apiError,
                 inputExplanation: inputValidation?.explanation ?? null,
                 retryAfterMs,
-                facts: { providerCode, responseField },
+                // A preview only reads, so a failure cannot have deleted anything
+                facts: { providerCode, responseField, read: phase === "preview" },
             }),
             {
                 code: `cleanup.${reason}`,
-                hint: operationFailureHint({
-                    reason,
-                    outcome,
-                    status,
-                    retryAfterMs,
-                    apiError,
-                    inputPath: inputValidation?.path ?? null,
-                }),
+                // A plan works only once, so a cleanup stopped by a transient failure needs a new preview
+                hint:
+                    phase === "cleanup" && planUsedUpReasons.has(reason)
+                        ? "This preview plan is used up. Check submittedBatches and terminalBatchIds, then preview again to delete the rest"
+                        : operationFailureHint({
+                              reason,
+                              outcome,
+                              status,
+                              retryAfterMs,
+                              apiError,
+                              read: phase === "preview",
+                              inputPath: inputValidation?.path ?? null,
+                          }),
                 cause: options.cause,
                 details: operationDetails({
                     phase,
@@ -274,6 +283,7 @@ export class MessageCleanupError extends FluxerlyError {
                     scannedCount,
                     providerCode,
                     responseField,
+                    read: phase === "preview" ? true : undefined,
                 }),
             },
         )

@@ -1,5 +1,5 @@
 // Opt-in hosted Fluxer protocol probe, not an SDK connection implementation
-// Protocol: https://docs.fluxer.app/gateway/overview/
+// Protocol: https://docs.fluxer.com/gateway/overview/
 // Creates no journal and changes no server content: identity and gateway discovery reads, then one gateway session
 // that identifies, heartbeats and closes cleanly
 import { HarnessCheckError, acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
@@ -174,7 +174,7 @@ try {
     const gateway = await get("/gateway/bot", token, "gateway_discovery")
     stage = "gateway_endpoint"
     const url = new URL(gateway.url)
-    if (url.protocol !== "wss:" || url.hostname !== "gateway.fluxer.app" || url.port || url.username || url.password) {
+    if (url.protocol !== "wss:" || url.hostname !== "gateway.fluxer.com" || url.port || url.username || url.password) {
         throw new ProbeFailure(stage)
     }
     url.search = "?v=1&encoding=json"

@@ -15,11 +15,12 @@ import {
     loadSandboxEnvironment,
     openJournal,
     processValue,
-    verifySandboxIdentity,
+    sandboxBotId,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createDeadlineSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 // Guild mode requires current authorization to erase the designated bot's entire sandbox guild history
 const mode = process.argv[2]
@@ -45,7 +46,12 @@ let requestDeadline = operationDeadline.signal
 
 const report = createReporter({ mode, scope: reportsScope }, { passed: true })
 const save = () => journalFile.save(journal)
-const deadlineTimer = setTimeout(() => operationDeadline.abort(), 150_000).unref()
+// Whole-run bounds sized from the shared pacer. The operation makes at most 58 requests, counting every lost-response
+// reconciliation: identity, membership, the owned channels, threads and messages, discovery and the deletion stages.
+// Cleanup makes at most 18. The process watchdog in support/watchdogs.js covers both
+const operationMs = pacedDeadlineMs(150_000, 58, { clients: 1 })
+const cleanupMs = pacedDeadlineMs(30_000, 18)
+const deadlineTimer = setTimeout(() => operationDeadline.abort(), operationMs).unref()
 // This is failure containment, not cleanup evidence. The journal remains for a later verified recovery
 const watchdog = setTimeout(() => {
     console.error(
@@ -59,7 +65,7 @@ const watchdog = setTimeout(() => {
         }),
     )
     process.exit(1)
-}, 180_000).unref()
+}, harnessWatchdogMs()).unref()
 
 const api = createDeadlineSandboxApi({ fetch: rawFetch, token: () => token, deadline: () => requestDeadline })
 
@@ -301,8 +307,8 @@ async function deleteOwnMessages(target, kind) {
     const requests = []
     let attempts = 0
     const expectedPath = guildMode
-        ? `/v1/users/@me/guilds/${guildId}/messages/bulk-delete-mine`
-        : `/v1/channels/${target.id}/messages/bulk-delete-mine`
+        ? `/api/v1/users/@me/guilds/${guildId}/messages/bulk-delete-mine`
+        : `/api/v1/channels/${target.id}/messages/bulk-delete-mine`
     globalThis.fetch = async (url, init) => {
         if (init?.method !== "POST" || new URL(String(url)).pathname !== expectedPath) return rawFetch(url, init)
         attempts++
@@ -364,7 +370,7 @@ async function deleteOwnMessages(target, kind) {
 async function cleanup() {
     if (!verified || !journal) return
     const priorRequestDeadline = requestDeadline
-    requestDeadline = AbortSignal.timeout(30_000)
+    requestDeadline = AbortSignal.timeout(cleanupMs)
     try {
         assertJournal()
         // The threads go first, while their parent still exists to locate one whose creation response was lost
@@ -449,8 +455,7 @@ try {
         )
 
     stage = "sandbox_identity"
-    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
-    botId = identity.botId
+    botId = await sandboxBotId(async (path) => (await api("GET", path)).data, sandbox)
     await assertBotMembership()
     verified = true
     report(stage)
@@ -459,6 +464,7 @@ try {
     if (journalFile.exists()) {
         journal = journalFile.read()
         await cleanup()
+        recoveredOnly()
         report("recovery_only_no_history_deletion")
     } else {
         journal = {

@@ -1,24 +1,34 @@
 ---
 // A comment's parts. The lead is the summary's first paragraph, so a signature can follow it closely. Its first
-// sentence is the summary and the further sentences one quieter paragraph after it.
-// The body is the rest of the summary, and the rest is the default value, remarks, examples and links
+// sentence is the summary and the further sentences one quieter paragraph after it. On a symbol's own page the lead is the
+// first sentence alone, so the declaration follows the summary, and the further sentences open the body.
+// The body is the rest of the summary, and the rest is the default value, remarks, examples and links. A nested option
+// shows its default value on its own, as its remarks and examples would crowd its row. A symbol's own page folds long
+// remarks away under its name, so its members are not pushed far down the page
 import type { Doc } from "../../../lib/reference"
-import { leadParagraphs } from "../../../lib/markdown"
+import { isLong, leadParagraphs, shortParagraphs, splitLead } from "../../../lib/paragraphs"
 import Md from "./Md.astro"
 
 interface Props {
     doc?: Doc
-    part: "lead" | "body" | "rest"
+    part: "lead" | "body" | "default" | "rest"
     /** The reference URL of the symbol the comment documents */
     self?: string
+    /** The name to fold long remarks under */
+    fold?: string
+    /** The lead is the first sentence alone, and the body starts with the rest of it */
+    brief?: boolean
 }
 
-const { doc, part, self } = Astro.props
+const { doc, part, self, fold, brief = false } = Astro.props
 // Split at the first blank line, unless the first block opens a code fence
 const summary = doc?.summary ?? ""
 const split = summary.search(/\n\s*\n/)
 const head = split < 0 || summary.slice(0, split).includes("```") ? summary : summary.slice(0, split)
-const body = summary.slice(head.length).trim()
+const [first, further] = brief ? splitLead(head) : [leadParagraphs(head), undefined]
+const body = [further, shortParagraphs(summary.slice(head.length).trim())].filter(Boolean).join("\n\n")
+// The reference stores a default value as a fenced block, and one line of code reads best inside its sentence
+const defaultValue = doc?.defaultValue?.trim().replace(/^```\w*\n([^\n`]+)\n```$/, "`$1`")
 ---
 
 {
@@ -29,20 +39,31 @@ const body = summary.slice(head.length).trim()
                     <strong>Deprecated.</strong> <Md md={doc.deprecated} inline self={self} />
                 </p>
             )}
-            <Md md={leadParagraphs(head)} class="ref-summary" self={self} />
+            <Md md={first} class="ref-summary" self={self} />
         </>
     )
 }
 {doc && part === "body" && <Md md={body} self={self} />}
 {
+    defaultValue && (part === "default" || part === "rest") && (
+        <p class="ref-note">
+            Default <Md md={defaultValue} inline self={self} />
+        </p>
+    )
+}
+{
     doc && part === "rest" && (
         <>
-            {doc.defaultValue && (
-                <p class="ref-note">
-                    Default <Md md={doc.defaultValue} inline self={self} />
-                </p>
+            {fold && isLong(doc.remarks) ? (
+                <details class="ref-fold">
+                    <summary>
+                        More About <code>{fold}</code>
+                    </summary>
+                    <Md md={shortParagraphs(doc.remarks)} self={self} />
+                </details>
+            ) : (
+                <Md md={shortParagraphs(doc.remarks)} self={self} />
             )}
-            <Md md={doc.remarks} self={self} />
             {doc.examples?.map((example) => <Md md={example} class="ref-example" self={self} />)}
             {!!doc.see?.length && (
                 <p class="ref-note">

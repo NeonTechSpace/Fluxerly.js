@@ -64,12 +64,12 @@ export interface SupervisorChildOptions {
      */
     readonly token: string | undefined
     /** Every client setting except token is read by property name and copied before configure, including inherited and
-     * non-enumerable properties. The supervisor assigns the shards, so sharding accepts only sessions.
+     * non-enumerable properties. The supervisor assigns the shards, so sharding accepts only sessions and refillCaches.
      * Runtime validation rejects a token, a shard plan or identify coordinator in sharding, and any other own key that
      * is not a client option, with ConfigurationError
      */
     readonly clientOptions?: Omit<ClientOptions, "token" | "sharding"> & {
-        /** Session storage for the assigned shards. The parent assigns the shards and paces Identify, so only sessions is accepted */
+        /** Session storage and cache refill for the assigned shards. The parent assigns the shards and paces Identify, so only sessions and refillCaches are accepted */
         readonly sharding?: SupervisorChildSharding
     }
     /** Register subscriptions and local application behavior before the helper calls client.run.
@@ -152,7 +152,8 @@ export interface SupervisorTools {
          * The helper cannot forcibly stop a configure promise that ignores cancellation and does not wait for it.
          * The options are read once before waiting for the assignment, and a throwing option getter rejects with
          * SdkDefect code application.defect and the thrown value as its cause.
-         * Defects reject with SdkDefect, retaining accompanying typed failures without private error text
+         * Defects reject with SdkDefect, retaining accompanying typed failures without private error text.
+         * Expected failures are returned in the Result, not printed. Check the result in the child module, print describeError(result.error) and set process.exitCode so the reason reaches the parent's output
          */
         run(
             options: SupervisorChildOptions,

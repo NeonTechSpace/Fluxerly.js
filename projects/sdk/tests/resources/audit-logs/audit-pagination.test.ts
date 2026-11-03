@@ -38,7 +38,7 @@ async function fixture(mode: Mode) {
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const parsed = new URL(url)
         requests.push(parsed)
-        expect(parsed.pathname).toBe("/v1/guilds/20/audit-logs")
+        expect(parsed.pathname).toBe("/api/v1/guilds/20/audit-logs")
         expect(init.method).toBe("GET")
         return control.respond(parsed, init)
     })

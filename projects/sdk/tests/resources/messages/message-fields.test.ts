@@ -17,7 +17,7 @@ import { settle } from "../../support/settle.js"
 import { expectDefect, expectThrown } from "../defects.js"
 
 vi.mock("ws", (original) => import("../../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
-const hostedGateway = "wss://gateway.fluxer.app/?v=1&encoding=json"
+const hostedGateway = "wss://gateway.fluxer.com/?v=1&encoding=json"
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -383,7 +383,7 @@ test.each(
 /** Deliver dispatches synchronously on the SDK socket, in sequence with READY */
 async function gateway() {
     const server = await startSynchronousGateway({ heartbeatIntervalMs: 600_000 })
-    stubFetchWithHostedDiscovery(async () => Response.json({ url: "wss://gateway.fluxer.app" }))
+    stubFetchWithHostedDiscovery(async () => Response.json({ url: "wss://gateway.fluxer.com" }))
     return (event: string, payload: unknown) => server.deliverNow(event, payload)
 }
 
@@ -488,7 +488,6 @@ test.each(modes)("%s excluded malformed REST fields still reject the response", 
         { message_snapshots: [{ ...wire().message_snapshots[0], timestamp: "2025-02-29T00:00:00Z" }] },
         { nsfw_emojis: null },
         { nsfw_emojis: ["not-an-id"] },
-        { users: [{ ...author, mention_flags: 3 }] },
         { referenced_message: { ...referenced, referenced_message: null } },
     ]) {
         stubFetchWithHostedDiscovery(async () => Response.json({ ...wire(), ...fields }))
@@ -551,6 +550,23 @@ test.each(modes)("%s received mention preferences never opt a reply into notifyi
     expect(bodies[0]).toMatchObject({ allowed_mentions: { parse: [], users: [], roles: [], replied_user: false } })
 })
 
+// Catches: A mention preference Fluxer adds later rejected the whole message instead of leaving out the field
+test.each(modes)("%s an unknown mention preference is left out of the author and referenced users", async (mode) => {
+    const api = await setup(mode, ["referencedUsers"])
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json({
+            ...wire(),
+            author: { ...author, mention_flags: 3 },
+            users: [{ ...author, id: "36", username: "referenced", bot: false, mention_flags: 9 }],
+        }),
+    )
+    const received = await settle(api.client.messages.fetch(target))
+    expect(received.author.id).toBe(author.id)
+    expect(received.author).not.toHaveProperty("mentionFlags")
+    expect(received.referencedUsers?.[0]).toMatchObject({ id: "36", username: "referenced" })
+    expect(received.referencedUsers?.[0]).not.toHaveProperty("mentionFlags")
+})
+
 test.each(modes)("%s retained cache and collector budgets account for the selected projection", async (mode) => {
     const dispatch = await gateway()
     const core = {
@@ -574,7 +590,7 @@ test.each(modes)("%s retained cache and collector budgets account for the select
     const maxBytes = Buffer.byteLength(JSON.stringify(core))
     const api = await setup(mode, [], undefined, maxBytes)
     stubFetchWithHostedDiscovery(async (url) =>
-        Response.json(url.endsWith("/gateway/bot") ? { url: "wss://gateway.fluxer.app" } : wire()),
+        Response.json(url.endsWith("/gateway/bot") ? { url: "wss://gateway.fluxer.com" } : wire()),
     )
     const fetched = await settle(api.client.messages.fetch(target))
     expect(fetched).toEqual(core)

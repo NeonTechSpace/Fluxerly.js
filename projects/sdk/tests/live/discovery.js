@@ -16,9 +16,10 @@ import {
     processAuthorized,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -64,7 +65,7 @@ const watchdog = setTimeout(() => {
         JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: journalFile.exists() }),
     )
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 try {
     lock = acquireLock()
     const sandbox = loadSandboxEnvironment({ processOverrides: true })
@@ -85,6 +86,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")

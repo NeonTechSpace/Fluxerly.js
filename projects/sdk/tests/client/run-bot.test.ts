@@ -215,14 +215,14 @@ describe("public runBot", () => {
         await handled.promise
         expect(requests).toEqual([
             {
-                url: "https://api.fluxer.app/v1/channels/20/messages",
+                url: "https://fluxer.com/api/v1/channels/20/messages",
                 body: expect.objectContaining({
                     content: "Pong!",
                     message_reference: expect.objectContaining({ message_id: "10", channel_id: "20" }),
                 }),
             },
             {
-                url: "https://api.fluxer.app/v1/channels/20/messages",
+                url: "https://fluxer.com/api/v1/channels/20/messages",
                 body: expect.objectContaining({
                     content: "Pong again",
                     message_reference: expect.objectContaining({ message_id: "10", channel_id: "20" }),

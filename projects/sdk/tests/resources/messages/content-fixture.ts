@@ -80,7 +80,7 @@ export async function fixture() {
     const gateway = await startGatewayServer({ sessionId: "fixture" })
     const deliver = (event: string) => gateway.dispatch(event, message)
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
-        if (url.endsWith("/gateway/bot")) return Response.json({ url: "wss://gateway.fluxer.app" })
+        if (url.endsWith("/gateway/bot")) return Response.json({ url: "wss://gateway.fluxer.com" })
         const body = init.body ? JSON.parse(String(init.body)) : undefined
         requests.push({ url, method: init.method!, body })
         if (init.method === "POST" || init.method === "PATCH") {

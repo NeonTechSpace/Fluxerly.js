@@ -14,9 +14,10 @@ import {
     openJournal,
     processValue,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 // Manual, current-authorization check only. FLUXER_TEST_MEMBER_ID must come from this invocation, never the env file
 const mode = process.argv[2]
@@ -92,7 +93,7 @@ async function cleanup() {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
-}, 90_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     // An existing lock, including a stale one, is a failure: do not bypass another run or delete its recovery state
@@ -122,6 +123,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         target = await fetchTarget()
         report(stage)
     } else {
@@ -162,7 +164,7 @@ try {
             const body = options?.body === undefined ? undefined : JSON.parse(String(options.body))
             if (
                 options?.method === "PATCH" &&
-                url.pathname === `/v1/guilds/${guildId}/members/${memberId}` &&
+                url.pathname === `/api/v1/guilds/${guildId}/members/${memberId}` &&
                 body?.nick === journal.changedNickname
             ) {
                 assert.equal(markerDispatches, 0, "The lost-response nickname write must not retry")

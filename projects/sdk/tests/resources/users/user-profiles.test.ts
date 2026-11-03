@@ -59,7 +59,7 @@ const guildFields = (extra: Record<string, unknown> = {}) => ({
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(url, init),
     )
 }
@@ -134,7 +134,7 @@ test.each(modes)("%s projects an explicit guild-context profile without private 
     expect(JSON.stringify(result)).not.toContain("private")
     expect(calls).toEqual([
         {
-            path: "/v1/users/30/profile",
+            path: "/api/v1/users/30/profile",
             query: "?guild_id=20",
             method: "GET",
             authorization: `Bot ${fixtureToken}`,
@@ -203,8 +203,8 @@ test.each(modes)("%s avoids all user-cache writes and invalidation", async (mode
     let rejected = false
     rest(async (url) => {
         const path = new URL(url).pathname
-        if (path === "/v1/users/30") return Response.json(user("30", { username: "cached" }))
-        if (path === "/v1/users/30/profile")
+        if (path === "/api/v1/users/30") return Response.json(user("30", { username: "cached" }))
+        if (path === "/api/v1/users/30/profile")
             return rejected ? Response.json({}, { status: 403 }) : Response.json(profile())
         throw Error(`Unexpected profile request ${path}`)
     })
@@ -311,5 +311,120 @@ test.each(modes)("%s retries profile reads, redacts failure bodies, and awaits c
     } finally {
         // Release the held cleanup so a failed assertion does not stall client shutdown
         cleanup.resolve()
+    }
+})
+
+const badge = (extra: Record<string, unknown> = {}) => ({
+    key: "staff",
+    kind: "staff",
+    label: "Fluxer Staff",
+    asset: "0123456789abcdef",
+    asset_url: null,
+    aspect_ratio: null,
+    caption: null,
+    href: "https://fluxer.com/staff",
+    ...extra,
+})
+
+test.each(modes)("%s keeps public profile badges in order, unknown kinds included", async (mode) => {
+    let response: unknown = profile("30", {
+        profile_badges: [
+            badge({ small_asset: "fedcba9876543210", accessible_label: null, details: null, count: null }),
+            badge({
+                key: "custom:40",
+                kind: "custom",
+                label: "Event winner",
+                asset: null,
+                asset_url: "https://cdn.example.test/badges/40.webp",
+                aspect_ratio: 2.5,
+                caption: "#1",
+                href: null,
+                count: 3,
+                accessible_label: "Event winner, 3 times",
+                details: { title: "Event winner", lines: ["Spring", "Autumn"] },
+            }),
+            badge({ key: "future_kind", kind: "future_kind", label: "Something new", asset: null, extra: true }),
+        ],
+    })
+    rest(async () => Response.json(response))
+    const api = await profiles(mode)
+
+    const result = await api.fetchProfile()
+
+    expect(result.profileBadges).toStrictEqual([
+        {
+            key: "staff",
+            kind: "staff",
+            label: "Fluxer Staff",
+            asset: "0123456789abcdef",
+            assetUrl: null,
+            smallAsset: "fedcba9876543210",
+            aspectRatio: null,
+            caption: null,
+            href: "https://fluxer.com/staff",
+        },
+        {
+            key: "custom:40",
+            kind: "custom",
+            label: "Event winner",
+            asset: null,
+            assetUrl: "https://cdn.example.test/badges/40.webp",
+            aspectRatio: 2.5,
+            caption: "#1",
+            href: null,
+            count: 3,
+            accessibleLabel: "Event winner, 3 times",
+            details: { title: "Event winner", lines: ["Spring", "Autumn"] },
+        },
+        {
+            key: "future_kind",
+            kind: "future_kind",
+            label: "Something new",
+            asset: null,
+            assetUrl: null,
+            aspectRatio: null,
+            caption: null,
+            href: "https://fluxer.com/staff",
+        },
+    ])
+    expect(
+        Object.isFrozen(result.profileBadges) &&
+            result.profileBadges!.every(Object.isFrozen) &&
+            Object.isFrozen(result.profileBadges![1]!.details) &&
+            Object.isFrozen(result.profileBadges![1]!.details!.lines),
+    ).toBe(true)
+
+    // An empty list stays empty, and an instance that sends no list leaves the field out
+    response = profile("30", { profile_badges: [] })
+    expect((await api.fetchProfile()).profileBadges).toStrictEqual([])
+    response = profile("30")
+    expect(Object.hasOwn(await api.fetchProfile(), "profileBadges")).toBe(false)
+
+    // Instances from before custom badges send neither key nor asset_url
+    response = profile("30", { profile_badges: [badge({ key: undefined, asset_url: undefined })] })
+    expect((await api.fetchProfile()).profileBadges).toMatchObject([{ key: "staff", assetUrl: null }])
+})
+
+test.each(modes)("%s rejects malformed profile badges as a malformed response", async (mode) => {
+    let response: unknown
+    rest(async () => Response.json(response))
+    const api = await profiles(mode)
+    for (const badges of [
+        {},
+        [null],
+        [badge({ kind: 1 })],
+        [badge({ label: undefined })],
+        [badge({ asset: 1 })],
+        [badge({ asset_url: 1 })],
+        [badge({ aspect_ratio: 0 })],
+        [badge({ count: 1.5 })],
+        [badge({ details: { title: "x", lines: [1] } })],
+    ]) {
+        response = profile("30", { profile_badges: badges })
+        await expect(api.fetchProfile()).rejects.toMatchObject({
+            _tag: "UserOperationError",
+            operation: "users.fetchProfile",
+            reason: "response",
+        })
     }
 })

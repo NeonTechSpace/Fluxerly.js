@@ -70,9 +70,17 @@ async function convert() {
         const project = await app.convert()
         if (!project || app.logger.hasErrors()) throw new Error("TypeDoc could not convert the SDK declarations")
         const gaps = { undocumented: [], notExported: [], other: [] }
+        // The generated REST route types name Fluxer's API schemas, which stay private to that file. Each route links
+        // Fluxer's own documentation for them, so they are left out of the reference on purpose
+        const routeSchema = /, defined in \S*\/(?:src\/rest-routes\.ts|dist\/rest-routes\.d\.ts), is referenced by /
+        // The generated gateway payload types do the same: GatewayDispatchPayloads and GatewayPayloadObjects name private
+        // payload and object types whose fields carry Fluxer's descriptions in editors, and each entry links Fluxer's docs
+        const gatewaySchema = /, defined in \S*\/(?:src\/gateway-payloads\.ts|dist\/gateway-payloads\.d\.ts), is referenced by /
         app.logger.validationWarning = (message) => {
             if (message.endsWith(" does not have any documentation")) gaps.undocumented.push(message)
-            else if (message.endsWith(" but not included in the documentation")) gaps.notExported.push(message)
+            else if (message.endsWith(" but not included in the documentation")) {
+                if (!routeSchema.test(message) && !gatewaySchema.test(message)) gaps.notExported.push(message)
+            }
             else gaps.other.push(message)
         }
         app.validate(project)

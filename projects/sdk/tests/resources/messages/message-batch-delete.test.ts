@@ -11,7 +11,7 @@ test("default batches copy IDs, use canonical JSON and preserve unselected cache
     const calls: RequestInit[] = []
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         if (init.method === "GET") return Response.json(wire(url.split("/").at(-1)!))
-        expect(url).toBe("https://api.fluxer.app/v1/channels/20/messages/bulk-delete")
+        expect(url).toBe("https://fluxer.com/api/v1/channels/20/messages/bulk-delete")
         calls.push(init)
         return new Response(null, { status: 204 })
     })

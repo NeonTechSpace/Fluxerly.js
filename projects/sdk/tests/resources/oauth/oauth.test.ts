@@ -9,6 +9,7 @@ import {
     createClient,
     describeError,
     display,
+    errors,
     oauth as defaultApi,
     SdkDefect,
     type OAuthAuthorizationInput,
@@ -69,8 +70,10 @@ test.each(modes)("%s rejects noncanonical OAuth form/query values before discove
         }
         for (const redirectUri of [
             "https://example.com/" + "x".repeat(257 - "https://example.com/".length),
-            " https://example.com/callback",
-            "https://example.com/\u202ecallback",
+            // Fluxer keeps the standard form with the code, which here grows past 256 units, so no exchange could match
+            "https://example.com/" + "a b".repeat(78),
+            " \u000c\u202e ",
+            "http://example.com/callback",
         ]) {
             expect(await run(client.authorizationUrl({ ...auth, redirectUri }))).toMatchObject({
                 reason: "input",
@@ -164,6 +167,48 @@ test("OAuth authorization preserves boundary state and deduplicates scopes throu
     }
 })
 
+// Fluxer compares the authorization's redirect_uri, after its normalizeString, exactly with the registered URIs, stores
+// the URL's standard form with the code, and compares the exchange's redirect_uri exactly with that form
+// (OAuth2Service.ts:55 to :60, :116 to :129 and :271 to :279, SchemaPrimitives.ts:20 to :21 at 5f3fc0b1)
+test.each(modes)("%s sends a redirect URI as Fluxer reads it at authorization and at exchange", async (mode) => {
+    const { base, requests } = await fixture()
+    const config = { clientId: "1", clientSecret: "secret", instance: { url: base, allowInsecure: true } }
+    const scope = Scope.makeUnsafe()
+    onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
+    const defaultClient = defaultApi.create(config)
+    onTestFinished(async () => {
+        await defaultClient.shutdown()
+    })
+    const client =
+        mode === "default" ? defaultClient : await Effect.runPromise(native.create(config).pipe(Scope.provide(scope)))
+    const run = async <A>(operation: unknown): Promise<A> =>
+        mode === "default"
+            ? ((await operation) as { _unsafeUnwrap(): A })._unsafeUnwrap()
+            : await Effect.runPromise(operation as Effect.Effect<A, unknown>)
+    const cases = [
+        ["https://example.test", "https://example.test", "https://example.test/"],
+        [" https://example.test/cb\u202e \u000c", "https://example.test/cb", "https://example.test/cb"],
+        ["https://Example.TEST:443/a b?x=1", "https://Example.TEST:443/a b?x=1", "https://example.test/a%20b?x=1"],
+        // Fluxer registers HTTP redirect URIs for an IP address, such as a phone on a LAN reaching a development machine
+        ["http://192.168.1.20:8080/cb", "http://192.168.1.20:8080/cb", "http://192.168.1.20:8080/cb"],
+        ["http://[fd00::1]/cb", "http://[fd00::1]/cb", "http://[fd00::1]/cb"],
+    ] as const
+    for (const [input, authorize, exchange] of cases) {
+        const url = await run<string>(
+            client.authorizationUrl({
+                redirectUri: input,
+                scopes: ["identify"],
+                state: "state",
+                codeChallenge: "a".repeat(43),
+            }),
+        )
+        expect(new URL(url).searchParams.get("redirect_uri"), input).toBe(authorize)
+        await run(client.exchangeCode({ code: "code", redirectUri: input, codeVerifier: "a".repeat(43) }))
+        const body = new URLSearchParams(requests.filter((request) => request.path === "/oauth2/token").at(-1)!.body)
+        expect(body.get("redirect_uri"), input).toBe(exchange)
+    }
+})
+
 async function fixture(
     mode:
         | "normal"
@@ -190,7 +235,9 @@ async function fixture(
         | "introspectionNoSubject"
         | "introspectionInactive"
         | "introspectionRefresh"
-        | "introspectionLarge" = "normal",
+        | "introspectionLarge"
+        | "authorizationNoUser"
+        | "authorizationMalformed" = "normal",
     webappPath = "",
 ) {
     const requests: Array<{
@@ -311,6 +358,36 @@ async function fixture(
                     iat: 1_700_000_000,
                 }),
             )
+        // An OAuth2MeResponse, as OAuth2RequestService.getMe builds it at 5f3fc0b1
+        if (request.url === "/oauth2/@me")
+            return response.end(
+                JSON.stringify({
+                    application: {
+                        id: "1",
+                        name: "App",
+                        icon: null,
+                        description: null,
+                        bot_public: true,
+                        bot_require_code_grant: false,
+                        flags: mode === "authorizationMalformed" ? "0" : 0,
+                    },
+                    scopes: ["identify", "guilds"],
+                    expires: "2026-11-10T00:00:00.000Z",
+                    ...(mode === "authorizationNoUser"
+                        ? {}
+                        : {
+                              user: {
+                                  id: "2",
+                                  username: "name",
+                                  discriminator: "0",
+                                  global_name: null,
+                                  avatar: null,
+                                  avatar_color: null,
+                                  flags: 0,
+                              },
+                          }),
+                }),
+            )
         if (request.url === "/oauth2/userinfo")
             return response.end(
                 JSON.stringify({
@@ -320,6 +397,11 @@ async function fixture(
                     discriminator: "0",
                     global_name: "Display",
                     avatar: null,
+                    // Fluxer's userinfo also maps these public account fields
+                    flags: 4,
+                    bot: false,
+                    system: false,
+                    avatar_color: 1234,
                 }),
             )
         if (request.url?.startsWith("/users/@me/guilds"))
@@ -752,7 +834,7 @@ describe("oauth", () => {
             )
             expect(tokens.scopes).toEqual(["identify", "guilds", "future"])
             const identity = await settle(client.fetchIdentity("access"))
-            expect(identity.id).toBe("1")
+            expect(identity).toMatchObject({ id: "1", flags: 4, isBot: false, isSystem: false, avatarColor: 1234 })
             // The account-wide name uses the same field as User, so the display helper reads it
             expect(display.name(identity)).toBe("Display")
             expect((await settle(client.fetchGuilds("access")))[0]?.id).toBe("2")
@@ -787,6 +869,56 @@ describe("oauth", () => {
             ).toEqual(["Bearer access", "Bearer access", "Bearer access"])
         },
     )
+
+    test.each(modes)("%s reads the authorization behind a delegated access token", async (mode) => {
+        const { base, requests } = await fixture()
+        const client = await oauthClient(mode, base)
+        const read = await settle(client.fetchAuthorization("access"))
+        expect(read).toEqual({
+            application: {
+                id: "1",
+                name: "App",
+                icon: null,
+                description: null,
+                botPublic: true,
+                botRequireCodeGrant: false,
+                flags: 0,
+            },
+            scopes: ["identify", "guilds"],
+            expiresAt: "2026-11-10T00:00:00.000Z",
+            user: {
+                id: "2",
+                username: "name",
+                discriminator: "0",
+                displayName: null,
+                avatar: null,
+                avatarColor: null,
+                flags: 0,
+            },
+        })
+        expect(Object.isFrozen(read) && Object.isFrozen(read.application) && Object.isFrozen(read.scopes)).toBe(true)
+        expect(requests.find((entry) => entry.path === "/oauth2/@me")).toMatchObject({
+            method: "GET",
+            authorization: "Bearer access",
+        })
+        const noUser = await fixture("authorizationNoUser")
+        expect(await settle((await oauthClient(mode, noUser.base)).fetchAuthorization("access"))).not.toHaveProperty(
+            "user",
+        )
+        const malformed = await fixture("authorizationMalformed")
+        await expect(
+            settle((await oauthClient(mode, malformed.base)).fetchAuthorization("access")),
+        ).rejects.toMatchObject({
+            operation: "oauth.fetchAuthorization",
+            reason: "response",
+            details: { read: true },
+        })
+        await expect(settle(client.fetchAuthorization(""))).rejects.toMatchObject({
+            operation: "oauth.fetchAuthorization",
+            reason: "input",
+            outcome: "notDispatched",
+        })
+    })
 
     test.each(modes)(
         "%s refresh posts the refresh grant form with Basic credentials and projects the rotated tokens",
@@ -1182,6 +1314,51 @@ describe("oauth", () => {
         })
         await second.shutdown()
     })
+
+    // Fluxer's revoke looks up refresh tokens only for the refresh_token hint, then falls back to access tokens,
+    // and deletes every token of the matched user and application (OAuth2Service.ts:418-429 at 5f3fc0b1)
+    test.each(modes)(
+        "%s revoke without a hint finds refresh and access tokens as Fluxer looks them up",
+        async (mode) => {
+            const store = {
+                refresh: new Map([["refresh-token", { userId: "2", applicationId: "1" }]]),
+                access: new Map([
+                    ["access-token", { userId: "2", applicationId: "1" }],
+                    ["other-application", { userId: "2", applicationId: "9" }],
+                ]),
+            }
+            const fluxerMatch = (body: string) => {
+                const form = new URLSearchParams(body)
+                const token = form.get("token") ?? ""
+                const refresh = form.get("token_type_hint") === "refresh_token" ? store.refresh.get(token) : undefined
+                if (refresh?.applicationId === "1") return "refresh"
+                return store.access.get(token)?.applicationId === "1" ? "access" : "none"
+            }
+            const { base, requests } = await fixture()
+            const client = await oauthClient(mode, base)
+            const inputs = [
+                { token: "refresh-token" },
+                { token: "access-token" },
+                { token: "other-application" },
+                { token: "unknown" },
+                { token: "access-token", tokenTypeHint: "access_token" },
+                { token: "refresh-token", tokenTypeHint: "refresh_token" },
+            ] as const
+            for (const input of inputs) await settle(client.revoke(input))
+            const sent = requests
+                .filter((request) => request.path === "/oauth2/token/revoke")
+                .map((request) => request.body)
+            expect(sent.map((body) => new URLSearchParams(body).get("token_type_hint"))).toEqual([
+                "refresh_token",
+                "refresh_token",
+                "refresh_token",
+                "refresh_token",
+                "access_token",
+                "refresh_token",
+            ])
+            expect(sent.map(fluxerMatch)).toEqual(["refresh", "access", "none", "none", "access", "refresh"])
+        },
+    )
 
     test("marks a dispatched code exchange timeout unknown without retrying", async () => {
         const clock = sdkClock()
@@ -1642,6 +1819,55 @@ describe("oauth", () => {
             globalThis.fetch = originalFetch
         }
     })
+
+    // A connection reset after the first chunk errors the body stream. The failure is the lost response, not an SDK
+    // defect from cancelling the already errored stream during cleanup
+    test.each(
+        modes.flatMap((mode) =>
+            (
+                [
+                    ["fetchIdentity", "/oauth2/userinfo", 200, { reason: "network", outcome: "unknown", status: 200 }],
+                    ["refresh", "/oauth2/token", 200, { reason: "network", outcome: "unknown", status: 200 }],
+                    ["refresh", "/oauth2/token", 400, { reason: "rejected", outcome: "rejected", status: 400 }],
+                ] as const
+            ).map(([operation, path, status, expected]) => ({ mode, operation, path, status, expected })),
+        ),
+    )(
+        "$mode $operation classifies a body reset after a $status reply as a typed failure",
+        async ({ mode, operation, path, status, expected }) => {
+            const { base } = await fixture()
+            const originalFetch = globalThis.fetch
+            globalThis.fetch = async (input, init) => {
+                const response = await originalFetch(input, init)
+                if (String(input) !== `${base}${path}`) return response
+                await response.arrayBuffer()
+                let sent = false
+                const body = new ReadableStream<Uint8Array>({
+                    pull(controller) {
+                        if (sent)
+                            return controller.error(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))
+                        sent = true
+                        controller.enqueue(new TextEncoder().encode('{"error":'))
+                    },
+                })
+                return new Response(body, { status, headers: { "content-type": "application/json" } })
+            }
+            try {
+                const client = await oauthClient(mode, base)
+                const call: Operation<unknown, unknown> =
+                    operation === "refresh" ? client.refresh("refresh") : client.fetchIdentity("access")
+                const failure = await expectErr(call)
+                expect(failure).toMatchObject({
+                    _tag: "OAuthOperationError",
+                    operation: `oauth.${operation}`,
+                    ...expected,
+                })
+                expect(errors.isRetryable(failure)).toBe(operation === "fetchIdentity" && status === 200)
+            } finally {
+                globalThis.fetch = originalFetch
+            }
+        },
+    )
 
     test.each(modes)("%s retains discovery throttling as a defect beside reader-cleanup defects", async (mode) => {
         const { base } = await fixture()

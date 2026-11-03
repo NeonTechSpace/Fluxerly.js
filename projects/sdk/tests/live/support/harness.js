@@ -13,13 +13,20 @@ import {
     writeFileSync,
     writeSync,
 } from "node:fs"
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { basename, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseEnv } from "node:util"
 import { declaredCheck } from "./check-classes.js"
+import { activateLivePacing, installLivePacing } from "./live-pacing.js"
+import { stateRoot } from "./state-root.js"
+
+// Every harness imports this module before its own body captures fetch, so the shared live pacer sits under every
+// fetch the harness and the SDK make. It stays inert until the sandbox env file is loaded
+installLivePacing()
 
 /** The SDK package directory, which holds the ignored env file, the sandbox lock files and every journal */
-const sdkRoot = new URL("../../../", import.meta.url)
+const sdkRoot = stateRoot
 const environmentPath = new URL(".env.test.local", sdkRoot)
 const lockPath = new URL(".env.test.local.lock", sdkRoot)
 export const snowflake = /^[1-9][0-9]{0,19}$/
@@ -169,6 +176,8 @@ export function loadSandboxEnvironment({
         throw new HarnessCheckError("configuration", "Set FLUXER_TEST_GUILD_ID and FLUXER_TEST_APPLICATION_ID")
     if (requireApplicationToken && token.split(".")[0] !== applicationId)
         throw new HarnessCheckError("configured_application", "The bot token does not belong to the application")
+    // A live run loads the real env file before its first request, and offline checks pass their own path
+    if (path === environmentPath) activateLivePacing()
     return Object.freeze({ env, token, guildId, applicationId })
 }
 
@@ -181,6 +190,17 @@ export function processValue(name, pattern = snowflake) {
     if (typeof value !== "string" || !pattern.test(value))
         throw new HarnessCheckError("configuration", `Set the currently authorized ${name}`)
     return value
+}
+
+/**
+ * Returns the process-supplied leave target, which must be the designated sandbox server. Leaving any other server is
+ * outside the live check boundary, so another ID fails before any live request
+ */
+export function sandboxLeaveTarget(sandboxGuildId) {
+    const target = processValue("FLUXER_TEST_LEAVE_GUILD_ID")
+    if (target !== sandboxGuildId)
+        throw new HarnessCheckError("configuration", "FLUXER_TEST_LEAVE_GUILD_ID must name the sandbox server")
+    return target
 }
 
 /** Whether the current process explicitly authorizes an opt-in effect with `name=1`. The env file never counts */
@@ -302,6 +322,46 @@ export async function verifySandboxIdentity(
     const guild = await read(guildPath)
     checkServer(guild, guildId)
     return Object.freeze({ application, user, guild, botId })
+}
+
+/** The environment value through which run-all.js passes its identity verification to the harnesses it starts */
+export const runIdentityVariable = "FLUXERLY_LIVE_RUN_IDENTITY"
+
+function identityMac(key, runner, botId, { token, applicationId, guildId }) {
+    return createHmac("sha256", key).update([runner, botId, token, applicationId, guildId].join("\n")).digest()
+}
+
+/**
+ * The run identity value for harnesses started by this process after it verified `botId` for this sandbox: The
+ * runner's process ID, the bot ID, a random key and a keyed digest of both with the token, application and server.
+ * It lives only in the child process environment and holds no credential
+ */
+export function runIdentityValue(botId, sandbox, runner = process.pid) {
+    const key = randomBytes(32)
+    const mac = identityMac(key, runner, botId, sandbox)
+    return [runner, botId, key.toString("base64url"), mac.toString("base64url")].join(":")
+}
+
+/**
+ * The bot ID that the parent run-all.js process verified for this exact sandbox env, or undefined. It counts only
+ * when this process's parent is the runner that recorded it and the digest matches this process's token, application
+ * and server, so a value from another run, another env file or a hand-started harness never counts
+ */
+export function runVerifiedBotId(sandbox, { value = process.env[runIdentityVariable], parent = process.ppid } = {}) {
+    const [runner, botId, key, mac, ...rest] = (value ?? "").split(":")
+    if (rest.length > 0 || !key || !mac || !snowflake.test(botId ?? "") || runner !== String(parent)) return undefined
+    const expected = identityMac(Buffer.from(key, "base64url"), runner, botId, sandbox)
+    const actual = Buffer.from(mac, "base64url")
+    return actual.length === expected.length && timingSafeEqual(actual, expected) ? botId : undefined
+}
+
+/**
+ * The verified bot ID for a harness that needs nothing else from the identity reads. Under run-all.js, which verified
+ * bot, application and server identity once for the same env before starting any check, it sends no request.
+ * Otherwise it reads and verifies all three as verifySandboxIdentity does
+ */
+export async function sandboxBotId(read, sandbox) {
+    return runVerifiedBotId(sandbox) ?? (await verifySandboxIdentity(read, sandbox)).botId
 }
 
 /**

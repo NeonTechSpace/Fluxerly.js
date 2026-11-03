@@ -4,14 +4,14 @@ navTitle: Logging & debugging
 description: Read the default log output, adjust levels and categories, and send records to an existing logger
 ---
 
-Every client prints what it is doing by default: Startup, each [shard](/docs/glossary/#shard) (gateway connection) becoming ready, lost connections with their close code and next step, long rate-limit waits, shutdown, and every application error in full. Adjust the level for the whole client or one area, turn on Debug records while investigating, or send records to an existing logger. Records never contain tokens or other credentials
+Every client prints what it is doing by default: Startup, each [shard](/docs/glossary/#shard) (gateway connection) becoming ready, lost connections with their close code and next step, long rate-limit waits, shutdown, and every application error with its name, string `code`, message, stack, cause chain up to four levels and the first ten errors of an `AggregateError`. Other properties of an error, such as a `status` or a request ID, are not printed. The original error stays unchanged on `FailureReport.error` for an `onError` hook. Adjust the level for the whole client or one area, turn on Debug records while investigating, or send records to an existing logger. Records mask the bot token, the credential forms Fluxer uses and common credential names, such as Authorization headers, client secrets, passwords and cookies. A secret of another service that a bot logs itself may not be recognized, so keep such secrets out of error messages
 
 ## Read the default output
 
 On a terminal the client prints one readable line per record: Time, level, category, the record's code in brackets, a message and its facts. Warnings and errors go to standard error, everything else to standard output. A two-shard bot that starts, loses one connection and stops prints lines like these
 
 ```text
-2026-09-27 03:14:20.850 INFO  lifecycle  [lifecycle.starting] Starting Fluxerly <version> for fluxer.app with 2 shards version=<version> instance=fluxer.app shards=2 totalShards=2
+2026-09-27 03:14:20.850 INFO  lifecycle  [lifecycle.starting] Starting Fluxerly <version> for fluxer.com with 2 shards version=<version> instance=fluxer.com shards=2 totalShards=2
 2026-09-27 03:14:20.853 INFO  lifecycle  [lifecycle.startupDeadline] Startup of 2 shards may take up to 31.0 s: The configured 30.0 s (connection.startupTimeoutMs) plus 1 s per additional shard, because the SDK starts shard sessions 1 s apart startupTimeoutMs=31000 configuredMs=30000 shards=2
 2026-09-27 03:14:20.891 INFO  lifecycle  [lifecycle.ready] Shard 0 is ready shardId=0 attempt=1 durationMs=36 mode=identify shards=2
 2026-09-27 03:14:21.890 INFO  lifecycle  [lifecycle.ready] Shard 1 is ready shardId=1 attempt=1 durationMs=1033 mode=identify shards=2
@@ -27,7 +27,7 @@ When a stream is not a terminal, such as under a process manager or in a contain
 
 Readable output is colored on a terminal. Set `FLUXERLY_LOG_COLOR` to `1`, `true`, `yes` or `on` to force color, or to `0`, `false`, `no` or `off` to turn it off. The `NO_COLOR` variable also turns color off
 
-A failed handler is printed at Error with its message, stack and cause chain, because the error came from the bot's own code. Credentials are masked in names, application error codes, messages and stacks, including causes. Stack frames inside the SDK and Effect collapse into one line, so the bot's own frames stand out
+A failed handler is printed at Error with its message, stack and cause chain, because the error came from the bot's own code. Names, application error codes, messages and stacks, including causes, mask recognized credentials: Authorization, Cookie and X-API-Key headers, a value after a name ending in `token`, `secret`, `password`, `passwd`, `secretAccessKey`, `privateKey` or API key, written as `api_key`, `apiKey` or `X-API-Key`, in forms such as `password=x`, `"apiKey": "x"` or `secret: 'x'`, also in printed objects, and in URLs the user name and password, invite codes, OAuth codes, webhook tokens and the signatures of signed links, such as `X-Amz-Signature`, the `sig` of an Azure link, the `Signature` of a Google link and the `hm` of a Fluxer attachment link, also after a link is split into an object. A short value written another way, such as `token: abc` in a sentence, can stay readable, and another service's secret under a name not listed here may too. So do the bytes of a `Buffer` or `Uint8Array`, which print as numbers, and context the bot adds itself, such as Effect log annotations or a `ConfigurationError` hint. Stack frames inside the SDK and Effect collapse into one line, so the bot's own frames stand out
 
 ```text
 2026-09-26 21:27:52.689 ERROR events     [events.handlerFailed] The messageCreate handler failed: Cannot read properties of undefined (reading 'content') event=messageCreate subscriptionId=messageCreate#1 messageId=1456074443980800005 channelId=1456074443980800002 guildId=1456074443980800001
@@ -41,7 +41,7 @@ An expected SDK error, such as a rejected request, prints its code, hint and det
 ```text
 2026-09-26 21:27:52.804 ERROR events     [events.handlerFailed] The messageCreate handler failed: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403) event=messageCreate subscriptionId=messageCreate#1 messageId=1456074443980800006 channelId=1456074443980800002 guildId=1456074443980800001
     MessageError [message.send.rejected]: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)
-      Hint: The bot needs View channel and Send messages for this operation. Grant them to the bot's role in the community settings or the channel's permission overrides. Embeds also need Embed links, files need Attach files, and a forward needs View channel in its source channel
+      Hint: The bot needs View channel and Send messages for this operation. Grant them to the bot's role in the community settings or the channel's permission overrides. Embeds also need Embed links, files need Attach files, and a forward needs View channel in its source channel. In a thread, Send messages in threads in the parent channel replaces Send messages
       Details: operation=send reason=rejected outcome=rejected status=403 apiError=MISSING_PERMISSIONS requiredPermissions=["ViewChannel","SendMessages"]
 ```
 
@@ -61,7 +61,7 @@ Every record has a stable code, shown in brackets in readable output. The [error
 
 | Code | Meaning |
 | --- | --- |
-| `rest.rejected` | Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem. It is logged even when the application handles the Result. A handler that fails with the rejection within one second and has no `onError` hook logs only its own failure record. A later failure logs both. A bot that expects these rejections can set the `rest` [category](/docs/logging/#choose-levels-and-categories) to `error` |
+| `rest.rejected` | Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem, or a webhook client's token with HTTP 404. It is logged even when the application handles the Result. A handler that fails with the rejection within one second and has no `onError` hook logs only its own failure record. A later failure logs both. A bot that expects these rejections can set the `rest` [category](/docs/logging/#choose-levels-and-categories) to `error` |
 | `rest.responseRejected` | A successful response to an SDK operation did not match the expected shape. The failing field is in `fields.field` |
 | `sdk.unknownEnvironmentValue` | The `FLUXERLY_LOG_FORMAT` or `FLUXERLY_LOG_COLOR` variable has a value the SDK does not recognize, so it is ignored |
 
@@ -85,7 +85,8 @@ export function createQuietClient(token: string) {
 
 | Level | What appears |
 | --- | --- |
-| `error` and `fatal` | Application errors, failed hooks, connections that cannot continue and cleanup failures |
+| `fatal` | Only Fatal records. Failed handlers, failed hooks and cleanup failures are Error records, so this level hides them |
+| `error` | Application errors, failed hooks, connections that cannot continue and cleanup failures |
 | `warn` | Lost connections, session resets, rate-limit waits of one second or more, rejected requests and responses, skipped malformed gateway events and dropped events |
 | `info` | Startup, shard readiness and shutdown with its duration |
 | `debug` | Every REST request with its route template, status and duration, retries, gateway dispatch summaries, rejected and unmatched commands |
@@ -125,7 +126,7 @@ export function stopDebugOutput(client: Client) {
 
 ## Handle failures in one place
 
-Pass `onError` to receive every failure that has no returned result: Handler and command failures, [collector](/docs/glossary/#collector) callbacks and filters, cleanup progress callbacks, subscriptions closed by a full queue with `overflow: "stop"`, message cache callbacks and failed state observers. The report holds the original error and the IDs of the message involved, never its content. With a hook in place the SDK keeps those failures at Debug instead of printing them again
+Pass `onError` to receive every failure that has no returned result: Handler and command failures, [collector](/docs/glossary/#collector) callbacks and filters, cleanup progress callbacks, subscriptions closed by a full queue with `overflow: "stop"`, message cache callbacks and failed state observers. The report holds the original error and the IDs of the message involved. The SDK adds no message content itself, but an error from the bot's own code can contain some. With a hook in place the SDK keeps those failures at Debug instead of printing them again
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -149,17 +150,15 @@ A subscription's own `onError` takes precedence for that subscription. The [reli
 <details>
 <summary>How reports are delivered</summary>
 
-A failure only queues its report, so a slow hook never holds up event handlers.
-Reports are delivered one at a time in order. Up to 256 wait while the hook is busy, and later ones are logged instead and counted in `diagnostics().counters.reportsDropped`.
-A hook that throws or rejects is logged together with the original failure and is not retried.
-Shutdown does not wait for a hook that never finishes, and logs the reports it had not delivered with a note.
-The record's `fields.reportOutcome` names why a report was logged instead of delivered: `queueFull`, `interrupted`, `clientClosed` or `subscriptionClosed`
+A failure only queues its report, so a slow hook never holds up event handlers. Reports are delivered one at a time in order. Up to 256 wait while the hook is busy, and later ones are logged instead and counted in `diagnostics().counters.reportsDropped`
+
+A hook that throws or rejects is logged together with the original failure and is not retried. Shutdown does not wait for a hook that never finishes, and logs the reports it had not delivered with a note. The record's `fields.reportOutcome` names why a report was logged instead of delivered: `queueFull`, `interrupted`, `clientClosed` or `subscriptionClosed`
 
 </details>
 
 ## Send records to an existing logger
 
-The `sink` option replaces the console output. It receives frozen `LogRecord` objects with a stable `code`, a readable `message` and optional facts such as `shardId`, `route`, `status`, `closeCode` and `error`. Other facts are in `fields`, such as `next` on `lifecycle.retry` and `lifecycle.connectionLost` records, which is `resume` when the next attempt resumes the session and `identify` when it starts a new one. Match on `code` and these facts, because message wording can change between releases
+The `sink` option replaces the console output. It receives frozen `LogRecord` objects with a stable `code`, a readable `message` and optional facts such as `shardId`, `route`, `status`, `closeCode` and `error`. When an Effect failure has more than one reason, such as a task whose cleanup also failed, `otherErrors` lists the rest. Other facts are in `fields`, such as `next` on `lifecycle.retry` and `lifecycle.connectionLost` records, which is `resume` when the next attempt resumes the session and `identify` when it starts a new one. Match on `code` and these facts, because message wording can change between releases
 
 Many loggers have one method per level that takes an object of fields and a message. This sink passes each record to such a logger
 
@@ -213,7 +212,9 @@ A sink runs synchronously and its return value is ignored. A sink that throws or
 
 ## Collapse repeated errors
 
-Identical Warn, Error and Fatal records within one minute are printed once. Records about different shards or subscriptions are not identical, so each one's first occurrence is printed. The next identical record after the window says how many were hidden, as in `(repeated 12× since last shown)`, and shutdown prints any remainder. A sink finds that count in `fields.repeated`. Change the window with `dedupe: { windowMs: 10_000 }` or turn collapsing off with `dedupe: false`. Counters in `diagnostics().counters` still include every occurrence
+Identical Warn, Error and Fatal records within one minute are printed once. Records about different shards or subscriptions are not identical, so each one's first occurrence is printed. The next identical record after the window says how many were hidden, as in `(repeated 12× since last shown)`, and shutdown prints any remainder
+
+A sink finds that count in `fields.repeated`. Change the window with `dedupe: { windowMs: 10_000 }` or turn collapsing off with `dedupe: false`. Counters in `diagnostics().counters` still include every occurrence
 
 ## Count what happened
 
@@ -229,7 +230,7 @@ export function healthSnapshot(client: Client) {
     return {
         state,
         reconnects: counters.reconnects,
-        droppedEvents: counters.eventsDropped.overflow + counters.eventsDropped.malformed,
+        droppedEvents: Object.values(counters.eventsDropped).reduce((total, count) => total + count, 0),
         handlerFailures: counters.handlerFailures,
     }
 }
@@ -237,7 +238,9 @@ export function healthSnapshot(client: Client) {
 
 ## Debug payloads safely
 
-The setting `unsafe: { payloads: true }` adds Trace records with gateway and REST payload bodies, for all categories or the listed ones. Payloads can contain private message content, so the client prints a Warn banner once, at startup or before the first payload record, even when the level hides warnings. A category set to `silent` prints no payloads, and a received REST body shows at most its first 64 KiB. Tokens, Authorization headers, client secrets, passwords, cookies, invite codes and the user name and password in a URL such as `https://user:password@host/path` stay masked even then, including credential-key values in truncated JSON text. Leave it off in production
+The setting `unsafe: { payloads: true }` adds Trace records with gateway and REST payload bodies, for all categories or the listed ones. Payloads can contain private message content, so the client prints a Warn banner once, at startup or before the first payload record, even when the level hides warnings
+
+A category set to `silent` prints no payloads, and a received REST body shows at most its first 64 KiB. Received bodies are printed only for accepted responses. A rejected request's Fluxer code and message are in its error. Masking still applies: Values under keys ending in `token`, `secret`, `password`, `passwd`, `secretAccessKey`, `privateKey` or API key, written as `api_key`, `apiKey` or `X-API-Key`, Authorization and Cookie values, client secrets, the signed upload URL of an attachment upload plan, the user name and password in a URL such as `https://user:password@host/path`, and invite codes in invites, invite audit entries, vanity URL fields and invite links, including in truncated JSON text. Leave it off in production
 
 ```ts
 import { createClient } from "@neontechspace/fluxerly"
@@ -249,7 +252,7 @@ export function createPayloadDebugClient(token: string) {
 
 ## Use the Effect logger in native programs
 
-A native client, created from the [Effect](/docs/glossary/#effect) entry point `@neontechspace/fluxerly/effect`, sends records through the running program's Effect logger with `Effect.logWithLevel`. Each record carries `fluxerly.*` annotations such as `fluxerly.code`, `fluxerly.category` and `fluxerly.shardId`, so any Effect logger, span and tracer applies. Records with errors also carry a `Cause` with credentials masked
+A native client, created from the [Effect](/docs/glossary/#effect) entry point `@neontechspace/fluxerly/effect`, sends records through the running program's Effect logger with `Effect.logWithLevel`. Each record carries `fluxerly.*` annotations such as `fluxerly.code`, `fluxerly.category` and `fluxerly.shardId`, so any Effect logger, span and tracer applies. Records with errors also carry a `Cause` with recognized credentials masked, as in printed records
 
 A record with an SDK error also carries `fluxerly.error.code`, `fluxerly.error.hint` and one `fluxerly.error.<detail>` annotation per safe detail, such as `fluxerly.error.status`. Each error in its cause chain adds the same annotations with one more `cause.` in the prefix, such as `fluxerly.error.cause.code`, `fluxerly.error.cause.hint` and `fluxerly.error.cause.<detail>`
 
@@ -274,7 +277,9 @@ Debug and Trace records chosen by the SDK settings bypass the Effect minimum log
 
 ## Export metrics and traces with OpenTelemetry
 
-Pass an `observe` function to the client to receive a measurement each time the SDK finishes a piece of work: A REST request attempt with its method, route template, status and duration, a rate-limit wait, a reconnection attempt, a resumed session, and a handler or command run with its duration and outcome. Each measurement is an `Observation` whose `type` field says which kind it is. Observations never contain tokens, payloads or message content, so they can go to any monitoring system. Both entry points accept the same option
+Pass an `observe` function to the client to receive a measurement each time the SDK finishes a piece of work: A REST request attempt with its method, route template, status and duration, a rate-limit wait, a reconnection attempt, a resumed session, and a handler or command run with its duration and outcome
+
+Each measurement is an `Observation` whose `type` field says which kind it is. Observations never contain tokens, payloads or message content, so they can go to any monitoring system. Both entry points accept the same option
 
 A command router emits one handler observation per message, including event and command middleware in its duration. A matched command supplies its canonical name in `command`, even when a guard denies it or middleware stops it. A reported failure gives `outcome: "failure"` even if middleware recovers, interruption gives `"cancelled"`, and other completions give `"success"`. Messages with no command match still produce an observation without `command`
 

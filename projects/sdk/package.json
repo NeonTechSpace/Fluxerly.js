@@ -87,9 +87,12 @@
         "lint:effect": "effect-tsgo diagnostics --project tsconfig.test.json --strict --severity error,warning --format text && effect-tsgo diagnostics --project tsconfig.examples.json --strict --severity error,warning --format text",
         "build": "node scripts/build.js",
         "packages:prepare": "node scripts/packages.js",
-        "test:packaging": "node --test tests/packaging/packaging-check.js",
+        "test:packaging": "node --import ../scripts/no-fluxer-network.mjs --test tests/packaging/packaging-check.js",
         "test": "vitest run",
-        "test:types": "tsc -p tsconfig.test.json",
+        "test:unit": "vitest run --project sdk",
+        "test:processes": "vitest run --project processes",
+        "test:types": "tsc -p tsconfig.test.json && tsc -p tests/types/tsconfig.starter.json",
+        "test:examples": "node --import ../scripts/no-fluxer-network.mjs --test --test-timeout=30000 --test-force-exit \"examples/**/*.test.*\"",
         "test:public-contract": "node tests/contract/public-client-contract.js",
         "test:upstream:guild-features": "pnpm run build && node tests/contract/upstream-guild-features.js",
         "test:package": "node tests/packaging/package-check.js",
@@ -156,6 +159,8 @@
         "test:live:voice-controls:effect": "pnpm run build && node tests/live/voice-controls.js effect",
         "test:live:channels": "pnpm run build && node tests/live/messages.js default --channels && node tests/live/messages.js effect --channels",
         "test:live:threads": "pnpm run build && node tests/live/threads.js default && node tests/live/threads.js effect",
+        "test:live:voice-notes": "pnpm run build && node tests/live/voice-notes.js default && node tests/live/voice-notes.js effect",
+        "test:live:typed-raw": "pnpm run build && node tests/live/typed-raw.js default && node tests/live/typed-raw.js effect",
         "test:live:history": "pnpm run build && node tests/live/messages.js default --history && node tests/live/messages.js effect --history",
         "test:live:search": "pnpm run build && node tests/live/messages.js default --search && node tests/live/messages.js effect --search",
         "test:live:pagination": "pnpm run build && node tests/live/messages.js default --pagination && node tests/live/messages.js effect --pagination",
@@ -167,20 +172,20 @@
         "test:live:attachments": "pnpm run build && node tests/live/messages.js default --attachments && node tests/live/messages.js effect --attachments",
         "test:live:attachment-sources": "pnpm run build && node tests/live/messages.js default --attachment-sources && node tests/live/messages.js effect --attachment-sources",
         "test:rest:queue": "pnpm run build && node --expose-gc --max-old-space-size=512 tests/perf/rest-queue-workload.js default && node --expose-gc --max-old-space-size=512 tests/perf/rest-queue-workload.js effect",
-        "check": "pnpm run format:check && pnpm run lint && pnpm run build && pnpm run test:public-contract && pnpm run test:types && pnpm run test && pnpm run test:packaging && pnpm run test:package"
+        "check": "node ../scripts/check.mjs sdk"
     },
     "dependencies": {
         "neverthrow": "8.2.0",
         "ws": "8.22.0"
     },
     "peerDependencies": {
-        "effect": "^4.1.0"
+        "effect": "^4.1.2"
     },
     "devDependencies": {
         "@effect/tsgo": "0.57.0",
         "@types/node": "24.19.2",
         "@types/ws": "8.18.2",
-        "effect": "4.1.0",
+        "effect": "4.1.2",
         "npm": "12.2.1",
         "prettier": "3.9.10",
         "typescript": "7.0.2",

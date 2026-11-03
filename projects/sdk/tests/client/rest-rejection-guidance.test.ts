@@ -5,6 +5,7 @@ import { createWebhookClient as createNativeWebhook, oauth as nativeOAuth } from
 import { modes, setup, type Mode } from "../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { captureLogs } from "../support/log-capture.js"
+import { fixtures } from "../../src/internal/testing/fixtures.js"
 import { expectErr, type Operation } from "../support/settle.js"
 
 // What a REST failure tells the reader: a suggested fix, unrecognized Fluxer codes, the failing response field, and
@@ -211,6 +212,8 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         const client = await oauthClient(mode)
         const user = (await expectErr(client.fetchIdentity("fixture-access-token"))) as FluxerlyError
         expect(user.hint).toMatch(/user's access token/)
+        // A closed or temporarily banned user is refused even with a fresh token
+        expect(user.hint).toMatch(/temporarily banned/)
         const exchanged = (await expectErr(client.exchangeCode(exchange))) as FluxerlyError
         expect(exchanged.hint).toMatch(/client ID and client secret/)
         // An RFC invalid_client answer names the client credentials even on a call that sent the user's token
@@ -290,6 +293,97 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         ])
     })
 
+    test("a success status other than the expected one names the status check in the error and its Warn", async () => {
+        stubFetchWithHostedDiscovery(async () => new Response(null, { status: 204 }))
+        const logs = captureLogs()
+        const client = await setup(mode, { logging: logs.logging })
+        const fetched = await expectErr(client.messages.fetch({ id: "10", channelId: "20" }))
+        expect(fetched).toMatchObject({ reason: "response", status: 204, details: { responseField: "status" } })
+        // A named check is described, not reported as a missing field called status
+        expect((fetched as FluxerlyError).message).not.toContain("Field status")
+        expect(logs.withCode("rest.responseRejected").map((record) => record.fields?.field)).toEqual(["status"])
+    })
+
+    test("a well-formed answer for a different resource names that check, not the last field read", async () => {
+        const member = { user: { id: "31", username: "other" }, roles: [], joined_at: "2026-01-01T00:00:00.000Z" }
+        stubFetchWithHostedDiscovery(async (url) =>
+            Response.json(
+                String(url).includes("/profile")
+                    ? {
+                          user: {
+                              ...member.user,
+                              discriminator: "0001",
+                              global_name: null,
+                              avatar: null,
+                              avatar_color: null,
+                              flags: 0,
+                          },
+                          user_profile: { bio: null, pronouns: null, banner: null, accent_color: null },
+                      }
+                    : { ...member, nick: null, avatar: null, banner: null, mute: false, deaf: false },
+            ),
+        )
+        const client = await setup(mode)
+        for (const failed of [
+            await expectErr(client.members.fetch({ guildId: "20", userId: "30" })),
+            await expectErr(client.users.fetchProfile("30")),
+        ]) {
+            expect(failed).toMatchObject({ reason: "response", details: { responseField: "targetMismatch" } })
+            expect((failed as FluxerlyError).message).not.toContain("Field")
+        }
+    })
+
+    test("a well-formed resource for another ID names the target check", async () => {
+        // Each body is valid for its own ID, so the only fault is that it describes a different resource
+        const invite = {
+            code: "FixtureCode",
+            type: 0,
+            channel: { id: "21", type: 0, name: null },
+            guild: { id: "20", name: "Guild" },
+            presence_count: 1,
+            max_age: 86400,
+            member_count: 2,
+            temporary: false,
+            created_at: "2026-09-09T00:00:00.000Z",
+            expires_at: null,
+            uses: 0,
+            max_uses: 0,
+        }
+        const bodies: Record<string, unknown> = {
+            "GET /users/30": fixtures.user({ id: "31" }),
+            "GET /guilds/20": fixtures.guild({ id: "21" }),
+            "GET /channels/20": fixtures.channel({ id: "21", guild_id: "20" }),
+            "POST /users/@me/channels": { id: "50", type: 1, recipients: [fixtures.user({ id: "31" })] },
+            "PATCH /guilds/20": fixtures.guild({ id: "21" }),
+            "PATCH /channels/20": fixtures.channel({ id: "21", guild_id: "20" }),
+            "PATCH /channels/40": fixtures.thread({ id: "41", guild_id: "20" }),
+            "GET /guilds/20/threads/active": { threads: [fixtures.thread({ id: "40", guild_id: "21" })], members: [] },
+            "POST /channels/20/invites": invite,
+        }
+        const requested: string[] = []
+        stubFetchWithHostedDiscovery(async (url, init) => {
+            const key = `${init.method ?? "GET"} ${new URL(url).pathname.replace(/^\/api\/v1/, "")}`
+            requested.push(key)
+            return Response.json(bodies[key])
+        })
+        const client = await setup(mode)
+        for (const failed of [
+            await expectErr(client.users.fetch("30")),
+            await expectErr(client.guilds.fetch("20")),
+            await expectErr(client.channels.fetch("20")),
+            await expectErr(client.directMessages.open("30")),
+            await expectErr(client.guilds.edit("20", { name: "fixture" })),
+            await expectErr(client.channels.edit("20", { name: "fixture" })),
+            await expectErr(client.threads.edit("40", { name: "fixture" })),
+            await expectErr(client.threads.fetchActive("20")),
+            await expectErr(client.invites.create("20")),
+        ]) {
+            expect(failed).toMatchObject({ reason: "response", details: { responseField: "targetMismatch" } })
+        }
+        // Every case reached the response it was written for
+        expect(requested).toEqual(Object.keys(bodies))
+    })
+
     test("a hierarchy check keeps the failing step's unrecognized code, response field and error", async () => {
         let body: unknown = { code: "SOMETHING_NEW" }
         let status = 403
@@ -357,6 +451,49 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         expect(hint).toContain("permissionBits.refusedGrants")
     })
 
+    test.each<{
+        operation: string
+        call: (client: AnyClient) => Operation<unknown, unknown>
+        label: string
+        absent: string | undefined
+    }>([
+        {
+            operation: "send",
+            call: (client: AnyClient) => client.messages.send("20", "x"),
+            label: "Send messages in threads",
+            absent: undefined,
+        },
+        {
+            operation: "members.unban",
+            call: (client: AnyClient) => client.members.unban({ guildId: "30", userId: "40" }),
+            label: "Ban members",
+            // Fluxer checks no role order for an unban
+            absent: "highest role",
+        },
+    ])("a refused $operation logs the permission advice its operation error gives", async ({ call, label, absent }) => {
+        rejectMissingPermissions()
+        const logs = captureLogs()
+        const error = (await expectErr(call(await setup(mode, { logging: logs.logging })))) as FluxerlyError
+        const hint = logs.withCode("rest.rejected")[0]?.fields?.hint
+        for (const text of [error.hint, hint]) {
+            expect(text).toContain(label)
+            if (absent !== undefined) expect(text).not.toContain(absent)
+        }
+    })
+
+    test("a webhook refused a message it did not send is told to use its own message", async () => {
+        rejectMissingPermissions()
+        const logs = captureLogs()
+        const webhook = await webhookClient(mode, logs.logging)
+        const error = (await expectErr(webhook.fetchMessage("10"))) as FluxerlyError
+        expect(error.hint).toMatch(/message this webhook sent/)
+        expect(logs.withCode("rest.rejected")).toEqual([
+            expect.objectContaining({
+                fields: expect.objectContaining({ hint: expect.stringMatching(/message this webhook sent/) }),
+            }),
+        ])
+    })
+
     test("webhook and OAuth clients log a rejected credential once through their logging option", async () => {
         let body: unknown = {}
         stubFetchWithHostedDiscovery(async () => Response.json(body, { status: 401 }))
@@ -392,6 +529,31 @@ describe.each(modes)("%s REST rejection guidance", (mode) => {
         )
         // The client secret never appears in a record
         expect(JSON.stringify(oauthLogs.records)).not.toContain("fixture-client-secret")
+    })
+
+    // Fluxer answers a wrong or deleted webhook token with UNKNOWN_WEBHOOK and HTTP 404, not 401
+    test("a webhook token refused with UNKNOWN_WEBHOOK logs one Warn with the token fix", async () => {
+        stubFetchWithHostedDiscovery(async () => Response.json({ code: "UNKNOWN_WEBHOOK" }, { status: 404 }))
+        const logs = captureLogs()
+        const webhook = await webhookClient(mode, logs.logging)
+        let failure: FluxerlyError | undefined
+        for (let attempt = 0; attempt < 2; attempt++) failure = (await expectErr(webhook.send("x"))) as FluxerlyError
+        expect(failure?.hint).toMatch(/webhook ID and token/)
+        expect(logs.withCode("rest.rejected")).toEqual([
+            expect.objectContaining({
+                level: "warn",
+                status: 404,
+                fields: expect.objectContaining({
+                    apiError: "UNKNOWN_WEBHOOK",
+                    hint: expect.stringMatching(/webhook ID and token/),
+                }),
+            }),
+        ])
+        // A bot-authenticated lookup of a missing webhook is an ordinary missing resource
+        const botLogs = captureLogs()
+        const client = await setup(mode, { logging: botLogs.logging })
+        await expectErr(client.webhooks.fetch("100"))
+        expect(botLogs.records.filter((record) => record.category === "rest")).toEqual([])
     })
 
     test("other client rejections stay at Debug", async () => {

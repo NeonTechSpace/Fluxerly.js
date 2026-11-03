@@ -1,0 +1,4168 @@
+{
+    "about": "What readers type into the docs search and the page that should come first, then acceptable alternatives. scripts/checks/search.mjs runs them against the built index. Tune with the tune set and check the holdout set does not get worse. An essential query must find its page first, a query with shows must have one of those pages among its results, and a set may miss no more queries than its ceiling, so an average cannot hide a query whose expected pages are missing from all its results",
+    "seed": 20261103,
+    "floors": {
+        "tune": {
+            "hit1": 0.775,
+            "hit3": 0.862,
+            "mrr": 0.822
+        },
+        "holdout": {
+            "hit1": 0.811,
+            "hit3": 0.855,
+            "mrr": 0.835
+        }
+    },
+    "ceilings": {
+        "tune": {
+            "missed": 25
+        },
+        "holdout": {
+            "missed": 18
+        }
+    },
+    "queries": [
+        {
+            "q": "application.busy",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-application-reason",
+                "/docs/codes/#error-botapplicationoperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "application.callbackFailed",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-application-callbackfailed",
+                "/docs/codes/#error-applicationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "application.defect",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-application-defect",
+                "/docs/codes/#error-sdkdefect"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "asset.id",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-asset-reason",
+                "/docs/codes/#error-asseturlerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "attachment.notFound",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-attachment-reason",
+                "/docs/codes/#error-attachmentrefresherror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "attachment.download.untrustedUrl",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-attachment-download-reason",
+                "/docs/codes/#error-attachmentdownloaderror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "auth.rejected",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-auth-rejected",
+                "/docs/codes/#error-authenticationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "bot.workerStopped",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-bot-workerstopped",
+                "/docs/codes/#error-criticalworkerstoppederror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "channel.rejected",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-channel-reason",
+                "/docs/codes/#error-channeloperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "cleanup.rateLimit",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-cleanup-reason",
+                "/docs/codes/#error-messagecleanuperror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "client.busy",
+            "kind": "error-code",
+            "set": "holdout",
+            "essential": true,
+            "expect": [
+                "/docs/codes/#error-client-busy",
+                "/docs/codes/#error-clientbusyerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "client.closed",
+            "kind": "error-code",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/codes/#error-client-closed",
+                "/docs/codes/#error-clientclosederror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "collector.overflow",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-collector-reason",
+                "/docs/codes/#error-collectorerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "configuration.invalid",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-configuration-invalid",
+                "/docs/codes/#error-configurationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "connection.gateway.notFound",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-connection-phase-reason",
+                "/docs/codes/#error-connectionerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "connection.shard",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-connection-shard",
+                "/docs/codes/#error-shardconnectionerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "connection.timeout",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-connection-timeout",
+                "/docs/codes/#error-connectiontimeouterror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "count.input",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-count-reason",
+                "/docs/codes/#error-countoperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "events.overflow",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-events-overflow",
+                "/docs/codes/#error-eventoverflowerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "events.readBusy",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-events-readbusy",
+                "/docs/codes/#error-eventreadbusyerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "events.wait.filter",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-events-wait-reason",
+                "/docs/codes/#error-eventwaiterror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "gateway.send.busy",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-gateway-send-reason",
+                "/docs/codes/#error-gatewaysenderror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "guild.busy",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-guild-reason",
+                "/docs/codes/#error-guildoperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "helper.time",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-helper-reason",
+                "/docs/codes/#error-helpererror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "memberChunks.rateLimit",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-memberchunks-reason",
+                "/docs/codes/#error-memberchunkerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "message.rejected",
+            "kind": "error-code",
+            "set": "holdout",
+            "essential": true,
+            "expect": [
+                "/docs/codes/#error-message-reason",
+                "/docs/codes/#error-messageoperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "message.send.rejected",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-message-send-reason",
+                "/docs/codes/#error-messageerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "oauth.timeout",
+            "kind": "error-code",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/codes/#error-oauth-reason",
+                "/docs/codes/#error-oauthoperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "operation.cancelled",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-operation-cancelled",
+                "/docs/codes/#error-cancellederror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "pagination.cursorStalled",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-pagination-reason",
+                "/docs/codes/#error-paginationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "presence.limit",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-presence-reason",
+                "/docs/codes/#error-presenceerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "ratelimit.connection",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-ratelimit-connection",
+                "/docs/codes/#error-ratelimiterror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "rest.response",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-rest-reason",
+                "/docs/codes/#error-restrequesterror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "sdk.defect",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-sdk-defect",
+                "/docs/codes/#error-sdkdefect"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "supervisor.restartLimit",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-supervisor-reason",
+                "/docs/codes/#error-supervisorerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "supervisor.child.protocol",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-supervisor-child-reason",
+                "/docs/codes/#error-supervisorchilderror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "testing.timeout",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-testing-timeout",
+                "/docs/codes/#error-testtimeouterror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "testing.unhandledFailures",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-testing-unhandledfailures",
+                "/docs/codes/#error-unhandledtestfailureserror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "user.rateLimit",
+            "kind": "error-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-user-reason",
+                "/docs/codes/#error-useroperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "webhook.rejected",
+            "kind": "error-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-webhook-reason",
+                "/docs/codes/#error-webhookoperationerror"
+            ],
+            "source": "codes.json errors"
+        },
+        {
+            "q": "cache.changesDropped",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-cache-changesdropped",
+                "/docs/codes/#log-cache"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "cleanup.progressFailed",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-cleanup-progressfailed",
+                "/docs/codes/#log-cleanup"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "collectors.dropped",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-collectors-dropped",
+                "/docs/codes/#log-collectors"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "collectors.filterFailed",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-collectors-filterfailed",
+                "/docs/codes/#log-collectors"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "commands.failed",
+            "kind": "log-code",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/codes/#log-commands-failed",
+                "/docs/codes/#log-commands",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "commands.middlewareStopped",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-commands-middlewarestopped",
+                "/docs/codes/#log-commands"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "commands.unmatched",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-commands-unmatched",
+                "/docs/codes/#log-commands",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "events.dropped",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-events-dropped",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "events.hookFailed",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-events-hookfailed",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "events.raw",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-events-raw",
+                "/docs/codes/#log-events"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "events.registeredAfterShutdown",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-events-registeredaftershutdown",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.dispatch",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-gateway-dispatch",
+                "/docs/codes/#log-gateway"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.heartbeatAck",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-gateway-heartbeatack",
+                "/docs/codes/#log-gateway"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.ignoredEventRegistered",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-gateway-ignoredeventregistered",
+                "/docs/codes/#log-gateway",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.payloadReceived",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-gateway-payloadreceived",
+                "/docs/codes/#log-gateway"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.receive",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-gateway-receive",
+                "/docs/codes/#log-gateway"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.threadSkipped",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-gateway-threadskipped",
+                "/docs/codes/#log-gateway"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "gateway.unknownOpcode",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-gateway-unknownopcode",
+                "/docs/codes/#log-gateway"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.automaticSharding",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-lifecycle-automaticsharding",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.cacheRefill",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-cacherefill",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.connected",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-connected",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.connectionLost",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-connectionlost",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.drainTimedOut",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-draintimedout",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.draining",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-draining",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.observerCoalesced",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-observercoalesced",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.ready",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-ready",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.retry",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-retry",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.sessionReset",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-sessionreset",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.sessionSaveFailed",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-lifecycle-sessionsavefailed",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.sessionSnapshotIgnored",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-sessionsnapshotignored",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.shutdownComplete",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-shutdowncomplete",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.startupDeadline",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-startupdeadline",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "lifecycle.taskFailed",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-taskfailed",
+                "/docs/codes/#log-lifecycle"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "ratelimit.deadline",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-ratelimit-deadline",
+                "/docs/codes/#log-ratelimit",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "ratelimit.wait",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-ratelimit-wait",
+                "/docs/codes/#log-ratelimit",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "rest.payloadReceived",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-rest-payloadreceived",
+                "/docs/codes/#log-rest"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "rest.rejected",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-rest-rejected",
+                "/docs/codes/#log-rest",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "rest.responseRejected",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-rest-responserejected",
+                "/docs/codes/#log-rest"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "rest.typingRefreshStopped",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-rest-typingrefreshstopped",
+                "/docs/codes/#log-rest"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "sdk.timerFailed",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-sdk-timerfailed",
+                "/docs/codes/#log-sdk"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "sdk.unknownEnvironmentValue",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-sdk-unknownenvironmentvalue",
+                "/docs/codes/#log-sdk"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.automaticSharding",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-supervisor-automaticsharding",
+                "/docs/codes/#log-supervisor"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.crash",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-supervisor-crash",
+                "/docs/codes/#log-supervisor"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.identifyPermitFailed",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-supervisor-identifypermitfailed",
+                "/docs/codes/#log-supervisor"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.memberRequestsLocal",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-supervisor-memberrequestslocal",
+                "/docs/codes/#log-supervisor"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.resharded",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-supervisor-resharded",
+                "/docs/codes/#log-supervisor",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.spawn",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-supervisor-spawn",
+                "/docs/codes/#log-supervisor"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "supervisor.startupTimeout",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-supervisor-startuptimeout",
+                "/docs/codes/#log-supervisor"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "testing.responderFailed",
+            "kind": "log-code",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-testing-responderfailed",
+                "/docs/codes/#log-testing"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "testing.unmatchedRequest",
+            "kind": "log-code",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-testing-unmatchedrequest",
+                "/docs/codes/#log-testing"
+            ],
+            "source": "codes.json logs"
+        },
+        {
+            "q": "ERROR events [events.handlerFailed] The messageCreate handler failed",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-events-handlerfailed",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN lifecycle [lifecycle.connectionLost] An established shard connection was lost and the SDK is reconnecting",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-lifecycle-connectionlost",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "INFO lifecycle [lifecycle.connected]",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-lifecycle-connected",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN ratelimit [ratelimit.wait] POST /channels/{channel_id}/messages was rate-limited, so it waits 1200 ms before retrying",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-ratelimit-wait",
+                "/docs/codes/#log-ratelimit",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN events [events.dropped] A full subscription queue dropped an event",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-events-dropped",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN lifecycle [lifecycle.drainTimedOut] The 10 s drain time (drainMs) ran out, so shutdown cancels 2 handlers",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-draintimedout",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "DEBUG commands [commands.rejected]",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-commands-rejected",
+                "/docs/codes/#log-commands",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN gateway [gateway.dispatchRejected] Skipped a MESSAGE_CREATE dispatch because its data did not match the expected shape",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-gateway-dispatchrejected",
+                "/docs/codes/#log-gateway",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN rest [rest.rejected] HTTP 403",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-rest-rejected",
+                "/docs/codes/#log-rest",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN lifecycle [lifecycle.retry] connection attempt failed",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#log-lifecycle-retry",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "ERROR lifecycle [lifecycle.connectionEnded] close 4004",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-connectionended",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN lifecycle [lifecycle.sessionReset]",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-lifecycle-sessionreset",
+                "/docs/codes/#log-lifecycle",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN events [events.registeredAfterShutdown]",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-events-registeredaftershutdown",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "INFO events [events.discarded]",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-events-discarded",
+                "/docs/codes/#log-events",
+                "/docs/troubleshooting/#match-a-log-line-with-its-fix"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "WARN cache [cache.changesDropped]",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#log-cache-changesdropped",
+                "/docs/codes/#log-cache"
+            ],
+            "source": "SDK log format and messages"
+        },
+        {
+            "q": "MessageError [message.send.rejected]: Message send failed: Fluxer reports that the bot lacks a required permission (MISSING_PERMISSIONS, HTTP 403)",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-message-send-reason",
+                "/docs/codes/#error-messageerror",
+                "/docs/api/js-ts/messageerror/"
+            ],
+            "source": "describeError output"
+        },
+        {
+            "q": "RateLimitError [ratelimit.connection]",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-ratelimit-connection",
+                "/docs/codes/#error-ratelimiterror",
+                "/docs/api/js-ts/ratelimiterror/"
+            ],
+            "source": "describeError output"
+        },
+        {
+            "q": "AuthenticationError [auth.rejected]: Fluxer rejected the bot token",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-auth-rejected",
+                "/docs/codes/#error-authenticationerror",
+                "/docs/api/js-ts/authenticationerror/"
+            ],
+            "source": "describeError output"
+        },
+        {
+            "q": "ConfigurationError [configuration.invalid] token",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/codes/#error-configuration-invalid",
+                "/docs/codes/#error-configurationerror",
+                "/docs/api/js-ts/configurationerror/"
+            ],
+            "source": "describeError output"
+        },
+        {
+            "q": "ClientClosedError [client.closed]",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-client-closed",
+                "/docs/codes/#error-clientclosederror",
+                "/docs/api/js-ts/clientclosederror/"
+            ],
+            "source": "describeError output"
+        },
+        {
+            "q": "Error: Fluxerly is ESM-only. Use import, and set \"type\": \"module\" in package.json",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/troubleshooting/#the-process-fails-with-a-require-error",
+                "/docs/faq/#why-does-loading-the-sdk-fail-with-a-require-error"
+            ],
+            "source": "troubleshooting guide"
+        },
+        {
+            "q": "Error: Fluxerly needs Node.js 24.15 or newer, but this is Node.js 22.12.0",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/troubleshooting/#the-process-fails-with-a-nodejs-version-error",
+                "/docs/faq/#which-nodejs-version-is-required"
+            ],
+            "source": "troubleshooting guide"
+        },
+        {
+            "q": "node: .env: not found",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/troubleshooting/#nodejs-prints-env-not-found"
+            ],
+            "source": "troubleshooting guide"
+        },
+        {
+            "q": "Cannot find name 'AsyncDisposable'",
+            "kind": "log-line",
+            "set": "tune",
+            "expect": [
+                "/docs/troubleshooting/#typescript-cannot-find-abortsignal-or-asyncdisposable",
+                "/docs/faq/#does-typescript-need-extra-setup"
+            ],
+            "source": "troubleshooting guide"
+        },
+        {
+            "q": "MISSING_PERMISSIONS HTTP 403",
+            "kind": "log-line",
+            "set": "holdout",
+            "expect": [
+                "/docs/codes/#error-messageerror",
+                "/docs/troubleshooting/",
+                "/docs/guilds-and-permissions/#check-permissions-using-available-data"
+            ],
+            "source": "failed reply log"
+        },
+        {
+            "q": "client.connect",
+            "kind": "api-name",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/api/js-ts/client/#connect"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.run",
+            "kind": "api-name",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/api/js-ts/client/#run"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.waitForClose",
+            "kind": "api-name",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/api/js-ts/client/#waitforclose"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.shutdown",
+            "kind": "api-name",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/api/js-ts/client/#shutdown"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.send",
+            "kind": "api-name",
+            "set": "holdout",
+            "essential": true,
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-send",
+                "/docs/api/effect/messages/#messages-send"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.send",
+            "kind": "api-name",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-send",
+                "/docs/api/effect/messages/#messages-send"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.edit",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-edit",
+                "/docs/api/effect/messages/#messages-edit"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.edit",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-edit",
+                "/docs/api/effect/messages/#messages-edit"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.delete",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-delete",
+                "/docs/api/effect/messages/#messages-delete"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.delete",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-delete",
+                "/docs/api/effect/messages/#messages-delete"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.fetch",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-fetch",
+                "/docs/api/effect/messages/#messages-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.fetch",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-fetch",
+                "/docs/api/effect/messages/#messages-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.fetchHistory",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-fetchhistory",
+                "/docs/api/effect/messages/#messages-fetchhistory"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.fetchHistory",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-fetchhistory",
+                "/docs/api/effect/messages/#messages-fetchhistory"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.deleteMany",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-deletemany",
+                "/docs/api/effect/messages/#messages-deletemany"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.deleteMany",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-deletemany",
+                "/docs/api/effect/messages/#messages-deletemany"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.addReaction",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-addreaction",
+                "/docs/api/effect/messages/#messages-addreaction"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.addReaction",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-addreaction",
+                "/docs/api/effect/messages/#messages-addreaction"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.collect",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-collect",
+                "/docs/api/effect/messages/#messages-collect"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.collect",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-collect",
+                "/docs/api/effect/messages/#messages-collect"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.collectReactions",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-collectreactions",
+                "/docs/api/effect/messages/#messages-collectreactions"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "messages.collectReactions",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-collectreactions",
+                "/docs/api/effect/messages/#messages-collectreactions"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.messages.reply",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-reply",
+                "/docs/api/effect/messages/#messages-reply"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.members.ban",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-ban",
+                "/docs/api/effect/guilds-and-members/#members-ban"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.members.kick",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-kick",
+                "/docs/api/effect/guilds-and-members/#members-kick"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.members.timeout",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-timeout",
+                "/docs/api/effect/guilds-and-members/#members-timeout"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "members.timeout",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-timeout",
+                "/docs/api/effect/guilds-and-members/#members-timeout"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.members.addRole",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-addrole",
+                "/docs/api/effect/guilds-and-members/#members-addrole"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "members.addRole",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-addrole",
+                "/docs/api/effect/guilds-and-members/#members-addrole"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.members.fetch",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-fetch",
+                "/docs/api/effect/guilds-and-members/#members-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "members.fetch",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-fetch",
+                "/docs/api/effect/guilds-and-members/#members-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.members.search",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-search",
+                "/docs/api/effect/guilds-and-members/#members-search"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.channels.create",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channels/#channels-create",
+                "/docs/api/effect/channels/#channels-create"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "channels.create",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channels/#channels-create",
+                "/docs/api/effect/channels/#channels-create"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.channels.fetch",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channels/#channels-fetch",
+                "/docs/api/effect/channels/#channels-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "channels.fetch",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channels/#channels-fetch",
+                "/docs/api/effect/channels/#channels-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.channels.edit",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channels/#channels-edit",
+                "/docs/api/effect/channels/#channels-edit"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.channels.setPermissionOverwrite",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channels/#channels-setpermissionoverwrite",
+                "/docs/api/effect/channels/#channels-setpermissionoverwrite"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.threads.create",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/channels/#threads-create",
+                "/docs/api/effect/channels/#threads-create"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.threads.join",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/channels/#threads-join",
+                "/docs/api/effect/channels/#threads-join"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.roles.create",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/roles-and-permissions/#roles-create",
+                "/docs/api/effect/roles-and-permissions/#roles-create"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "roles.create",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/roles-and-permissions/#roles-create",
+                "/docs/api/effect/roles-and-permissions/#roles-create"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.roles.edit",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/roles-and-permissions/#roles-edit",
+                "/docs/api/effect/roles-and-permissions/#roles-edit"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.guilds.fetch",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#guilds-fetch",
+                "/docs/api/effect/guilds-and-members/#guilds-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.users.fetch",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/users-and-dms/#users-fetch",
+                "/docs/api/effect/users-and-dms/#users-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "users.fetch",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/users-and-dms/#users-fetch",
+                "/docs/api/effect/users-and-dms/#users-fetch"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.directMessages.send",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/users-and-dms/#directmessages-send",
+                "/docs/api/effect/users-and-dms/#directmessages-send"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.webhooks.create",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/invites-and-webhooks/#webhooks-create",
+                "/docs/api/effect/invites-and-webhooks/#webhooks-create"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.presence.set",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#presence-set",
+                "/docs/api/effect/client-and-lifecycle/#presence-set"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "presence.set",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#presence-set",
+                "/docs/api/effect/client-and-lifecycle/#presence-set"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "client.attachments.download",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#attachments-download",
+                "/docs/api/effect/messages/#attachments-download"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "runBot",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#runbot",
+                "/docs/api/effect/client-and-lifecycle/#runbot"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "createClient",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#createclient",
+                "/docs/api/effect/client-and-lifecycle/#createclient"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "describeError",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/errors/#describeerror"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "createTestBot",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect-testing/testing/#createtestbot",
+                "/docs/api/testing/testing/#createtestbot"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "createFixtures",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/testing/testing/#createfixtures"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "EmbedBuilder",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/embedbuilder/"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "MessageBuilder",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messagebuilder/"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "RateLimitError",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/ratelimiterror/"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "ConfigurationError",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/configurationerror/"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "format",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/builders-and-formatting/#format",
+                "/docs/api/effect/builders-and-formatting/#format"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "Permissions",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/client/#permissions",
+                "/docs/api/js-ts/roles-and-permissions/#permissions",
+                "/docs/api/effect/client/#permissions"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "ChannelType",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/channels/#channeltype"
+            ],
+            "source": "reference"
+        },
+        {
+            "q": "onError",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#boteventoptions-onerror",
+                "/docs/api/js-ts/options/#clientoptions-onerror",
+                "/docs/logging/#handle-failures-in-one-place"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "processSignals",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/options/#runbotoptions-processsignals",
+                "/docs/api/js-ts/client-and-lifecycle/#botoptions-processsignals",
+                "/docs/api/js-ts/options/#runbotoptions",
+                "/docs/api/js-ts/client-and-lifecycle/#runbot"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "drainMs",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#shutdownoptions-drainms",
+                "/docs/api/js-ts/options/#runbotoptions-drainms",
+                "/docs/api/js-ts/client-and-lifecycle/#botoptions-drainms",
+                "/docs/deploying/#what-happens-on-shutdown"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "ignoredEvents",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/options/#gatewayoptions-ignoredevents",
+                "/docs/api/js-ts/options/#gatewayoptions",
+                "/docs/configuration/#events-and-the-gateway"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "isRetryable",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/errors/#errortools-isretryable",
+                "/docs/api/js-ts/errors/#errortools",
+                "/docs/reliability/#limits-and-retry-rules"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "FLUXERLY_DEBUG",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/logging/#turn-on-debug-output-without-changing-code"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "maxPendingChanges",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/caching/",
+                "/docs/codes/#log-cache-changesdropped"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "totalShards",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/sharding/#choose-the-shards-explicitly",
+                "/docs/api/js-ts/sharding-and-supervision/"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "sessionStore",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/sharding/#resume-after-a-restart",
+                "/docs/api/js-ts/sharding-and-supervision/",
+                "/docs/deploying/#keep-session-and-reminder-files"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "await using client",
+            "kind": "api-name",
+            "set": "holdout",
+            "expect": [
+                "/docs/core-concepts/#shutdown",
+                "/docs/api/js-ts/client/"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "diagnostics().counters",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/#count-what-happened",
+                "/docs/api/js-ts/logging-and-diagnostics/"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "client.on(\"messageCreate\")",
+            "kind": "api-name",
+            "set": "tune",
+            "expect": [
+                "/docs/events-and-collectors/",
+                "/docs/api/js-ts/client/#on",
+                "/docs/core-concepts/#events-and-handlers"
+            ],
+            "source": "reference options"
+        },
+        {
+            "q": "client.permissions.calculate",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/effect/roles-and-permissions/#permissionhelpers-calculate",
+                "/docs/api/js-ts/roles-and-permissions/#permissionhelpers-calculate"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.channels.fetchAll",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#channels-fetchall",
+                "/docs/api/js-ts/channels/#channels-fetchall"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.roles.fetchAll",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/roles-and-permissions/#roles-fetchall",
+                "/docs/api/js-ts/roles-and-permissions/#roles-fetchall"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.instance.resolve",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/client-and-lifecycle/#instance-resolve",
+                "/docs/api/js-ts/client-and-lifecycle/#instance-resolve"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.directMessages.open",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/users-and-dms/#directmessages-open",
+                "/docs/api/js-ts/users-and-dms/#directmessages-open"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.threads.fetchActive",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#threads-fetchactive",
+                "/docs/api/js-ts/channels/#threads-fetchactive"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.members.setRoles",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/effect/guilds-and-members/#members-setroles",
+                "/docs/api/js-ts/guilds-and-members/#members-setroles"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.users.fetchSelf",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/effect/users-and-dms/#users-fetchself",
+                "/docs/api/js-ts/users-and-dms/#users-fetchself"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.threads.createPost",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#threads-createpost",
+                "/docs/api/js-ts/channels/#threads-createpost"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.threads.fetchArchived",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#threads-fetcharchived",
+                "/docs/api/js-ts/channels/#threads-fetcharchived"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.channels.reorder",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#channels-reorder",
+                "/docs/api/js-ts/channels/#channels-reorder"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.channels.removePermissionOverwrite",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#channels-removepermissionoverwrite",
+                "/docs/api/js-ts/channels/#channels-removepermissionoverwrite"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.messages.fetchReactionUsers",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/messages/#messages-fetchreactionusers",
+                "/docs/api/js-ts/messages/#messages-fetchreactionusers"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.members.fetchBans",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/guilds-and-members/#members-fetchbans",
+                "/docs/api/js-ts/guilds-and-members/#members-fetchbans"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.roles.setHoistPositions",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/roles-and-permissions/#roles-sethoistpositions",
+                "/docs/api/js-ts/roles-and-permissions/#roles-sethoistpositions"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.webhooks.fetchForGuild",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/effect/invites-and-webhooks/#webhooks-fetchforguild",
+                "/docs/api/js-ts/invites-and-webhooks/#webhooks-fetchforguild"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.messages.previewCleanup",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/messages/#messages-previewcleanup",
+                "/docs/api/js-ts/messages/#messages-previewcleanup"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.members.timeoutState",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/guilds-and-members/#members-timeoutstate",
+                "/docs/api/js-ts/guilds-and-members/#members-timeoutstate"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "client.messages.clearReaction",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/messages/#messages-clearreaction",
+                "/docs/api/js-ts/messages/#messages-clearreaction"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "createTestBot effect",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/effect-testing/testing/#createtestbot",
+                "/docs/effect-application-testing/"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "BotEventContext",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/effect/client-and-lifecycle/#boteventcontext"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "permissionBits",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/roles-and-permissions/#permissionbits",
+                "/docs/api/js-ts/roles-and-permissions/#permissionbits"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "isThreadChannel",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/channels/#isthreadchannel",
+                "/docs/api/js-ts/channels/#isthreadchannel"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "MemberChunkError",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/memberchunkerror/",
+                "/docs/codes/#error-memberchunkerror"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "ChannelOperationError",
+            "kind": "neonflux",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/channeloperationerror/",
+                "/docs/codes/#error-channeloperationerror"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "TimestampStyles",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/builders-and-formatting/#timestampstyles",
+                "/docs/api/js-ts/builders-and-formatting/#timestampstyles"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "FluxerClient service",
+            "kind": "neonflux",
+            "set": "tune",
+            "expect": [
+                "/docs/api/effect/fluxerclient/",
+                "/docs/effect-application-testing/#provide-the-test-client-as-the-fluxerclient-service"
+            ],
+            "source": "NeonFlux"
+        },
+        {
+            "q": "Why Does Loading the SDK Fail with a Require Error?",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#why-does-loading-the-sdk-fail-with-a-require-error"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Which Node.js Version Is Required?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#which-nodejs-version-is-required"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Does TypeScript Need Extra Setup?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#does-typescript-need-extra-setup"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Where Should the Bot Token Be Stored?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#where-should-the-bot-token-be-stored"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Why Does the Bot Not See or Answer Messages?",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#why-does-the-bot-not-see-or-answer-messages"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Why Do Methods Return Results Instead of Throwing?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#why-do-methods-return-results-instead-of-throwing"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "What Is Effect?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#what-is-effect"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Is Effect Required?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#is-effect-required"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Does the Bot Need to Handle Rate Limits?",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#does-the-bot-need-to-handle-rate-limits"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "How Can a Bot Be Tested Without Fluxer?",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#how-can-a-bot-be-tested-without-fluxer"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "Does the Bot Need Sharding?",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#does-the-bot-need-sharding"
+            ],
+            "source": "FAQ"
+        },
+        {
+            "q": "require is not defined fluxerly",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#why-does-loading-the-sdk-fail-with-a-require-error",
+                "/docs/troubleshooting/#the-process-fails-with-a-require-error"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "what node version do I need",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#which-nodejs-version-is-required",
+                "/docs/support-and-compatibility/#runtime-and-upgrade-requirements"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "typescript setup",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#does-typescript-need-extra-setup"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "where to put the bot token",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#where-should-the-bot-token-be-stored",
+                "/docs/quick-start/#2-save-the-token",
+                "/docs/configuration/#token"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "bot does not respond to messages",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#why-does-the-bot-not-see-or-answer-messages",
+                "/docs/troubleshooting/#no-reply-arrives"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "why no exceptions",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#why-do-methods-return-results-instead-of-throwing",
+                "/docs/core-concepts/#results"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "do I have to use effect",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#is-effect-required"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "rate limits",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#does-the-bot-need-to-handle-rate-limits",
+                "/docs/glossary/#rate-limit",
+                "/docs/reliability/#limits-and-retry-rules"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "test without a server",
+            "kind": "faq",
+            "set": "holdout",
+            "expect": [
+                "/docs/faq/#how-can-a-bot-be-tested-without-fluxer",
+                "/docs/testing/"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "do I need shards",
+            "kind": "faq",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#does-the-bot-need-sharding",
+                "/docs/sharding/"
+            ],
+            "source": "FAQ in own words"
+        },
+        {
+            "q": "how do I reply to a message",
+            "kind": "heading-question",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/messages/#reply-to-a-message-and-check-what-happened"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to mention a user",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#mention-someone-deliberately"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I edit a message the bot sent",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/messages/#send-then-edit-the-returned-message"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I build an embed",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#build-an-embed",
+                "/docs/api/js-ts/embedbuilder/"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to send a file from disk",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/messages/#send-a-file-from-disk"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I download an attachment",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#download-an-attachment-when-needed",
+                "/docs/api/js-ts/messages/#attachments-download"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to send a direct message",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#send-a-requested-direct-message",
+                "/docs/api/js-ts/users-and-dms/#directmessages-send"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I register commands",
+            "kind": "heading-question",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/commands/#register-commands"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to add a cooldown to a command",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/commands/#guard-limit-and-wrap-commands",
+                "/docs/small-bot/#a-cooldown"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I add a help command",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/commands/#add-help-from-the-registered-commands",
+                "/docs/small-bot/#generated-help"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to parse command arguments",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/commands/#convert-arguments-before-execution",
+                "/docs/small-bot/#a-typed-argument"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I wait for a reply from the user",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/events-and-collectors/#ask-a-question-without-missing-a-fast-reply",
+                "/docs/events-and-collectors/#wait-for-one-future-event"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to log message edits and deletions",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/events-and-collectors/#log-edits-and-deletions"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I paginate with reactions",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/events-and-collectors/#show-pages-with-reactions"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to know when a member joins",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/events-and-collectors/#distinguish-a-join-from-community-availability"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I create a thread",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/threads/#create-a-thread"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to archive or lock a thread",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/threads/#archive-lock-and-pin-threads"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I create a forum post",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/threads/#create-a-forum-post",
+                "/docs/forum-channels/#start-posts"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to change a forum tag",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/forum-channels/#change-one-tag"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I publish an announcement",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/announcement-channels/#send-a-message-then-publish-it"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to follow an announcement channel",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/announcement-channels/#follow-an-announcement-channel-from-a-text-channel"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to check permissions",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/#check-permissions-using-available-data"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I change a channel permission overwrite",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/#change-part-of-a-channel-overwrite",
+                "/docs/api/js-ts/channels/#channels-setpermissionoverwrite"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to give a member a role",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/#grant-a-configured-opt-in-role",
+                "/docs/api/js-ts/guilds-and-members/#members-addrole"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I read audit logs",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/#read-audit-records"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to reorder channels",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/#reorder-channels-and-check-the-result",
+                "/docs/api/js-ts/channels/#channels-reorder"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I read pinned messages",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/history-and-cache/#read-pinned-messages"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to limit the message cache",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/history-and-cache/#limit-the-message-cache"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I search old messages",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/history-and-cache/#search-the-message-index",
+                "/docs/history-and-cache/#scan-for-one-message"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I turn on debug logging",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/#turn-on-debug-output-without-changing-code"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to use pino or winston logger",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/#send-records-to-an-existing-logger"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to export metrics to opentelemetry",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/#export-metrics-and-traces-with-opentelemetry"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I run the bot with docker",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/#run-with-docker"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to run with pm2",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/deploying/#run-with-pm2"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to run with systemd",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/#run-with-systemd"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "what happens on shutdown",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/#what-happens-on-shutdown",
+                "/docs/core-concepts/#shutdown"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I run a task every day",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/starter-lifetime/#run-a-task-every-day-at-a-set-time"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to run code when the bot is ready",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/starter-lifetime/#run-code-once-the-bot-is-connected"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to keep reminders across restarts",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/starter-lifetime/#keep-reminders-across-restarts"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I set a request timeout",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/reliability/#set-a-request-deadline-and-allow-cancellation"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to read an sdk error",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/reliability/#read-an-sdk-error",
+                "/docs/api/js-ts/errors/#describeerror"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I run shards in several processes",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/sharding/#run-shards-in-several-processes"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to resume after a restart",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/sharding/#resume-after-a-restart"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I write a first test",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/testing/#write-a-first-test"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to test a denied permission",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/testing/#test-a-denied-permission"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to inspect what the bot sent in a test",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/testing/#inspect-what-the-bot-sent"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I send through a webhook",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/webhooks-and-oauth/#send-through-a-configured-webhook"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to create an oauth consent url",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/webhooks-and-oauth/#create-a-user-consent-url"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I get a bot token",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/create-a-bot/#2-copy-the-token",
+                "/docs/create-a-bot/"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to invite the bot to a community",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/create-a-bot/#3-invite-the-bot-to-a-community"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to install the sdk",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/quick-start/#1-install-the-sdk",
+                "/docs/effect-first-bot/#install-the-matching-version"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I call a route that has no method",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/raw-requests-and-events/#call-a-route-without-a-method"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to read a raw gateway event",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/raw-requests-and-events/#read-an-event-without-a-type"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to create a custom emoji",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/emoji-and-stickers/#create-a-reusable-community-emoji"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I send a sticker",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/emoji-and-stickers/#send-a-community-sticker"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to supervise a critical worker",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/application-supervision/"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "what should I check before deploying",
+            "kind": "heading-question",
+            "set": "holdout",
+            "expect": [
+                "/docs/production-checklist/",
+                "/docs/production-checklist/#before-each-deploy"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I test effect programs",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/testing/#test-effect-programs",
+                "/docs/effect-application-testing/"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how to handle all errors in one place",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/#handle-failures-in-one-place"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "how do I send a voice note",
+            "kind": "heading-question",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#mark-media-as-explicit-or-send-a-voice-note"
+            ],
+            "source": "guide headings"
+        },
+        {
+            "q": "Fluxer changes to review",
+            "kind": "github",
+            "set": "tune",
+            "expect": [
+                "/docs/support-and-compatibility/",
+                "/docs/changelog/"
+            ],
+            "source": "GitHub issue 23"
+        },
+        {
+            "q": "release 1000.0.0",
+            "kind": "github",
+            "set": "tune",
+            "expect": [
+                "/docs/changelog/"
+            ],
+            "source": "GitHub release pull requests"
+        },
+        {
+            "q": "getting started",
+            "kind": "newcomer",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/",
+                "/docs/quick-start/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "hello world bot",
+            "kind": "newcomer",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/quick-start/",
+                "/docs/small-bot/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "my first bot",
+            "kind": "newcomer",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/quick-start/",
+                "/docs/small-bot/",
+                "/docs/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "bot is online but not answering",
+            "kind": "newcomer",
+            "set": "tune",
+            "essential": true,
+            "expect": [
+                "/docs/troubleshooting/#no-reply-arrives",
+                "/docs/faq/#why-does-the-bot-not-see-or-answer-messages",
+                "/docs/troubleshooting/#the-gateway-is-connected-but-commands-stopped"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "ping pong command",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/quick-start/",
+                "/docs/commands/#register-commands",
+                "/docs/small-bot/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what is a guild",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#guild",
+                "/docs/different-patterns/#communities-are-guilds"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what is a snowflake",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#snowflake"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what is the gateway",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#gateway",
+                "/docs/core-concepts/#gateway-and-rest"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what is a shard",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/glossary/#shard",
+                "/docs/sharding/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what is an intent",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#intent",
+                "/docs/different-patterns/#receive-events-without-intents"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what is a result",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#result",
+                "/docs/core-concepts/#results"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "example bots",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/examples/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "welcome message when someone joins",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/examples/#welcome-messages",
+                "/docs/small-bot/#a-welcome-message"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "reaction roles",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/examples/#reaction-roles"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "ticket system",
+            "kind": "newcomer",
+            "set": "holdout",
+            "essential": true,
+            "expect": [
+                "/docs/examples/#support-tickets"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "moderation bot",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/examples/#moderation-commands",
+                "/docs/guilds-and-permissions/#moderate-members"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "bot keeps crashing",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/troubleshooting/",
+                "/docs/reliability/",
+                "/docs/application-supervision/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "keep the bot running 24/7",
+            "kind": "newcomer",
+            "set": "holdout",
+            "essential": true,
+            "expect": [
+                "/docs/deploying/",
+                "/docs/deploying/#restart-policy"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "host my bot",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/deploying/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "env file",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/quick-start/#2-save-the-token",
+                "/docs/troubleshooting/#nodejs-prints-env-not-found",
+                "/docs/faq/#where-should-the-bot-token-be-stored"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "where are all the methods",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/",
+                "/docs/api/tasks/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "find a method for a task",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/tasks/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "list of events",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/events-and-collectors/",
+                "/docs/events-and-collectors/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "what changed in the latest version",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/changelog/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "is fluxerly free",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/support-and-compatibility/",
+                "/docs/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "get help",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/support-and-compatibility/#get-help"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "report a bug",
+            "kind": "newcomer",
+            "set": "holdout",
+            "expect": [
+                "/docs/support-and-compatibility/#safe-failure-reports",
+                "/docs/support-and-compatibility/#get-help"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "learn effect",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/effect-first-bot/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "glossary",
+            "kind": "newcomer",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "mesages.send",
+            "kind": "typo",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-send",
+                "/docs/api/effect/messages/#messages-send"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "send mesage",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/",
+                "/docs/api/js-ts/messages/#messages-send"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "embeded",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#build-an-embed",
+                "/docs/api/js-ts/embedbuilder/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "permision",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/",
+                "/docs/api/js-ts/roles-and-permissions/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "shardig",
+            "kind": "typo",
+            "set": "holdout",
+            "expect": [
+                "/docs/sharding/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "ratelimit",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#rate-limit",
+                "/docs/faq/#does-the-bot-need-to-handle-rate-limits",
+                "/docs/codes/#log-ratelimit"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "createclinet",
+            "kind": "typo",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#createclient"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "colector",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/events-and-collectors/",
+                "/docs/glossary/#collector"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "webhok",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/webhooks-and-oauth/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "thred",
+            "kind": "typo",
+            "set": "holdout",
+            "expect": [
+                "/docs/threads/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "reacton",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/emoji-and-stickers/",
+                "/docs/events-and-collectors/#accept-a-confirmation-reaction"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "atachment",
+            "kind": "typo",
+            "set": "holdout",
+            "expect": [
+                "/docs/messages/#download-an-attachment-when-needed",
+                "/docs/api/js-ts/messages/#attachments"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "deploing",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "troubleshoot",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/troubleshooting/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "loging",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "testing bot",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/testing/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "cooldwon",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/small-bot/#a-cooldown",
+                "/docs/commands/#guard-limit-and-wrap-commands",
+                "/docs/glossary/#cooldown"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "describeEror",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/errors/#describeerror"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "typscript",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#does-typescript-need-extra-setup"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "enviroment variable token",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/configuration/#token",
+                "/docs/quick-start/#2-save-the-token",
+                "/docs/faq/#where-should-the-bot-token-be-stored"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "membr ban",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-ban",
+                "/docs/api/effect/guilds-and-members/#members-ban",
+                "/docs/guilds-and-permissions/#moderate-members"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "forun channel",
+            "kind": "typo",
+            "set": "holdout",
+            "expect": [
+                "/docs/forum-channels/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "anouncement",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/announcement-channels/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "oauht",
+            "kind": "typo",
+            "set": "tune",
+            "expect": [
+                "/docs/webhooks-and-oauth/",
+                "/docs/api/js-ts/oauth/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "ban a user",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-ban",
+                "/docs/api/effect/guilds-and-members/#members-ban",
+                "/docs/guilds-and-permissions/#moderate-members"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "kick someone",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-kick",
+                "/docs/api/effect/guilds-and-members/#members-kick",
+                "/docs/guilds-and-permissions/#moderate-members"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "mute a member",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-setmute",
+                "/docs/api/effect/guilds-and-members/#members-setmute",
+                "/docs/api/js-ts/guilds-and-members/#members-timeout",
+                "/docs/api/effect/guilds-and-members/#members-timeout",
+                "/docs/guilds-and-permissions/#moderate-members"
+            ],
+            "shows": [
+                "/docs/api/js-ts/guilds-and-members/#members-timeout",
+                "/docs/api/effect/guilds-and-members/#members-timeout",
+                "/docs/guilds-and-permissions/#moderate-members"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "mute someone in chat",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/#members-timeout",
+                "/docs/api/effect/guilds-and-members/#members-timeout",
+                "/docs/guilds-and-permissions/#moderate-members",
+                "/docs/guilds-and-permissions/#check-permissions-using-available-data"
+            ],
+            "shows": [
+                "/docs/api/js-ts/guilds-and-members/#members-timeout",
+                "/docs/api/effect/guilds-and-members/#members-timeout",
+                "/docs/guilds-and-permissions/#moderate-members",
+                "/docs/guilds-and-permissions/#check-permissions-using-available-data"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "moderation",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/#moderate-members",
+                "/docs/examples/#moderation-commands"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "server",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/glossary/#guild",
+                "/docs/different-patterns/#communities-are-guilds"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "guild",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#guild",
+                "/docs/different-patterns/#communities-are-guilds"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "community",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#guild",
+                "/docs/different-patterns/#communities-are-guilds",
+                "/docs/guilds-and-permissions/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "server members",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/guilds-and-members/",
+                "/docs/guilds-and-permissions/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "slash command",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/commands/",
+                "/docs/different-patterns/#use-prefix-commands"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "slash commands",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/commands/",
+                "/docs/different-patterns/#use-prefix-commands"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "prefix command",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/commands/",
+                "/docs/glossary/#prefix-command",
+                "/docs/different-patterns/#use-prefix-commands"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "intents",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/different-patterns/#receive-events-without-intents",
+                "/docs/glossary/#intent"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "gateway intents",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/different-patterns/#receive-events-without-intents",
+                "/docs/glossary/#intent"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "dm a user",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/users-and-dms/#directmessages-send",
+                "/docs/api/effect/users-and-dms/#directmessages-send",
+                "/docs/messages/#send-a-requested-direct-message"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "private message",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/messages/#send-a-requested-direct-message",
+                "/docs/api/js-ts/users-and-dms/#directmessages-send",
+                "/docs/api/effect/users-and-dms/#directmessages-send"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "rich embed",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/messages/#build-an-embed",
+                "/docs/api/js-ts/embedbuilder/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "upload image",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/messages/#upload-a-small-generated-file",
+                "/docs/messages/#send-a-file-from-disk"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "emoji reaction",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/emoji-and-stickers/",
+                "/docs/events-and-collectors/#accept-a-confirmation-reaction",
+                "/docs/api/js-ts/messages/#messages-addreaction",
+                "/docs/api/effect/messages/#messages-addreaction"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "purge messages",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-deletemany",
+                "/docs/api/effect/messages/#messages-deletemany",
+                "/docs/api/js-ts/messages/#messages-previewcleanup"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "bulk delete",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-deletemany",
+                "/docs/api/effect/messages/#messages-deletemany"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "clear chat",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-deletemany",
+                "/docs/api/effect/messages/#messages-deletemany",
+                "/docs/api/js-ts/messages/#messages-previewcleanup"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "event listener",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/core-concepts/#events-and-handlers",
+                "/docs/events-and-collectors/",
+                "/docs/api/js-ts/client/#on"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "on message",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/core-concepts/#events-and-handlers",
+                "/docs/events-and-collectors/",
+                "/docs/api/js-ts/client/#on"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "graceful shutdown",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/#what-happens-on-shutdown",
+                "/docs/core-concepts/#shutdown",
+                "/docs/small-bot/#clean-shutdown"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "reconnect",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/troubleshooting/#the-connection-is-recovering",
+                "/docs/glossary/#resume"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "heartbeat",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/troubleshooting/#the-connection-is-recovering",
+                "/docs/glossary/#gateway"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "unit test",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/testing/",
+                "/docs/testing/#write-a-first-test"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "mock fluxer",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/testing/",
+                "/docs/faq/#how-can-a-bot-be-tested-without-fluxer"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "cron job",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/starter-lifetime/#run-a-task-every-day-at-a-set-time",
+                "/docs/starter-lifetime/#run-work-later-or-on-a-schedule"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "schedule a message",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/starter-lifetime/#run-work-later-or-on-a-schedule",
+                "/docs/starter-lifetime/#run-a-task-every-day-at-a-set-time"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "2fa",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/guilds-and-permissions/#communities-that-require-two-factor-authentication",
+                "/docs/glossary/#mfa"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "error handling",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/logging/#handle-failures-in-one-place",
+                "/docs/reliability/",
+                "/docs/core-concepts/#results"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "exceptions",
+            "kind": "synonym",
+            "set": "tune",
+            "expect": [
+                "/docs/faq/#why-do-methods-return-results-instead-of-throwing",
+                "/docs/core-concepts/#results"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "config options",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/configuration/#options-at-a-glance",
+                "/docs/api/js-ts/options/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "voice channel",
+            "kind": "synonym",
+            "set": "holdout",
+            "expect": [
+                "/docs/guilds-and-permissions/#voice-controls-versus-a-voice-connection"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "embedbui",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/embedbuilder/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "describeErr",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/api/js-ts/errors/#describeerror"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "messages.sen",
+            "kind": "partial",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/messages/#messages-send",
+                "/docs/api/effect/messages/#messages-send"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "shard",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/sharding/",
+                "/docs/glossary/#shard"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "collect",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/events-and-collectors/",
+                "/docs/glossary/#collector"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "permiss",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/guilds-and-permissions/",
+                "/docs/api/js-ts/roles-and-permissions/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "webho",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/webhooks-and-oauth/",
+                "/docs/api/js-ts/invites-and-webhooks/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "threa",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/threads/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "deploy",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "troublesh",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/troubleshooting/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "ratelim",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#rate-limit",
+                "/docs/faq/#does-the-bot-need-to-handle-rate-limits",
+                "/docs/codes/#log-ratelimit",
+                "/docs/api/js-ts/ratelimiterror/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "createTes",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/api/testing/testing/#createtestbot",
+                "/docs/api/testing/testing/#createtestclient"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "runB",
+            "kind": "partial",
+            "set": "holdout",
+            "expect": [
+                "/docs/api/js-ts/client-and-lifecycle/#runbot"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "oaut",
+            "kind": "partial",
+            "set": "holdout",
+            "expect": [
+                "/docs/webhooks-and-oauth/",
+                "/docs/api/js-ts/oauth/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "forum",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/forum-channels/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "announce",
+            "kind": "partial",
+            "set": "holdout",
+            "expect": [
+                "/docs/announcement-channels/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "sticker",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/emoji-and-stickers/#send-a-community-sticker",
+                "/docs/emoji-and-stickers/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "glossa",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "changel",
+            "kind": "partial",
+            "set": "holdout",
+            "expect": [
+                "/docs/changelog/"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "opentele",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/logging/#export-metrics-and-traces-with-opentelemetry"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "pm2",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/#run-with-pm2"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "docker",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/deploying/#run-with-docker"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "snowfl",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#snowflake"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "middlew",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#middleware"
+            ],
+            "source": "synthetic"
+        },
+        {
+            "q": "pkce",
+            "kind": "partial",
+            "set": "tune",
+            "expect": [
+                "/docs/glossary/#pkce",
+                "/docs/webhooks-and-oauth/#validate-the-callback-before-exchanging-its-code"
+            ],
+            "source": "synthetic"
+        }
+    ]
+}

@@ -9,7 +9,7 @@ import { waitUntil } from "../../support/clock.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
 import { settle, typedResult } from "../../support/settle.js"
 
-const operationUrl = "https://api.fluxer.app/v1/attachments/refresh-urls"
+const operationUrl = "https://fluxer.com/api/v1/attachments/refresh-urls"
 
 afterEach(() => {
     vi.unstubAllGlobals()

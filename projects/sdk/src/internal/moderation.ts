@@ -15,6 +15,7 @@ import { identifier, integerInRange as integer, record } from "./decode/primitiv
 import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
+import { decodeUser } from "./users.js"
 import { normalizedText as text } from "./field-text.js"
 import { auditSettings as validateAuditSettings } from "./audit.js"
 import type { AuditedRequestOptions } from "#sdk/client"
@@ -269,12 +270,14 @@ export function guildBans(guildId: string): GuildRequest<readonly GuildBan[]> | 
                 )
                     return undefined
                 ids.add(item.user.id)
+                const user = decodeUser(item.user)
                 bans.push(
                     Object.freeze({
                         guildId,
                         userId: item.user.id,
                         username: item.user.username,
                         isBot: item.user.bot === true,
+                        ...(user ? { user } : {}),
                         moderatorId: item.moderator_id,
                         bannedAt: item.banned_at,
                         ...(item.reason === undefined ? {} : { reason: item.reason as string | null }),

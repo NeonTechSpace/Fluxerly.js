@@ -7,7 +7,7 @@ import { describeBothApis, setup } from "../support/both-apis.js"
 import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
 import { settle } from "../support/settle.js"
 
-const gatewayUrl = "wss://gateway.fluxer.app/?v=1&encoding=json"
+const gatewayUrl = "wss://gateway.fluxer.com/?v=1&encoding=json"
 afterEach(() => vi.useRealTimers())
 
 /** A scripted transport socket with no I/O or host timers */

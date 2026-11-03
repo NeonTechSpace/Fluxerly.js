@@ -56,7 +56,7 @@ test.each(modes)(
                 fetch: async (url) =>
                     url.endsWith("/.well-known/fluxer")
                         ? Response.json(hostedDiscoveryDocument)
-                        : Response.json({ url: "wss://gateway.fluxer.app" }),
+                        : Response.json({ url: "wss://gateway.fluxer.com" }),
             },
         })
         await settle(client.connect())

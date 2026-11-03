@@ -13,16 +13,18 @@ The default API returns expected failures, such as a missing permission or a net
 The SDK holds a `rest.rejected` Warn for an HTTP 401 or 403 rejection for up to one second. If the handler returns that same failure while the Warn is held and no `onError` hook is configured for it, only the handler's failure record appears. See [rejection logging](/docs/logging/#read-the-default-output)
 
 ```ts
+import { setTimeout as wait } from "node:timers/promises"
 import { errors, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
     events: {
-        messageCreate: async ({ message, reply }) => {
+        messageCreate: async ({ message, reply, signal }) => {
             if (message.content !== "!ping") return undefined
             const first = await reply("Pong!")
             if (first.isOk() || !errors.isRetryable(first.error)) return first
-            await new Promise((resolve) => setTimeout(resolve, errors.retryAfterMs(first.error) ?? 1_000))
+            // The signal ends the wait when the bot stops
+            await wait(errors.retryAfterMs(first.error) ?? 1_000, undefined, { signal })
             return reply("Pong!")
         },
     },
@@ -37,7 +39,9 @@ The bot itself follows the same rule. When a failure stops it, such as a rejecte
 
 ## Report failures that have no Result
 
-Some failures have no caller to return to: A throwing event handler or one that returns an Err, a failed command, a failing [collector](/docs/glossary/#collector) callback or filter, a message cache callback that throws or a subscription closed by a full queue with `overflow: "stop"`. The SDK sends each of them to the client's `onError` option with the original error and the IDs of the message involved, never its content. Without a hook it logs them at Error with the full message, stack and cause chain
+Some failures have no caller to return to: A throwing event handler or one that returns an Err, a failed command, a failing [collector](/docs/glossary/#collector) callback or filter, a message cache callback that throws or a subscription closed by a full queue with `overflow: "stop"`
+
+The SDK sends each of them to the client's `onError` option with the original error and the IDs of the message involved. The SDK adds no message content itself, but your own error can contain some. Without a hook it logs them at Error with the full message, stack and cause chain
 
 ```ts
 import { createClient, type FailureReport } from "@neontechspace/fluxerly"
@@ -152,20 +156,24 @@ The SDK applies these rules automatically. They need no configuration, but expla
 <details>
 <summary>Automatic request retries</summary>
 
-A GET request that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice. A connection lost while the response body arrives counts as a network error.
+A GET request, or a call to `threads.fetchPostData`, that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice. A connection lost while the response body arrives counts as a network error.
 A write is sent again only after Fluxer confirms a rate limit with HTTP 429, so a write with an unknown outcome is never repeated automatically.
-Each retry is counted in `diagnostics().counters.restRetries` and logged at Debug
+Each retry after a network error or HTTP 500, 502, 503 or 504 is counted in `diagnostics().counters.restRetries` and logged as `rest.retry` at Debug. A resend after HTTP 429 is counted in `rateLimitWaits` instead, as described under Rate limits
 
 </details>
 
 <details>
 <summary>Rate limits</summary>
 
-The SDK waits for [rate limits](/docs/glossary/#rate-limit) on its own and logs waits of one second or more at Warn.
-Waiting counts toward each operation's deadline. A wait that would pass the deadline fails at once with `ratelimit.deadline`, including for an operation queued behind an earlier pause, and the error's `retryAfterMs` names the remaining wait.
-A global HTTP 429 pauses unrelated API routes on the same client, including when a valid global header accompanies an unreadable error body. Cancelling one queued operation does not clear the shared pause.
-Server-provided bucket identifiers refine request grouping automatically, so bot code does not configure rate-limit groups. Matching limits share a wait, while independently limited resources stay separate. The first requests can still receive a 429 before the grouping is learned.
-The [client contract](/docs/api/js-ts/client/) explains scope metadata and retry boundaries
+The SDK waits for [rate limits](/docs/glossary/#rate-limit) on its own when the request body can be sent again, and logs waits of one second or more at Warn. A webhook or inline upload with a Blob, File or stream attachment fails with reason `rateLimit` instead and logs `ratelimit.notResent` at Warn. If the upload read the stream, `errors.isRetryable` returns false. Send again with a new stream or with the file as bytes. If the upload never read the stream, as when a rate-limit pause outlasts the deadline before sending, `errors.isRetryable` returns true and the same stream can be used again. Waiting counts toward each operation's deadline. A wait that would pass the deadline fails at once with `ratelimit.deadline`, including for an operation queued behind an earlier pause, and the error's `retryAfterMs` names the remaining wait
+
+A global HTTP 429 pauses unrelated API routes on the same client, including when a valid global header accompanies an unreadable error body. Cancelling one queued operation does not clear the shared pause
+
+An HTTP 429 that does not identify its limit also pauses every API request of the client for its wait. Such a response has no `X-RateLimit-Bucket` or `X-RateLimit-Scope` header and no JSON body with a boolean `global` member, as when a proxy in front of the API answers. Fluxer did not declare it global, so its records say `global: false` with `pause: "client"`, and other processes of a supervisor keep running. A limit Fluxer identifies as a route limit pauses only its bucket. When the `Retry-After` header and the body's `retry_after` disagree, the SDK waits for the longer one. After such a pause, one request goes first and the others wait for its answer. If that request meets another unidentified 429, the next pause doubles the wait it asks for, up to a minute, plus a little jitter, so a longer outage does not wake the whole queue every few seconds
+
+Server-provided bucket identifiers refine request grouping automatically, so bot code does not configure rate-limit groups. Matching limits share a wait, while independently limited resources stay separate. The first requests can still receive a 429 before the grouping is learned. The [client contract](/docs/api/js-ts/client/) explains scope metadata and retry boundaries
+
+When rate limits hold queued requests for a second, the client logs one `ratelimit.queueHeld` record that says how many requests wait, why and for how long. A global limit or a client pause after an unidentified 429 is a Warn. Used-up route limits are a Debug that names the route with the most waiting requests, because they are part of ordinary pacing. Each reason is logged at most once a minute. The `diagnostics().rest.rateLimitHold` field shows the same summary at any moment, or null when no queued request waits for a rate limit
 
 </details>
 
@@ -180,10 +188,9 @@ The `rest` client option changes these limits, as described in [configuration](/
 <details>
 <summary>Rejected gateway messages</summary>
 
-Gateway receive protection is automatic. A message beyond the fixed receive ceiling, or invalid UTF-8, stops the connection rather than repeatedly reconnecting to the same rejected data.
-A known event that fails validation is skipped instead: The SDK logs `gateway.dispatchRejected` at Warn with the event type and failing field, clears cache entries it could have changed and keeps the session running.
-Set `gateway: { onMalformedDispatch: "terminate" }` to end the client instead.
-The [client contract](/docs/api/js-ts/client/) documents the ceiling and failure codes. Subscription queue limits apply separately and do not bound JSON parsing memory
+Gateway receive protection is automatic. A message beyond the fixed receive ceiling, or invalid UTF-8, stops the connection rather than repeatedly reconnecting to the same rejected data. A known event that fails validation is skipped instead: The SDK logs `gateway.dispatchRejected` at Warn with the event type and failing field, clears cache entries it could have changed and keeps the session running
+
+Set `gateway: { onMalformedDispatch: "terminate" }` to end the client instead. The [client contract](/docs/api/js-ts/client/) documents the ceiling and failure codes. Subscription queue limits apply separately and do not bound JSON parsing memory
 
 </details>
 

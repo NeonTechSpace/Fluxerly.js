@@ -90,7 +90,9 @@ This is the bot that `fluxerly init --template effect` writes. Save it as `bot.t
 
 Send `!ping` and expect `Pong!`. Press Ctrl+C to stop the bot. The SDK interrupts it and waits for its cleanup
 
-The last line passes the options and the token to `runBot` and runs that program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The line runs only when Node.js runs the file, so a test can import `bot` without starting it, as the [Effect application testing guide](/docs/effect-application-testing/#test-a-runbot-bot-against-an-in-memory-fluxer) shows. The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
+The last line passes the options and the token to `runBot` and runs that program with `Effect.runPromiseExit`, which resolves with the program's outcome, called an Exit, instead of rejecting. The line runs only when Node.js runs the file, so a test can import `bot` without starting it, as the [Effect application testing guide](/docs/effect-application-testing/#test-a-runbot-bot-against-an-in-memory-fluxer) shows
+
+The `runBot` program reports its own failure: A failure that stops the bot, such as a rejected token, is logged once and sets `process.exitCode` to 1, so the Exit needs no further handling. Setting the exit code instead of calling `process.exit()` lets Node.js finish cleanup before the process ends
 
 <details>
 <summary>What the runner watches while the bot runs</summary>
@@ -105,7 +107,7 @@ The [small bot](/docs/small-bot/) guide shows a larger native bot with commands,
 
 ## Report failures outside runBot
 
-Application code outside `runBot`, such as a one-off job, reports its own failure. A failed Exit holds a Cause, Effect's full record of why the program failed. Pass `exit.cause` to `describeError`, which prints each error's code, hint and details with credentials masked
+Application code outside `runBot`, such as a one-off job, reports its own failure. A failed Exit holds a Cause, Effect's full record of why the program failed. Pass `exit.cause` to `describeError`, which prints each error's code, hint and details with recognized credentials masked
 
 ```ts
 import { Effect, Exit } from "effect"

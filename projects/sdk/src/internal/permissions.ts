@@ -422,8 +422,8 @@ const closedBeforeRead = <A>(
  * A thread channel adds a read of its parent channel, whose permissions the thread takes
  *
  * By default this reads remotely without consulting local caches. With preferCache, each observation comes from an
- * enabled cache when it can be used and is read remotely otherwise. Its deadline covers the whole composition and
- * is checked only before a remote read. The resulting observations are not transactional and do not establish access,
+ * enabled cache when it can be used and is read remotely otherwise. Its deadline covers the reads, is checked only
+ * before a remote read, and awaited cleanup of an interrupted read can finish after it. The resulting observations are not transactional and do not establish access,
  * hierarchy, timeouts, or action success
  */
 export function fetchPermissions(

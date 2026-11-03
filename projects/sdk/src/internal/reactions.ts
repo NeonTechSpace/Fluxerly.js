@@ -9,6 +9,7 @@ import { format } from "#sdk/helpers"
 import { identifier, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { decodeDispatchMember } from "./guilds.js"
+import { decodeMessageUser } from "./message.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
     const input = query === undefined ? {} : query
@@ -45,17 +46,12 @@ export function decodeReactionUsersPage(
     const items: ReactionUser[] = []
     let previous = query.after === undefined ? undefined : BigInt(query.after)
     for (const item of value.items) {
-        if (
-            !record(item) ||
-            !identifier(item.id) ||
-            typeof item.username !== "string" ||
-            (item.bot !== undefined && typeof item.bot !== "boolean")
-        )
-            return undefined
-        const id = BigInt(item.id)
+        const user = decodeMessageUser(item)
+        if (user === undefined || user === true) return undefined
+        const id = BigInt(user.id)
         if (previous !== undefined && id <= previous) return rejectCheck("order")
         previous = id
-        items.push(Object.freeze({ id: item.id, username: item.username, isBot: item.bot === true }))
+        items.push(user)
     }
     if (value.has_more) {
         if (items.length === 0 || value.next_after !== items.at(-1)!.id) return undefined
@@ -99,7 +95,7 @@ export function resolveReactionEmoji(
                     "name",
                     "id",
                     "animated",
-                    ...(snapshot ? ["guildId"] : []),
+                    ...(snapshot ? ["guildId", "creatorId"] : []),
                     ...(metadata ? ["allowCloning"] : []),
                 ].includes(key),
         )

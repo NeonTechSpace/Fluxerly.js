@@ -27,6 +27,7 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import type { EncodedBody } from "./attachments.js"
 import { decodeGuildChannel, decodeGuildChannels, url } from "./channel-decode.js"
 import { count as nonNegativeInt32, fieldsOnce, identifier, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { channelName, normalizedText } from "./field-text.js"
 import {
     booleanField,
@@ -55,6 +56,10 @@ export interface ChannelRequest<A> {
     readonly audited?: true
     /** Private client capabilities required for one explicit provider-gated replacement */
     readonly features?: readonly string[]
+    /** A POST that only reads, so its failures count as reads like those of a GET */
+    readonly read?: true
+    /** A read POST that is safe to send again, so its transient failures retry as a GET's do */
+    readonly retryRead?: true
     readonly decode: (value: unknown) => A | undefined
     /** Decodes an HTTP 202 response, for a route that answers 202 instead of status while its result is not ready */
     readonly accepted?: (value: unknown) => A | undefined
@@ -521,7 +526,7 @@ export function channelFetch(channelId: string): ChannelValidationResult<GuildCh
         cache: { channelId },
         decode: (value) => {
             const channel = decodeGuildChannel(value)
-            return channel?.id === channelId ? channel : undefined
+            return channel === undefined || channel.id === channelId ? channel : rejectCheck("targetMismatch")
         },
     }
 }
@@ -631,7 +636,7 @@ export function channelEdit(channelId: string, input: ChannelEdit): ChannelValid
         },
         decode: (value) => {
             const channel = decodeGuildChannel(value)
-            return channel?.id === channelId ? channel : undefined
+            return channel === undefined || channel.id === channelId ? channel : rejectCheck("targetMismatch")
         },
     }
 }

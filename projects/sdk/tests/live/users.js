@@ -16,9 +16,10 @@ import {
     openJournal,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 // Manual, currently authorized recipient checks only; never run through check, CI or a schedule
 const mode = process.argv[2]
@@ -350,7 +351,7 @@ function verifyGroup(group) {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
-}, 180_000).unref()
+}, harnessWatchdogMs()).unref()
 try {
     const sandbox = loadSandboxEnvironment()
     token = sandbox.token
@@ -372,6 +373,7 @@ try {
     if (journalFile.exists()) {
         journal = journalFile.read()
         await cleanup()
+        recoveredOnly()
         report("recovery_only_complete")
     } else {
         if (groupChecks && groupId) {
@@ -428,7 +430,10 @@ try {
             stage = "latest_message_batch_failure_and_recovery"
             let attempts = 0
             globalThis.fetch = async (url, init) => {
-                if (init?.method === "POST" && new URL(url).pathname === "/v1/users/@me/channels/messages/preload") {
+                if (
+                    init?.method === "POST" &&
+                    new URL(url).pathname === "/api/v1/users/@me/channels/messages/preload"
+                ) {
                     attempts++
                     throw new TypeError("Test-owned batch response loss")
                 }
@@ -548,7 +553,7 @@ try {
             let sends = 0
             globalThis.fetch = async (url, init) => {
                 const response = await rawFetch(url, init)
-                if (init?.method === "POST" && new URL(url).pathname === `/v1/channels/${dm.id}/messages`) {
+                if (init?.method === "POST" && new URL(url).pathname === `/api/v1/channels/${dm.id}/messages`) {
                     sends++
                     await response.arrayBuffer()
                     throw new TypeError("Test-owned response loss")

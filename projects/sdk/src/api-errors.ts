@@ -11,6 +11,7 @@ import { permissionLabel as label } from "#sdk/internal/permission-labels"
 import {
     permissionRequirement,
     requiredPermissionsHint,
+    threadSend,
     type PermissionRequirement,
 } from "#sdk/internal/permission-requirements"
 /**
@@ -38,7 +39,7 @@ export const apiErrorMappings = {
     },
     CANNOT_MODIFY_SYSTEM_WEBHOOK: {
         code: "cannotModifySystemWebhook",
-        explanation: "Fluxer does not allow modifying a system webhook",
+        explanation: "Fluxer does not allow editing a system message, pinning it or starting a thread from it",
     },
     ANNOUNCEMENT_CHANNEL_REQUIRED: {
         code: "announcementChannelRequired",
@@ -158,7 +159,7 @@ export const apiErrorMappings = {
     CONTENT_BLOCKED: { code: "contentBlocked", explanation: "Fluxer blocked the submitted content" },
     DIRECT_MESSAGES_DISABLED: {
         code: "directMessagesDisabled",
-        explanation: "The recipient does not accept direct messages",
+        explanation: "Direct messages are turned off on this Fluxer instance",
     },
     EXPLICIT_CONTENT_CANNOT_BE_SENT: {
         code: "explicitContentCannotBeSent",
@@ -167,7 +168,8 @@ export const apiErrorMappings = {
     FILE_SIZE_TOO_LARGE: { code: "fileSizeTooLarge", explanation: "A submitted file exceeds Fluxer's limit" },
     FEATURE_TEMPORARILY_DISABLED: {
         code: "featureTemporarilyDisabled",
-        explanation: "Fluxer has temporarily disabled this feature",
+        explanation:
+            "Fluxer has turned this operation off, either for this community or for the whole instance, such as sending messages, reactions, invites or search",
     },
     SLOWMODE_RATE_LIMITED: { code: "slowmodeRateLimited", explanation: "Fluxer's channel slowmode is active" },
     GUILD_VERIFICATION_REQUIRED: {
@@ -219,6 +221,39 @@ export const apiErrorMappings = {
     FEATURE_NOT_AVAILABLE_SELF_HOSTED: {
         code: "featureNotAvailableSelfHosted",
         explanation: "Fluxer does not offer this feature on this self-hosted instance",
+    },
+    USER_NOT_IN_VOICE: {
+        code: "userNotInVoice",
+        explanation: "Fluxer reports that the member is not connected to voice",
+    },
+    NSFW_CONTENT_AGE_RESTRICTED: {
+        code: "nsfwContentAgeRestricted",
+        explanation:
+            "Fluxer refused age-restricted content in a channel that is not age-restricted, such as a forwarded message with age-restricted media",
+    },
+    SINGLE_COMMUNITY_CANNOT_LEAVE: {
+        code: "singleCommunityCannotLeave",
+        explanation: "This Fluxer instance runs as a single community, which members cannot leave",
+    },
+    DISCOVERY_DISABLED: {
+        code: "discoveryDisabled",
+        explanation: "Community directory discovery is turned off on this Fluxer instance",
+    },
+    DISCOVERY_INSUFFICIENT_MEMBERS: {
+        code: "discoveryInsufficientMembers",
+        explanation: "The community has fewer members than this instance requires for a discovery listing",
+    },
+    DISCOVERY_ALREADY_APPLIED: {
+        code: "discoveryAlreadyApplied",
+        explanation: "The community already has a pending or approved discovery application",
+    },
+    DISCOVERY_APPLICATION_NOT_FOUND: {
+        code: "discoveryApplicationNotFound",
+        explanation: "The community has no discovery application",
+    },
+    DISCOVERY_APPLICATION_ALREADY_REVIEWED: {
+        code: "discoveryApplicationAlreadyReviewed",
+        explanation: "Fluxer already rejected or removed this discovery application, so it can no longer be edited",
     },
     MAX_ACTIVE_THREADS: { code: "resourceLimit", explanation: "Fluxer's community active-thread limit was reached" },
     MAX_CATEGORY_CHANNELS: { code: "resourceLimit", explanation: "Fluxer's category-channel limit was reached" },
@@ -277,6 +312,15 @@ export const validationErrorMappings = {
     VANITY_URL_CODE_ALREADY_TAKEN: "The vanity URL code is already taken",
     VANITY_URL_CODE_LENGTH_INVALID: "The vanity URL code has an invalid length",
     VANITY_URL_INVALID_CHARACTERS: "The vanity URL code has invalid characters",
+    VOICE_MESSAGES_ATTACHMENT_MUST_BE_AUDIO: "A voice note or an attachment with a waveform must be an audio file",
+    VOICE_MESSAGES_ATTACHMENT_WAVEFORM_REQUIRED: "A voice note's attachment needs a waveform",
+    VOICE_MESSAGES_ATTACHMENT_DURATION_REQUIRED: "A voice note's attachment needs a duration",
+    VOICE_MESSAGES_CANNOT_HAVE_CONTENT: "A voice note cannot have message content",
+    VOICE_MESSAGES_CANNOT_HAVE_EMBEDS: "A voice note cannot have embeds",
+    VOICE_MESSAGES_CANNOT_HAVE_FAVORITE_MEMES: "A voice note cannot have a saved meme",
+    VOICE_MESSAGES_CANNOT_HAVE_STICKERS: "A voice note cannot have stickers",
+    VOICE_MESSAGES_DURATION_EXCEEDS_LIMIT: "The voice note is longer than this instance allows",
+    VOICE_MESSAGES_REQUIRE_SINGLE_ATTACHMENT: "A voice note needs exactly one attachment",
 } as const satisfies Readonly<Record<ApiValidationCode, string>>
 
 /**
@@ -285,7 +329,8 @@ export const validationErrorMappings = {
  * Announcement, follow, channel conversion and publishing preconditions have distinct categories. Publishing and
  * published-message editing limits are separate from the general rateLimited category. Thread state, forum tag and
  * webhook post preconditions also have distinct categories, while the thread, tag and pinned-post limits join
- * resourceLimit and a missing forum tag or thread member joins unknownResource
+ * resourceLimit and a missing forum tag or thread member joins unknownResource.
+ * The name cannotModifySystemWebhook comes from Fluxer's code. Fluxer sends it for system messages, not webhooks
  *
  * @category Errors
  */
@@ -352,6 +397,14 @@ export type ApiErrorCode =
     | "cannotExecuteOnDirectMessage"
     | "invitesDisabled"
     | "featureNotAvailableSelfHosted"
+    | "userNotInVoice"
+    | "nsfwContentAgeRestricted"
+    | "singleCommunityCannotLeave"
+    | "discoveryDisabled"
+    | "discoveryInsufficientMembers"
+    | "discoveryAlreadyApplied"
+    | "discoveryApplicationNotFound"
+    | "discoveryApplicationAlreadyReviewed"
     | "resourceLimit"
 
 /**
@@ -441,6 +494,14 @@ export type ApiProviderCode =
     | "CANNOT_EXECUTE_ON_DM"
     | "INVITES_DISABLED"
     | "FEATURE_NOT_AVAILABLE_SELF_HOSTED"
+    | "USER_NOT_IN_VOICE"
+    | "NSFW_CONTENT_AGE_RESTRICTED"
+    | "SINGLE_COMMUNITY_CANNOT_LEAVE"
+    | "DISCOVERY_DISABLED"
+    | "DISCOVERY_INSUFFICIENT_MEMBERS"
+    | "DISCOVERY_ALREADY_APPLIED"
+    | "DISCOVERY_APPLICATION_NOT_FOUND"
+    | "DISCOVERY_APPLICATION_ALREADY_REVIEWED"
     | "MAX_ACTIVE_THREADS"
     | "MAX_CATEGORY_CHANNELS"
     | "MAX_EMOJIS"
@@ -491,6 +552,15 @@ export type ApiValidationCode =
     | "VANITY_URL_CODE_ALREADY_TAKEN"
     | "VANITY_URL_CODE_LENGTH_INVALID"
     | "VANITY_URL_INVALID_CHARACTERS"
+    | "VOICE_MESSAGES_ATTACHMENT_MUST_BE_AUDIO"
+    | "VOICE_MESSAGES_ATTACHMENT_WAVEFORM_REQUIRED"
+    | "VOICE_MESSAGES_ATTACHMENT_DURATION_REQUIRED"
+    | "VOICE_MESSAGES_CANNOT_HAVE_CONTENT"
+    | "VOICE_MESSAGES_CANNOT_HAVE_EMBEDS"
+    | "VOICE_MESSAGES_CANNOT_HAVE_FAVORITE_MEMES"
+    | "VOICE_MESSAGES_CANNOT_HAVE_STICKERS"
+    | "VOICE_MESSAGES_DURATION_EXCEEDS_LIMIT"
+    | "VOICE_MESSAGES_REQUIRE_SINGLE_ATTACHMENT"
 
 /** A validation error reported by Fluxer, with a fixed SDK explanation.
  * This is a server rejection, not a problem found by local input checks.
@@ -501,7 +571,8 @@ export type ApiValidationCode =
 export interface ApiValidationErrorDetail {
     /**
      * Fluxer validation code. A code this SDK version does not recognize is kept when it is an uppercase code of at most
-     * 64 characters, with a generic explanation, so its field path is not lost
+     * 64 characters, with a generic explanation, so its field path is not lost. An empty string when Fluxer named the
+     * field without a code
      */
     readonly providerCode: ApiValidationCode | (string & {})
     /** Fixed SDK explanation of the validation code */
@@ -558,21 +629,31 @@ export interface ApiErrorDetail {
 /** Shape of a Fluxer error code that is safe to keep even when this SDK version does not describe it */
 const providerCodePattern = /^[A-Z][A-Z0-9_]{0,63}$/
 
+/** The explanation of a validation entry that names a field without a code */
+const uncodedExplanation = "Fluxer rejected this field without a code"
+
 function validationDetails(value: unknown): readonly ApiValidationErrorDetail[] {
     if (!Array.isArray(value)) return Object.freeze([])
     const details: ApiValidationErrorDetail[] = []
     for (const item of value) {
-        if (details.length === 32 || !record(item) || typeof item.code !== "string") continue
-        const known = Object.hasOwn(validationErrorMappings, item.code)
-        if (!known && !providerCodePattern.test(item.code)) continue
-        const explanation = known
-            ? validationErrorMappings[item.code as keyof typeof validationErrorMappings]
-            : "Fluxer rejected this field with a code that this SDK version does not describe"
+        if (details.length === 32 || !record(item)) continue
         const path =
             typeof item.path === "string" &&
             /^[A-Za-z_][A-Za-z0-9_]*(?:\.(?:[A-Za-z_][A-Za-z0-9_]*|\d{1,4})){0,8}$/.test(item.path)
                 ? item.path
                 : undefined
+        // Fluxer's schema makes the code optional, and some checks name only the field, such as a badge cursor
+        // (packages/schema/src/domains/common/ErrorSchemas.ts:6-10 at 5f3fc0b1)
+        if (item.code === undefined && path !== undefined) {
+            details.push(Object.freeze({ providerCode: "", explanation: uncodedExplanation, path }))
+            continue
+        }
+        if (typeof item.code !== "string") continue
+        const known = Object.hasOwn(validationErrorMappings, item.code)
+        if (!known && !providerCodePattern.test(item.code)) continue
+        const explanation = known
+            ? validationErrorMappings[item.code as keyof typeof validationErrorMappings]
+            : "Fluxer rejected this field with a code that this SDK version does not describe"
         details.push(
             Object.freeze({
                 providerCode: item.code,
@@ -613,7 +694,7 @@ export function unrecognizedProviderCode(body: unknown): string | null {
 const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     missingPermissions:
         "Grant the bot's role the permission this operation needs in the community settings or the channel's permission overrides",
-    missingAccess: `Give the bot's role ${label("ViewChannel")} for this channel or its category, and check that the bot is still in the community`,
+    missingAccess: `Give the bot's role ${label("ViewChannel")} for this channel or its category, and check that the bot is still in the community. For a private thread, ask a thread member to add the bot, or grant ${label("ManageThreads")} in the parent channel`,
     unknownResource: "Check the ID. The resource may be deleted or not visible to this bot",
     notFound: "Check the ID. The resource may be deleted or not visible to this bot",
     unauthorized:
@@ -621,7 +702,13 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     invalidFormBody:
         "Correct the fields named in the message. The error's apiError.validationErrors lists them as data",
     cannotSendMessagesToUser: "The user does not accept direct messages from this bot, so retrying does not help",
-    directMessagesDisabled: "The user does not accept direct messages from this bot, so retrying does not help",
+    directMessagesDisabled:
+        "This Fluxer instance has turned off direct messages, so retrying does not help. Ask its administrator if bots should be able to send them",
+    communicationDisabled:
+        "The bot is timed out in this community. Wait for the timeout to end, or ask a moderator to remove it",
+    contentBlocked:
+        "This instance's content filter blocked text, a link or a file in the request. Change or remove the blocked content and send again",
+    cannotModifySystemWebhook: "Use an ordinary message or reply instead of a system message",
     cannotSendEmptyMessage: "Include content, an embed, an attachment or a sticker",
     announcementChannelRequired: "Use an announcement channel as the source of this operation",
     channelAlreadyFollowed: "Keep the existing follow or choose a destination that does not already follow this source",
@@ -659,7 +746,25 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     fileSizeTooLarge: "Send a smaller file",
     serviceUnavailable: "Fluxer had a temporary problem. Retry later",
     serviceFailure: "Fluxer had a temporary problem. Retry later",
-    featureTemporarilyDisabled: "Retry later",
+    featureTemporarilyDisabled:
+        "Instance staff turned this off, so retrying does not help until they turn it on again. Ask the instance's administrator if the bot needs it",
+    explicitContentCannotBeSent:
+        "Fluxer's media check found explicit content in an attachment, and this community's explicit content filter blocks it, or the recipient of a direct message blocks sensitive media. Send different media. In a community, an admin can give the bot a role or change the filter. A discoverable community always blocks it",
+    userNotInVoice:
+        "Check that the member is connected to voice before moving or disconnecting them. Fluxer also refuses a move into an occupied channel whose participants all use peer-to-peer voice, and retrying does not help while it stays that way",
+    nsfwContentAgeRestricted:
+        "Forward age-restricted content only into an age-restricted channel or community, or forward a different message",
+    singleCommunityCannotLeave:
+        "Retrying does not help. On a single-community instance, ask its administrator to remove the bot instead",
+    discoveryDisabled:
+        "This instance has discovery turned off, so retrying does not help. ResolvedInstance.discoveryEnabled reports this before any request",
+    discoveryInsufficientMembers:
+        "Apply again once the community has more members. discovery.fetchStatus reports whether it is eligible",
+    discoveryAlreadyApplied:
+        "Read the application with discovery.fetchStatus, and change a pending one with discovery.edit instead of applying again",
+    discoveryApplicationNotFound: "Apply with discovery.apply first",
+    discoveryApplicationAlreadyReviewed:
+        "Read the result with discovery.fetchStatus, then apply again with discovery.apply if the community should be listed",
     resourceLocked: "Retry later",
     cannotExecuteOnDirectMessage: "Use this operation in a community channel",
 }
@@ -667,7 +772,7 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
 /** Suggested fixes for the standard OAuth error codes that the SDK keeps in oauthError */
 const oauthErrorHints: Readonly<Record<string, string>> = {
     invalid_grant:
-        "Check the authorization code or refresh token for expiry, prior use and the correct redirect URI. Also check whether the authorizing user's account is closed or temporarily banned. A new token or repeated authorization does not fix an account-standing rejection. The rejection alone does not identify the cause",
+        "Check the authorization code or refresh token for expiry, prior use and the correct redirect URI. For a code exchange, pass the original codeVerifier that produced the authorization request's codeChallenge. Also check whether the authorizing user's account is closed or temporarily banned. A new token or repeated authorization does not fix an account-standing rejection. The rejection alone does not identify the cause",
     invalid_client: "Check the configured OAuth client ID and client secret",
     invalid_request: "Check the request parameters, such as the code and redirectUri",
     invalid_scope: "Request only scopes that the application may use",
@@ -685,6 +790,9 @@ const statusHints: Readonly<Record<number, string | undefined>> = {
     401: apiErrorHints.unauthorized,
     403: "Check the bot's permissions and role position for this resource",
     404: apiErrorHints.unknownResource,
+    // Fluxer sends GENERAL_ERROR with HTTP 423 and Retry-After 2 while it holds a lock on the resource, such as a role or
+    // channel reorder or a community settings update (packages/errors/src/domains/core/ResourceLockedError.ts at 5f3fc0b1)
+    423: "Fluxer is applying another change to this resource, such as a role or channel reorder. Wait retryAfterMs, then send the change again",
 }
 
 /**
@@ -693,25 +801,33 @@ const statusHints: Readonly<Record<number, string | undefined>> = {
  */
 export type RequestCredential = "bot" | "webhook" | "oauthClient" | "oauthUser"
 
+/** The fix when Fluxer refuses a token-authenticated webhook request for a missing permission */
+const webhookMessageHint = "Use a message this webhook sent. A webhook can only read, edit or delete its own messages"
+
 /** Suggested fixes for a rejected credential other than the bot token */
 const credentialHints: Readonly<Record<Exclude<RequestCredential, "bot">, string>> = {
     webhook: "Check the webhook ID and token, or recreate the webhook and use its new token",
     oauthClient: "Check the configured OAuth client ID and client secret",
-    oauthUser: "Refresh the user's access token, or ask the user to authorize the application again",
+    oauthUser:
+        "Refresh the user's access token, or ask the user to authorize the application again. If a fresh token is also rejected, the user's account may be closed or temporarily banned, which a new token does not fix",
 }
 
 /**
  * @internal What a rejected REST route does, so a logged missing-permission hint names what that route needs.
  * Operation errors name the permissions of their operation instead
  */
-export type RequestAction = "message" | "moderation" | "setOverwrite" | "removeOverwrite" | "other"
+export type RequestAction =
+    "message" | "moderation" | "memberRole" | "unban" | "setOverwrite" | "removeOverwrite" | "other"
 
 /** Missing-permission fixes for actions whose needs are known */
 const missingPermissionHints: Readonly<Record<Exclude<RequestAction, "other">, string>> = {
-    message: `Grant the bot's role ${label("ViewChannel")} and ${label("SendMessages")} in this channel, plus ${label("EmbedLinks")} or ${label("AttachFiles")} when the message has them, in the community settings or the channel's permission overrides`,
+    message: `Grant the bot's role ${label("ViewChannel")} and ${label("SendMessages")} in this channel, plus ${label("EmbedLinks")} or ${label("AttachFiles")} when the message has them, in the community settings or the channel's permission overrides. ${threadSend}`,
     moderation:
         "Grant the bot's role the permission this operation needs in the community settings, and move the bot's highest role above the highest role of the member it acts on",
-    // Refused overwrite writes share the text of their operations, so one place owns what these routes need
+    // Fluxer compares the bot's highest role with the role granted or removed, not with the member's roles
+    memberRole: requiredPermissionsHint(permissionRequirement("members.addRole")!),
+    // A refused unban and refused overwrite writes share the text of their operations, so one place owns what these routes need
+    unban: requiredPermissionsHint(permissionRequirement("members.unban")!),
     setOverwrite: requiredPermissionsHint(permissionRequirement("channels.setPermissionOverwrite")!),
     removeOverwrite: requiredPermissionsHint(permissionRequirement("channels.removePermissionOverwrite")!),
 }
@@ -723,9 +839,24 @@ export function routeAction(template: string, method: string): RequestAction {
         if (method === "DELETE") return "removeOverwrite"
         return "other"
     }
-    if (/\/(members|bans|roles)(\/|$)/.test(template)) return "moderation"
-    if (/\/messages(\/|$)/.test(template)) return "message"
-    return "other"
+    // Only routes whose needs are certain get a specific fix. Reads, pins, reactions, bulk deletes and role edits need
+    // other permissions, so they keep the general missing-permission hint
+    if (method === "POST" && template === "/channels/:id/messages") return "message"
+    if (method === "DELETE" && template === "/guilds/:id/bans/:id") return "unban"
+    if ((method === "PUT" || method === "DELETE") && template === "/guilds/:id/members/:id/roles/:id")
+        return "memberRole"
+    const memberWrite =
+        ((method === "PATCH" || method === "DELETE") && template === "/guilds/:id/members/:id") ||
+        (method === "PUT" && template === "/guilds/:id/bans/:id")
+    return memberWrite ? "moderation" : "other"
+}
+
+/**
+ * @internal Whether Fluxer refused a token-authenticated webhook request because its ID and token do not match.
+ * Fluxer answers a wrong or deleted webhook token with UNKNOWN_WEBHOOK and HTTP 404, not with 401
+ */
+export function rejectedWebhookToken(apiError: ApiErrorDetail | null): boolean {
+    return apiError?.providerCode === "UNKNOWN_WEBHOOK"
 }
 
 /**
@@ -741,6 +872,10 @@ export function apiErrorHint(
 ): string | undefined {
     if (credential !== "bot" && (apiError === null ? status === 401 : apiError.code === "unauthorized"))
         return credentialHints[credential]
+    if (credential === "webhook" && rejectedWebhookToken(apiError)) return credentialHints.webhook
+    // With a webhook token, Fluxer refuses only a message the webhook did not send this way
+    // (webhook/WebhookService.ts:572, channel/services/message/MessageSendService.ts:1161 and MessageDeleteService.ts:160 at 5f3fc0b1)
+    if (credential === "webhook" && apiError?.code === "missingPermissions") return webhookMessageHint
     if (apiError?.code === "missingPermissions" && action !== "other") return missingPermissionHints[action]
     const categoryHint = apiError === null ? undefined : apiErrorHints[apiError.code]
     return categoryHint ?? (status === null ? undefined : statusHints[status])
@@ -762,7 +897,7 @@ const reasonExplanations: Readonly<Record<string, string>> = {
     busy: "Too many requests of this kind are already pending in this client",
     network: "A network error interrupted the request",
     notFound: "Fluxer could not find the requested resource",
-    rateLimit: "Fluxer rate-limited the request, and the SDK could not wait and retry it",
+    rateLimit: "The request was rate-limited, and the SDK could not wait and retry it",
     rejected: "Fluxer rejected the request",
     response: "Fluxer's answer did not have the expected format",
     timeout: "The operation did not finish within its timeout",
@@ -778,10 +913,12 @@ const reasonExplanations: Readonly<Record<string, string>> = {
 /** Readable text for the named response checks, which are not field paths */
 const responseChecks: Readonly<Record<string, string>> = {
     body: "The response body has the wrong type",
+    status: "It answered with a different success status than the operation expects",
     tooMany: "It returned more items than requested",
     order: "Its items are out of order",
     channelMismatch: "The returned message belongs to a different channel",
     idMismatch: "The returned message has a different ID",
+    targetMismatch: "It describes a different resource than the one requested",
 }
 
 /** @internal Describe the response field path or named check that failed, for messages and log records */
@@ -826,9 +963,12 @@ export function operationErrorMessage(input: {
                 ? `${fallback}. ${responseFieldText(responseField)}`
                 : (inputExplanation ?? fallback)
     const validation = (apiError?.validationErrors ?? []).map((error) => {
-        const text = Object.hasOwn(validationErrorMappings, error.providerCode)
-            ? `${error.explanation} (${error.providerCode})`
-            : `Fluxer returned ${error.providerCode}, a code this SDK version does not describe yet`
+        const text =
+            error.providerCode === ""
+                ? error.explanation
+                : Object.hasOwn(validationErrorMappings, error.providerCode)
+                  ? `${error.explanation} (${error.providerCode})`
+                  : `Fluxer returned ${error.providerCode}, a code this SDK version does not describe yet`
         return error.path === undefined ? text : `Field ${error.path}: ${text}`
     })
     const parts = [
@@ -856,6 +996,7 @@ export function operationFailureHint(input: {
     readonly retryAfterMs?: number | null
     readonly apiError?: ApiErrorDetail | null
     readonly read?: boolean
+    readonly streamUsed?: boolean
     readonly inputPath?: string | null | undefined
     readonly oauthError?: string | null
     readonly credential?: RequestCredential
@@ -864,7 +1005,10 @@ export function operationFailureHint(input: {
 }): string | undefined {
     const { reason, outcome } = input
     const read = input.read === true
-    const general = operationHint(reason, outcome, input.retryAfterMs ?? null, read)
+    const general = operationHint(reason, outcome, input.retryAfterMs ?? null, {
+        read,
+        streamUsed: input.streamUsed === true,
+    })
     if (reason === "rateLimit" || (outcome === "unknown" && !read)) return general
     if (reason === "rejected" || reason === "notFound")
         return (
@@ -891,6 +1035,7 @@ export interface OperationErrorFields<
     readonly apiError: ApiErrorDetail | null
     readonly inputValidation: InputValidationDetail | null
     readonly read: boolean
+    readonly streamUsed: boolean
     readonly providerCode: string | null
     readonly responseField: string | null
 }
@@ -937,9 +1082,30 @@ export function operationErrorFields<Operation extends string, Reason extends st
         apiError,
         inputValidation: options.inputValidation ?? null,
         read: options.read === true,
+        streamUsed: options.streamUsed === true,
         providerCode: safeProviderCode(apiError, providerCode),
         responseField: safeResponseField(responseField),
     }
+}
+
+/**
+ * What to say about a rejection the SDK decided itself, which Fluxer never saw. Only an operation with a local permission
+ * check has an entry, so the shared text cannot claim that Fluxer rejected a request that was not sent
+ */
+const localRejections: Readonly<Record<string, { readonly explanation: string; readonly hint: string }>> = {
+    "members.search": {
+        explanation: "The bot needs ManageGuild to search by join source or invite code. The search was not sent",
+        hint: "Grant ManageGuild to the bot, or remove joinSourceTypes and sourceInviteCodes from this search",
+    },
+}
+
+function localRejection(fields: OperationErrorFields<string, string, string>) {
+    return fields.reason === "rejected" &&
+        fields.outcome === "notDispatched" &&
+        fields.apiError === null &&
+        Object.hasOwn(localRejections, fields.operation)
+        ? localRejections[fields.operation]
+        : undefined
 }
 
 /** @internal The readable message for a resource operation error */
@@ -951,7 +1117,7 @@ export function operationErrorText(subject: string, fields: OperationErrorFields
         outcome: fields.outcome,
         status: fields.status,
         apiError: fields.apiError,
-        inputExplanation: fields.inputValidation?.explanation ?? null,
+        inputExplanation: fields.inputValidation?.explanation ?? localRejection(fields)?.explanation ?? null,
         retryAfterMs: fields.retryAfterMs,
         facts: fields,
     })
@@ -971,12 +1137,14 @@ export function operationErrorSettings(
         fields.apiError?.code === "missingPermissions" ? permissionRequirement(fields.operation) : undefined
     return {
         code: `${prefix}.${fields.reason}`,
-        hint: operationFailureHint({
-            ...fields,
-            inputPath: fields.inputValidation?.path ?? null,
-            credential,
-            requirement,
-        }),
+        hint:
+            localRejection(fields)?.hint ??
+            operationFailureHint({
+                ...fields,
+                inputPath: fields.inputValidation?.path ?? null,
+                credential,
+                requirement,
+            }),
         cause,
         details: operationDetails({
             operation: fields.operation,
@@ -989,6 +1157,7 @@ export function operationErrorSettings(
             responseField: fields.responseField,
             inputPath: fields.inputValidation?.path,
             read: fields.read || undefined,
+            streamUsed: fields.streamUsed || undefined,
             requiredPermissions: requirement?.permissions,
         }),
     }

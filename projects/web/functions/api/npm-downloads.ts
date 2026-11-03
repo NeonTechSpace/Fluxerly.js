@@ -1,12 +1,15 @@
 // GET /api/npm-downloads: the npm download history of the SDK package, as the homepage chart reads it. It has
 // the same shape as src/data/npm-downloads.json, which is only the build's first paint and fallback
 //
-// The counts update when a new version of the site is deployed, and from then on once a week. The deploy fetches them
-// into the snapshot this file is built with. After that npm is asked about once a week for everyone. The global copy
-// lives in Workers KV under one key, with the time it was fetched, and the newer of that copy and the snapshot is the
-// one served. In front of KV, each Cloudflare location keeps the answer in its edge cache until that copy is a week old,
-// under a key tied to this deployment, so most requests touch neither KV nor npm, and a deploy replaces every location's
-// answer at once. A copy older than a week is still served at once and refreshed in the background, so nobody waits for npm
+// The counts update when a new version of the site is deployed, and from then on once a day after 04:00 UTC. npm
+// counts whole UTC days and publishes the previous one around 01:00 UTC, so 04:00 leaves it three hours. The deploy
+// fetches the counts into the snapshot this file is built with. After that npm is asked about once a day for everyone.
+// The global copy lives in Workers KV under one key, with the time it was fetched, and the newer of that copy and the
+// snapshot is the one served. A copy is fresh until the first 04:00 UTC after it was fetched, so every location counts
+// to the same moment. In front of KV, each Cloudflare location keeps the answer in its edge cache until that moment,
+// under a key tied to this deployment, so most requests touch neither KV nor npm, and a deploy replaces every
+// location's answer at once. A copy past that time is still served at once and refreshed in the background, so nobody
+// waits for npm
 //
 // One-time setup, before the first deploy that carries this file:
 //   1. Create the KV namespace: wrangler kv namespace create NPM_DOWNLOADS
@@ -15,7 +18,7 @@
 //   3. Deploy with wrangler pages deploy run from the app folder (projects/web), because wrangler takes functions/
 //      from the folder it runs in. A binding applies from the next deployment on
 // Without the binding the function still works from the snapshot and the edge cache: Each location asks npm once a
-// week on its own
+// day on its own
 
 import snapshot from "../../src/data/npm-downloads.json" with { type: "json" }
 import { fetchNpmHistory, isNpmHistory, type NpmHistory } from "../../src/lib/npm-history.ts"
@@ -41,8 +44,8 @@ interface Copy {
 }
 
 const kvKey = "history"
-// How long a copy counts as fresh, in the edge cache and in KV
-const freshMs = 7 * 24 * 60 * 60 * 1000
+const hourMs = 60 * 60 * 1000
+const dayMs = 24 * hourMs
 // A cache entry never lives for less than this, so a stale copy is not looked up again on every request
 const shortestEdgeMs = 60 * 1000
 // When npm cannot be reached, the stale copy is cached for this long before the next try
@@ -77,7 +80,7 @@ async function writeKv(kv: Kv | undefined, copy: Copy) {
 
 // The entry lives for the given time, which the edge cache takes from the entry's own Cache-Control
 async function cachePut(edge: EdgeCache, key: Request, copy: Copy, lifetimeMs: number) {
-    const seconds = Math.floor(Math.min(freshMs, Math.max(shortestEdgeMs, lifetimeMs)) / 1000)
+    const seconds = Math.floor(Math.max(shortestEdgeMs, lifetimeMs) / 1000)
     try {
         await edge.put(key, new Response(JSON.stringify(copy.history), { headers: { ...json, "cache-control": `public, max-age=${seconds}` } }))
     } catch (error) {
@@ -85,8 +88,11 @@ async function cachePut(edge: EdgeCache, key: Request, copy: Copy, lifetimeMs: n
     }
 }
 
-// How long a copy has left before it is a week old. Every location counts to the same moment
-const timeLeft = (copy: Copy) => copy.fetchedAt + freshMs - Date.now()
+// The first 04:00 UTC after the given moment
+const nextRefresh = (time: number) => Math.floor((time - 4 * hourMs) / dayMs) * dayMs + 4 * hourMs + dayMs
+
+// How long a copy has left before the first 04:00 UTC after it was fetched. Every location counts to the same moment
+const timeLeft = (copy: Copy) => nextRefresh(copy.fetchedAt) - Date.now()
 
 // Asks npm, and keeps the answer only once it has passed the same check the chart applies
 async function fetchCopy(kv: Kv | undefined): Promise<Copy> {
@@ -129,7 +135,7 @@ export async function answerDownloads(context: Context, built: Copy | undefined)
         if (left > 0) {
             context.waitUntil(cachePut(edge, key, stored, left))
         } else {
-            // Past its week: served as it is, while this location asks npm for the next copy
+            // Past its 04:00 UTC: served as it is, while this location asks npm for the next copy
             context.waitUntil(
                 (async () => {
                     await cachePut(edge, key, stored, shortestEdgeMs)

@@ -86,12 +86,12 @@ import { emitObservation } from "../observer.js"
 import { linkRejectionError } from "../rejection-scope.js"
 import { rateRoute, routeTemplate } from "../rate-limits.js"
 import { defaultHttpTransport, type HttpTransport } from "../transport/index.js"
-import { RestAdmission } from "./admission.js"
+import { RestAdmission, type RateLimitHold } from "./admission.js"
 import { defaultRestConfiguration, type RestConfiguration } from "./options.js"
 import { RestRequestError, type RestRequest, type RestRequestFailure, type RestResponse } from "#sdk/rest"
 import type { RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
-import { isReadRequest, runAttempt, type AttemptResult, type Request } from "./attempt.js"
-import { encodeRestRequest, readRestResponse } from "./request.js"
+import { isReadRequest, retriesAsRead, runAttempt, type AttemptResult, type Request } from "./attempt.js"
+import { encodeRestRequest, readRestResponse, routeRequest, type EncodedRestRequest } from "./request.js"
 import {
     inputFailure,
     instanceFailure,
@@ -140,6 +140,8 @@ export interface RestOwnerOptions<M extends MessageCore> {
     readonly cache?: MessageCache<M> | undefined
     /** Total bytes of attachment files that may be reserved by running operations */
     readonly uploadMaxBytes: number
+    /** The client option that sets uploadMaxBytes, named in failures that suggest raising it. Defaults to uploads.maxBytes */
+    readonly uploadMaxBytesOption?: string
     readonly resources?: GuildCache | undefined
     readonly channels?: ChannelCache | undefined
     readonly users?: UserCache | undefined
@@ -181,9 +183,13 @@ export class RestRuntime<M extends MessageCore> {
     readonly logical: LogicalScheduler
     readonly logging: ClientLogger | undefined
     readonly resolveInstance: () => Effect.Effect<InstanceEndpointContext, InternalResolveError>
+    /** The client option that sets the upload budget, such as uploads.maxBytes */
+    readonly uploadMaxBytesOption: string
 
     /** Logical time of the last rest.busy Warn, repeated at most once per busyWarnIntervalMs */
     #busyWarnedAt: number | undefined
+    /** Logical time of the last ratelimit.queueHeld record per reason, repeated at most once per busyWarnIntervalMs */
+    readonly #heldLoggedAt = new Map<RateLimitHold["reason"], number>()
     /**
      * Logical time of the last ratelimit.deadline Warn for requests refused before dispatch, per route template.
      * Each new Warn first removes entries older than busyWarnIntervalMs, which no longer hold back a Warn, so the map
@@ -198,6 +204,7 @@ export class RestRuntime<M extends MessageCore> {
             this.settings,
             () => this.busy("queue"),
             options.shareGlobalPause,
+            (hold) => this.held(hold),
         )
         this.http = options.http ?? defaultHttpTransport
         this.cache = options.cache
@@ -207,6 +214,42 @@ export class RestRuntime<M extends MessageCore> {
         this.logical = options.logical
         this.logging = options.logging
         this.resolveInstance = options.resolveInstance
+        this.uploadMaxBytesOption = options.uploadMaxBytesOption ?? "uploads.maxBytes"
+    }
+
+    /**
+     * Log why queued requests wait once a rate limit has held them for a second, at most once a minute per reason.
+     * A global or client pause holds every rate-limited request and is a Warn. Route limits hold only their own routes
+     * during ordinary pacing, so they are a Debug
+     */
+    held(hold: RateLimitHold) {
+        const now = this.logical.now()
+        const last = this.#heldLoggedAt.get(hold.reason)
+        if (last !== undefined && now - last < busyWarnIntervalMs) return
+        this.#heldLoggedAt.set(hold.reason, now)
+        const waiting = hold.requests === 1 ? "1 REST request has" : `${hold.requests} REST requests have`
+        // A broad pause can be shorter than a route wait of one of the requests it holds, so the longest wait is named on
+        // its own rather than as the length of the pause
+        const longest = `. The longest known wait among these requests is ${hold.waitMs} ms`
+        const cause =
+            hold.reason === "global"
+                ? `Fluxer declared a global rate limit, which holds every rate-limited request of this client${longest}`
+                : hold.reason === "client"
+                  ? `a 429 response that named no limit, such as one from a proxy, paused every rate-limited request of this client${
+                        hold.waitMs > 0
+                            ? longest
+                            : ", and they wait for one request to show whether the limit has passed"
+                    }`
+                  : `their routes' rate limits are used up${hold.route === null ? "" : `, most of them on ${hold.route}`}, for up to another ${hold.waitMs} ms`
+        this.logging?.log({
+            level: hold.reason === "route" ? "debug" : "warn",
+            category: "ratelimit",
+            code: "ratelimit.queueHeld",
+            message: `${waiting} waited over a second because ${cause}. The current hold is in diagnostics().rest.rateLimitHold, and later holds for the same reason within a minute are not logged`,
+            ...(hold.route === null ? {} : { route: hold.route }),
+            delayMs: hold.waitMs,
+            fields: { reason: hold.reason, requests: hold.requests },
+        })
     }
 
     /**
@@ -221,15 +264,16 @@ export class RestRuntime<M extends MessageCore> {
         const queue = this.admission.diagnostics()
         const full =
             budget === "uploads"
-                ? "attachments reserved by running uploads reached uploads.maxBytes"
+                ? `attachments reserved by running uploads reached ${this.uploadMaxBytesOption}`
                 : queue.queuedRequests >= queue.queuedCapacity
                   ? `${queue.queuedRequests} requests already wait for a slot (rest.maxQueued)`
                   : "the bodies of waiting requests reached rest.queuedJsonMaxBytes"
+        const cause = `The REST queue is full because ${full}, so new requests fail with reason busy until it drains. Send fewer requests at once, or raise that limit`
         this.logging?.log({
             level: "warn",
             category: "rest",
             code: "rest.busy",
-            message: `The REST queue is full because ${full}, so new requests fail with reason busy until it drains. Send fewer requests at once, or raise that limit. Further busy failures within a minute are counted in diagnostics().counters.restBusy without another record`,
+            message: `${cause}. Further busy failures within a minute are counted in diagnostics().counters.restBusy without another record`,
             fields: {
                 budget,
                 activeRequests: queue.activeRequests,
@@ -503,6 +547,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                   inputValidation: error.inputValidation,
                                   providerCode: error.providerCode,
                                   responseField: error.responseField,
+                                  ...(error.streamUsed ? { streamUsed: true } : {}),
                                   // Keep the transport failure visible, as the other operation errors do
                                   ...(error.cause === undefined ? {} : { cause: error.cause }),
                               }),
@@ -1082,8 +1127,9 @@ export class RestOwner<M extends MessageCore = Message> {
                     )
             }
             /** The failure of a rate-limited request that cannot wait and send again */
-            const rateLimitFailure = (response: RetryAttempt) =>
+            const rateLimitFailure = (response: RetryAttempt, streamUsed = false) =>
                 new RestFailure({
+                    streamUsed,
                     reason: "rateLimit",
                     outcome: progress.outcome,
                     status: 429,
@@ -1091,6 +1137,23 @@ export class RestOwner<M extends MessageCore = Message> {
                     apiError: response.apiError,
                     providerCode: response.providerCode ?? null,
                 })
+            /** Fluxer's code for the limit, recognized or not, so a crosspost limit differs from a route limit in the logs */
+            const rateLimitCode = (response: RetryAttempt) => {
+                const code = response.apiError?.providerCode ?? response.providerCode
+                return code === undefined ? {} : { apiError: code }
+            }
+            /** How a 429 record names the limit: Global only when Fluxer declared it, or unidentified when nothing named it */
+            const limitText = (response: RetryAttempt) =>
+                response.global
+                    ? " globally"
+                    : response.pause === "client"
+                      ? " by a limit that did not identify itself"
+                      : ""
+            /** The client-wide pause an unidentified limit applies, which a global limit's text already implies */
+            const pauseText = (response: RetryAttempt) =>
+                response.pause === "client" && !response.global
+                    ? ". Every API request of this client waits too, because the limit may be shared"
+                    : ""
             /** Report a 429 whose wait passes the deadline. No wait happens, so this is not counted as a rate-limit wait */
             const logRateLimitDeadline = (response: RetryAttempt) =>
                 runtime.logging?.log(
@@ -1098,12 +1161,40 @@ export class RestOwner<M extends MessageCore = Message> {
                         level: response.retry >= longRateLimitWaitMs ? "warn" : "debug",
                         category: "ratelimit",
                         code: "ratelimit.deadline",
-                        message: `${request.method} ${template} was rate-limited${response.global ? " globally" : ""} for ${response.retry} ms, which is past its timeout, so it fails without waiting`,
+                        message: `${request.method} ${template} was rate-limited${limitText(response)} for ${response.retry} ms, which is past its timeout, so it fails without waiting${pauseText(response)}`,
                         route: template,
                         status: 429,
                         delayMs: response.retry,
                         attempt: attempts,
-                        fields: { method: request.method, global: response.global, ...response.details },
+                        fields: {
+                            method: request.method,
+                            global: response.global,
+                            pause: response.pause,
+                            ...response.details,
+                            ...rateLimitCode(response),
+                        },
+                    },
+                    fiber.context,
+                )
+            /** Report a 429 on a request whose Blob, File or stream body cannot be sent twice, so it fails without waiting */
+            const logRateLimitNotResent = (response: RetryAttempt) =>
+                runtime.logging?.log(
+                    {
+                        level: "warn",
+                        category: "ratelimit",
+                        code: "ratelimit.notResent",
+                        message: `${request.method} ${template} was rate-limited${limitText(response)} for ${response.retry} ms, and its upload body cannot be sent twice, so it fails without waiting${pauseText(response)}`,
+                        route: template,
+                        status: 429,
+                        delayMs: response.retry,
+                        attempt: attempts,
+                        fields: {
+                            method: request.method,
+                            global: response.global,
+                            pause: response.pause,
+                            ...response.details,
+                            ...rateLimitCode(response),
+                        },
                     },
                     fiber.context,
                 )
@@ -1116,6 +1207,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     route: template,
                     waitMs: response.retry,
                     global: response.global,
+                    pause: response.pause,
                     ...response.details,
                     // Log fields are masked by the logger, while observations go straight to the application
                     ...(response.details.scope === undefined
@@ -1131,12 +1223,18 @@ export class RestOwner<M extends MessageCore = Message> {
                         level: response.retry >= longRateLimitWaitMs ? "warn" : "debug",
                         category: "ratelimit",
                         code: "ratelimit.wait",
-                        message: `${request.method} ${template} was rate-limited${response.global ? " globally" : ""}, so it waits ${response.retry} ms before retrying`,
+                        message: `${request.method} ${template} was rate-limited${limitText(response)}, so it waits ${response.retry} ms before retrying${pauseText(response)}`,
                         route: template,
                         status: 429,
                         delayMs: response.retry,
                         attempt: attempts,
-                        fields: { method: request.method, global: response.global, ...response.details },
+                        fields: {
+                            method: request.method,
+                            global: response.global,
+                            pause: response.pause,
+                            ...response.details,
+                            ...rateLimitCode(response),
+                        },
                     },
                     fiber.context,
                 )
@@ -1148,13 +1246,21 @@ export class RestOwner<M extends MessageCore = Message> {
                         restore(
                             Effect.acquireUseRelease(
                                 Effect.interruptible(
-                                    runtime.admission.acquire({ route: route.key, bytes, until, deadline }),
+                                    runtime.admission.acquire({
+                                        route: route.key,
+                                        group: `${request.method} ${template}`,
+                                        bytes,
+                                        until,
+                                        deadline,
+                                        // A signed storage PUT says nothing about Fluxer's API limit, so it never probes it
+                                        probe: request.put === undefined,
+                                    }),
                                 ).pipe(
                                     mapFailureCause(restFailures, (error) =>
                                         error instanceof RestFailure ? error.withOutcome(progress.outcome) : error,
                                     ),
                                 ),
-                                () =>
+                                (admission) =>
                                     runtime.logical.now() >= deadline
                                         ? Effect.fail(new RestFailure({ reason: "timeout", outcome: progress.outcome }))
                                         : runAttempt({
@@ -1166,6 +1272,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                               generation,
                                               fiber,
                                               retryCount,
+                                              admission,
                                           }),
                                 (release) => Effect.sync(release),
                             ),
@@ -1185,7 +1292,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     const error = reason.error
                     logAttemptFailure(error)
                     if (
-                        request.method !== "GET" ||
+                        !retriesAsRead(request) ||
                         !(error instanceof RestFailure) ||
                         !error.retryableRead ||
                         retries === maximumReadRetries
@@ -1218,8 +1325,13 @@ export class RestOwner<M extends MessageCore = Message> {
                 if (
                     (request.inlineAttachments || request.webhookId) &&
                     request.sources?.some((source) => !source.replayable)
-                )
-                    return yield* Effect.fail(rateLimitFailure(response))
+                ) {
+                    logRateLimitNotResent(response)
+                    // A Blob or File can be read again by a new call, while a stream this request read cannot. A stream
+                    // the rate limit arrived before is still whole
+                    const streamUsed = request.sources.some((source) => source.streamRead)
+                    return yield* Effect.fail(rateLimitFailure(response, streamUsed))
+                }
                 until = runtime.logical.now() + response.retry
                 if (until >= deadline) {
                     logRateLimitDeadline(response)
@@ -1290,6 +1402,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                     reason: "response",
                                     outcome: "notDispatched",
                                     status: response.status,
+                                    responseField: "attachments",
                                 })
                             return { kind: "plans" as const, plans }
                         },
@@ -1364,6 +1477,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                     reason: "response",
                                     outcome: "notDispatched",
                                     status: response.status,
+                                    responseField: "uploads",
                                 })
                         },
                     },
@@ -1465,6 +1579,8 @@ export class RestOwner<M extends MessageCore = Message> {
                     ...(input.cache === undefined ? {} : { channelCache: input.cache }),
                     ...(audit?.auditReason === undefined ? {} : { auditReason: audit.auditReason }),
                     ...(input.features === undefined ? {} : { features: input.features }),
+                    ...(input.read === undefined ? {} : { read: input.read }),
+                    ...(input.retryRead === undefined ? {} : { retryRead: input.retryRead }),
                     path: input.path,
                     method: input.method,
                     // A route that can also answer 202 has its status checked here instead
@@ -1502,6 +1618,7 @@ export class RestOwner<M extends MessageCore = Message> {
                     channel: input.majorId,
                     bucket: `user:${operation}`,
                     cache: false,
+                    ...(input.read === undefined ? {} : { read: input.read }),
                     path: input.path,
                     method: input.method,
                     status: input.status,
@@ -1630,7 +1747,13 @@ export class RestOwner<M extends MessageCore = Message> {
                 )
             const bytes = Buffer.byteLength(request.body?.json ?? "")
             const uploadBytes = request.body?.files.reduce((sum, file) => sum + file.size, 0) ?? 0
-            if (!Number.isSafeInteger(uploadBytes) || uploadBytes > owner.#uploadMaxBytes - runtime.uploadBytes) {
+            const oversized = oversizedFailure(bytes, uploadBytes, {
+                queuedJsonMaxBytes: runtime.settings.queuedJsonMaxBytes,
+                uploadMaxBytes: owner.#uploadMaxBytes,
+                uploadOption: runtime.uploadMaxBytesOption,
+            })
+            if (oversized) return Effect.fail(oversized)
+            if (uploadBytes > owner.#uploadMaxBytes - runtime.uploadBytes) {
                 runtime.busy("uploads")
                 return Effect.fail(new RestFailure({ reason: "busy", outcome: "notDispatched" }))
             }
@@ -1807,12 +1930,19 @@ export class RestOwner<M extends MessageCore = Message> {
             )
         }).pipe(
             // A read that failed after dispatch cannot have changed remote state, so its unknown outcome stays retryable.
-            // Mark it in place: The failure's Cause, including any cleanup defects beside it, stays unchanged
+            // A rate limit after the operation read a caller's stream, inline or through a presigned upload, cannot be
+            // repeated with that stream. Mark both in place: The failure's Cause, including any cleanup defects beside
+            // it, stays unchanged
             Effect.onExit((exit) =>
                 Effect.sync(() => {
-                    if (!isReadRequest(request) || Exit.isSuccess(exit)) return
+                    if (Exit.isSuccess(exit)) return
+                    const read = isReadRequest(request)
+                    const streamRead = request.sources?.some((source) => source.streamRead) === true
                     for (const reason of exit.cause.reasons)
-                        if (reason._tag === "Fail" && reason.error instanceof RestFailure) reason.error.read = true
+                        if (reason._tag === "Fail" && reason.error instanceof RestFailure) {
+                            if (read) reason.error.read = true
+                            if (streamRead && reason.error.reason === "rateLimit") reason.error.streamUsed = true
+                        }
                 }),
             ),
         )
@@ -1827,9 +1957,31 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         input: RestRequest | DefaultRestRequest,
     ): Effect.Effect<RestResponse<T>, RestRequestFailure> {
+        return this.#callerRequest<T>(token, () => encodeRestRequest(input))
+    }
+
+    /**
+     * Send one request for a route of Fluxer's API description, which client.rest.call types. The route and its path
+     * parameters become a caller-described request, which then follows every rule of request
+     */
+    call<T>(
+        token: Redacted.Redacted<string>,
+        route: unknown,
+        input: unknown,
+    ): Effect.Effect<RestResponse<T>, RestRequestFailure> {
+        return this.#callerRequest<T>(token, () => {
+            const request = routeRequest(route, input)
+            return request instanceof InputValidationFailure ? request : encodeRestRequest(request)
+        })
+    }
+
+    #callerRequest<T>(
+        token: Redacted.Redacted<string>,
+        encode: () => EncodedRestRequest | InputValidationFailure,
+    ): Effect.Effect<RestResponse<T>, RestRequestFailure> {
         return suspendInput((): Effect.Effect<RestResponse<T>, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
-            const encoded = encodeRestRequest(input)
+            const encoded = encode()
             if (encoded instanceof InputValidationFailure) return Effect.fail(inputFailure(encoded.detail))
             return this.#execute(
                 token,
@@ -1880,4 +2032,28 @@ export class RestOwner<M extends MessageCore = Message> {
             )
         })
     }
+}
+
+/** The failure of a request larger than a whole budget, which can never be sent. It is invalid input rather than
+ * congestion, so retrying it cannot help. Undefined when the request fits the budgets once they drain
+ */
+function oversizedFailure(
+    bytes: number,
+    uploadBytes: number,
+    limits: { readonly queuedJsonMaxBytes: number; readonly uploadMaxBytes: number; readonly uploadOption: string },
+): RestFailure | undefined {
+    const { queuedJsonMaxBytes, uploadMaxBytes, uploadOption } = limits
+    if (!Number.isSafeInteger(uploadBytes) || uploadBytes > uploadMaxBytes)
+        return localInputFailure(
+            "files",
+            "size",
+            `The attachments are larger than ${uploadOption} (${uploadMaxBytes} bytes) in total, so this request can never be sent. Send fewer or smaller attachments, or raise ${uploadOption}`,
+        )
+    if (bytes > queuedJsonMaxBytes)
+        return localInputFailure(
+            "body",
+            "size",
+            `The JSON body is ${bytes} bytes, larger than rest.queuedJsonMaxBytes (${queuedJsonMaxBytes} bytes), so this request can never be sent. Make the body smaller or raise rest.queuedJsonMaxBytes`,
+        )
+    return undefined
 }

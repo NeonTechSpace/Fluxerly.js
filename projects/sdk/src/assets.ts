@@ -53,7 +53,7 @@ export interface AssetUrlOptions {
      * Omit it to leave size selection to Fluxer. The helper sends it unchanged, Fluxer selects a supported size for that asset
      */
     readonly size?: number
-    /** Output encoding. `Webp` is used when omitted */
+    /** Requested output encoding. `Webp` is requested when omitted. A successful download can contain the original image with its original encoding and dimensions if Fluxer cannot transform it. Check the response Content-Type and image data */
     readonly format?: AssetFormat
     /** Request animation or a still image. When omitted, animated asset hashes or emoji metadata select animation.
      * Requesting animation with Png or Jpeg throws AssetUrlError, choose animated false to request a still image instead

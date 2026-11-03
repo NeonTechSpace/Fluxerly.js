@@ -34,7 +34,7 @@ afterEach(() => {
 })
 
 /** A fixture root whose sandbox answers the test-channel create with a 429 that asks for a wait over ten seconds */
-function fixture() {
+function fixture(probeFailure = false) {
     const root = mkdtempSync(join(temporaryParent, "fluxerly-command-conveniences-"))
     temporaryRoots.push(root)
     mkdirSync(join(root, "tests/live"), { recursive: true })
@@ -49,6 +49,42 @@ function fixture() {
         join(root, "tests/live/command-conveniences.mjs"),
     )
     copyHarnessSupport(root)
+    copyFileSync(new URL("./upload-diagnostics.mjs", import.meta.url), join(root, "tests/live/upload-diagnostics.mjs"))
+    if (probeFailure) {
+        const sdk = join(root, "node_modules/@neontechspace/fluxerly")
+        mkdirSync(sdk, { recursive: true })
+        writeFileSync(
+            join(sdk, "package.json"),
+            JSON.stringify({
+                type: "module",
+                exports: { ".": "./default.js", "./effect": "./effect.js" },
+            }),
+        )
+        writeFileSync(join(sdk, "default.js"), `export { createDefault as createClient, commands } from "./fixture.js"`)
+        writeFileSync(join(sdk, "effect.js"), `export { createNative as createClient, commands } from "./fixture.js"`)
+        writeFileSync(
+            join(sdk, "fixture.js"),
+            `
+            import { Effect } from "effect"
+            export const commands = {}
+            const success = (value) => ({ isErr: () => false, isOk: () => true, value })
+            const failure = { _tag: "MessageError", reason: "rejected", status: 500, outcome: "unknown" }
+            function create(native) {
+                const ok = (value) => native ? Effect.succeed(value) : success(value)
+                const subscription = { close: () => ok(), waitForClose: () => ok(), result: () => ok({ messages: [] }) }
+                return {
+                    connect: () => ok(), shutdown: () => ok(), on: () => native ? ok(subscription) : subscription,
+                    messages: {
+                        collect: () => native ? ok(subscription) : subscription,
+                        send: () => native ? Effect.fail(failure) : { isErr: () => true, error: failure },
+                    },
+                }
+            }
+            export const createDefault = () => create(false)
+            export const createNative = () => Effect.succeed(create(true))
+        `,
+        )
+    }
     writeFileSync(
         join(root, ".env.test.local"),
         `FLUXER_TEST_GUILD_ID=100\nFLUXER_TEST_APPLICATION_ID=150\nFLUXER_TEST_BOT_TOKEN=${fixtureToken}\n`,
@@ -57,18 +93,28 @@ function fixture() {
         join(root, "trap.mjs"),
         `
             const reads = {
-                "/v1/applications/@me": { id: "150", bot: { id: "200" } },
-                "/v1/users/@me": { id: "200", bot: true },
-                "/v1/guilds/100": { id: "100" },
-                "/v1/guilds/100/members/200": { user: { id: "200" } },
-                "/v1/guilds/100/channels": [],
+                "/api/v1/applications/@me": { id: "150", bot: { id: "200" } },
+                "/api/v1/users/@me": { id: "200", bot: true },
+                "/api/v1/guilds/100": { id: "100" },
+                "/api/v1/guilds/100/members/200": { user: { id: "200" } },
+                "/api/v1/guilds/100/channels": [],
             }
+            let channel
             globalThis.fetch = async (url, options = {}) => {
                 const path = new URL(url).pathname
                 const method = options.method ?? "GET"
                 console.log(JSON.stringify({ fixture: "remote_request", method, path }))
+                if (${probeFailure} && method === "POST" && path === "/api/v1/guilds/100/channels") {
+                    channel = { id: "300", guild_id: "100", ...JSON.parse(options.body) }
+                    return Response.json(channel)
+                }
+                if (${probeFailure} && path === "/api/v1/guilds/100/channels") return Response.json(channel ? [channel] : [])
+                if (${probeFailure} && path === "/api/v1/channels/300") {
+                    if (method === "DELETE") { channel = undefined; return new Response(null, { status: 204 }) }
+                    return Response.json(channel ?? null, { status: channel ? 200 : 404 })
+                }
                 if (method === "GET" && reads[path]) return Response.json(reads[path])
-                if (method === "POST" && path === "/v1/guilds/100/channels")
+                if (method === "POST" && path === "/api/v1/guilds/100/channels")
                     return Response.json({ retry_after: 60 }, { status: 429 })
                 return Response.json(null, { status: 500 })
             }
@@ -98,6 +144,37 @@ test.each(["default", "effect"])(
         expect(lines.filter((line) => line.fixture === "remote_request" && line.method === "POST")).toHaveLength(1)
         expect(lines).toContainEqual(expect.objectContaining({ check: "planned_channel_creation_not_dispatched" }))
         expect(existsSync(join(root, ".env.test.command-conveniences-help.local"))).toBe(false)
+        expect(lockFiles(root)).toEqual([])
+    },
+)
+
+test.each(["default", "effect"])(
+    "%s probe failure reports the provider status and still removes its channel",
+    (mode) => {
+        const root = fixture(true)
+        const child = spawnSync(
+            process.execPath,
+            ["--import", "./trap.mjs", "tests/live/command-conveniences.mjs", mode, "fields"],
+            { cwd: root, encoding: "utf8", timeout: childTimeoutMs, windowsHide: true },
+        )
+        expect(child.error).toBeUndefined()
+        expect(child.status).toBe(1)
+        const output = child.stdout + child.stderr
+        expect(output).not.toContain(fixtureToken)
+        const lines = jsonLines(output)
+        expect(lines).toContainEqual(
+            expect.objectContaining({
+                stage: "selected_fields_observed_gateway_registration",
+                passed: false,
+                tag: "MessageError",
+                reason: "rejected",
+                status: 500,
+                outcome: "unknown",
+                providerFault: true,
+            }),
+        )
+        expect(lines).toContainEqual(expect.objectContaining({ check: "test_owned_channel_removed", passed: true }))
+        expect(existsSync(join(root, ".env.test.command-conveniences-fields.local"))).toBe(false)
         expect(lockFiles(root)).toEqual([])
     },
 )

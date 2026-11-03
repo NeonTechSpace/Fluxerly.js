@@ -72,7 +72,7 @@ if (!child) {
     const nonces = new Map()
     const rawFetch = globalThis.fetch
     globalThis.fetch = withHostedDiscovery(async (url, init) => {
-        assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages")
+        assert.equal(url, "https://fluxer.com/api/v1/channels/20/messages")
         assert.equal(init.method, "POST")
         const body = JSON.parse(init.body)
         const ordinal = Number(body.content.slice(0, 6))

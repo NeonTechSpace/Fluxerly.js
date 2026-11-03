@@ -85,10 +85,10 @@ test("live probe rejects discovery that would send credentials to another gatewa
         fixture(),
         `
     const responses = {
-      "/v1/applications/@me": { id: "200", bot: { id: "300" } },
-      "/v1/users/@me": { id: "300", bot: true },
-      "/v1/guilds/100": { id: "100" },
-      "/v1/gateway/bot": { url: "wss://example.invalid" },
+      "/api/v1/applications/@me": { id: "200", bot: { id: "300" } },
+      "/api/v1/users/@me": { id: "300", bot: true },
+      "/api/v1/guilds/100": { id: "100" },
+      "/api/v1/gateway/bot": { url: "wss://example.invalid" },
     }
     return Response.json(responses[new URL(url).pathname])
   `,

@@ -11,6 +11,7 @@
  * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
 import { platform } from "node:os"
+import type * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Redacted from "effect/Redacted"
@@ -41,13 +42,15 @@ export interface SendFailure {
 export function commandSender(options: {
     readonly socket: GatewaySocket
     readonly logger: ClientLogger | undefined
+    /** The services of the fiber that runs the session, whose Effect logger receives native records */
+    readonly context?: Context.Context<never> | undefined
     readonly shardId: number | undefined
     /** True once the session started closing, after which sends are skipped */
     readonly stopping: () => boolean
     /** End the attempt as a retryable send failure */
     readonly failed: (failure: SendFailure) => void
 }): SendCommand {
-    const { socket, logger, shardId, stopping, failed } = options
+    const { socket, logger, context, shardId, stopping, failed } = options
     return (op, d) => {
         if (stopping()) return false
         if (socket.readyState !== SocketState.open) {
@@ -59,15 +62,18 @@ export function commandSender(options: {
             return false
         }
         if (logger?.enabled("trace", "gateway"))
-            logger.log({
-                level: "trace",
-                category: "gateway",
-                code: "gateway.send",
-                message: `Sent opcode ${op} (${opcodeName(op) ?? "UNKNOWN"})`,
-                shardId,
-                fields: { opcode: op },
-            })
-        logger?.payload("gateway", "gateway.payloadSent", `Sent opcode ${op} payload`, { op, d }, { shardId })
+            logger.log(
+                {
+                    level: "trace",
+                    category: "gateway",
+                    code: "gateway.send",
+                    message: `Sent opcode ${op} (${opcodeName(op) ?? "UNKNOWN"})`,
+                    shardId,
+                    fields: { opcode: op },
+                },
+                context,
+            )
+        logger?.payload("gateway", "gateway.payloadSent", `Sent opcode ${op} payload`, { op, d }, { shardId }, context)
         socket.send(JSON.stringify({ op, d }), (error) => {
             if (error && !stopping())
                 failed({
@@ -129,6 +135,8 @@ export function commandPacer(options: {
     /** Monotonic milliseconds from the session's Clock */
     readonly now: () => number
     readonly logger: ClientLogger | undefined
+    /** The services of the fiber that runs the session, whose Effect logger receives native records */
+    readonly context?: Context.Context<never> | undefined
     readonly shardId: number | undefined
     /** Send history owned by the resumable session, not the socket attempt */
     readonly sentAt?: number[]
@@ -139,6 +147,7 @@ export function commandPacer(options: {
         send,
         now,
         logger,
+        context,
         shardId,
         sentAt = [],
         budget = applicationCommandBudget,
@@ -172,14 +181,17 @@ export function commandPacer(options: {
         const sent = send(item.op, item.d)
         if (sent) sentAt.push(now())
         if (sent && item.application)
-            logger?.log({
-                level: "debug",
-                category: "gateway",
-                code: "gateway.commandSent",
-                message: `Sent a gateway.send command with opcode ${item.op} (${opcodeName(item.op) ?? "UNKNOWN"})`,
-                shardId,
-                fields: { opcode: item.op },
-            })
+            logger?.log(
+                {
+                    level: "debug",
+                    category: "gateway",
+                    code: "gateway.commandSent",
+                    message: `Sent a gateway.send command with opcode ${item.op} (${opcodeName(item.op) ?? "UNKNOWN"})`,
+                    shardId,
+                    fields: { opcode: item.op },
+                },
+                context,
+            )
         item.settled?.(sent)
     }
     const enqueue = (item: PendingCommand) => {

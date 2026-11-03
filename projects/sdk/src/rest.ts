@@ -1,4 +1,5 @@
 import type { AttachmentInput } from "./attachments.js"
+import type { RestRoutes } from "./rest-routes.js"
 import type { ClientClosedError } from "./errors.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
@@ -39,7 +40,8 @@ export interface RestOptions {
      */
     readonly maxQueued?: number
     /** JSON request-body bytes that waiting requests may hold together, excluding attachment transfers.
-     * A request whose JSON does not fit fails immediately with reason busy, so this also caps the largest single JSON body.
+     * A request whose JSON does not fit beside the bodies already waiting fails immediately with reason busy. A single
+     * JSON body larger than this limit can never be sent and fails with reason input and inputValidation.path body
      * An integer from 65,536 (64 KiB) through 268,435,456 (256 MiB), default 4,194,304 (4 MiB)
      */
     readonly queuedJsonMaxBytes?: number
@@ -162,22 +164,31 @@ export interface RestRequest {
      */
     readonly path: string
     /** Query parameters appended to the path in insertion order. Undefined values are omitted, numbers must be finite,
-     * and booleans are sent as true or false. The encoded query may contain at most 8,192 characters
+     * and booleans are sent as true or false. An array sends its name once per item in order, such as
+     * `{ tag: ["1", "2"] }` for `tag=1&tag=2`, and an empty array sends nothing. The encoded query may contain at most
+     * 8,192 characters
      */
-    readonly query?: Readonly<Record<string, string | number | boolean | undefined>>
+    readonly query?: Readonly<
+        Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>
+    >
     /** JSON body, serialized when the request starts. A value JSON cannot represent fails with reason input.
      * Its size counts against the client's queued JSON budget while the request waits. Not allowed with GET
      */
     readonly body?: unknown
     /** Files sent inline as multipart/form-data, with the JSON body as payload_json and each file as files[n] in order.
      * Accepts the same byte, file and stream inputs as message attachments, with the same size, filename and upload-budget
-     * rules. The body must then be omitted or a JSON object without attachments, because the SDK sets attachments to
-     * the files' metadata as Fluxer's message routes expect. A request whose file source cannot be read again fails
-     * with reason rateLimit instead of waiting out a 429. Not allowed with GET
+     * rules. The body must then be omitted or a JSON object. The SDK sends body.attachments as Fluxer's message routes
+     * expect: The body's entries for existing attachments first, which an edit must list to keep them, then each file's
+     * metadata with id n. A body entry whose id is a file's index may add that file's title or description and repeat
+     * its filename or flags. A value that differs from the file's own, two entries for one file or another key there
+     * fail with reason input.
+     * A request whose file source cannot be read again fails with reason rateLimit instead of waiting out a 429.
+     * Not allowed with GET
      */
     readonly files?: readonly AttachmentInput[]
-    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 printable ASCII characters after trimming.
-     * Omission sends no header. Never included in errors, logs or diagnostics
+    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after trimming.
+     * Any language works, because the header carries its UTF-8 bytes. Control characters, line separators and lone
+     * surrogates fail before dispatch. Omission sends no header. Never included in errors, logs or diagnostics
      */
     readonly auditReason?: string
     /** Total milliseconds across local queueing, rate-limit waits, retries and HTTP. An integer from 1 through
@@ -203,6 +214,63 @@ export interface RestResponse<T = unknown> {
      */
     readonly body: T
 }
+
+/**
+ * A route that client.rest.call accepts, written as its method and path template the way Fluxer's documentation
+ * writes them, such as `GET /channels/{channel_id}/messages`. The routes are those of Fluxer's API description at the
+ * commit this release pins that accept a bot token, which {@link RestRoutes} lists
+ *
+ * @category Client and lifecycle
+ */
+export type RestRoute = keyof RestRoutes
+
+/**
+ * The route-specific fields of a client.rest.call for one route, with Fluxer's official names: params for the path
+ * parameters, query for the query parameters, body for the JSON body and files where the route accepts message-style
+ * attachments. Each is present only when the route has it, and required only when Fluxer requires it
+ *
+ * @category Client and lifecycle
+ */
+export type RestRouteInput<R extends RestRoute> = RestRoutes[R]["input"]
+
+/**
+ * The type of the parsed JSON body of a successful client.rest.call for one route, or undefined for a route Fluxer
+ * answers without a body. It comes from Fluxer's API description and is not checked at runtime
+ *
+ * @category Client and lifecycle
+ */
+export type RestRouteResponse<R extends RestRoute> = RestRoutes[R]["response"]
+
+/**
+ * Options every client.rest.call accepts beside its route-specific fields, with the same rules as client.rest.request
+ *
+ * @category Client and lifecycle
+ */
+export interface RestRouteOptions {
+    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after trimming.
+     * Control characters, line separators and lone surrogates fail before dispatch. Omission sends no header.
+     * Never included in errors, logs or diagnostics
+     */
+    readonly auditReason?: string
+    /** Total milliseconds across local queueing, rate-limit waits, retries and HTTP. An integer from 1 through
+     * 2,147,483,647, defaulting to the client's rest.defaultTimeoutMs (30,000 unless configured)
+     */
+    readonly timeoutMs?: number
+}
+
+/**
+ * The second argument of an Effect API client.rest.call: The route's fields and the shared options
+ *
+ * @category Client and lifecycle
+ */
+export type RestCallInput<R extends RestRoute> = RestRouteInput<R> & RestRouteOptions
+
+/**
+ * The arguments after the route in client.rest.call. The input may be left out when the route requires no field
+ *
+ * @category Client and lifecycle
+ */
+export type RestCallArguments<R extends RestRoute, I> = {} extends RestRouteInput<R> ? [input?: I] : [input: I]
 
 /**
  * Operation name included in REST request failures

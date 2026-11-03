@@ -1,8 +1,8 @@
 import { expect, onTestFinished, test, vi } from "vitest"
-import { apiErrorDetail } from "../../src/api-errors.js"
-import { errors } from "../../src/index.js"
+import { apiErrorDetail, apiErrorHint, routeAction, type RequestCredential } from "../../src/api-errors.js"
+import { ChannelOperationError, CountOperationError, errors } from "../../src/index.js"
 import * as native from "../../src/effect.js"
-import { MessageOperationError } from "../../src/message-errors.js"
+import { MessageError, MessageOperationError } from "../../src/message-errors.js"
 import { OAuthOperationError } from "../../src/oauth.js"
 import { modes, setup } from "../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
@@ -160,6 +160,85 @@ test.each(modes)("%s treats the retired phone-verification code as unrecognized"
         expect(apiErrorDetail({ code })).toMatchObject({ providerCode: code, code: "guildVerificationRequired" })
 })
 
+// Fluxer 5f3fc0b1: GuildMemberOperationsService, GuildDiscoveryService and its controller, MessageSendService (a
+// forward of age-restricted content) and GuildBaseController (leaving a single-community instance) send these to bots
+const botReachableRejections = [
+    { providerCode: "USER_NOT_IN_VOICE", code: "userNotInVoice", status: 400, topic: /voice/ },
+    { providerCode: "DISCOVERY_DISABLED", code: "discoveryDisabled", status: 400, topic: /discoveryEnabled/ },
+    {
+        providerCode: "DISCOVERY_INSUFFICIENT_MEMBERS",
+        code: "discoveryInsufficientMembers",
+        status: 400,
+        topic: /members/,
+    },
+    {
+        providerCode: "DISCOVERY_ALREADY_APPLIED",
+        code: "discoveryAlreadyApplied",
+        status: 409,
+        topic: /discovery\.edit/,
+    },
+    {
+        providerCode: "DISCOVERY_APPLICATION_NOT_FOUND",
+        code: "discoveryApplicationNotFound",
+        status: 404,
+        topic: /discovery\.apply/,
+    },
+    {
+        providerCode: "DISCOVERY_APPLICATION_ALREADY_REVIEWED",
+        code: "discoveryApplicationAlreadyReviewed",
+        status: 409,
+        topic: /discovery\.apply/,
+    },
+    {
+        providerCode: "NSFW_CONTENT_AGE_RESTRICTED",
+        code: "nsfwContentAgeRestricted",
+        status: 403,
+        topic: /age-restricted/,
+    },
+    {
+        providerCode: "SINGLE_COMMUNITY_CANNOT_LEAVE",
+        code: "singleCommunityCannotLeave",
+        status: 400,
+        topic: /administrator/,
+    },
+] as const
+
+test.each(modes)("%s describes the Fluxer codes a bot can reach instead of calling them unknown", async (mode) => {
+    onTestFinished(() => void vi.unstubAllGlobals())
+    let rejection: (typeof botReachableRejections)[number] = botReachableRejections[0]
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json({ code: rejection.providerCode, message: "private text" }, { status: rejection.status }),
+    )
+    const client = await setup(mode)
+    for (const reviewed of botReachableRejections) {
+        rejection = reviewed
+        const error = await expectErr(client.rest.request({ method: "POST", path: "/channels/10/messages", body: {} }))
+        expect(error, reviewed.providerCode).toMatchObject({
+            apiError: { providerCode: reviewed.providerCode, code: reviewed.code },
+            details: { apiError: reviewed.providerCode },
+            hint: expect.stringMatching(reviewed.topic),
+        })
+        expect(error.message).not.toContain("does not describe")
+        expect(errors.apiCode(error)).toBe(reviewed.code)
+        expect(native.errors.apiCode(error)).toBe(reviewed.code)
+    }
+})
+
+// FEATURE_TEMPORARILY_DISABLED marks an operation instance staff turned off, through a community's disabled operations
+// or an instance setting, so waiting does not bring it back (MessageSendService.ts:235, InviteService.ts:209 at 5f3fc0b1)
+test("an operation staff turned off and blocked explicit media get hints that do not promise a retry", () => {
+    const disabled = hintOf("FEATURE_TEMPORARILY_DISABLED", 403)
+    expect(disabled).toMatch(/does not help/)
+    expect(disabled).not.toMatch(/^Retry later$/)
+    expect(apiErrorDetail({ code: "FEATURE_TEMPORARILY_DISABLED" })?.explanation).not.toMatch(/temporarily/)
+    expect(hintOf("EXPLICIT_CONTENT_CANNOT_BE_SENT", 400)).toMatch(/explicit content filter/)
+})
+
+// Fluxer answers a held role, channel-order or community-settings lock with GENERAL_ERROR, HTTP 423 and Retry-After 2
+test("a rejection Fluxer sends while another change holds the resource says to wait and send again", () => {
+    expect(apiErrorHint(null, 423)).toMatch(/retryAfterMs/)
+})
+
 test("excludes unknown and inherited provider values with every raw response field", () => {
     for (const code of ["UNKNOWN", "__proto__", "constructor", "toString"]) {
         const detail = apiErrorDetail({ code, message: "private provider message", errors: [{ path: "private.path" }] })
@@ -283,4 +362,123 @@ test("operation errors use reviewed details, status, retry delay, and never raw 
     })
     expect(unknown.apiError).toBeNull()
     expect(unknown.message).toMatch(/\S/)
+})
+
+const hintOf = (providerCode: string, status: number, credential?: RequestCredential) =>
+    apiErrorHint(apiErrorDetail({ code: providerCode }), status, credential)
+
+// Fluxer sends these as 403, so without their own hint they would get the permission-and-role advice
+test("timeout and content-filter rejections get their own hints instead of the permission hint", () => {
+    const permissionHint = apiErrorHint(null, 403)
+    for (const [providerCode, topic] of [
+        ["COMMUNICATION_DISABLED", /timed out/],
+        ["CONTENT_BLOCKED", /content filter.*\bfile\b/],
+    ] as const) {
+        expect(hintOf(providerCode, 403), providerCode).not.toBe(permissionHint)
+        expect(hintOf(providerCode, 403), providerCode).toMatch(topic)
+    }
+})
+
+// Fluxer sends DIRECT_MESSAGES_DISABLED only for the instance's policy, and CANNOT_MODIFY_SYSTEM_WEBHOOK only for
+// system messages
+test("instance-wide DM refusals and system-message refusals name what Fluxer checked", () => {
+    const dms = apiErrorDetail({ code: "DIRECT_MESSAGES_DISABLED" })
+    for (const text of [dms?.explanation, hintOf("DIRECT_MESSAGES_DISABLED", 403)]) {
+        expect(text).toMatch(/instance/)
+        expect(text).not.toMatch(/recipient|user/)
+    }
+    expect(apiErrorDetail({ code: "CANNOT_MODIFY_SYSTEM_WEBHOOK" })?.explanation).not.toMatch(/webhook/)
+    expect(hintOf("CANNOT_MODIFY_SYSTEM_WEBHOOK", 400)).toEqual(expect.any(String))
+})
+
+test("the missing-access hint covers private threads the bot was not added to", () => {
+    expect(hintOf("MISSING_ACCESS", 403)).toMatch(/private thread/)
+    expect(hintOf("MISSING_ACCESS", 403)).toContain("Manage threads")
+})
+
+// Fluxer answers a wrong or deleted webhook token with UNKNOWN_WEBHOOK and HTTP 404
+test("an unknown webhook is a rejected token only for a token-authenticated request", () => {
+    expect(hintOf("UNKNOWN_WEBHOOK", 404, "webhook")).toMatch(/webhook ID and token/)
+    expect(hintOf("UNKNOWN_WEBHOOK", 404)).not.toMatch(/webhook ID and token/)
+    expect(hintOf("UNKNOWN_MESSAGE", 404, "webhook")).not.toMatch(/webhook ID and token/)
+})
+
+// Only routes whose needs are certain get a specific missing-permission fix in the rest.rejected record
+test("logged missing-permission hints name Send messages or role order only for routes that need them", () => {
+    const missing = apiErrorDetail({ code: "MISSING_PERMISSIONS" })
+    for (const [method, template] of [
+        ["DELETE", "/channels/:id/messages/:id/reactions"],
+        ["GET", "/guilds/:id/bans"],
+        ["GET", "/channels/:id/messages"],
+        ["POST", "/channels/:id/messages/bulk-delete"],
+        ["PUT", "/channels/:id/pins/:id"],
+        ["POST", "/guilds/:id/roles"],
+        ["PATCH", "/guilds/:id/roles/:id"],
+    ] as const) {
+        const action = routeAction(template, method)
+        expect(action, `${method} ${template}`).toBe("other")
+        expect(apiErrorHint(missing, 403, "bot", action)).not.toMatch(/Send messages|highest role/)
+    }
+    expect(routeAction("/channels/:id/messages", "POST")).toBe("message")
+    for (const [method, template] of [
+        ["PATCH", "/guilds/:id/members/:id"],
+        ["DELETE", "/guilds/:id/members/:id"],
+        ["PUT", "/guilds/:id/bans/:id"],
+    ] as const)
+        expect(routeAction(template, method), `${method} ${template}`).toBe("moderation")
+    // Fluxer checks Manage roles and the bot's highest role against the role, not against the member
+    for (const method of ["PUT", "DELETE"] as const) {
+        const action = routeAction("/guilds/:id/members/:id/roles/:id", method)
+        expect(action, `${method} member role`).toBe("memberRole")
+        const hint = apiErrorHint(missing, 403, "bot", action)
+        expect(hint).toContain("above the role")
+        expect(hint).not.toContain("of the member it acts on")
+    }
+    // Fluxer checks only Ban Members for an unban, without the role order
+    expect(routeAction("/guilds/:id/bans/:id", "DELETE")).toBe("unban")
+    expect(apiErrorHint(missing, 403, "bot", "unban")).not.toMatch(/highest role/)
+})
+
+test("the malformed-answer hint does not name a details field that the error lacks", () => {
+    const error = new CountOperationError({ operation: "guilds.fetchCounts", reason: "response" })
+    expect(error.details).not.toHaveProperty("responseField")
+    expect(error.hint).not.toMatch(/report the field named/)
+})
+
+// Threads replace Send messages and Manage channels with thread permissions of the parent channel
+test("a refused send or typing request names the thread permission too", () => {
+    const refused = { reason: "rejected", outcome: "rejected", status: 403 } as const
+    const apiError = apiErrorDetail({ code: "MISSING_PERMISSIONS" })
+    for (const error of [
+        new MessageError({ ...refused, apiError }),
+        new MessageOperationError({ ...refused, operation: "typing", apiError }),
+    ])
+        expect(error.hint).toContain("Send messages in threads")
+})
+
+// Fluxer sends a thread PATCH through channels.edit to its thread rules, where Manage channels does not help
+test("a refused channel edit names the thread permission too", () => {
+    const error = new ChannelOperationError({
+        operation: "channels.edit",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 403,
+        apiError: apiErrorDetail({ code: "MISSING_PERMISSIONS" }),
+    })
+    expect(error.hint).toContain("Manage threads")
+    expect(error.hint).toContain("threads.edit")
+    expect(error.details.requiredPermissions).toEqual(["ViewChannel", "ManageChannels"])
+})
+
+test("a refused channel deletion names the thread permission too", () => {
+    const error = new ChannelOperationError({
+        operation: "channels.delete",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 403,
+        apiError: apiErrorDetail({ code: "MISSING_PERMISSIONS" }),
+    })
+    expect(error.hint).toContain("Manage threads")
+    // The listed permissions stay those of an ordinary channel
+    expect(error.details.requiredPermissions).toEqual(["ViewChannel", "ManageChannels"])
 })

@@ -334,7 +334,7 @@ for (const mode of modes) {
             [{ userIds: ["18446744073709551616"] }, undefined, "20"],
             [{ query: "a", limit: 0 }, undefined, "20"],
             [{ query: "a", limit: 101 }, undefined, "20"],
-            [{ query: "x".repeat(4_096) }, undefined, "20"],
+            [{ query: "x".repeat(4_097) }, undefined, "20"],
             [{ all: true, presences: 1 }, undefined, "20"],
             [{ all: true }, { timeoutMs: null }, "20"],
             [{ all: true }, { maxPendingBytes: 0 }, "20"],
@@ -349,6 +349,24 @@ for (const mode of modes) {
         await f.shutdown()
         await expect(f.iterate().next()).rejects.toMatchObject({ _tag: "ClientClosedError" })
         expect(f.requestCount()).toBe(0)
+    })
+
+    test(`${mode} sends a member request up to Fluxer's 16,384-byte frame limit and rejects a larger one`, async () => {
+        const f = await fixture(mode)
+        // Each control character encodes to six JSON bytes, so 2,800 of them pass the length check but not the frame limit
+        await expect(f.iterate({ query: "\u0001".repeat(2_800) }).next()).rejects.toMatchObject({
+            reason: "input",
+            inputValidation: expect.objectContaining({ path: "query", constraint: "size" }),
+        })
+        expect(f.requestCount()).toBe(0)
+        // Three UTF-8 bytes each: Over 12,000 bytes, which fit 16,384 but not the earlier 4,096
+        const iterator = f.iterate({ query: "\u4e2d".repeat(4_096) })
+        const first = iterator.next()
+        const sent = await f.request(1)
+        expect(Buffer.byteLength(JSON.stringify({ op: 8, d: sent }))).toBeGreaterThan(12_288)
+        f.chunk(sent.nonce, [member("30")])
+        await first
+        await f.shutdown()
     })
 
     test(`${mode} reports safe member-chunk and count input detail before gateway dispatch`, async () => {

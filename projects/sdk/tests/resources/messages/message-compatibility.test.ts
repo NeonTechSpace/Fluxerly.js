@@ -46,7 +46,7 @@ async function fixture() {
                         content_type: "application/octet-stream",
                         upload_filename: `fixture-${String(file.id)}`,
                         upload_mode: "singlepart",
-                        upload_url: `https://api.fluxer.app/fixture-upload/${String(file.id)}`,
+                        upload_url: `https://fluxer.com/api/fixture-upload/${String(file.id)}`,
                     })),
                 })
             } else if (
@@ -62,7 +62,7 @@ async function fixture() {
         },
     })
     const fetch = vi.fn((url: string, init: RequestInit) =>
-        realFetch(url.replace("https://api.fluxer.app", server.origin), init),
+        realFetch(url.replace("https://fluxer.com/api", server.origin), init),
     )
     stubFetchWithHostedDiscovery(fetch)
     return { ...server, state, fetch }
@@ -258,7 +258,7 @@ test.each(modes)(
     async (mode) => {
         const server = await fixture()
         const client = await setup(mode)
-        for (const auditReason of [" ", "x".repeat(513), "line\nbreak", "non-ASCII é", 42]) {
+        for (const auditReason of [" ", "x".repeat(513), "line\nbreak", "lone \ud800", 42]) {
             const options = { auditReason } as never
             for (const operation of [
                 () => settle(client.messages.delete(target, options)),

@@ -18,9 +18,11 @@ interface Props {
     nested?: boolean
     /** Further reading the site adds under a member, by member name, such as the endpoint map under client.rest */
     links?: Record<string, { href: string; text: string }>
+    /** Leaves the members out of the search index, where another page already makes their text findable */
+    unindexed?: boolean
 }
 
-const { members, inherited = [], level = 4, sections = false, nested = false, links = {} } = Astro.props
+const { members, inherited = [], level = 4, sections = false, nested = false, links = {}, unindexed = false } = Astro.props
 const linkOf = (member: Member) => (Object.hasOwn(links, member.name) ? links[member.name] : undefined)
 const callable = (member: Member) => !!member.signatures?.length
 const order = (member: Member) => (member.kind === "constructor" ? 0 : callable(member) ? 2 : 1)
@@ -37,7 +39,7 @@ const documentedFields = (member: Member) => (member.signatures ? undefined : fi
 
 {
     listed.length > 0 && (
-        <dl class:list={["ref-list", "ref-members", { "ref-nested": nested }]}>
+        <dl class:list={["ref-list", "ref-members", { "ref-nested": nested }]} data-pagefind-ignore={unindexed || undefined}>
             {listed.map((member) => {
                 const fields = documentedFields(member)
                 return (
@@ -57,7 +59,7 @@ const documentedFields = (member: Member) => (member.signatures ? undefined : fi
                                 !fields && <pre class="ref-type"><code set:html={fitted((width) => typeHtml(member.type ?? "unknown", width), narrowTypeWidth)} /></pre>
                             )}
                             <DocText doc={member.doc ?? member.signatures?.[0]?.doc} part="body" self={selfOf(member)} />
-                            {!nested && <DocText doc={member.doc} part="rest" self={selfOf(member)} />}
+                            <DocText doc={member.doc} part={nested ? "default" : "rest"} self={selfOf(member)} />
                             {linkOf(member) && <p class="ref-more"><a href={linkOf(member)!.href}>{linkOf(member)!.text}</a></p>}
                             {fields && <Astro.self members={fields} nested />}
                         </dd>

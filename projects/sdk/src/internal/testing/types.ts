@@ -24,15 +24,16 @@ export interface TestSettings {
 }
 
 /**
- * Choose the shard that receives an emitted dispatch
+ * Choose the shard that receives an emitted dispatch or Gateway Error frame
  *
  * @category Testing
  */
 export interface TestEmitOptions {
     /**
-     * Local shard ID that receives the dispatch.
-     * By default a payload with a guild_id goes to the shard Fluxer routes that community to, (guild_id >> 22) % totalShards,
-     * and any other payload goes to shard 0, which receives direct-message traffic
+     * Local shard ID that receives the dispatch or Gateway Error frame.
+     * By default a payload with a guild_id, or a guild create, update or delete payload, goes to the shard Fluxer routes
+     * that community to, (guild_id >> 22) % totalShards, and any other payload goes to shard 0, which receives
+     * direct-message traffic. A Gateway Error frame goes to shard 0
      */
     readonly shardId?: number
 }
@@ -167,7 +168,8 @@ export type TestResponse =
 
 /**
  * Compute a response from the recorded request. A returned promise may settle later, and a handler that throws or
- * rejects makes the request fail as a network error, which the client reports like any transport failure
+ * rejects makes the request fail as a network error, which the client reports like any transport failure.
+ * That does not always fail the test, so check request contents with next() or requests() after the call instead
  *
  * @category Testing
  */
@@ -185,8 +187,7 @@ export interface TestRoute {
     /**
      * Resolve with the next request this registration answers. Each call returns a different request, in order, so
      * a request that arrived before the call is returned at once.
-     * Without timeoutMs the wait has no SDK deadline, so the test runner's own timeout ends a test whose request never
-     * arrives. With timeoutMs the promise rejects with TestTimeoutError when no request arrives in time.
+     * Without timeoutMs the wait has no SDK deadline, so it can run forever unless the test runner stops the test. With timeoutMs the promise rejects with TestTimeoutError when no request arrives in time.
      * It rejects with ClientClosedError when the test client shuts down first. Invalid options throw ConfigurationError
      */
     next(options?: TestWaitOptions): Promise<TestRequest>
@@ -204,8 +205,9 @@ export interface TestRoute {
 export interface TestWaitOptions {
     /**
      * Milliseconds before the wait fails with TestTimeoutError, an integer from 1 through 2,147,483,647.
-     * Omit it to wait without an SDK deadline, so the test runner's own timeout bounds a wait that never settles.
-     * The timeout uses real timers, so it still fires when a test fakes timers
+     * Omit it to wait without an SDK deadline, which can run forever unless the test runner stops the test.
+     * The timeout uses real timers, so it still fires when a test fakes timers.
+     * Any other key, such as a misspelled timeoutMs, throws ConfigurationError
      */
     readonly timeoutMs?: number
 }

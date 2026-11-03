@@ -18,8 +18,9 @@ import {
     openJournal,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createFailureClassifier, createOutcomeReporter } from "./support/reporting.js"
+import { createFailureClassifier, createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { createRetryingSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const rawFetch = globalThis.fetch
@@ -188,7 +189,7 @@ function observeGateway() {
             assert.ok(sockets.size < 2)
             const url = new URL(socket.url)
             assert.equal(url.protocol, "wss:")
-            assert.equal(url.host, "gateway.fluxer.app")
+            assert.equal(url.host, "gateway.fluxer.com")
             observed = { ready: 0, resumed: 0 }
             sockets.set(socket, observed)
         }
@@ -363,7 +364,7 @@ async function verifyAttachmentDeletion(channelId) {
         if (
             options?.method === "DELETE" &&
             url.pathname ===
-                `/v1/channels/${channelId}/messages/${uncertain.id}/attachments/${uncertain.attachments[0].id}`
+                `/api/v1/channels/${channelId}/messages/${uncertain.id}/attachments/${uncertain.attachments[0].id}`
         ) {
             dispatches++
             assert.equal(dispatches, 1)
@@ -422,7 +423,7 @@ async function verifyRoleReplacement() {
     const clientFetch = globalThis.fetch
     globalThis.fetch = async (request, options) => {
         const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
-        if (options?.method === "PATCH" && url.pathname === `/v1/guilds/${guildId}/members/${botId}`) {
+        if (options?.method === "PATCH" && url.pathname === `/api/v1/guilds/${guildId}/members/${botId}`) {
             dispatches++
             assert.equal(dispatches, 1)
             const response = await clientFetch(request, options)
@@ -451,10 +452,23 @@ async function verifyRoleReplacement() {
 }
 
 function assertPositiveCounts(result, key, expectedId) {
-    assert.equal(result.counts.length, 1)
-    assert.equal(result.counts[0][key], expectedId)
-    assert.ok(Number.isSafeInteger(result.counts[0].memberCount) && result.counts[0].memberCount > 0)
-    assert.ok(Number.isSafeInteger(result.counts[0].onlineCount) && result.counts[0].onlineCount >= 0)
+    try {
+        assert.equal(result.counts.length, 1)
+        assert.equal(result.counts[0][key], expectedId)
+        assert.ok(Number.isSafeInteger(result.counts[0].memberCount) && result.counts[0].memberCount > 0)
+        assert.ok(Number.isSafeInteger(result.counts[0].onlineCount) && result.counts[0].onlineCount >= 0)
+    } catch (error) {
+        // Only assertion outcomes, never the provider's body, target ID or count values
+        const count = result.counts[0]
+        report(stage, false, {
+            countType: key,
+            oneEntry: result.counts.length === 1,
+            targetMatches: count?.[key] === expectedId,
+            positiveMemberCount: Number.isSafeInteger(count?.memberCount) && count.memberCount > 0,
+            validOnlineCount: Number.isSafeInteger(count?.onlineCount) && count.onlineCount >= 0,
+        })
+        throw error
+    }
 }
 
 async function verifyCounts(channelId) {
@@ -580,7 +594,7 @@ async function verifyCounts(channelId) {
 const watchdog = setTimeout(() => {
     report(stage, false, { code: "process_timeout", journalRetained: journal !== undefined })
     process.exit(1)
-}, 240_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
@@ -607,6 +621,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { kind: "consumer-operations", guildId, botId }

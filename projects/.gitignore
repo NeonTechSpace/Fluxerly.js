@@ -1,3 +1,4 @@
 node_modules/
 fluxerly-sdk.tgz
 .release-publish*.lock
+release/.cache/

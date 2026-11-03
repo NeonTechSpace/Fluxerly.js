@@ -8,16 +8,28 @@
 // The node:timers functions stay real when a test fakes the global timers, so waits still time out and settle
 import { clearTimeout, setTimeout } from "node:timers"
 import { ConfigurationError } from "#sdk/errors"
+import { unsupportedKeyHint } from "../suggest.js"
 import { TestTimeoutError } from "./errors.js"
 import type { TestWaitOptions } from "./types.js"
 
 /** Settle a pending wait with a value or a failure */
 export type WaitOutcome<A> = { readonly value: A } | { readonly error: unknown }
 
-/** Read and check a wait's timeout option, undefined when the wait has no deadline. Misuse throws ConfigurationError */
-export function waitTimeout(options: TestWaitOptions | undefined): number | undefined {
+/**
+ * Read and check a wait's timeout option, undefined when the wait has no deadline. Misuse throws ConfigurationError,
+ * including a key outside supported, so a misspelled timeoutMs fails instead of leaving the wait without a deadline
+ */
+export function waitTimeout(
+    options: TestWaitOptions | undefined,
+    supported: readonly string[] = ["timeoutMs"],
+): number | undefined {
     if (options !== undefined && (typeof options !== "object" || options === null))
         throw new ConfigurationError("configuration", "Test wait options must be an object")
+    const unsupported = options === undefined ? undefined : Object.keys(options).find((key) => !supported.includes(key))
+    if (unsupported !== undefined)
+        throw new ConfigurationError("configuration", `Unsupported test wait option ${JSON.stringify(unsupported)}`, {
+            hint: unsupportedKeyHint(unsupported, supported),
+        })
     const timeoutMs = options?.timeoutMs
     if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647))
         throw new ConfigurationError(

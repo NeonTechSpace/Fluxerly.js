@@ -41,3 +41,15 @@ export function createFailureClassifier({ tags, reasons = [], httpStatus = false
         ...(httpStatus && Number.isSafeInteger(error?.status) ? { httpStatus: error.status } : {}),
     })
 }
+
+/**
+ * The exit code of a harness run that only recovered an earlier run's journal. It is not zero, so a paired package
+ * script such as `node tests/live/webhooks.js default && node tests/live/webhooks.js effect` stops before its second API
+ * mode starts a fresh test, and run-all.js reports the check as recovered rather than failed
+ */
+export const recoveredOnlyExitCode = 3
+
+/** Mark this run as recovery only, unless it already failed */
+export function recoveredOnly() {
+    if (!process.exitCode) process.exitCode = recoveredOnlyExitCode
+}

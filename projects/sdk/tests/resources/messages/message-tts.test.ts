@@ -22,7 +22,7 @@ function recordSends() {
     const fetch = stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const path = new URL(url).pathname
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        if (path === "/v1/users/@me/channels")
+        if (path === "/api/v1/users/@me/channels")
             return Response.json({
                 id: "301",
                 type: 1,
@@ -39,7 +39,7 @@ function recordSends() {
                 ],
             })
         bodies.push({ path, body })
-        return Response.json(messageWire({ channel_id: path.split("/")[3], tts: body.tts ?? false }))
+        return Response.json(messageWire({ channel_id: path.split("/")[4], tts: body.tts ?? false }))
     })
     return { bodies, fetch }
 }
@@ -56,10 +56,10 @@ test.each(modes)("%s sends tts on channel sends, replies and direct messages and
     const plain = await settle(client.messages.send("300", { content: "Plain" }))
 
     expect(bodies.map(({ path, body }) => [path, body.tts])).toEqual([
-        ["/v1/channels/300/messages", true],
-        ["/v1/channels/300/messages", false],
-        ["/v1/channels/301/messages", true],
-        ["/v1/channels/300/messages", undefined],
+        ["/api/v1/channels/300/messages", true],
+        ["/api/v1/channels/300/messages", false],
+        ["/api/v1/channels/301/messages", true],
+        ["/api/v1/channels/300/messages", undefined],
     ])
     // An omitted value is not sent, so Fluxer applies its default
     expect(bodies.at(-1)!.body).not.toHaveProperty("tts")

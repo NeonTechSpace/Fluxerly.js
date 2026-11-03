@@ -12,11 +12,12 @@ import {
     loadSandboxEnvironment,
     openJournal,
     snowflake,
-    verifySandboxIdentity,
+    sandboxBotId,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -82,7 +83,7 @@ async function cleanup() {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
-}, 300_000).unref()
+}, harnessWatchdogMs()).unref()
 
 async function scenario(sdk) {
     scope = Scope.makeUnsafe()
@@ -256,7 +257,7 @@ async function scenario(sdk) {
     stage = "lost_follow_response_reconciliation"
     let attempts = 0
     globalThis.fetch = async (url, init) => {
-        if (init?.method === "POST" && new URL(String(url)).pathname === `/v1/channels/${a.id}/followers`) {
+        if (init?.method === "POST" && new URL(String(url)).pathname === `/api/v1/channels/${a.id}/followers`) {
             attempts++
             const response = await rawFetch(url, init)
             assert.ok(response.ok)
@@ -301,13 +302,14 @@ try {
     token = sandbox.token
     guildId = sandbox.guildId
     stage = "sandbox_identity"
-    botId = (await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)).botId
+    botId = await sandboxBotId(async (path) => (await api("GET", path)).data, sandbox)
     verified = true
     report(stage)
     if (journalFile.exists()) {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { guildId, botId, marker: `fluxerly-ann-${randomUUID().replaceAll("-", "")}`, channels: [] }

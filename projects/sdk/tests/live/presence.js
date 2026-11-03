@@ -12,6 +12,7 @@ import {
 } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const restoreStatus = process.env.FLUXER_TEST_PRESENCE_RESTORE_STATUS
@@ -115,7 +116,7 @@ async function observeGateway(guildId) {
             assert.ok(sockets.size < 2)
             const url = new URL(socket.url)
             assert.equal(url.protocol, "wss:")
-            assert.equal(url.host, "gateway.fluxer.app")
+            assert.equal(url.host, "gateway.fluxer.com")
             entry = { ready: 0, resumed: 0, selected: 0, cleared: 0 }
             sockets.set(socket, entry)
         }
@@ -140,7 +141,7 @@ async function observeGateway(guildId) {
         try {
             const packet = JSON.parse(data.toString())
             if (packet.op === 14) {
-                assert.ok(Buffer.byteLength(data.toString()) <= 4096)
+                assert.ok(Buffer.byteLength(data.toString()) <= 16_384)
                 const selections = packet.d.subscriptions
                 assert.deepEqual(Object.keys(selections), [guildId])
                 const ids = selections[guildId].members
@@ -195,7 +196,7 @@ async function observeGateway(guildId) {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, check: stage, passed: false, reason: "deadline", cleanExitVerified: false }))
     process.exit(1)
-}, 480_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")

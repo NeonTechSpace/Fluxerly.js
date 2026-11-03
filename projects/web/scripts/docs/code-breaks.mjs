@@ -86,6 +86,9 @@ export const seamHtml = (html) =>
 
 const isCode = (node) => node.type === "element" && node.tagName === "code"
 
+// A span this short fits on a line of the narrowest phone, so it moves to the next line whole instead of breaking at a hump
+const wholeCode = 20
+
 const wbr = () => ({ type: "element", tagName: "wbr", properties: {}, children: [] })
 
 // A path written as plain prose, such as node_modules/@scope/name/file.md, is one word to the browser and runs past a
@@ -113,7 +116,7 @@ function addSeams(node, insidePre) {
     const pre = insidePre || (node.type === "element" && node.tagName === "pre")
     if (isCode(node) && !pre) {
         node.children = node.children.flatMap((child) => {
-            if (child.type !== "text") return [child]
+            if (child.type !== "text" || child.value.length <= wholeCode) return [child]
             return segments(child.value).flatMap((part, index) => [...(index ? [wbr()] : []), { type: "text", value: part }])
         })
         return

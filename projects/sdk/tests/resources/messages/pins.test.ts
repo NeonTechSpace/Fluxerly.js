@@ -49,7 +49,7 @@ const pin = (id = "10", time = "2026-09-08T12:00:00.000Z") => ({ message: wire(i
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(url, init),
     )
 }
@@ -148,8 +148,8 @@ test.each(modes)(
             expect(await api.get({ ...target, id: "11" })).toBe(other)
         }
         expect(calls).toEqual([
-            ["PUT", "https://api.fluxer.app/v1/channels/20/pins/10"],
-            ["DELETE", "https://api.fluxer.app/v1/channels/20/pins/10"],
+            ["PUT", "https://fluxer.com/api/v1/channels/20/pins/10"],
+            ["DELETE", "https://fluxer.com/api/v1/channels/20/pins/10"],
         ])
         expect(api.state()).not.toBe("Connected")
     },
@@ -182,7 +182,7 @@ test.each(modes)("%s lists explicit frozen timestamp pages without traversal or 
     expect(next.items[0]!.message.id).toBe("11")
     expect(next.nextBefore).toBeNull()
     expect(calls[1]).toBe(
-        "https://api.fluxer.app/v1/channels/20/messages/pins?limit=50&before=2026-09-08T12%3A00%3A00.000Z",
+        "https://fluxer.com/api/v1/channels/20/messages/pins?limit=50&before=2026-09-08T12%3A00%3A00.000Z",
     )
     expect(await api.get()).toBeUndefined()
 })

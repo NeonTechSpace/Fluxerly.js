@@ -35,7 +35,7 @@ export type LogCategory =
     | "sdk"
 
 /** Readable facts about an error attached to a log record or failure report.
- * Application errors keep their name, string code, message, stack and cause chain with credentials masked.
+ * Application errors keep their name, string code, message, stack, cause chain and AggregateError members with credentials masked.
  * SDK errors add their fixed code and hint
  *
  * @category Logging and diagnostics
@@ -55,13 +55,20 @@ export interface ErrorInfo {
     readonly stack?: string
     /** The next error in the cause chain, limited to a few levels */
     readonly cause?: ErrorInfo
+    /**
+     * The errors inside an AggregateError, such as each rejection of Promise.any, limited to the first 10 and a few
+     * levels
+     */
+    readonly errors?: readonly ErrorInfo[]
     /** Safe structured facts from an SDK error */
     readonly details?: Readonly<Record<string, unknown>>
 }
 
 /** One structured SDK log record, delivered frozen to sinks and printed by the built-in console output.
- * Records never contain tokens, Authorization headers, client secrets, invite codes or the user information of a URL,
- * such as user:password in https://user:password@host/path.
+ * Records mask the bot token and recognized credentials: Authorization, Cookie and X-API-Key headers, a value after a name
+ * ending in token, secret, password, passwd or API key, written as api_key, apiKey or X-API-Key, in forms such as
+ * password=x, "apiKey": "x" or secret: 'x', invite links, OAuth codes and webhook tokens in URLs, and the user information
+ * of a URL, such as user:password in https://user:password@host/path. A secret written another way, such as token: abc in a sentence, stays readable.
  * Message payload bodies appear only in explicit unsafe payload mode
  *
  * @category Logging and diagnostics
@@ -101,6 +108,11 @@ export interface LogRecord {
     readonly fields?: Readonly<Record<string, string | number | boolean | null>>
     /** The error that the record describes */
     readonly error?: ErrorInfo
+    /** Other failures and defects in the same Cause, after the one in error, with credentials masked. For example, an
+     * Effect task that fails and whose cleanup then also fails names the task's failure in error and the cleanup's here.
+     * At most 10, and absent when error is the only one
+     */
+    readonly otherErrors?: readonly ErrorInfo[]
 }
 
 /** A synchronous callback that receives each emitted SDK record.
@@ -121,7 +133,9 @@ export type LogSink = (record: LogRecord) => void
  * HTTP 401 and 403 rejections log a rest.rejected Warn even when handled. An unhandled handler failure with that same
  * rejection, directly or in its cause chain, replaces its Warn if it happens within one second. A later handler failure
  * also logs its own record, because the Warn has already been emitted.
- * Logging never changes operation results, and records never contain credentials
+ * Logging never changes operation results. Records mask the bot token, the credential forms Fluxer uses and common
+ * credential names. A secret of another service that the bot writes into its own errors may not be recognized, so keep
+ * such secrets out of error messages
  *
  * @category Logging and diagnostics
  */
@@ -168,9 +182,12 @@ export interface LoggingOptions {
      * Payload records bypass the level setting, except that a category set to silent prints no payloads.
      * Payloads can contain private message content, so the SDK prints a Warn banner once, at startup or before the first
      * payload record, whichever comes first, even when the level would hide Warn records.
-     * Received REST bodies show at most their first 65,536 bytes.
-     * Tokens, Authorization headers, client secrets, passwords, cookies, invite codes and the user information of a URL
-     * stay masked even in this mode, including credential-key values in a truncated JSON response
+     * Received REST bodies show at most their first 65,536 bytes, and only for accepted responses. A rejected
+     * request's Fluxer code and message are in its error.
+     * Masking still applies: Values under keys ending in token, secret, password, passwd or api_key, Authorization and
+     * Cookie values, client secrets, the signed upload URL of an attachment upload plan, the user information of a URL,
+     * and invite codes in invites, invite audit entries, vanity URL fields and invite links, including in a truncated
+     * JSON response
      */
     readonly unsafe?: {
         /** Must be true to acknowledge that payload bodies can contain private content */
@@ -220,7 +237,9 @@ export interface ClientCounters {
      * guildChannelCreate and directMessageCreate
      */
     readonly eventsDroppedByEvent: Readonly<Partial<Record<EventName, number>>>
-    /** Cache changes not delivered to a cache.onChange listener because its waiting changes reached maxPendingChanges */
+    /** Cache changes not delivered to a cache.onChange listener because its waiting changes reached maxPendingChanges or
+     * the client shut down first
+     */
     readonly cacheChangesDropped: number
     /** Gateway messages rejected as invalid protocol data, including skipped malformed dispatches */
     readonly protocolFailures: number
@@ -228,7 +247,9 @@ export interface ClientCounters {
     readonly unknownDispatches: number
     /** Gateway opcodes the SDK does not handle */
     readonly unknownOpcodes: number
-    /** Automatic REST request retries */
+    /** Automatic retries of read requests after a network error or HTTP 500, 502, 503 or 504. Resends after HTTP 429
+     * are counted in rateLimitWaits instead
+     */
     readonly restRetries: number
     /** REST rate-limit waits that took place. A limit whose wait would pass the request deadline fails the request
      * without waiting, logs ratelimit.deadline and is not counted here

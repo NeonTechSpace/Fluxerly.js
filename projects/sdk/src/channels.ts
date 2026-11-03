@@ -168,7 +168,9 @@ export interface GuildChannelBase {
     readonly nsfw?: boolean
     /** Channel adult-content override, with null inheriting from its category then community */
     readonly nsfwOverride?: boolean | null
-    /** Channel content-warning override, when supplied */
+    /** Channel content-warning override, when supplied. 0 inherits and 1 shows a content warning.
+     * Another integer is a level this SDK version does not name and is returned unchanged
+     */
     readonly contentWarningLevel?: number
     /** Custom content-warning text, with null inheriting */
     readonly contentWarningText?: string | null
@@ -184,14 +186,15 @@ export interface GuildTextChannelBase extends GuildChannelBase {
     readonly type: typeof ChannelType.Text | typeof ChannelType.Announcement
     /** Topic, with null clearing it and omission meaning unavailable */
     readonly topic?: string | null
-    /** Last message ID, with null meaning no known message */
+    /** Last message ID, with null meaning no known message. Kept from when the channel was observed. Sending messages does not update a cached channel's value, so fetch the channel for a current value */
     readonly lastMessageId?: string | null
-    /** ISO 8601 last-pin time, with null meaning no pins */
+    /** ISO 8601 time of the most recent pin, or null when nothing was ever pinned. Unpinning does not clear it */
     readonly lastPinTimestamp?: string | null
     /** Slowmode delay in seconds */
     readonly rateLimitPerUser?: number
     /** Stored default auto-archive period for threads in this channel, in minutes, such as
-     * ThreadAutoArchiveMinutes.OneDay. Fluxer sends it only when one is stored, and does not apply it to a new thread
+     * ThreadAutoArchiveMinutes.OneDay. Fluxer sends it only when one is stored, and does not apply it to a new thread.
+     * Fluxer names it default_auto_archive_duration
      */
     readonly defaultAutoArchiveMinutes?: number | null
     /** Slowmode delay in seconds that a new thread in this channel copies when its creation sets none.
@@ -222,13 +225,16 @@ export interface GuildAnnouncementChannel extends GuildTextChannelBase {
 }
 
 /**
- * A community voice-call channel, selected by `type === ChannelType.Voice`
+ * A community voice-call channel, selected by `type === ChannelType.Voice`.
+ * Fluxer's rtc_p2p voice setting is not kept, because this SDK does not join voice
  *
  * @category Channels
  */
 export interface GuildVoiceChannel extends GuildChannelBase {
     /** Always ChannelType.Voice */
     readonly type: typeof ChannelType.Voice
+    /** Topic, with null meaning none and omission meaning unavailable */
+    readonly topic?: string | null
     /** Voice bitrate in bits per second, with null meaning no voice setting */
     readonly bitrate?: number | null
     /** Voice user limit, with null meaning no voice setting */
@@ -237,8 +243,12 @@ export interface GuildVoiceChannel extends GuildChannelBase {
     readonly voiceConnectionLimit?: number | null
     /** Voice region ID, with null selecting automatic routing */
     readonly rtcRegion?: string | null
-    /** Last message ID in the channel's text chat, with null meaning no known message */
+    /** Last message ID in the channel's text chat, with null meaning no known message. Kept from when the channel was observed. Sending messages does not update a cached channel's value, so fetch the channel for a current value */
     readonly lastMessageId?: string | null
+    /** ISO 8601 time of the most recent pin in the channel's text chat, or null when nothing was ever pinned. Unpinning
+     * does not clear it
+     */
+    readonly lastPinTimestamp?: string | null
     /** Slowmode delay in seconds for the channel's text chat */
     readonly rateLimitPerUser?: number
 }
@@ -266,27 +276,30 @@ export interface GuildLinkChannel extends GuildChannelBase {
 }
 
 /** The bot's own membership in a thread, as Fluxer reports it beside the thread.
- * A thread read, a thread list or an event only describes this membership at that moment
+ * A thread read, a thread list or an event only describes this membership at that moment.
+ * Fluxer's notification mute settings are not kept, because they only affect notifications
  *
  * @category Channels
  */
 export interface ThreadMembership {
-    /** ISO 8601 time the bot last joined the thread */
+    /** ISO 8601 time the bot last joined the thread. Fluxer names it join_timestamp */
     readonly joinedAt: string
     /** Fluxer's thread member flags, such as notification preferences. Unrecognized bits are kept */
     readonly flags: number
 }
 
-/** One member of a thread. The object is frozen and does not update when the membership changes
+/** One member of a thread. The object is frozen and does not update when the membership changes.
+ * Fluxer's muted and mute_config fields, sent only for the bot's own membership, are not kept, because they only
+ * affect notifications, as ThreadMembership says. A raw client.rest.request read of the thread's members returns them
  *
  * @category Channels
  */
 export interface ThreadMember {
-    /** Decimal thread ID */
+    /** Decimal thread ID. Fluxer names it id */
     readonly threadId: string
     /** Decimal ID of the member's account */
     readonly userId: string
-    /** ISO 8601 time the user last joined the thread */
+    /** ISO 8601 time the user last joined the thread. Fluxer names it join_timestamp */
     readonly joinedAt: string
     /** Fluxer's thread member flags, such as notification preferences. Unrecognized bits are kept */
     readonly flags: number
@@ -311,20 +324,26 @@ export interface GuildThreadChannelBase extends GuildChannelBase {
     /** Thread name */
     readonly name: string
     /** Whether the thread is archived. An archived thread accepts no new members, reactions, pins or edits, and a
-     * message sent to it unarchives it
+     * message sent to it unarchives it.
+     * Fluxer sends it as thread_metadata.archived
      */
     readonly archived: boolean
-    /** Whether only members who can manage threads may act in the thread */
+    /** Whether sending and other restricted thread actions require Manage Threads. A lock does not prevent leaving an unarchived thread or otherwise permitted message deletion.
+     * Fluxer sends it as thread_metadata.locked
+     */
     readonly locked: boolean
-    /** Inactivity period in minutes after which Fluxer archives the thread, such as ThreadAutoArchiveMinutes.ThreeDays */
+    /** Inactivity period in minutes after which Fluxer archives the thread, such as ThreadAutoArchiveMinutes.ThreeDays.
+     * Fluxer sends it as thread_metadata.auto_archive_duration
+     */
     readonly autoArchiveMinutes: number
     /** ISO 8601 time the thread was last archived, unarchived or given a new autoArchiveMinutes. It equals createdAt
-     * until the first of those changes
+     * until the first of those changes.
+     * Fluxer sends it as thread_metadata.archive_timestamp
      */
     readonly archiveTimestamp: string
-    /** ISO 8601 time the thread was created */
+    /** ISO 8601 time the thread was created. Fluxer sends it as thread_metadata.create_timestamp */
     readonly createdAt: string
-    /** Last message ID, with null meaning the thread has no message */
+    /** Last message ID, with null meaning the thread has no message. Kept from when the channel was observed. Sending messages does not update a cached channel's value, so fetch the channel for a current value */
     readonly lastMessageId?: string | null
     /** ISO 8601 last-pin time, with null meaning nothing was ever pinned */
     readonly lastPinTimestamp?: string | null
@@ -356,14 +375,18 @@ export interface GuildAnnouncementThreadChannel extends GuildThreadChannelBase {
 
 /**
  * A public thread inside a text channel, or a post inside a forum or media channel, selected by
- * `type === ChannelType.PublicThread`
+ * `type === ChannelType.PublicThread`.
+ * Fluxer's member_ids_preview is not kept, because it only feeds a client's avatar stack. Use threads.fetchMembers for
+ * the members of a post
  *
  * @category Channels
  */
 export interface GuildPublicThreadChannel extends GuildThreadChannelBase {
     /** Always ChannelType.PublicThread */
     readonly type: typeof ChannelType.PublicThread
-    /** IDs of the forum tags applied to a forum or media post, at most 5. Absent on a thread in a text channel */
+    /** IDs of the forum tags applied to a forum or media post, at most 5. Absent on a thread in a text channel.
+     * Fluxer names it applied_tags
+     */
     readonly appliedTagIds?: readonly string[]
 }
 
@@ -375,7 +398,9 @@ export interface GuildPublicThreadChannel extends GuildThreadChannelBase {
 export interface GuildPrivateThreadChannel extends GuildThreadChannelBase {
     /** Always ChannelType.PrivateThread */
     readonly type: typeof ChannelType.PrivateThread
-    /** Whether members who cannot manage threads may add other such members */
+    /** Whether members who cannot manage threads may add other such members.
+     * Fluxer sends it as thread_metadata.invitable
+     */
     readonly invitable: boolean
 }
 
@@ -426,7 +451,7 @@ export interface GuildForumChannelBase extends GuildChannelBase {
     readonly type: typeof ChannelType.Forum | typeof ChannelType.Media
     /** Posting guidelines, with null meaning none */
     readonly topic?: string | null
-    /** ID of the newest post, with null meaning the channel never had one */
+    /** ID of the newest post, with null meaning the channel never had one. Kept from when the channel was observed. Creating posts does not update a cached channel's value, so fetch the channel for a current value */
     readonly lastMessageId?: string | null
     /** Delay in seconds between one member's new posts */
     readonly rateLimitPerUser?: number
@@ -441,7 +466,8 @@ export interface GuildForumChannelBase extends GuildChannelBase {
     /** Default tag matching of a post search, "match_some" or "match_all". Another string Fluxer adds later is kept */
     readonly defaultTagSetting?: string
     /** Stored default auto-archive period for posts, in minutes, with null meaning none is set. Fluxer does not apply
-     * it to a new post
+     * it to a new post.
+     * Fluxer names it default_auto_archive_duration
      */
     readonly defaultAutoArchiveMinutes?: number | null
     /** Slowmode delay in seconds that a new post copies when its creation sets none */
@@ -596,7 +622,8 @@ export interface ChannelCreateBase {
 export interface ThreadParentDefaults {
     /** Auto-archive period in minutes that the channel stores for its threads: One of the ThreadAutoArchiveMinutes values,
      * or null to clear it. Fluxer stores the value but does not apply it to a new thread, which uses
-     * ThreadAutoArchiveMinutes.ThreeDays unless its creation sets another period
+     * ThreadAutoArchiveMinutes.ThreeDays unless its creation sets another period.
+     * Fluxer names it default_auto_archive_duration
      */
     readonly defaultAutoArchiveMinutes?: number | null
     /** Slowmode delay in seconds that a new thread in this channel copies when its creation sets none, an integer
@@ -823,7 +850,8 @@ export interface ChannelEdit {
     /** Auto-archive period in minutes that a text, announcement, forum or media channel stores for its threads: One of
      * the ThreadAutoArchiveMinutes values, or null to clear it. Fluxer stores the value but does not apply it to a
      * new thread. Fluxer ignores it for another channel type, and on a text or announcement channel in a community
-     * where threads are not active
+     * where threads are not active.
+     * Fluxer names it default_auto_archive_duration
      */
     readonly defaultAutoArchiveMinutes?: number | null
     /** Slowmode delay in seconds that a new thread in a text, announcement, forum or media channel copies when its
@@ -954,6 +982,7 @@ export type ChannelOperation =
     | "threads.fetchActive"
     | "threads.fetchArchived"
     | "threads.search"
+    | "threads.fetchPostData"
     | "threads.join"
     | "threads.leave"
     | "threads.addMember"

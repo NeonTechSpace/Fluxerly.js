@@ -16,8 +16,9 @@ import { expectedSdkError } from "#sdk/errors"
 import type { EventName } from "#sdk/events"
 import type { FailureKind, FailureMessageReference, FailureReport } from "#sdk/failures"
 import type { LogCategory } from "#sdk/logging"
-import { errorInfo, errorText, type ClientLogger } from "./logging.js"
-import { messageText } from "./masking.js"
+import { ownCleanup } from "./cleanup-owner.js"
+import { errorInfo, errorText, otherFailures, type ClientLogger, type LogInput } from "./logging.js"
+import { maskedMessage, maskText } from "./masking.js"
 import { applicationMarked } from "./defects.js"
 import type { LogCode } from "./code-catalogue.js"
 import { fiberRejectionScope } from "./rejection-scope.js"
@@ -34,6 +35,7 @@ export interface ReportInput {
     readonly event?: EventName | undefined
     readonly command?: string | undefined
     readonly subscriptionId?: string | undefined
+    readonly taskName?: string | undefined
     readonly message?: FailureMessageReference | undefined
 }
 
@@ -98,7 +100,19 @@ function subject(report: ReportInput) {
     if (report.command !== undefined) return `Command ${report.command} failed`
     if (report.event !== undefined && report.kind === "handler") return `The ${report.event} handler failed`
     if (report.event !== undefined && report.kind === "overflow") return `The ${report.event} subscription overflowed`
+    if (report.taskName !== undefined && report.kind === "task")
+        return `The scheduled task ${JSON.stringify(report.taskName)} failed`
     return kindText[report.kind]
+}
+
+/** The subject of a log record. A collector reports at most one callback or filter failure, so a record names its
+ * message and channel, which keeps equal failures of different collectors apart when records are deduplicated
+ */
+function recordSubject(report: ReportInput) {
+    const message = report.kind === "collector" || report.kind === "filter" ? report.message : undefined
+    return message === undefined
+        ? subject(report)
+        : `${subject(report)} on message ${message.id} in channel ${message.channelId}`
 }
 
 /** The subject in mid-sentence. Only the leading article or noun is lowercased, never an identifier */
@@ -116,7 +130,9 @@ function context(report: ReportInput) {
     return parts.length ? ` (${parts.join(", ")})` : ""
 }
 
-/** Build a frozen report. The describe method masks the client's credentials */
+/** Build a frozen report. The describe method masks the client's credentials and credential patterns in its whole text,
+ * including a task name in the subject, while the report's fields keep their original values
+ */
 export function makeReport(input: ReportInput, secrets: readonly string[] = []): InternalReport {
     const cause = input.cause ?? Cause.fail(input.error)
     const error = input.cause !== undefined && !("error" in input) ? primaryError(input.cause) : input.error
@@ -128,8 +144,19 @@ export function makeReport(input: ReportInput, secrets: readonly string[] = []):
         ...(input.event === undefined ? {} : { event: input.event }),
         ...(input.command === undefined ? {} : { command: input.command }),
         ...(input.subscriptionId === undefined ? {} : { subscriptionId: input.subscriptionId }),
+        ...(input.taskName === undefined ? {} : { taskName: input.taskName }),
         ...(input.message === undefined ? {} : { message: input.message }),
-        describe: () => `${subject(input)}${context(input)}\n${errorText(errorInfo(error, origin, secrets), "  ")}`,
+        describe: () =>
+            maskText(
+                [
+                    `${subject(input)}${context(input)}`,
+                    errorText(errorInfo(error, origin, secrets), "  "),
+                    ...otherFailures(cause, error).map((other) =>
+                        errorText(errorInfo(other, origin, secrets), "  ", true, "Also failed: "),
+                    ),
+                ].join("\n"),
+                secrets,
+            ),
     })
 }
 
@@ -176,25 +203,28 @@ function logReport(
         readonly handled?: boolean
         readonly outcome?: ReportOutcome
         readonly context?: Context.Context<never> | undefined
+        /** The community or channel of a claimed rest.rejected record, which the failure then names in its place */
+        readonly target?: RejectionTarget
     } = {},
 ) {
     try {
         const error = report.error
-        const errorMessage = messageText(error)
+        const errorMessage = maskedMessage(error)
         logger.log(
             {
                 level: options.handled ? "debug" : "error",
                 category: report.command === undefined ? categories[report.kind] : "commands",
                 code: report.command === undefined ? codes[report.kind] : "commands.failed",
-                message: `${subject(report)}${options.handled ? " and was passed to onError" : `: ${errorMessage}`}${options.outcome === undefined ? "" : reportNotes[options.outcome]}`,
+                message: `${recordSubject(report)}${options.handled ? " and was passed to onError" : `: ${errorMessage}`}${options.outcome === undefined ? "" : reportNotes[options.outcome]}`,
                 event: report.event,
                 command: report.command,
                 subscriptionId: report.subscriptionId,
                 // Undefined fields are omitted from the record
                 fields: {
+                    task: report.taskName,
                     messageId: report.message?.id,
-                    channelId: report.message?.channelId,
-                    guildId: report.message?.guildId,
+                    channelId: report.message?.channelId ?? options.target?.channelId,
+                    guildId: report.message?.guildId ?? options.target?.guildId,
                     reportOutcome: options.outcome,
                 },
                 ...(options.handled ? {} : { error, cause: report.cause }),
@@ -207,18 +237,34 @@ function logReport(
     }
 }
 
+/** The community and channel IDs a handler failure names */
+type RejectionTarget = { guildId?: string | undefined; channelId?: string | undefined }
+
 /**
  * Log a report that no hook receives. A handler failure caused by a rejected token or permission claims the held
- * rest.rejected record of its invocation by identity, directly or in its cause chain, if the record is still held.
- * The rejection is logged once unless the handler fails more than one second later. Never throws
+ * rest.rejected record of its invocation by identity, directly or in its cause chain, if the record is still held, and
+ * names the record's community or channel in its own fields. A record whose target differs from one the failure already
+ * names stays held, so its Warn still shows that target. The rejection is logged once unless the handler fails more than
+ * one second later. Never throws
  */
 export function logHandlerReport(
     logger: ClientLogger,
     report: InternalReport,
     context: Context.Context<never> | undefined,
 ) {
-    if (report.kind === "handler" && context !== undefined) fiberRejectionScope(context)?.claim(report.error)
-    logReport(logger, report, { context })
+    const target: RejectionTarget = { guildId: report.message?.guildId, channelId: report.message?.channelId }
+    // Keep a record whose target cannot be copied, because another target already fills that field
+    const keep = (input: LogInput) => {
+        for (const key of ["guildId", "channelId"] as const) {
+            const id = input.fields?.[key]
+            if (typeof id !== "string") continue
+            target[key] ??= id
+            if (target[key] !== id) return true
+        }
+        return false
+    }
+    if (report.kind === "handler" && context !== undefined) fiberRejectionScope(context)?.claim(report.error, keep)
+    logReport(logger, report, { context, target })
 }
 
 /** Log a failed hook together with the original failure it was reporting. Never throws */
@@ -236,7 +282,7 @@ function logHookFailure(
                 level: "error",
                 category: "events",
                 code: "events.hookFailed",
-                message: `The onError hook failed while reporting that ${lowerFirst(subject(report))}: ${messageText(hookError)}`,
+                message: `The onError hook failed while reporting that ${lowerFirst(recordSubject(report))}: ${maskedMessage(hookError)}`,
                 event: report.event,
                 command: report.command,
                 subscriptionId: report.subscriptionId,
@@ -262,6 +308,7 @@ export class HookQueue {
     readonly #queue: Queue.Queue<InternalReport>
     #worker: Fiber.Fiber<void> | undefined
     #current: InternalReport | undefined
+    readonly #cleanupDefects: Cause.Die[] = []
     #closed = false
 
     constructor(
@@ -311,8 +358,12 @@ export class HookQueue {
                 const report = next.value
                 owner.#current = report
                 const exit = yield* Effect.exit(Effect.suspend(() => owner.hook(report)))
-                // The close() call already logged a report whose hook it interrupted
-                if (owner.#current !== report) return
+                // The close() call already logged a report whose hook it interrupted. A defect raised while the hook
+                // cleaned up is a cleanup fault, which shutdown returns
+                if (owner.#current !== report) {
+                    if (Exit.isFailure(exit)) owner.#keepCleanupDefects(exit.cause)
+                    return
+                }
                 owner.#current = undefined
                 owner.#settle(report, exit)
             }
@@ -333,6 +384,19 @@ export class HookQueue {
             ),
         )
         this.#worker = fiber
+    }
+
+    /** Defects raised while a hook that close() interrupted cleaned up, each once */
+    #keepCleanupDefects(cause: Cause.Cause<unknown>) {
+        for (const reason of cause.reasons)
+            if (Cause.isDieReason(reason) && !this.#cleanupDefects.some((kept) => kept.defect === reason.defect))
+                this.#cleanupDefects.push(ownCleanup(reason, { subject: "an onError hook" }))
+    }
+
+    /** Defects raised while hooks that close() interrupted cleaned up, including those in the worker's own exit */
+    cleanupDefects(workerExit: Exit.Exit<unknown, unknown> | undefined): readonly Cause.Die[] {
+        if (workerExit !== undefined && Exit.isFailure(workerExit)) this.#keepCleanupDefects(workerExit.cause)
+        return this.#cleanupDefects
     }
 
     #settle(report: InternalReport, exit: Exit.Exit<unknown, unknown>) {
@@ -449,11 +513,19 @@ export class FailureReporter {
     shutdown(): Effect.Effect<void> {
         return Effect.suspend(() => {
             this.#closed = true
-            const workers = [this.#client?.close(), ...[...this.#active].map((queue) => queue.close())].filter(
-                (worker) => worker !== undefined,
+            const closing = [this.#client, ...this.#active].flatMap((queue) => {
+                const worker = queue?.close()
+                return queue === undefined || worker === undefined ? [] : [{ queue, worker }]
+            })
+            if (closing.length === 0) return Effect.void
+            // A defect raised while an interrupted hook cleaned up fails shutdown, as other cleanup faults do
+            const finished = Fiber.awaitAll(closing.map(({ worker }) => worker)).pipe(
+                Effect.flatMap((exits) => {
+                    const defects = closing.flatMap(({ queue }, index) => queue.cleanupDefects(exits[index]))
+                    return defects.length ? Effect.failCause(Cause.fromReasons<never>(defects)) : Effect.void
+                }),
             )
-            if (workers.length === 0) return Effect.void
-            return Effect.raceFirst(Fiber.awaitAll(workers).pipe(Effect.asVoid), wallDelay(hookInterruptGraceMs))
+            return Effect.raceFirst(finished, wallDelay(hookInterruptGraceMs))
         })
     }
 }

@@ -93,7 +93,7 @@ The [SDK contracts](/docs/SDK-CONTRACTS.md) define shared ownership, failure and
 ### Optional consumer Effect integration
 
 The SDK development dependency pins an exact stable Effect 4 version within the required peer range.
-Packed consumers separately test the range's minimum, such as `4.1.0` for `^4.1.0`.
+Packed consumers separately test the range's minimum, such as `4.1.2` for `^4.1.2`, including a native Effect consumer type-checked with Node.js types and no DOM library.
 Updating the development dependency does not raise that minimum. Other releases within the range are accepted, and only the newest one is checked daily, as described under [shared development tooling](/docs/TECHNOLOGY.md#shared-development-tooling). Effect 3 and Effect 4 prereleases are unsupported
 
 Modern npm, pnpm and Bun install required peers automatically by default.
@@ -243,7 +243,7 @@ The SDK build and test tools are installed and configured.
 The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
-Check, version PR, candidate preparation, publication, Website and daily upstream and Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
+Check, version PR, candidate preparation, publication, Website, weekly upstream drift and daily Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
 Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a schedule twice a day prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
 [Releasing](/docs/RELEASING.md) describes each trigger and when a nightly is skipped.
 Nightlies are published to npm.

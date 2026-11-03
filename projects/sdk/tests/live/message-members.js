@@ -20,17 +20,12 @@ import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Effect, Exit, Scope } from "effect"
 import { cleanupGuildChannelFixtures, createGuildChannelFixture } from "./channel-fixture.mjs"
-import {
-    acquireLock,
-    finalizeOwned,
-    loadSandboxEnvironment,
-    openJournal,
-    verifySandboxIdentity,
-} from "./support/harness.js"
+import { acquireLock, finalizeOwned, loadSandboxEnvironment, openJournal, sandboxBotId } from "./support/harness.js"
 import { createWindowGuard } from "./support/member-window.js"
-import { createOutcomeReporter } from "./support/reporting.js"
+import { createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createRetryingSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const rawFetch = globalThis.fetch
@@ -168,7 +163,7 @@ async function verifyMessageRefreshesMember(ops, channelId) {
 setTimeout(() => {
     report("process_timeout", false)
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
@@ -181,11 +176,10 @@ try {
     guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, {
+    botId = await sandboxBotId(async (path) => (await api("GET", path)).data, {
         ...sandbox,
         applicationPath: "/oauth2/applications/@me",
     })
-    botId = identity.botId
     verified = true
     report(stage, true, { clientSecretUsed: false })
 
@@ -194,6 +188,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { guildId }

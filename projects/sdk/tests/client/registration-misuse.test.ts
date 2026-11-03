@@ -1,7 +1,7 @@
 import { Effect, Exit, Stream } from "effect"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { ClientClosedError, ConfigurationError, createClient, type Client } from "../../src/index.js"
-import type { Client as NativeClient } from "../../src/effect.js"
+import { ClientClosedError, ConfigurationError, commands, createClient, type Client } from "../../src/index.js"
+import { commands as nativeCommands, type Client as NativeClient } from "../../src/effect.js"
 import { defaultApi, fixtureToken, nativeApi } from "../support/both-apis.js"
 import { thrownBy } from "../support/client-creation.js"
 
@@ -40,7 +40,22 @@ const onMisuse = [
         field: "concurrency",
         args: ["messageCreate", () => undefined, { concurrency: 0 }],
     },
+    {
+        name: "a misspelled option",
+        field: "eventOptions",
+        args: ["messageCreate", () => undefined, { concurreny: 1 }],
+    },
 ] as const
+
+/** Every option a handler accepts, which registration must keep accepting */
+const everyHandlerOption = {
+    concurrency: 2,
+    partition: "channel",
+    overflow: "dropNewest",
+    maxPendingMessages: 10,
+    maxPendingBytes: 10_000,
+    partitionReady: () => undefined,
+} as const
 
 describe("event registration misuse", () => {
     test.each(onMisuse)("default on throws ConfigurationError for $name before registering", ({ field, args }) => {
@@ -63,6 +78,63 @@ describe("event registration misuse", () => {
         const defect = await defectOf(Effect.scoped(registration))
         expect(defect).toBeInstanceOf(ConfigurationError)
         expect(defect).toMatchObject({ field })
+    })
+
+    test("default on, subscribe and router attach reject a misspelled or unsupported option", () => {
+        const client: Client = defaultApi()
+        const misspelled = thrownBy(() =>
+            client.on("messageCreate", () => undefined, { maxPendingMesages: 1 } as never),
+        )
+        expect(misspelled).toMatchObject({
+            field: "eventOptions",
+            hint: expect.stringContaining('"maxPendingMessages"'),
+        })
+        expect(misspelled).toBeInstanceOf(ConfigurationError)
+        // Handler-only options do nothing for a subscription, so they are rejected there too
+        for (const options of [{ maxPendingMesages: 1 }, { overflow: "dropOldest" }])
+            expect(thrownBy(() => client.subscribe("messageCreate", options as never))).toMatchObject({
+                field: "eventOptions",
+            })
+        const router = commands.create({ prefix: "!" }).register({ name: "go", execute: () => undefined })
+        expect(thrownBy(() => router.attach(client, { concurreny: 1 } as never))).toMatchObject({
+            field: "eventOptions",
+        })
+        expect(client.diagnostics().events.subscriptions).toBe(0)
+        client.on("messageCreate", () => undefined, { ...everyHandlerOption, onError: () => undefined }).close()
+        router.attach(client, { ...everyHandlerOption, onError: () => undefined }).close()
+    })
+
+    test("native on, subscribe and router attach reject a misspelled or unsupported option", async () => {
+        const client: NativeClient = await nativeApi()
+        const misspelled = await defectOf(
+            Effect.scoped(client.on("messageCreate", () => Effect.void, { maxPendingMesages: 1 } as never)),
+        )
+        expect(misspelled).toBeInstanceOf(ConfigurationError)
+        expect(misspelled).toMatchObject({
+            field: "eventOptions",
+            hint: expect.stringContaining('"maxPendingMessages"'),
+        })
+        for (const options of [{ maxPendingMesages: 1 }, { overflow: "dropOldest" }])
+            expect(await defectOf(Stream.runDrain(client.subscribe("messageCreate", options as never)))).toMatchObject({
+                field: "eventOptions",
+            })
+        const router = nativeCommands.create({ prefix: "!" }).register({ name: "go", execute: () => Effect.void })
+        expect(await defectOf(Effect.scoped(router.attach(client, { concurreny: 1 } as never)))).toMatchObject({
+            field: "eventOptions",
+        })
+        await Effect.runPromise(
+            Effect.scoped(
+                Effect.gen(function* () {
+                    const options = {
+                        ...everyHandlerOption,
+                        partitionReady: () => Effect.void,
+                        onError: () => Effect.void,
+                    }
+                    yield* client.on("messageCreate", () => Effect.void, options)
+                    yield* router.attach(client, options)
+                }),
+            ),
+        )
     })
 
     test("default subscribe throws ConfigurationError for an unknown event or invalid buffer options", () => {

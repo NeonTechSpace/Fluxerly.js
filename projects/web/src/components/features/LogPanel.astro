@@ -250,6 +250,7 @@ for (const raw of log.replace(/\n$/, "").split("\n")) {
     /* Lines printed under a record: the error with its code, then a hint and details labeled, then quiet frames */
     .nest {
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         gap: 8px;
         margin-top: 12px;
         padding-left: 16px;
@@ -291,15 +292,29 @@ for (const raw of log.replace(/\n$/, "").split("\n")) {
         font-style: italic;
     }
 
-    /* Narrow panels: the head stays on one line as far as it fits, and the body uses the full width */
+    /* Narrow panels: the record's code gets its own row, the body uses the full width, and a long value wraps, as nothing
+       here scrolls */
     @container (max-width: 520px) {
+        .records {
+            padding-inline: 16px;
+            overflow-wrap: anywhere;
+        }
+
         .rec-head {
-            grid-template-columns: var(--level) minmax(0, auto) minmax(0, 1fr);
+            grid-template-columns: var(--level) minmax(0, 1fr);
             column-gap: 1ch;
+        }
+
+        .rec-code {
+            grid-column: 1 / -1;
         }
 
         .rec-body {
             padding-left: 0;
+        }
+
+        .kv {
+            white-space: normal;
         }
     }
 

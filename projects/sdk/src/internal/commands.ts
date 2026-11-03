@@ -764,10 +764,10 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
                     feedback === undefined
                         ? ""
                         : suppressed
-                          ? ". No reply was sent because the same rejection was answered recently"
+                          ? ". No reply was sent because a reply for the same rejection was attempted recently"
                           : feedback === "reply"
-                            ? ". A reply explains why"
-                            : ". The onReject callback was called"
+                            ? ". The bot will try to reply with the reason"
+                            : ". The onReject callback runs next"
                 }`,
                 command: definition.name,
                 fields: {
@@ -799,7 +799,7 @@ export function dispatchCommand<D extends PrefixCommandDefinition, C, X, E, R, M
                 level: "debug",
                 category: "commands",
                 code: "commands.unmatched",
-                message: `${unmatchedText[resolved.unmatched._tag]}${detail}${suggestion === undefined ? "" : `. The closest command is ${suggestion}`}${adapter.unmatched === undefined ? "" : ". The onUnmatched callback was called"}`,
+                message: `${unmatchedText[resolved.unmatched._tag]}${detail}${suggestion === undefined ? "" : `. The closest command is ${suggestion}`}${adapter.unmatched === undefined ? "" : ". The onUnmatched callback runs next"}`,
                 fields: {
                     reason: resolved.unmatched._tag,
                     messageId: message.id,

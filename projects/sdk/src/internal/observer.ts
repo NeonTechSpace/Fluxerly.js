@@ -7,7 +7,7 @@
  */
 import type { Observation, Observer } from "#sdk/observer"
 import type { ClientLogger } from "./logging.js"
-import { maskText } from "./masking.js"
+import { maskedErrorCode, maskText } from "./masking.js"
 
 const observers = new WeakMap<ClientLogger, Observer>()
 
@@ -53,7 +53,7 @@ export function failureFacts(
         const code = (error as { code?: unknown }).code
         return {
             errorName: maskText(String(error.name), secrets),
-            ...(typeof code === "string" ? { errorCode: maskText(code, secrets) } : {}),
+            ...(typeof code === "string" ? { errorCode: maskedErrorCode(error, code, secrets) } : {}),
         }
     } catch {
         // allow-silent: An error whose name or code getter throws still produces its observation, without those facts

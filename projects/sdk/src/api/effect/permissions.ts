@@ -42,7 +42,7 @@ export interface PermissionHelpers {
      * A thread channel adds a read of its parent channel, and the result follows Fluxer's thread rule as in calculate.
      * Underlying fetches can enter enabled caches, but the calculated result is not cached.
      * The sequential reads are separate observations, so the result does not guarantee a later action will succeed.
-     * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the whole helper with shared read retries and awaited cancellation cleanup.
+     * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the helper's reads, including queueing and retries. Required cleanup is awaited and can finish after the deadline.
      * Only fetches count toward it, so reads served by a cache need no time.
      * Invalid target, deadline or a `preferCache` that is not a boolean fails with permissions.fetch reason input.
      * Resource errors keep their GuildOperationError or ChannelOperationError.
@@ -70,8 +70,8 @@ export interface PermissionHelpers {
      * ignores timeouts and role hierarchy, and a channel's bits do not prove that the member can view it.
      * The reads can fill enabled caches, but the result itself is not cached. Unlike fetch, it has no `preferCache`,
      * because no cache holds a complete channel list.
-     * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the whole call, including read
-     * retries and awaited cancellation cleanup.
+     * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), covers the call's reads, including queueing
+     * and retries. Required cleanup is awaited and can finish after the deadline.
      * An invalid target or deadline fails with permissions.fetchChannels reason input.
      * Errors from the reads keep their GuildOperationError or ChannelOperationError.
      * A listed channel that Fluxer sends without its permission overwrites fails with permissions.fetchChannels reason
@@ -82,15 +82,22 @@ export interface PermissionHelpers {
      * @example
      * ```ts
      * import { Effect } from "effect"
-     * import { permissionBits, type Client } from "@neontechspace/fluxerly/effect"
+     * import { ChannelType, permissionBits, type Client } from "@neontechspace/fluxerly/effect"
      *
+     * // These channel types accept ordinary messages, and their current permission bits allow sending.
+     * // Forum and media channels need a new post instead. Fluxer still checks the final request
      * export const sendableChannels = (client: Client, guildId: string) =>
      *     Effect.gen(function* () {
      *         const botId = (yield* client.users.getSelf())?.id
      *         if (botId === undefined) return []
      *         const entries = yield* client.permissions.fetchChannels({ guildId, userId: botId })
      *         return entries
-     *             .filter(({ permissions }) => permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]))
+     *             .filter(({ channel, permissions }) =>
+     *                (channel.type === ChannelType.Text ||
+     *                    channel.type === ChannelType.Voice ||
+     *                    channel.type === ChannelType.Announcement) &&
+     *                permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]),
+     *            )
      *             .map(({ channel }) => channel.id)
      *     })
      * ```

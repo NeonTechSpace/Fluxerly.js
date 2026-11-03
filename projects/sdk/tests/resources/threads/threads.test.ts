@@ -233,7 +233,7 @@ test.each(modes)("%s returns an indexing page for a 202 search without retrying 
             minId: "1",
         }),
     )
-    expect(page).toEqual({ indexing: true })
+    expect(page).toEqual({ indexing: true, retryAfterMs: 2000 })
     expect(search.requests()).toHaveLength(1)
     const params = new URL(search.requests()[0]!.url).searchParams
     expect(params.getAll("tag")).toEqual(["5", "6"])

@@ -246,9 +246,11 @@ class ListenerQueue {
 /** A listener's failure as a client cache report. Reporting never throws */
 function reportFailure<M extends MessageCore>(
     owner: ClientOwner<M>,
+    id: string,
     input: { readonly error: unknown } | { readonly cause: Cause.Cause<unknown> },
 ) {
-    owner.failures.report({ kind: "cache", ...input })
+    // The listener's ID keeps failures of different listeners apart in reports and in deduplicated records
+    owner.failures.report({ kind: "cache", subscriptionId: id, ...input })
 }
 
 const closedObserver = (id: string): CacheObserver =>
@@ -264,7 +266,7 @@ export const defaultCacheOnChange =
         const hub = owner.cacheChanges
         hub.watch(owner)
         const id = hub.nextId()
-        const report = (error: unknown) => reportFailure(owner, { error })
+        const report = (error: unknown) => reportFailure(owner, id, { error })
         const queue = new ListenerQueue(id, bounds, owner.logging, (change, done) => {
             let settled: Promise<unknown> | undefined
             try {
@@ -330,11 +332,11 @@ export const nativeCacheOnChange =
                             fiber.addObserver((exit) => {
                                 running.delete(fiber)
                                 if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause))
-                                    reportFailure(owner, { cause: exit.cause })
+                                    reportFailure(owner, id, { cause: exit.cause })
                                 done()
                             })
                         } catch (error) {
-                            reportFailure(owner, { error })
+                            reportFailure(owner, id, { error })
                             done()
                         }
                     })

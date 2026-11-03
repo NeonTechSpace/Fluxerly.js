@@ -49,7 +49,7 @@ A project from `fluxerly init` has such a test in `bot.test.js` or `bot.test.ts`
 ## Patterns that do not exist in Fluxerly
 
 - No `new Client()` and `client.login(token)`. Use `runBot({ token, ... })`, or `createClient({ token })` and then `client.run()`
-- No intents. Nothing needs to be enabled to receive events
+- No intents. Fluxer sends events by permissions, visibility and subscriptions. Member presence updates also need `client.presence.setMembers` with the member IDs
 - No slash commands or interactions. Commands are prefix commands such as `!ping`, through the `commands` option of `runBot`
 - Messages are read-only data without methods, so `message.reply()`, `message.delete()` and `channel.send()` do not exist. Use the `reply` passed to a handler, or `client.messages.send(channelId, content)`
 - A `runBot` event handler receives a context object such as `({ message, reply })`, not the message itself
@@ -116,7 +116,7 @@ Keep the application's existing module and TypeScript settings when they work wi
 
 ## Build the bot
 
-- `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup(client, { signal })` callback for other startup work and `onError`. By default it skips messages written by bots, and the default API's `runBot` also stops cleanly on SIGINT and SIGTERM. Set `ignoreBots: false` or `processSignals: false` to turn either off. The native Effect `runBot` from `@neontechspace/fluxerly/effect` handles those signals only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` may already handle them.
+- `runBot` takes one options object with the client settings, `events` handlers, prefix `commands`, a `setup` callback for other startup work and `onError`. The default API calls `setup(client, { signal })`. By default it skips messages written by bots, and the default API's `runBot` also stops cleanly on SIGINT and SIGTERM. Set `ignoreBots: false` or `processSignals: false` to turn either off. The native Effect `runBot` from `@neontechspace/fluxerly/effect` handles those signals only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` may already handle them.
   It checks every option before creating a client, then connects and resolves only after the bot stopped and SDK cleanup finished. By default, an expected runtime failure that stops the bot is logged once and sets `process.exitCode` to 1. In the default API, invalid options can throw synchronously and unexpected defects can throw or reject, so applications that need to recover from or report them must handle those errors. Pass `reportFailure: false` only when the application handles the returned failure itself
 - For prefix commands, pass `commands: { prefix, commands: { name: { arguments, guard, cooldown, hidden, execute } } }` to `runBot`.
   Guards come from `guards`: `guildOnly()`, `dmOnly()`, `ownerOnly()` for the application's owner, `ownerOnly(ids)` and `requirePermissions(names)`. A cooldown is `{ durationMs, per: "user" | "channel" | "guild" }`.
@@ -124,8 +124,8 @@ Keep the application's existing module and TypeScript settings when they work wi
 - With `createClient`, register handlers with `client.on` or `client.subscribe` before `connect` or `run`.
   The `run` method waits until the client stops, not just until it connects. The `shutdown` method closes the client permanently
 
-Local work returns plain values and needs no Result handling: Creating clients and command routers, registering handlers, cache `get` lookups and helpers such as `format` and `colors`.
-Misuse of local work, such as invalid options or a missing token, throws `ConfigurationError` or the helper's own error at once
+In the default API, local work returns plain values and needs no Result handling: Creating clients and command routers, registering handlers, cache `get` lookups and helpers such as `format` and `colors`.
+In the default API, misuse of local work, such as invalid options or a missing token, throws `ConfigurationError` or the helper's own error at once. The native Effect API returns Effects for some of this work, as described under "Only for native Effect applications"
 
 Methods returning `AsyncIterable`, such as `messages.iterateHistory`, start work when iteration begins. Use `for await` and check each returned `Result`
 
@@ -144,8 +144,8 @@ A subscription registered after shutdown began is returned already closed with a
 
 Test a `runBot` bot by passing its own options object to `createTestBot` from `@neontechspace/fluxerly/testing`. It runs the bot's events, commands and `setup` against an in-memory Fluxer, with no token or network. Use `createTestClient` for code written against a client.
 Both return a real client with the controls `ready()`, `emit(type, payload)` for Fluxer events such as `MESSAGE_CREATE`, `rest.respond(matcher, response)`, `requests()`, `commands()`, `logs()`, `counters()` and `disconnect()`. The shared `fixtures` build event payloads.
-Send a user message with `say(content)` on a test bot, which resolves with the messages the bot sent. Message sends and edits without a `rest.respond` fixture receive an echoed message.
-Wait for a request with `next()` on the route that `rest.respond` returns, and for a quiet bot with `idle()`, instead of sleeping. Waits have no deadline unless `timeoutMs` is passed, so the test runner's timeout bounds a hung test.
+Send a user message with `say(content)` on a test bot, which resolves with the messages the bot sent, including sends that a test's `rest.respond` fixture rejected. Message sends and edits without a `rest.respond` fixture receive an echoed message.
+Wait for a request with `next()` on the route that `rest.respond` returns, and for a quiet bot with `idle()`, instead of sleeping. Waits have no deadline unless `timeoutMs` is passed. Pass it to a wait that might never settle, or run tests with `node --test --test-timeout=10000 --test-force-exit`.
 A handler or command failure without `onError` makes shutdown fail with `UnhandledTestFailuresError`, unless the test reads it from `failures()`.
 Release the default test client with `await using` or `shutdown()`
 
@@ -193,7 +193,7 @@ export function sendOnce(token: string, channelId: string, content: string) {
 }
 ```
 
-The native `runBot` takes the same options object with handlers that return Effects. Match `examples/starter/bot-effect.ts`.
+The native `runBot` takes the same options object with handlers that return Effects. Native `setup(client)` gets only the client and returns an Effect that runs in the bot's Scope, so use scoped resources for cleanup instead of a signal. Match `examples/starter/bot-effect.ts`.
 For Layer-based programs, provide `FluxerClient.layer(options)` or `FluxerClient.layerConfig({ token: Config.Redacted("FLUXER_BOT_TOKEN") })` and read the client with `yield* FluxerClient`. Building the layer does not connect.
 Native logging goes through the program's Effect logger. The native test helpers from `@neontechspace/fluxerly/effect/testing` are scoped
 
@@ -205,8 +205,8 @@ Check each member's declaration rather than assuming every native member is an E
 
 - Build a command router with `commands.create` and `attach` it to a client. Router options add `use` middleware, `onReject: "reply"` feedback, `mentionPrefix` and `cooldowns: { maxEntries }`, and `router.help` or the command context's `help()` builds help pages. The context's `sendHelp()` sends them, and its `paginate(pages)` shows pages that the command's author flips with reactions
 - Use `client.use(middleware)` for event middleware around every later `on` handler
-- For Fluxer API routes without an SDK method, use `client.rest.request({ method, path })`, which shares the client's queue, rate limits and logging. For gateway commands without an SDK method, use `client.gateway.send(shardId, op, d)`. Check the installed declarations for an SDK method first
-- The client logs startup, readiness, lost connections, long rate-limit waits, event drops, shutdown and every application failure by default. Records never contain the token or other credentials.
+- For Fluxer API routes without an SDK method, use `client.rest.call("METHOD /path/{param}", { params, query, body })`, whose route, fields and response are typed from Fluxer's API description with Fluxer's field names, or `client.rest.request({ method, path })` for a route or field newer than the SDK. Both share the client's queue, rate limits and logging. For gateway commands without an SDK method, use `client.gateway.send(shardId, op, d)`, and read a voice join that Fluxer refuses from the `gatewayError` event. For dispatches without a typed event, such as `THREAD_MEMBER_UPDATE`, use `client.on("raw", handler)`: Check `documented`, then compare `t`, and `d` gets the payload type Fluxer's documentation describes, with Fluxer's field names. These types check nothing at runtime, so check a value before relying on it. Check the installed declarations for an SDK method first
+- The client logs startup, readiness, lost connections, long rate-limit waits, event drops, shutdown and every application failure by default. Records mask the token, Fluxer's credential forms and common credential names, such as Authorization headers, passwords and cookies, but not an unlabelled secret or another service's secret under a name the SDK does not know, so keep such secrets out of error messages.
   Adjust output with the `logging` option rather than filtering console output. Choose `format` (`"pretty"` or `"json"`), `sink` to forward records to another logger and `dedupe` when creating the client. Change `level`, per-category `categories` and `debug` while running with `client.logging.configure`.
   Set `FLUXERLY_DEBUG=1`, or a list of categories, for Debug records. Leave `unsafe` payload logging off unless explicitly authorized for local debugging.
   Each record has a stable `code`, such as `rest.rejected`. The documentation website lists every error and log code

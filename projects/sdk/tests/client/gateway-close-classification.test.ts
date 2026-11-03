@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest"
 import { AuthenticationError, ConnectionError, RateLimitError } from "../../src/errors.js"
-import { classifyClose } from "../../src/internal/gateway/session.js"
+import { classifyClose, closeReasonText } from "../../src/internal/gateway/session.js"
+import { closeCodeInfo } from "../../src/internal/protocol/gateway.js"
 
 describe("pinned provider gateway close lifecycle", () => {
     test("keeps established sessions resumable after timeout and rate-limit closes", () => {
@@ -17,6 +18,11 @@ describe("pinned provider gateway close lifecycle", () => {
         expect(limited.failure).toBeInstanceOf(RateLimitError)
     })
 
+    test("blames the bot's missing heartbeat for 4009, not a missing server acknowledgement", () => {
+        // Fluxer closes with 4009 when no heartbeat from the client arrived in time
+        expect(closeCodeInfo(4009).meaning).not.toMatch(/acknowledg/i)
+    })
+
     test("resets only the rejected resume attempt and retains permanent startup failures", () => {
         expect(classifyClose(4007, true)).toMatchObject({ retry: true, resetSession: true })
         expect(classifyClose(4007, false)).toMatchObject({ retry: true, resetSession: false })
@@ -31,5 +37,14 @@ describe("pinned provider gateway close lifecycle", () => {
                 resetSession: false,
                 failure: { _tag: "ConnectionError", reason: "protocol", status: code },
             })
+    })
+
+    test("keeps a close reason for logs only, as one bounded line", () => {
+        expect(closeReasonText(new TextEncoder().encode("Too many\r\nconnections"))).toBe("Too many connections")
+        expect(closeReasonText("\u202e\u0000 ")).toBeUndefined()
+        expect(closeReasonText(undefined)).toBeUndefined()
+        expect(closeReasonText(`${"é".repeat(200)}`)).toHaveLength(123)
+        // The reason never changes how a close code is handled
+        expect(classifyClose(4008, true, "any reason")).toMatchObject({ retry: true, closeReason: "any reason" })
     })
 })

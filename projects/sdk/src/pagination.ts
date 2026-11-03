@@ -24,7 +24,8 @@ export interface PaginationQuery {
      * History defaults to 50 with a range of 1 through 100, members to 100 with 1 through 1,000.
      * Community memberships default to 200 with 1 through 200, reaction users to 25 with 1 through 100.
      * Pins default to 50 with 1 through 50, audit logs to 50 with 1 through 100.
-     * Member search defaults to 100 with 1 through 100, message search to 25 with 1 through 25
+     * Member search defaults to 100 with 1 through 100, message search to 25 with 1 through 25.
+     * Thread members default to 100 with 1 through 100, archived threads to 50 with 2 through 100
      */
     readonly pageSize?: number
     /** Maximum page requests, a positive safe integer.
@@ -100,6 +101,7 @@ export type PaginationOperation =
     | "iteratePins"
     | "auditLogs.iterate"
     | "threads.iterateMembers"
+    | "threads.iterateArchived"
 
 /** What each non-input pagination failure means, for the error message */
 const paginationExplanations: Readonly<Record<PaginationError["reason"], string>> = {

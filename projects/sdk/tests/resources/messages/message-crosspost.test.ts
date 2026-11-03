@@ -198,6 +198,8 @@ test.each(modes)(
                     description: "Public description",
                     approximate_member_count: 12,
                     approximate_presence_count: 0,
+                    // Fluxer 5f3fc0b1: The source snapshot names the community's custom badges
+                    badge_ids: ["123"],
                 },
             },
         })
@@ -206,7 +208,9 @@ test.each(modes)(
             description: "Public description",
             approximateMemberCount: 12,
             approximatePresenceCount: 0,
+            badgeIds: ["123"],
         })
+        expect(Object.isFrozen(result.guild.badgeIds)).toBe(true)
         expect(result.guild).not.toHaveProperty("icon")
         expect(result.guild).not.toHaveProperty("banner")
         expect(await settle(api.client.guilds.get("40"))).toBeUndefined()
@@ -231,6 +235,7 @@ test.each(modes)("%s rejects malformed source profiles and classifies a non-qual
         { ...sourceGuild, approximate_presence_count: "0" },
         { ...sourceGuild, features: [0] },
         { ...sourceGuild, discoverable: null },
+        { ...sourceGuild, badge_ids: ["not-an-id"] },
     ]) {
         const route = api.rest.respond("GET /channels/10/messages/20/crosspost-source", { body: { guild } })
         await expect(settle(api.client.messages.fetchCrosspostSource(target))).rejects.toMatchObject({

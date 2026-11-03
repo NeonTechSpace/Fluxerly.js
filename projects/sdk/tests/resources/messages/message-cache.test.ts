@@ -34,7 +34,7 @@ vi.mock("ws", async (original) => {
         ...module,
         default: class extends module.default {
             constructor(url: string, options: import("ws").ClientOptions) {
-                expect(url).toBe("wss://gateway.fluxer.app/?v=1&encoding=json")
+                expect(url).toBe("wss://gateway.fluxer.com/?v=1&encoding=json")
                 super(transport.url, options)
             }
         },
@@ -158,7 +158,7 @@ async function fixture() {
 
     const rest = await startRestServer({
         routes: {
-            "GET /v1/gateway/bot": (_request, response) => sendJson(response, { url: "wss://gateway.fluxer.app" }),
+            "GET /v1/gateway/bot": (_request, response) => sendJson(response, { url: "wss://gateway.fluxer.com" }),
         },
         fallback: (incoming, response) => {
             const request = { method: incoming.method, path: incoming.path, body: incoming.body, response }
@@ -171,9 +171,9 @@ async function fixture() {
     const gateway = await startGatewayServer({ server: rest.server, redirect: false, sessionId: "fixture-session" })
     transport.url = gateway.url
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
-        expect(url.startsWith("https://api.fluxer.app/v1/")).toBe(true)
+        expect(url.startsWith("https://fluxer.com/api/v1/")).toBe(true)
         expect(init.redirect).toBe("error")
-        return realFetch(url.replace("https://api.fluxer.app", rest.origin), init)
+        return realFetch(url.replace("https://fluxer.com/api", rest.origin), init)
     })
     return {
         requests,
@@ -862,7 +862,9 @@ test.each([429, 503])(
         }
         const waiting = client.messages.fetch(target)
         await vi.waitFor(() => expect(server.requests).toHaveLength(1))
-        await clock.waiting(1_200)
+        // A 429 holds the retry in the REST queue, while a 503 retry waits out its own 1.2 s delay
+        if (status === 429) await vi.waitFor(() => expect(client.diagnostics().rest.rateLimitHold).not.toBeNull())
+        else await clock.waiting(1_200)
         server.closeCurrentSocket()
         await resumeInsideRetryWait(clock, server)
         const result = value(await waiting)

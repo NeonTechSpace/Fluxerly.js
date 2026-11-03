@@ -22,7 +22,7 @@ Start the bot with the `.env` file from the [quick start](/docs/quick-start/), o
 {"kind":"run","command":"node --env-file=.env bot.js"}
 ```
 
-For welcome messages, add the ID of the channel that should receive them to `.env`. A channel's ID is the last number in its link, which has the form `https://fluxer.app/channels/<community ID>/<channel ID>`:
+For welcome messages, add the ID of the channel that should receive them to `.env`. A channel's ID is the last number in its link, which has the form `https://fluxer.com/channels/<community ID>/<channel ID>`:
 
 ```text
 FLUXER_BOT_TOKEN=paste-the-token-here
@@ -76,19 +76,23 @@ The guard looks up the community, member, roles and channel, reading them from F
 
 ### An embed reply
 
-An embed is a formatted card with a title, text, color and footer. The `builders.embed()` chain sets its parts, and the finished builder goes into the `embeds` list of a reply. Building sends nothing, and limits such as the title length are checked when the message is sent. The bot needs the `EmbedLinks` permission in the channel, which new communities grant to everyone. Without it, Fluxer rejects the whole reply, and the failure reaches `onError`. The [messages guide](/docs/messages/) shows more message options
+An embed is a formatted card with a title, text, color and footer. The `builders.embed()` chain sets its parts, and the finished builder goes into the `embeds` list of a reply. Building sends nothing, and limits such as the title length are checked when the message is sent
+
+The bot needs the `EmbedLinks` permission in the channel, which new communities grant to everyone. Without it, Fluxer rejects the whole reply, and the failure reaches `onError`. The [messages guide](/docs/messages/) shows more message options
 
 ### A welcome message
 
 The `events` option registers a handler for each event name. The `guildMemberAdd` event arrives when someone joins a community the bot is in, and its handler receives the member as `event`, the `client` and a cancellation `signal`
 
-The handler skips bots. It then reads the welcome channel with `client.channels.fetch`. Like every request, it returns a [Result](/docs/core-concepts/#results): Either a success, whose `value` holds the channel, or a failure, whose `error` says what went wrong, and `isErr()` tells them apart. The handler uses the channel to check that it belongs to the community the member joined, so a bot in several communities never announces one community's members in another. Passing `signal` lets the SDK cancel these requests when the bot stops
+The handler skips bots. It then reads the welcome channel with `client.channels.fetch`. Like every request, it returns a [Result](/docs/core-concepts/#results): Either a success, whose `value` holds the channel, or a failure, whose `error` says what went wrong, and `isErr()` tells them apart
+
+The handler uses the channel to check that it belongs to the community the member joined, so a bot in several communities never announces one community's members in another. Passing `signal` lets the SDK cancel these requests when the bot stops
 
 The mention in the welcome text notifies the new member because `allowedMentions` lists them. If the channel read fails, the handler returns the failed Result, which the SDK reports to `onError`
 
 ### Error reporting
 
-The `onError` function receives every failure that has no caller to return it to: A failed command, event handler or reply. The report names the command or event, and `describeError` prints the full error with its code, hint and causes, with credentials masked. The bot keeps running after a failure. Without `onError`, the SDK logs each failure itself
+The `onError` function receives every failure that has no caller to return it to: A failed command, event handler or reply. The report names the command or event, and `describeError` prints the full error with its code, hint and causes, with recognized credentials masked. The bot keeps running after a failure. Without `onError`, the SDK logs each failure itself
 
 The [logging guide](/docs/logging/) shows how to change what the SDK prints
 

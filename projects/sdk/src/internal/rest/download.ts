@@ -40,6 +40,20 @@ class AttachmentStreamCleanupError extends Error {
     }
 }
 
+/**
+ * The failure of a second use of one attachment stream. Each stream downloads once, so retrying it cannot succeed and
+ * needs a new stream
+ */
+export const usedAttachmentStream = (): AttachmentDownloadError =>
+    new AttachmentDownloadError({
+        reason: "input",
+        inputValidation: inputValidationFailure(
+            "stream",
+            "relationship",
+            "This attachment stream has already been used. Call attachments.stream again for a new stream",
+        ).detail,
+    })
+
 /** Most stream cleanup failures retained for shutdown. Later ones are counted and reported without their values */
 const retainedCleanupDefects = 64
 
@@ -489,8 +503,9 @@ export function openAttachmentStream<M extends MessageCore>(
             runtime.downloads.add(source)
             const response = yield* Effect.tryPromise({
                 try: () => source!.open(url),
+                // Shutdown fails the source with ClientClosedError, which open rethrows
                 catch: (error) =>
-                    error instanceof AttachmentDownloadError
+                    error instanceof AttachmentDownloadError || error instanceof ClientClosedError
                         ? error
                         : new AttachmentDownloadError({ reason: "network", cause: new TransportError(error) }),
             })
@@ -619,14 +634,17 @@ export function downloadAttachment<M extends MessageCore>(
                     )
                     return work
                 },
+                // Shutdown aborts the request, which is the client's closure rather than a network failure
                 catch: (error) =>
-                    error instanceof AttachmentDownloadError
-                        ? error
-                        : new AttachmentDownloadError({
-                              reason: "network",
-                              status: response?.status ?? null,
-                              cause: new TransportError(error),
-                          }),
+                    runtime.closed
+                        ? new ClientClosedError()
+                        : error instanceof AttachmentDownloadError
+                          ? error
+                          : new AttachmentDownloadError({
+                                reason: "network",
+                                status: response?.status ?? null,
+                                cause: new TransportError(error),
+                            }),
             })
         }).pipe(
             withDeadline(timeout, () => new AttachmentDownloadError({ reason: "timeout" })),

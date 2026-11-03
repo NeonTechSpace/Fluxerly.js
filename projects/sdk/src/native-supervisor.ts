@@ -50,12 +50,12 @@ export interface SupervisorChildOptions<E = never, R = never> {
      */
     readonly token: string | undefined
     /** Every native client setting except token is read by property name and copied before configure, including inherited and
-     * non-enumerable properties. The supervisor assigns the shards, so sharding accepts only sessions.
+     * non-enumerable properties. The supervisor assigns the shards, so sharding accepts only sessions and refillCaches.
      * Runtime validation rejects a token, a shard plan or identify coordinator in sharding, and any other own key that
      * is not a client option, with ConfigurationError
      */
     readonly clientOptions?: Omit<ClientOptions<E, R>, "token" | "sharding"> & {
-        /** Session storage for the assigned shards. The parent assigns the shards and paces Identify, so only sessions is accepted */
+        /** Session storage and cache refill for the assigned shards. The parent assigns the shards and paces Identify, so only sessions and refillCaches are accepted */
         readonly sharding?: SupervisorChildSharding
     }
     /** Register subscriptions and local application behavior before the helper executes client.run.

@@ -8,15 +8,11 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Cause, Effect, Exit, Scope, Stream } from "effect"
-import {
-    acquireLock,
-    finalizeOwned,
-    loadSandboxEnvironment,
-    openJournal,
-    verifySandboxIdentity,
-} from "./support/harness.js"
-import { createOutcomeReporter } from "./support/reporting.js"
+import { acquireLock, finalizeOwned, loadSandboxEnvironment, openJournal, sandboxBotId } from "./support/harness.js"
+import { createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { createDeadlineSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
+import { safeFailure } from "./upload-diagnostics.mjs"
 
 const mode = process.argv[2]
 const feature = process.argv[3]
@@ -27,7 +23,14 @@ assert.equal(process.argv.length, 4)
 const rawFetch = globalThis.fetch
 const journalFile = openJournal(`command-conveniences-${feature}`)
 const operationDeadline = new AbortController()
-const deadlineTimer = setTimeout(() => operationDeadline.abort(), 150_000).unref()
+/** SDK reads and edits of the selected message, each one request, or two pages for iterateHistory */
+const readTimeoutMs = pacedDeadlineMs(10_000, 2)
+// Whole-run bounds sized from the shared pacer. The operation makes at most 28 requests, for the fields feature: 3
+// identity, membership, the channel and its fallback list, discovery and 21 feature requests. Cleanup makes at most 5.
+// The process watchdog in support/watchdogs.js covers both
+const operationMs = pacedDeadlineMs(150_000, 28, { clients: 1 })
+const cleanupMs = pacedDeadlineMs(30_000, 5)
+const deadlineTimer = setTimeout(() => operationDeadline.abort(), operationMs).unref()
 const watchdog = setTimeout(() => {
     console.error(
         JSON.stringify({
@@ -40,7 +43,7 @@ const watchdog = setTimeout(() => {
         }),
     )
     process.exit(1)
-}, 180_000).unref()
+}, harnessWatchdogMs()).unref()
 
 let stage = "configuration"
 let lock
@@ -70,8 +73,12 @@ async function value(operation, signal) {
 
 const api = createDeadlineSandboxApi({ fetch: rawFetch, token: () => token, deadline: () => requestDeadline })
 
-async function waitForCondition(matches, message) {
-    const deadline = performance.now() + 15_000
+/**
+ * Wait for a local condition. `requests` counts the paced requests that start during the wait, such as a handler's
+ * reply, so their slots extend the 15 s deadline. A wait for gateway events alone keeps 15 s
+ */
+async function waitForCondition(matches, message, requests = 0) {
+    const deadline = performance.now() + (requests === 0 ? 15_000 : pacedDeadlineMs(15_000, requests))
     while (!matches()) {
         assert.ok(performance.now() < deadline, message)
         await sleep(20, undefined, { signal: operationDeadline.signal })
@@ -127,7 +134,7 @@ async function createOwnedChannel() {
 async function cleanup() {
     if (!verified || !journal) return
     const priorDeadline = requestDeadline
-    requestDeadline = AbortSignal.timeout(30_000)
+    requestDeadline = AbortSignal.timeout(cleanupMs)
     try {
         assertJournal()
         const located = await findOwnedChannel()
@@ -189,7 +196,8 @@ function observeRejection(pending) {
 
 async function verifyWaits(ops, channelId) {
     const marker = `${journal.marker}-waits`
-    const options = { timeoutMs: 5_000, maxPendingMessages: 4, maxPendingBytes: 65_536 }
+    // Each wait registers before its one or two sends, so the sends' paced slots fall inside its timeout
+    const options = { timeoutMs: pacedDeadlineMs(5_000, 2), maxPendingMessages: 4, maxPendingBytes: 65_536 }
 
     stage = "event_wait_timeout"
     await assert.rejects(
@@ -346,6 +354,7 @@ async function verifyArguments(ops, channelId) {
         await waitForCondition(
             () => rejections.length === 1 && replies.length === 1,
             "Argument rejection and feedback deadline",
+            1,
         )
         assert.deepEqual(rejections, [
             {
@@ -363,6 +372,7 @@ async function verifyArguments(ops, channelId) {
         await waitForCondition(
             () => executions.length === 1 && replies.length === 2,
             "Argument execution and reply deadline",
+            1,
         )
         assert.deepEqual(executions, [
             {
@@ -621,7 +631,11 @@ async function verifyGroups(ops, channelId) {
 
         stage = "group_alias_routing_and_canonical_arguments"
         const nested = await ops.send({ content: '!a u i 7 "two words"', allowedMentions: {} })
-        await waitForCondition(() => executions.length === 1 && replies.length === 1, "Nested alias execution deadline")
+        await waitForCondition(
+            () => executions.length === 1 && replies.length === 1,
+            "Nested alias execution deadline",
+            1,
+        )
         assert.deepEqual(executions[0], {
             id: nested.id,
             name: "inspect",
@@ -646,6 +660,7 @@ async function verifyGroups(ops, channelId) {
         await waitForCondition(
             () => executions.length === 2 && replies.length === 2,
             "Independent grouped leaf deadline",
+            1,
         )
         assert.deepEqual(executions[1], {
             id: separate.id,
@@ -735,7 +750,8 @@ async function verifyFields(ops, channelId) {
     try {
         collector = await ops.collect({
             guildId,
-            timeoutMs: 15_000,
+            // The collector ends at its one message, and this guard covers the probe and rich sends, with an upload
+            timeoutMs: pacedDeadlineMs(15_000, 4),
             maxMessages: 1,
             maxBytes: 65_536,
             filter: (message) => {
@@ -916,14 +932,14 @@ async function createOps(sdk, channelId) {
             reply: (message, input) => value(client.messages.reply(message, input)),
             observe: async (handler) => client.on("messageCreate", handler),
             fetch: (message) =>
-                value(client.messages.fetch(message, { timeoutMs: 10_000, signal: operationDeadline.signal })),
+                value(client.messages.fetch(message, { timeoutMs: readTimeoutMs, signal: operationDeadline.signal })),
             get: async (message) => client.messages.get(message),
             history: () =>
                 value(
                     client.messages.fetchHistory(
                         channelId,
                         { limit: 10 },
-                        { timeoutMs: 10_000, signal: operationDeadline.signal },
+                        { timeoutMs: readTimeoutMs, signal: operationDeadline.signal },
                     ),
                 ),
             iterateHistory: async () => {
@@ -931,23 +947,28 @@ async function createOps(sdk, channelId) {
                 for await (const result of client.messages.iterateHistory(
                     channelId,
                     { maxItems: 10, pageSize: 10, maxPages: 2 },
-                    { timeoutMs: 10_000, signal: operationDeadline.signal },
+                    { timeoutMs: readTimeoutMs, signal: operationDeadline.signal },
                 ))
                     messages.push(await value(Promise.resolve(result)))
                 return messages
             },
             edit: (message, input) =>
-                value(client.messages.edit(message, input, { timeoutMs: 10_000, signal: operationDeadline.signal })),
+                value(
+                    client.messages.edit(message, input, {
+                        timeoutMs: readTimeoutMs,
+                        signal: operationDeadline.signal,
+                    }),
+                ),
             pin: (message) =>
-                value(client.messages.pin(message, { timeoutMs: 10_000, signal: operationDeadline.signal })),
+                value(client.messages.pin(message, { timeoutMs: readTimeoutMs, signal: operationDeadline.signal })),
             unpin: (message) =>
-                value(client.messages.unpin(message, { timeoutMs: 10_000, signal: operationDeadline.signal })),
+                value(client.messages.unpin(message, { timeoutMs: readTimeoutMs, signal: operationDeadline.signal })),
             pins: () =>
                 value(
                     client.messages.fetchPins(
                         channelId,
                         { limit: 10 },
-                        { timeoutMs: 10_000, signal: operationDeadline.signal },
+                        { timeoutMs: readTimeoutMs, signal: operationDeadline.signal },
                     ),
                 ),
             iteratePins: async () => {
@@ -955,7 +976,7 @@ async function createOps(sdk, channelId) {
                 for await (const result of client.messages.iteratePins(
                     channelId,
                     { maxItems: 10, pageSize: 10, maxPages: 1 },
-                    { timeoutMs: 10_000, signal: operationDeadline.signal },
+                    { timeoutMs: readTimeoutMs, signal: operationDeadline.signal },
                 ))
                     pins.push(await value(Promise.resolve(result)))
                 return pins
@@ -1024,30 +1045,39 @@ async function createOps(sdk, channelId) {
             value(
                 client.on("messageCreate", (message) => Effect.sync(() => handler(message))).pipe(Scope.provide(scope)),
             ),
-        fetch: (message) => value(client.messages.fetch(message, { timeoutMs: 10_000 }), operationDeadline.signal),
+        fetch: (message) =>
+            value(client.messages.fetch(message, { timeoutMs: readTimeoutMs }), operationDeadline.signal),
         get: (message) => value(client.messages.get(message)),
         history: () =>
             value(
-                client.messages.fetchHistory(channelId, { limit: 10 }, { timeoutMs: 10_000 }),
+                client.messages.fetchHistory(channelId, { limit: 10 }, { timeoutMs: readTimeoutMs }),
                 operationDeadline.signal,
             ),
         iterateHistory: () =>
             value(
                 client.messages
-                    .iterateHistory(channelId, { maxItems: 10, pageSize: 10, maxPages: 2 }, { timeoutMs: 10_000 })
+                    .iterateHistory(
+                        channelId,
+                        { maxItems: 10, pageSize: 10, maxPages: 2 },
+                        { timeoutMs: readTimeoutMs },
+                    )
                     .pipe(Stream.runCollect),
                 operationDeadline.signal,
             ),
         edit: (message, input) =>
-            value(client.messages.edit(message, input, { timeoutMs: 10_000 }), operationDeadline.signal),
-        pin: (message) => value(client.messages.pin(message, { timeoutMs: 10_000 }), operationDeadline.signal),
-        unpin: (message) => value(client.messages.unpin(message, { timeoutMs: 10_000 }), operationDeadline.signal),
+            value(client.messages.edit(message, input, { timeoutMs: readTimeoutMs }), operationDeadline.signal),
+        pin: (message) => value(client.messages.pin(message, { timeoutMs: readTimeoutMs }), operationDeadline.signal),
+        unpin: (message) =>
+            value(client.messages.unpin(message, { timeoutMs: readTimeoutMs }), operationDeadline.signal),
         pins: () =>
-            value(client.messages.fetchPins(channelId, { limit: 10 }, { timeoutMs: 10_000 }), operationDeadline.signal),
+            value(
+                client.messages.fetchPins(channelId, { limit: 10 }, { timeoutMs: readTimeoutMs }),
+                operationDeadline.signal,
+            ),
         iteratePins: () =>
             value(
                 client.messages
-                    .iteratePins(channelId, { maxItems: 10, pageSize: 10, maxPages: 1 }, { timeoutMs: 10_000 })
+                    .iteratePins(channelId, { maxItems: 10, pageSize: 10, maxPages: 1 }, { timeoutMs: readTimeoutMs })
                     .pipe(Stream.runCollect),
                 operationDeadline.signal,
             ),
@@ -1083,8 +1113,7 @@ try {
     guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
-    botId = identity.botId
+    botId = await sandboxBotId(async (path) => (await api("GET", path)).data, sandbox)
     const membership = await api("GET", `/guilds/${guildId}/members/${botId}`)
     assert.equal(membership.status, 200)
     assert.equal(membership.data?.user?.id, botId)
@@ -1095,6 +1124,7 @@ try {
     if (journalFile.exists()) {
         journal = journalFile.read()
         await cleanup()
+        recoveredOnly()
         report("recovery_only")
     } else {
         const marker = `fluxerly-command-conveniences-${randomUUID().replaceAll("-", "")}`
@@ -1137,6 +1167,7 @@ try {
             stage,
             passed: false,
             tag: error?._tag ?? error?.name ?? "Error",
+            ...safeFailure(error),
             ...(typeof error?.reason === "string" ? { reason: error.reason } : {}),
             ...(journal ? { journalRetained: true } : {}),
         }),

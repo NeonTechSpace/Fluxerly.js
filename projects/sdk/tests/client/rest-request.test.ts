@@ -8,8 +8,8 @@ import { captureLogs } from "../support/log-capture.js"
 import { rateLimitHeaders, rateLimitedResponse } from "../support/rest-server.js"
 import { expectErr, settle } from "../support/settle.js"
 
-const discoveryUrl = "https://fluxer.app/.well-known/fluxer"
-const api = "https://api.fluxer.app/v1"
+const discoveryUrl = "https://fluxer.com/.well-known/fluxer"
+const api = "https://fluxer.com/api/v1"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -87,6 +87,21 @@ describeBothApis("rest.request", (mode) => {
         expect(calls[0]!.body).toBeUndefined()
     })
 
+    test("sends an array query value as one repeated parameter per item, in order", async () => {
+        const { calls, request } = await restClient(mode, () => Response.json({ threads: [] }))
+        await settle(
+            request({
+                method: "GET",
+                path: "/channels/20/threads/search",
+                query: { query: "fixture", tag: ["101", "102"], skipped: [], archived: [false], limit: 5 },
+            }),
+        )
+        expect(calls).toHaveLength(1)
+        expect(calls[0]!.url).toBe(
+            `${api}/channels/20/threads/search?query=fixture&tag=101&tag=102&archived=false&limit=5`,
+        )
+    })
+
     test("sends JSON bodies and audit reasons, and returns undefined for an empty response", async () => {
         const { calls, request } = await restClient(mode, () => new Response(null, { status: 204 }))
         const response = await settle(
@@ -147,20 +162,37 @@ describeBothApis("rest.request", (mode) => {
         ["webhook token route", { method: "POST", path: "/webhooks/10/secret-token-value" }, "path"],
         ["non-finite query number", { method: "GET", path: "/users/@me", query: { limit: Number.NaN } }, "query"],
         ["object query value", { method: "GET", path: "/users/@me", query: { limit: {} } }, "query"],
+        ["nested query array", { method: "GET", path: "/users/@me", query: { tag: [["1"]] } }, "query"],
+        [
+            "undefined query array item",
+            { method: "GET", path: "/users/@me", query: { tag: ["1", undefined] } },
+            "query",
+        ],
+        ["non-finite query array item", { method: "GET", path: "/users/@me", query: { tag: [1, Infinity] } }, "query"],
         ["GET body", { method: "GET", path: "/users/@me", body: {} }, "body"],
         ["unserializable body", { method: "POST", path: "/users/@me", body: { value: 1n } }, "body"],
         ["files with array body", { method: "POST", path: "/channels/20/messages", body: [], files: [] }, undefined],
         [
-            "files with attachments in body",
+            "files with body attachments that are not an array",
             {
                 method: "POST",
                 path: "/channels/20/messages",
-                body: { attachments: [] },
+                body: { attachments: {} },
                 files: [{ data: new Uint8Array(1), filename: "a.txt" }],
             },
-            "body",
+            "body.attachments",
         ],
         ["invalid file", { method: "POST", path: "/channels/20/messages", files: [{ filename: "a" }] }, "files[]"],
+        // Files carry a voice note's waveform with the same checks as message sends
+        [
+            "an empty waveform on a file",
+            {
+                method: "POST",
+                path: "/channels/20/messages",
+                files: [{ data: new Uint8Array(1), filename: "a.ogg", waveform: "" }],
+            },
+            "files[].waveform",
+        ],
         [
             "audit reason with control character",
             { method: "DELETE", path: "/guilds/20", auditReason: "a\nb" },

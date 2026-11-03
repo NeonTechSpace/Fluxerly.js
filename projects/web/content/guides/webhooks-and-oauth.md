@@ -24,7 +24,9 @@ export async function sendWebhookMessage(
 }
 ```
 
-The `send` method takes a plain string for a text-only message, or an object with other fields such as `embeds`, and `editMessage` accepts the same forms to change a sent message. The send returns a [Result](/docs/glossary/#result) that holds the message Fluxer created on success. Mentions in webhook messages do not notify anyone unless `allowedMentions` allows them. The `await using` declaration shuts the client down when the helper returns or throws. For repeated sends, create one client per webhook, reuse it and shut it down when sending stops, as the [last section](/docs/webhooks-and-oauth/#wire-it-up) shows
+The `send` method takes a plain string for a text-only message, or an object with other fields such as `embeds`, and `editMessage` accepts the same forms to change a sent message. The send returns a [Result](/docs/glossary/#result) that holds the message Fluxer created on success
+
+Mentions in webhook messages do not notify anyone unless `allowedMentions` allows them. The `await using` declaration shuts the client down when the helper returns or throws. For repeated sends, create one client per webhook, reuse it and shut it down when sending stops, as the [last section](/docs/webhooks-and-oauth/#wire-it-up) shows
 
 <details>
 <summary>Follower webhooks and unknown kinds</summary>
@@ -36,10 +38,11 @@ A follower webhook has `WebhookType.ChannelFollower` and delivers [published ann
 <details>
 <summary>Failures, retries and credentials</summary>
 
-Creating the client checks and copies the credentials locally without a request, and throws `ConfigurationError` if they are malformed. If a send fails with a `WebhookOperationError` whose `outcome` is `"unknown"`, Fluxer may already have posted the message, so check for it before sending again. The [reliability guide](/docs/reliability/) explains these uncertain writes.
-A send, reply or forward can supply `nonce` for best-effort duplicate suppression through the same webhook for five minutes. Use an application operation ID, not a new value for each attempt. Nonces do not guarantee exactly-once delivery, and omission sends no nonce. A forward can instead supply its nonce in `messageReference.source`, but supplying both locations fails before any request.
-Webhook messages do not accept `tts`, and a send with it fails with reason `input` before any request.
-A rejected webhook token also logs one `rest.rejected` Warn record, even when the application handles the Result. The client prints Info and above to the console, and its `logging` option takes the same settings as a bot client's [logging](/docs/logging/)
+Creating the client checks and copies the credentials locally without a request, and throws `ConfigurationError` if they are malformed. If a send fails with a `WebhookOperationError` whose `outcome` is `"unknown"`, Fluxer may already have posted the message, so check for it before sending again. The [reliability guide](/docs/reliability/) explains these uncertain writes
+
+A send, reply or forward can supply `nonce` for best-effort duplicate suppression through the same webhook for five minutes. Use an application operation ID, not a new value for each attempt. Nonces do not guarantee exactly-once delivery, and omission sends no nonce. A forward can instead supply its nonce in `messageReference.source`, but supplying both locations fails before any request
+
+Webhook messages do not accept `tts`, and a send with it fails with reason `input` before any request. A rejected webhook token also logs one `rest.rejected` Warn record, even when the application handles the Result. The client prints Info and above to the console, and its `logging` option takes the same settings as a bot client's [logging](/docs/logging/)
 
 Shutdown releases the SDK's copy of the credentials and ends its active requests. It does not delete the webhook on Fluxer, and the application must still protect its stored credentials
 
@@ -63,6 +66,8 @@ export function sendWebhookMessageWithEffect(id: string, token: string, content:
 
 Keep this helper inside the application runtime shown in [the Effect bot guide](/docs/effect-first-bot/). The scope owns only this webhook client and leaves any bot client with its existing owner
 
+Fluxer also accepts notifications from GitHub, Slack, Instatus and LibreDesk at the webhook's URL with `/github`, `/slack`, `/instatus` or `/libredesk` added, and turns them into messages. Those services post to that URL themselves, so set them up in the service. The SDK does not send them
+
 ## Post into threads and forum channels
 
 A webhook posts into its own channel by default. To reach a [thread](/docs/threads/) of that channel, including a forum post, set `threadId` on the message. To start a new post in a forum or media channel instead, set `threadName`, and optionally `appliedTagIds`
@@ -82,7 +87,9 @@ export async function announceRelease(webhook: WebhookClient, version: string, t
 }
 ```
 
-A webhook that belongs to a forum or media channel must use exactly one of `threadName` and `threadId` on every message, and Fluxer rejects a message with neither. A webhook in a text channel needs neither, and Fluxer rejects `threadName` there. The SDK checks the combinations that it can see before any request: A message cannot combine `threadName` and `threadId`, `appliedTagIds` needs `threadName`, and a reply or forward cannot start a post, because the new post holds no earlier message. A post takes at most five tags. Fluxer rejects an unknown tag, a `moderated` tag (a webhook cannot manage threads) and a post without a tag in a channel that requires one
+A webhook that belongs to a forum or media channel must use exactly one of `threadName` and `threadId` on every message, and Fluxer rejects a message with neither. A webhook in a text channel needs neither, and Fluxer rejects `threadName` there
+
+The SDK checks the combinations that it can see before any request: A message cannot combine `threadName` and `threadId`, `appliedTagIds` needs `threadName`, and a reply or forward cannot start a post, because the new post holds no earlier message. A post takes at most five tags. Fluxer rejects an unknown tag, a `moderated` tag (a webhook cannot manage threads) and a post without a tag in a channel that requires one
 
 The `fetchMessage`, `editMessage` and `deleteMessage` methods look in the webhook's channel unless their options carry the `threadId` of the thread that holds the message
 
@@ -94,11 +101,34 @@ export async function reviseThreadNote(webhook: WebhookClient, messageId: string
 }
 ```
 
-Fluxer rejects a thread that belongs to another channel. Where threads are not active for the community, Fluxer can ignore `threadId` and post into the channel itself, which `threadsActive` on `guilds.fetchPage` reveals beforehand. The bot client's `rest.request` method refuses webhook token routes, so these options are the only way to reach a thread through a webhook
+Fluxer rejects a thread that belongs to another channel. The bot client's `rest.request` method refuses webhook token routes, so these options are the only way to reach a thread through a webhook
+
+## Pick an OAuth method
+
+Every step runs on the application server, which holds the client secret. The Effect API has the same methods
+
+| I want to | Use |
+| --- | --- |
+| Create a client for the application's ID and secret | [`oauth.create`](/docs/api/js-ts/oauth/#oauth-create) |
+| Send a user to Fluxer's consent page | [`oauth.createPkce`](/docs/api/js-ts/oauth/#oauth-createpkce), then [`authorizationUrl`](/docs/api/js-ts/oauth/#oauthclient-authorizationurl) |
+| Turn the callback's code into tokens | [`exchangeCode`](/docs/api/js-ts/oauth/#oauthclient-exchangecode) |
+| Get a new token pair before the access token expires | [`refresh`](/docs/api/js-ts/oauth/#oauthclient-refresh) |
+| End a user's tokens for the application | [`revoke`](/docs/api/js-ts/oauth/#oauthclient-revoke) |
+| Read who the user is | [`fetchIdentity`](/docs/api/js-ts/oauth/#oauthclient-fetchidentity) |
+| Check what a stored access token allows, without the client secret | [`fetchAuthorization`](/docs/api/js-ts/oauth/#oauthclient-fetchauthorization) |
+| List the user's communities | [`fetchGuilds`](/docs/api/js-ts/oauth/#oauthclient-fetchguilds) |
+| List the user's connected accounts | [`fetchConnections`](/docs/api/js-ts/oauth/#oauthclient-fetchconnections) |
+| Check whether a token is still active, with the client secret | [`introspect`](/docs/api/js-ts/oauth/#oauthclient-introspect) |
+| Read one community, its roles or the fuller profile | A server-side request with the access token, as [reading with a user token](/docs/webhooks-and-oauth/#reading-with-a-user-token) shows |
+| Stop the client and release its copy of the secret | [`shutdown`](/docs/api/js-ts/oauth/#oauthclient-shutdown), or `await using` |
 
 ## Create a user-consent URL
 
-OAuth sends a user to Fluxer to approve access, then back to the application's registered redirect URI with a one-use code. The application needs its client secret stored on the server, the exact registered redirect URI, an unpredictable `state` value that ties the callback to this request, and a fresh PKCE verifier and challenge, which prove that the same server finishes the exchange. Store the state and verifier together in a one-use server record before sending the user to the consent URL
+OAuth sends a user to Fluxer to approve access, then back to the application's registered redirect URI with a one-use code
+
+The application needs its client secret stored on the server, the exact registered redirect URI, an unpredictable `state` value that ties the callback to this request, and a fresh PKCE verifier and challenge, which prove that the same server finishes the exchange. Store the state and verifier together in a one-use server record before sending the user to the consent URL
+
+The redirect URI uses HTTPS, or HTTP for a loopback host or an IP address such as a LAN address. The SDK handles it as Fluxer does: It removes U+000C and U+202E and trims surrounding whitespace, then sends that text in the consent URL, which Fluxer compares exactly with the registered redirect URIs. The code exchange sends the URL's standard form, such as `https://example.test/` for `https://example.test`, because Fluxer keeps that form with the code
 
 ```ts
 import { oauth, OAuthScopes, type OAuthConfig } from "@neontechspace/fluxerly"
@@ -132,7 +162,7 @@ Adding `OAuthScopes.Bot` to the scopes asks the user to add the bot through the 
 
 ## Validate the callback before exchanging its code
 
-When Fluxer redirects the user back, the callback handler compares the returned state with the unused record from the previous step. Only on a match, consume that record and exchange the callback's code, using the original verifier and the exact redirect URI from the record
+When Fluxer redirects the user back, the callback handler compares the returned state with the unused record from the previous step. Only on a match, consume that record and exchange the callback's code, using the original verifier and the same redirect URI from the record. Pass it as it was passed to `authorizationUrl`, and the SDK sends the standard form that Fluxer kept with the code
 
 ```ts
 import { oauth, type OAuthConfig } from "@neontechspace/fluxerly"
@@ -162,11 +192,23 @@ An exchange code works once. A timeout, cancellation or lost response after the 
 
 </details>
 
-A rejected client ID or secret also logs one `rest.rejected` Warn record, while a rejected user access token is only returned, because it concerns one user. The OAuth client accepts the same `logging` option as a bot client
+A rejected client ID or secret also logs one `rest.rejected` Warn record, while a rejected user access token is only returned, because it concerns one user. The OAuth client accepts the same `logging` option as a bot client. At Debug, each OAuth request logs one `rest.request` record with its method, route, status and duration, never its query, form, body or `Authorization` value
 
-The `fetchIdentity`, `fetchGuilds`, `fetchConnections` and `introspect` methods are reads. Their failures set `details.read`, so `errors.isRetryable` can identify a transient failure without implying that tokens changed. OAuth requests are never retried automatically. Exchange, refresh and revoke requests with an unknown outcome remain unsafe to repeat. Discovery and OAuth transport failures retain only sanitized causes, including a safe transport code such as `ECONNRESET` when available, not the original error text
+To check a stored access token without the client secret, `fetchAuthorization` reads what the user authorized: The application, the granted scopes, when the token expires and, with the `identify` scope, the user. A rejected, expired or revoked token fails with reason `rejected` and HTTP 401
+
+The `fetchIdentity`, `fetchAuthorization`, `fetchGuilds`, `fetchConnections` and `introspect` methods are reads. Their failures set `details.read`, so `errors.isRetryable` can identify a transient failure without implying that tokens changed. OAuth requests are never retried automatically. Exchange, refresh and revoke requests with an unknown outcome remain unsafe to repeat. Discovery and OAuth transport failures retain only sanitized causes, including a safe transport code such as `ECONNRESET` when available, not the original error text
 
 The default API returns expected webhook and OAuth failures as `Result` values. Handle an `Err` where the helper is called, for example by logging `describeError(result.error)`, and never log the webhook token, client secret or verifier. Operation details are in the [webhook client reference](/docs/api/js-ts/invites-and-webhooks/#webhookclient) and the [OAuth client reference](/docs/api/js-ts/oauth/#oauthclient)
+
+Revoking a token revokes every access and refresh token for that user and application, so the user's other sessions with the application stop working too
+
+### Reading with a user token
+
+The OAuth client does not wrap `GET /guilds/{guild_id}`, `GET /guilds/{guild_id}/roles` or the fuller profile that `GET /users/@me` returns. A raw `client.rest.request` cannot replace them, because it always sends the bot token
+
+From the application server, call `fetch` with an `Authorization` header of `Bearer` followed by the user's access token. Build the URL from the selected instance's API base, such as `endpoints.apiPublic` from a bot client's `client.instance.resolve()`, then `/v1` and the route. The community routes need the `guilds` scope, and the current-user route needs `identify`, plus `email` for the email fields
+
+Check the response status and validate the body before using it, since the SDK neither decodes nor retries these requests. Keep the access token out of logs, error messages and URLs
 
 ## Wire it up
 

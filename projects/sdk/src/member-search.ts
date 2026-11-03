@@ -100,13 +100,15 @@ export interface MemberSearchHit {
     readonly username: string
     /** Indexed four-digit account discriminator */
     readonly discriminator: string
-    /** Indexed account-wide display name, null when absent. The display.name helper reads it */
+    /** Indexed account-wide display name, null when absent. The display.name helper reads it.
+     * Fluxer names it global_name
+     */
     readonly displayName: string | null
     /** Indexed community nickname, null when absent */
     readonly nickname: string | null
     /** Explicit indexed role IDs, not effective permissions or the implicit everyone role */
     readonly roleIds: readonly string[]
-    /** Indexed community-join time as a nonnegative whole Unix-second value */
+    /** Indexed community-join time as a nonnegative whole Unix-second value. Fluxer names it joined_at */
     readonly joinedAtSeconds: number
     /** Indexed bot classification */
     readonly isBot: boolean

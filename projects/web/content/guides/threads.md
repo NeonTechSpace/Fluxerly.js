@@ -8,7 +8,7 @@ A thread is a channel inside a text, announcement, forum or media channel that h
 
 The `client.threads` namespace creates, changes, lists and searches threads and manages their members. A thread is still a channel, so `channels.fetch` reads one, `channels.delete` deletes one and `messages.send` with the thread's ID posts in it. Bots can use threads without a capability setting
 
-The examples use the default API. The Effect entry point exports the same names, and each `client.threads` method returns an Effect there
+The examples use the default API. The Effect entry point exports the same names. Its `client.threads` methods return Effects, except `threads.iterateArchived` and `threads.iterateMembers`, which return Streams
 
 ## Recognize a thread
 
@@ -76,7 +76,7 @@ export async function discussIn(client: Client, message: Message) {
 
 ## Create a forum post
 
-In a forum or media channel, `threads.createPost` creates a post: A public thread together with its first message. The message takes the same content, embeds, files and stickers as `messages.send`, and files go in the same request. The `appliedTagIds` setting applies up to 5 of the channel's tags. The [forum channel guide](/docs/forum-channels/) describes the tags and settings a forum channel has
+In a forum or media channel, `threads.createPost` creates a post: A public thread together with its first message. The message takes the same content, embeds, files and stickers as `messages.send`, can be a [voice note](/docs/messages/#mark-media-as-explicit-or-send-a-voice-note), and its files go in the same request. The `appliedTagIds` setting applies up to 5 of the channel's tags. The [forum channel guide](/docs/forum-channels/) describes the tags and settings a forum channel has
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -93,6 +93,8 @@ export async function reportCrash(client: Client, forumId: string, tagId: string
     return post.map(({ thread, message }) => ({ postId: thread.id, messageId: message.id }))
 }
 ```
+
+After a timeout or lost response, `threads.create` and `threads.createPost` may already have created the thread, and repeating them can create a second one. Read the channel's threads before repeating, and treat a failed read as still unknown. The `threads.createFromMessage` method cannot create a second thread for one message, and `channels.fetch(message.id)` shows whether it exists. If a separate `messages.send` fails after `threads.create` or `threads.createFromMessage` succeeds, the thread remains. If `threads.createPost` fails while sending its first message, Fluxer removes the new post again, so listeners see a thread create event followed by a thread delete event for it. See [uncertain writes](/docs/reliability/#send-once-when-the-outcome-is-uncertain)
 
 ## Archive, lock and pin threads
 
@@ -112,24 +114,24 @@ Setting `pinned` to `true` pins a forum or media post at the top of its channel,
 
 The `threads.fetchActive` method returns every active thread the bot can view in a community, newest first. A private thread appears only when the bot joined it or can manage threads in its parent channel
 
-The `threads.fetchArchived` method returns one page of archived threads of a channel. Its `scope` selects public threads, private threads or the private threads the bot joined. Reading them needs `ReadMessageHistory`, and the `private` scope also needs `ManageThreads`. The `public` and `private` scopes list the most recently archived threads first, so pass the last thread's `archiveTimestamp` as `before` to read the next page. The `joinedPrivate` scope lists the newest threads first, so pass the last thread's `id` as `before` instead
+The `threads.fetchArchived` method returns one page of archived threads of a channel. Its `scope` selects public threads, private threads or the private threads the bot joined. Reading them needs `ReadMessageHistory`, and the `private` scope also needs `ManageThreads`. The `public` and `private` scopes list the most recently archived threads first, and the `joinedPrivate` scope lists the newest threads first
+
+The `threads.iterateArchived` method reads every page up to `maxItems` in the same order, and takes the same `scope` and starting `before`. It picks each next cursor itself: The last thread's archive time for `public` and `private`, and its ID for `joinedPrivate`. Threads archived in the same millisecond are all read unless more of them than a full page share it, and each thread is delivered once
 
 ```ts
 import type { Client, GuildThreadChannel } from "@neontechspace/fluxerly"
 
-export async function archivedThreads(client: Client, channelId: string, maxPages = 5) {
+export async function archivedThreads(client: Client, channelId: string) {
     const threads: GuildThreadChannel[] = []
-    let before: string | undefined
-    for (let page = 0; page < maxPages; page++) {
-        const result = await client.threads.fetchArchived(channelId, before === undefined ? {} : { before })
+    for await (const result of client.threads.iterateArchived(channelId, { maxItems: 500 })) {
         if (result.isErr()) return result
-        threads.push(...result.value.threads)
-        before = result.value.threads.at(-1)?.archiveTimestamp
-        if (!result.value.hasMore || before === undefined) break
+        threads.push(result.value)
     }
     return threads
 }
 ```
+
+To read pages one at a time with `threads.fetchArchived` instead, pass the last thread's `archiveTimestamp`, or its `id` for `joinedPrivate`, as `before`. Fluxer reads that cursor as strictly before, so a thread archived in the same millisecond as the last one is skipped
 
 In every list, a thread the bot joined has `membership` set
 
@@ -137,7 +139,7 @@ In every list, a thread the bot joined has `membership` set
 
 The `threads.search` method finds threads of a text, announcement, forum or media channel by name, tags and archive state, and returns one page. In a forum or media channel, the page's `firstMessages` holds the posts' first messages that still exist. Searching needs `ReadMessageHistory`
 
-When a community has no thread search index yet, Fluxer starts building one and the result has `indexing` set to `true` and no threads. The SDK does not retry, so search again later
+When a community has no thread search index yet, Fluxer starts building one and the result has `indexing` set to `true`, no threads and `retryAfterMs`, the wait Fluxer suggests. The SDK does not retry, so search again after that wait
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -171,7 +173,7 @@ export async function memberNames(client: Client, threadId: string) {
 
 ## Find the thread a message started
 
-A message that started a thread has the `MessageFlags.HasThread` bit, and its `thread` field holds that thread while it exists. When someone starts a public or announcement thread, Fluxer also posts a `MessageType.ThreadCreated` notice in the parent channel. The notice's content is the thread name and its `messageReference` names the thread. Prefix commands never run for such a notice
+A message that started a thread has the `MessageFlags.HasThread` bit, and its `thread` field holds that thread while it exists. A public or announcement thread started without a message posts a `MessageType.ThreadCreated` notice in the parent channel. A thread started from a message posts it only when that message is not among the channel's five newest messages, and a forum or media post never does. The notice's content is the thread name and its `messageReference` names the thread. To react to new threads, handle `threadCreate` and check `isNewlyCreated`, as [Follow threads](/docs/events-and-collectors/#follow-threads) shows. Prefix commands never run for such a notice
 
 ```ts
 import { MessageFlags, type Message } from "@neontechspace/fluxerly"

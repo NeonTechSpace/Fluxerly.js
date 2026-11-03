@@ -48,7 +48,7 @@ for (const mode of modes) {
         const client = await setup(mode)
         let calls = 0
         stubFetchWithHostedDiscovery(async (url, init) => {
-            expect(url).toBe("https://api.fluxer.app/v1/guilds/20/members/30")
+            expect(url).toBe("https://fluxer.com/api/v1/guilds/20/members/30")
             expect(init.method).toBe("PATCH")
             return Response.json(
                 { user: { id: "30", username: "fixture" }, roles: [], joined_at: "2026-09-08T12:00:00Z" },
@@ -178,7 +178,9 @@ for (const mode of modes) {
         expect(calls).toBe(5)
     })
 
-    test(`${mode}: a precise 429 body schedules the route retry before its rounded header`, async () => {
+    // Fluxer rounds its header up from the precise body, and a proxy may answer for longer than a body it passes on,
+    // so the longer of the two waits is kept
+    test(`${mode}: a 429 body shorter than its Retry-After header waits for the header`, async () => {
         const client = await setup(mode)
         let calls = 0
         stubFetchWithHostedDiscovery(async () => {
@@ -191,7 +193,7 @@ for (const mode of modes) {
         const operation = outcome(client.messages.typing("20"))
         await vi.advanceTimersByTimeAsync(0)
         expect(calls).toBe(1)
-        await vi.advanceTimersByTimeAsync(427)
+        await vi.advanceTimersByTimeAsync(999)
         expect(calls).toBe(1)
         await vi.advanceTimersByTimeAsync(1)
         expect(await operation).toEqual({ value: undefined })

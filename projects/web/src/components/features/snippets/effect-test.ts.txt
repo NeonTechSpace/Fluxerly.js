@@ -1,10 +1,11 @@
+import assert from "node:assert/strict"
+import { test } from "node:test"
 import { Effect } from "effect"
 import { createTestBot } from "@neontechspace/fluxerly/effect/testing"
 
-export const pingTest = Effect.scoped(
+const pingTest = Effect.scoped(
     Effect.gen(function* () {
         const bot = yield* createTestBot({
-            token: process.env.FLUXER_BOT_TOKEN,
             events: {
                 messageCreate: ({ message, reply }) =>
                     message.content !== "!ping" ? Effect.void : reply("Pong!"),
@@ -17,3 +18,9 @@ export const pingTest = Effect.scoped(
         return { replies: replies.map((message) => message.content), ignored: ignored.length }
     }),
 )
+
+test("!ping replies Pong! and other messages get no reply", async () => {
+    const { replies, ignored } = await Effect.runPromise(pingTest)
+    assert.deepEqual(replies, ["Pong!"])
+    assert.equal(ignored, 0)
+})

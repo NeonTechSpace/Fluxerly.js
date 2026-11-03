@@ -290,7 +290,7 @@ test("REST requests produce Debug records with route templates, and retries and 
     })
     expect(client.diagnostics().counters).toMatchObject({ restRetries: 1, rateLimitWaits: 1 })
     const serialized = JSON.stringify(records)
-    for (const hidden of [token, "api.fluxer.app", "/channels/20"]) expect(serialized).not.toContain(hidden)
+    for (const hidden of [token, "fluxer.com/api", "/channels/20"]) expect(serialized).not.toContain(hidden)
 })
 
 test("native records keep the real Cause and fluxerly annotations, and chosen Debug records pass the Effect minimum", async () => {
@@ -341,8 +341,12 @@ test("overflow policies drop and record events, and unmanaged sources report the
     const records: LogRecord[] = []
     const logger = configured({ sink: (record: LogRecord) => records.push(record), dedupe: false })
     const bus = new EventBus(() => logger)
-    const oldest = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 2, overflow: "dropOldest" }))
-    const newest = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 2, overflow: "dropNewest" }))
+    const oldest = Effect.runSync(
+        bus.open("typingStart", { maxPendingMessages: 2, overflow: "dropOldest" }, { handler: true }),
+    )
+    const newest = Effect.runSync(
+        bus.open("typingStart", { maxPendingMessages: 2, overflow: "dropNewest" }, { handler: true }),
+    )
     const stopping = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 2 }))
     for (const timestamp of [1, 2, 3, 4])
         bus.offer("typingStart", { channelId: "1", userId: "2", timestamp } as never, 10)
@@ -442,6 +446,25 @@ test("dedupe eviction reports the evicted record's suppressed repeats instead of
     expect(first.map((record) => record.fields?.repeated)).toEqual([undefined, 2])
 })
 
+test("deduplication shows a failure with a new cause at once and still collapses repeats of the same cause", () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"))
+    const { logger, records } = collect({ dedupe: { windowMs: 60_000 } })
+    // An application that wraps every failure in one stable outer error
+    const failed = (cause: string) =>
+        logger.log({
+            level: "error",
+            category: "events",
+            code: "events.test" as LogCode,
+            message: "Saving failed",
+            error: new Error("Saving failed", { cause: new Error(cause) }),
+        })
+    failed("Connection refused")
+    failed("Permission rejected")
+    failed("Permission rejected")
+    expect(records.map((record) => record.error?.cause?.message)).toEqual(["Connection refused", "Permission rejected"])
+})
+
 test("deferred repeat summaries follow thresholds that configure lowered after the repeats", () => {
     vi.useFakeTimers({ toFake: ["Date"] })
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"))
@@ -504,7 +527,7 @@ test.each(["default", "native"] as const)(
     async (mode) => {
         const webhookToken = "webhook-canary-secret-value"
         const authorization = "Bot Mzk0NTQ2.header-canary.token-value"
-        const failure = Object.assign(new Error(`POST https://api.fluxer.app/v1/webhooks/123/${webhookToken} failed`), {
+        const failure = Object.assign(new Error(`POST https://fluxer.com/api/v1/webhooks/123/${webhookToken} failed`), {
             config: { headers: { Authorization: authorization } },
         })
         const printed: string[] = []

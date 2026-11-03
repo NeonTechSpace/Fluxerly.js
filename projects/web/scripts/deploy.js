@@ -170,7 +170,7 @@ async function upload(settings, source, progress) {
         }
         if (record?.pages_project !== settings.project || !deploymentId.test(record?.deployment_id ?? "")) {
             throw new Error(
-                "Upload outcome is unknown; reconcile this source and branch in Cloudflare before another upload",
+                "Upload outcome is unknown. Reconcile this source and branch in Cloudflare before another upload",
             )
         }
         return record.deployment_id
@@ -222,7 +222,7 @@ export async function deploySite(env = process.env, io = {}) {
     }
     const artifact = await measureLocalArtifact(join(webRoot, "dist"), { readdir: list, lstat: inspect })
     progress(`Local site artifact: ${artifact.fileCount} files, ${artifact.totalBytes} bytes ` +
-        `(largest file ${artifact.largestFileBytes} bytes); local preflight ${elapsed(now() - localStarted)}`)
+        `(largest file ${artifact.largestFileBytes} bytes). Local preflight took ${elapsed(now() - localStarted)}`)
     const base = `https://api.cloudflare.com/client/v4/accounts/${settings.account}/pages/projects/${settings.project}`
     async function get(url, authenticated, timeout, redirect = "error") {
         let response
@@ -336,10 +336,10 @@ export async function deploySite(env = process.env, io = {}) {
     progress("Uploading the checked site artifact with Wrangler")
     let id
     try { id = await publish(settings, source, progress) } catch {
-        throw new Error("Upload outcome is unknown; reconcile this source and branch in Cloudflare before another upload")
+        throw new Error("Upload outcome is unknown. Reconcile this source and branch in Cloudflare before another upload")
     }
     if (!deploymentId.test(id ?? ""))
-        throw new Error("Upload identity is unknown; reconcile Cloudflare before another upload")
+        throw new Error("Upload identity is unknown. Reconcile Cloudflare before another upload")
     progress(`Wrangler completed in ${elapsed(now() - wranglerStarted)} (not a network transfer measurement)`)
     progress("Upload acknowledged. Verifying the exact deployment")
     const readbackStarted = now()
@@ -363,7 +363,7 @@ export async function deploySite(env = process.env, io = {}) {
                 throw new Error("Uploaded deployment identity does not match the checked Production target")
             if (["failure", "canceled"].includes(deployment.latest_stage?.status))
                 throw new Error(
-                    "Cloudflare deployment failed or was canceled; inspect it before another upload",
+                    "Cloudflare deployment failed or was canceled. Inspect it before another upload",
                 )
             if (deployment.latest_stage?.name === "deploy" && deployment.latest_stage.status === "success") {
                 const deploymentUrl = deploymentOrigin(project, deployment)
@@ -385,7 +385,7 @@ export async function deploySite(env = process.env, io = {}) {
         }
     }
     throw new Error(
-        `Site readback did not converge for deployment ${id}; reconcile its status and custom-domain routing before another upload`,
+        `Site readback did not converge for deployment ${id}. Reconcile its status and custom-domain routing before another upload`,
     )
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -400,7 +400,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } catch (error) {
         console.error(
             error instanceof ReadUnavailable
-                ? "Cloudflare preflight is unavailable; no upload was started"
+                ? "Cloudflare preflight is unavailable. No upload was started"
                 : error.message,
         )
         process.exitCode = 1

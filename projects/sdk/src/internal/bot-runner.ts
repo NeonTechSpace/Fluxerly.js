@@ -48,7 +48,7 @@ const handlerOptionKeys = [
  */
 function validateBotEvent(event: string, options: Readonly<Record<string, unknown>>, bus: EventBus) {
     const { onError, partitionReady, ...delivery } = options
-    const opened = Effect.runSyncExit(bus.open(event as EventName, delivery, { partitionReady }))
+    const opened = Effect.runSyncExit(bus.open(event as EventName, delivery, { partitionReady, handler: true }))
     if (Exit.isFailure(opened)) {
         const reason = opened.cause.reasons.find((reason) => reason._tag === "Fail")
         if (reason?._tag === "Fail" && reason.error instanceof ConfigurationError) throw reason.error
@@ -156,7 +156,7 @@ export const botOptionKeys = [
     "drainMs",
 ] as const
 
-/** How long a requested stop lets running work finish by default, within the 10 seconds Docker and similar tools wait */
+/** How long a requested stop lets running work finish by default */
 const defaultBotDrainMs = 5_000
 
 /** Check the client settings with createClient's rules before the runner adds signal listeners or creates a client.

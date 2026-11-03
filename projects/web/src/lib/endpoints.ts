@@ -3,7 +3,7 @@
 import endpointsSource from "@content/reference/endpoints.json?raw"
 
 /** What a reader can use when no Fluxerly method sends a route */
-export type EndpointFallback = "rest" | "noToken" | "oauth2" | "webhookToken"
+export type EndpointFallback = "rest" | "noToken" | "oauth2" | "webhookToken" | "ownerOnly" | "voiceServer"
 
 export interface EndpointRoute {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
@@ -13,6 +13,8 @@ export interface EndpointRoute {
     docs: string | null
     methods: { name: string; url: string }[]
     fallback?: EndpointFallback
+    /** What the row says instead of the plain fallback */
+    note?: string
 }
 
 export interface EndpointArea {

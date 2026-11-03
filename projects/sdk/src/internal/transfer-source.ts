@@ -90,6 +90,8 @@ export class AttachmentTransferSource {
     /** Byte inputs are snapshot-owned and can recreate a fully consumed inline body after a confirmed rate-limit rejection */
     readonly replayable: boolean
     #streamReader: AttachmentStreamReader | undefined
+    /** Whether an upload took a reader from the caller's stream, after which no later call can read it whole */
+    #streamTaken = false
     #streamPending: Uint8Array | undefined
     #streamOffset = 0
     #streamPosition = 0
@@ -98,6 +100,11 @@ export class AttachmentTransferSource {
     constructor(private readonly file: FilePart) {
         this.size = file.size
         this.replayable = file.source.kind === "bytes"
+    }
+
+    /** Whether an upload read the caller's ReadableStream, so repeating the operation cannot send it again */
+    get streamRead(): boolean {
+        return this.#streamTaken
     }
 
     async #closeStream(cancel: boolean) {
@@ -128,6 +135,7 @@ export class AttachmentTransferSource {
         if (!isAttachmentStreamReader(reader))
             throw new Error("The attachment stream getReader() result must have read, cancel, and releaseLock methods")
         this.#streamReader = reader
+        this.#streamTaken = true
         return reader
     }
 

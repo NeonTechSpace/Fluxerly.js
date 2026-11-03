@@ -153,6 +153,12 @@ const place = (x: number, y: number, size: number) =>
     import { getExperience, subscribeExperience } from "../lib/experience"
 
     const lost = document.querySelector<HTMLElement>("[data-lost]")
+    // The footer's height changes as its lines wrap, so the page fills one screen with the footer it really has
+    const footer = document.querySelector<HTMLElement>(".site-footer")
+    if (lost && footer) {
+        const zoom = () => Number.parseFloat(getComputedStyle(document.body).zoom) || 1
+        new ResizeObserver(() => lost.style.setProperty("--footer", `${footer.getBoundingClientRect().height / zoom()}px`)).observe(footer)
+    }
     if (lost) {
         // Still, chosen or asked for by the system, stops everything in the picture
         const update = () => lost.toggleAttribute("data-still", getExperience() === "still")
@@ -181,9 +187,10 @@ const place = (x: number, y: number, size: number) =>
 <style>
     .lost {
         --accent: var(--color-cyan);
-        /* The fixed header above and the footer below, so the page fills one screen between them */
+        /* The fixed header above and the footer below, so the page fills one screen between them. The script measures the
+           footer, and this is its height before that */
         --header: 76px;
-        --footer: 170px;
+        --footer: 100px;
 
         /* The picture's height follows the screen, so the words beside it never need a scroll on a short laptop */
         --tall: min(560px, calc(100svh / var(--page-zoom, 1) - var(--header) - var(--footer) - 88px));

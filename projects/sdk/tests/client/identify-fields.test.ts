@@ -103,6 +103,20 @@ describeBothApis("Identify fields", (mode) => {
         ])
     })
 
+    test("names the mention exception when an explicit list suppresses messageCreate", async () => {
+        const logs = captureLogs()
+        await start({ logging: logs.logging, gateway: { ignoredEvents: ["MESSAGE_CREATE"] } }, mode, (client) =>
+            subscribe(mode, client, "messageCreate"),
+        )
+        // Fluxer still sends messages that mention the bot, so the Warn must not say the handler receives nothing at all
+        expect(logs.withCode("gateway.ignoredEventRegistered")).toEqual([
+            expect.objectContaining({
+                fields: { events: "messageCreate" },
+                message: expect.stringContaining("@everyone"),
+            }),
+        ])
+    })
+
     test("automatic filtering keeps registered events, SDK needs and cache categories, re-evaluated per session", async () => {
         const clock = sdkClock()
         const { server, client } = await start(
@@ -185,9 +199,10 @@ describe("gateway option validation", () => {
         ).toBe(true)
     })
 
-    test("maps every public event except raw to the dispatch types that deliver it", async () => {
-        // Type-level completeness: adding a public event without a mapping fails the test typecheck
-        type Unmapped = Exclude<EventName, "raw" | MappedEvent>
+    test("maps every public event except raw and gatewayError to the dispatch types that deliver it", async () => {
+        // Type-level completeness: adding a public event without a mapping fails the test typecheck. A gatewayError
+        // frame is opcode 12, not a dispatch, so Identify filtering never applies to it
+        type Unmapped = Exclude<EventName, "raw" | "gatewayError" | MappedEvent>
         const complete: [Unmapped] extends [never] ? true : Unmapped = true
         expect(complete).toBe(true)
         // Runtime: every mapped name is an event the bus accepts, so a renamed event cannot hide in the map

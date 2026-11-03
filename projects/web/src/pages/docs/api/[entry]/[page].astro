@@ -95,10 +95,10 @@ const searchDescription = declaration
         {
             declaration && (
                 <>
-                    <DocText doc={declaration.doc} part="lead" self={declaration.url} />
+                    <DocText doc={declaration.doc} part="lead" self={declaration.url} brief />
                     <pre class="ref-sig"><code set:html={fitted((width) => declarationHtml(declaration.kind === "class" ? "class" : "interface", declaration.name, { tp: declaration.tp, extends: declaration.extends, implements: declaration.implements }, width))} /></pre>
-                    <DocText doc={declaration.doc} part="body" self={declaration.url} />
-                    <DocText doc={declaration.doc} part="rest" self={declaration.url} />
+                    <DocText doc={declaration.doc} part="body" self={declaration.url} brief />
+                    <DocText doc={declaration.doc} part="rest" self={declaration.url} fold={declaration.name} />
                     {sections.map((section) => (
                         <section class="ref-group">
                             <Heading level={2} id={section.id}>{section.title}</Heading>

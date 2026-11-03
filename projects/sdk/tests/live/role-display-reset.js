@@ -13,8 +13,9 @@ import {
     processValue,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const journalFile = openJournal("role-reset")
@@ -57,7 +58,7 @@ async function cleanup() {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, check: stage, passed: false, reason: "deadline", cleanupVerified: false }))
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
@@ -84,6 +85,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         stage = "original_display_preflight"
@@ -123,7 +125,7 @@ try {
             let dispatches = 0
             globalThis.fetch = async (request, options) => {
                 const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
-                if (options?.method !== "DELETE" || url.pathname !== `/v1/guilds/${guildId}/roles/hoist-positions`)
+                if (options?.method !== "DELETE" || url.pathname !== `/api/v1/guilds/${guildId}/roles/hoist-positions`)
                     return rawFetch(request, options)
                 dispatches++
                 assert.equal(dispatches, 1)

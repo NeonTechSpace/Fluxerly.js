@@ -20,6 +20,7 @@ import * as Pull from "effect/Pull"
 import * as Random from "effect/Random"
 import * as Schedule from "effect/Schedule"
 import type { ConnectionState } from "#sdk/client"
+import type { GatewayErrorEvent, RawDispatchEvent } from "#sdk/events"
 import {
     ClientClosedError,
     ConnectionError,
@@ -35,6 +36,7 @@ import type { Configuration } from "../configuration.js"
 import type { CountOwner } from "../counts.js"
 import { failures, mapCause, mapFailureCause, withDeadline } from "../effect-failures.js"
 import type { EventBus } from "../events.js"
+import { documentedDispatchTypes } from "../gateway/documented-dispatches.js"
 import { primaryFault } from "../failures.js"
 import { AttemptFailure, runGatewaySession, type Session } from "../gateway.js"
 import { gatewayUrl, type InstanceResolver } from "../instance.js"
@@ -166,7 +168,8 @@ function attemptExplanation(failure: AttemptFailure): string {
     const closeCode = attemptCloseCode(failure)
     if (closeCode !== undefined) {
         const info = closeCodeInfo(closeCode)
-        return `Close code ${closeCode} (${info.name}): ${info.meaning}`
+        const reason = failure.closeReason === undefined ? "" : ` (Fluxer's reason: ${failure.closeReason})`
+        return `Close code ${closeCode} (${info.name}): ${info.meaning}${reason}`
     }
     if (error instanceof ConnectionError) {
         const detail = error.details.detail
@@ -213,6 +216,16 @@ function retryableDiscovery(error: unknown): boolean {
     return error instanceof RateLimitError || (error instanceof ConnectionError && retryableConnection(error))
 }
 
+/** Whether an attempt ended because Fluxer rate-limited discovery and said how long to wait */
+function discoveryLimit(failure: AttemptFailure): boolean {
+    return (
+        failure.failure instanceof RateLimitError &&
+        failure.failure.source === "http" &&
+        failure.failure.retryAfterMs !== null &&
+        failure.failure.retryAfterMs > 0
+    )
+}
+
 /** The failure kind that log records name */
 function failureClassification(failure: AttemptFailure): string {
     return failure.failure instanceof ConnectionError ? failure.failure.reason : failure.failure._tag
@@ -231,6 +244,8 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
         const now = () => nowMs(clock)
         const intake = shardIntake(host.caches)
         let established = options.established ?? false
+        /** Startup attempts that ended because discovery was rate-limited with a wait */
+        let limitedDiscoveries = 0
         /** Whether startup has used a saved session, until readiness, including a fallback after partial replay */
         let restoredSession = false
         let attempts = 0
@@ -355,7 +370,11 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
         /** Stop when this failure allows no retry, logging why unless a larger plan replaces the shard. Returns whether it stopped */
         const stopRetrying = (failure: AttemptFailure, outcome: string, reported: AttemptFailure["failure"]) => {
             const protocolLimited = failure.retry && protocolFailures >= protocolFailureLimit
-            if (failure.retry && !protocolLimited && (established || attempts < configuration.maxStartupAttempts))
+            if (
+                failure.retry &&
+                !protocolLimited &&
+                (established || attempts - limitedDiscoveries < configuration.maxStartupAttempts)
+            )
                 return false
             shard.recovery = null
             // Automatic sharding answers sharding required with a larger plan, which the client logs itself
@@ -366,7 +385,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             if (reshard === true) return true
             logConnectionEnded(
                 failure,
-                `${outcome}. ${protocolLimited ? `The SDK stops retrying after ${protocolFailures} connections in a row ended with invalid gateway data` : failure.retry ? `The SDK stops retrying after ${attempts} attempts (connection.maxStartupAttempts)` : reshard === undefined ? "The SDK does not retry this failure" : `Automatic sharding does not move to a larger plan, because ${reshard}`}`,
+                `${outcome}. ${protocolLimited ? `The SDK stops retrying after ${protocolFailures} connections in a row ended with invalid gateway data` : failure.retry ? `The SDK stops retrying after ${attempts - limitedDiscoveries} attempts (connection.maxStartupAttempts)` : reshard === undefined ? "The SDK does not retry this failure" : `Automatic sharding does not move to a larger plan, because ${reshard}`}`,
                 reported,
             )
             return true
@@ -492,9 +511,41 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                                 shardId: shard.shardId,
                                 fields: { dispatch: t, sequence: s, bytes },
                             })
+                        // documented says whether GatewayDispatchPayloads types d, which checks nothing about d itself
+                        const dispatch = { shardId: shard.shardId, t, s, d, documented: documentedDispatchTypes.has(t) }
                         host.events.offer(
                             "raw",
-                            Object.freeze({ shardId: shard.shardId, t, s, d }),
+                            Object.freeze(dispatch) as RawDispatchEvent,
+                            bytes,
+                            shard.shardId,
+                            shard.sessionEpoch,
+                        )
+                    },
+                    onGatewayError: (d, bytes) => {
+                        const subscribed = host.events.hasSources("gatewayError")
+                        const code =
+                            typeof d === "object" &&
+                            d !== null &&
+                            "code" in d &&
+                            typeof d.code === "string" &&
+                            /^[A-Z0-9_]{1,64}$/.test(d.code)
+                                ? d.code
+                                : null
+                        if (logger.enabled(subscribed ? "debug" : "warn", "gateway"))
+                            logger.log({
+                                level: subscribed ? "debug" : "warn",
+                                category: "gateway",
+                                code: "gateway.gatewayError",
+                                message: subscribed
+                                    ? `Delivering a Gateway Error frame${code ? ` with code ${code}` : ""}`
+                                    : `Fluxer sent a Gateway Error frame${code ? ` with code ${code}` : ""}, which reports a refused voice join, and no gatewayError subscription receives it`,
+                                shardId: shard.shardId,
+                                fields: { code, bytes },
+                            })
+                        if (!subscribed) return
+                        host.events.offer(
+                            "gatewayError",
+                            Object.freeze({ shardId: shard.shardId, d }) as GatewayErrorEvent,
                             bytes,
                             shard.shardId,
                             shard.sessionEpoch,
@@ -574,6 +625,9 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             const lost = established && connectedAt !== undefined
             const outcome = `Shard ${shard.shardId} ${lost ? "lost its connection" : "could not connect"}. ${attemptExplanation(failure)}`
             recordAttemptEnd(failure)
+            // A discovery that Fluxer rate-limited with a wait is not a failed connection, so it does not use up
+            // connection.maxStartupAttempts. The startup deadline still bounds how long startup waits
+            if (!established && discoveryLimit(failure)) limitedDiscoveries += 1
             const reported =
                 !established && failure.failure instanceof ConnectionTimeoutError
                     ? new ConnectionTimeoutError(startupTimeoutMs)
@@ -596,7 +650,9 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                 }
                 delay = Math.max(decided, requiredWait)
             } else {
-                const ceiling = established ? backoffCeiling(recoveryStep++, recovery) : backoffCeiling(attempts - 1)
+                const ceiling = established
+                    ? backoffCeiling(recoveryStep++, recovery)
+                    : backoffCeiling(Math.max(0, attempts - limitedDiscoveries - 1))
                 delay = retryDelay(ceiling, yield* Random.next, requiredWait)
             }
             if (!established && delay >= deadline - now()) {

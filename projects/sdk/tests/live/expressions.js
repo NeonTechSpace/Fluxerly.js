@@ -14,9 +14,10 @@ import {
     openJournal,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -118,7 +119,7 @@ async function cleanup() {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
-}, 240_000).unref()
+}, harnessWatchdogMs()).unref()
 try {
     lock = acquireLock()
     const sandbox = loadSandboxEnvironment()
@@ -134,6 +135,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = {
@@ -173,6 +175,7 @@ try {
                     client.on(event, (snapshot) => Effect.sync(() => observe(snapshot))).pipe(Scope.provide(scope)),
                 )
         }
+        stage = "gateway_connect"
         await value(client.connect())
         let sticker, emoji
         for (const kind of ["emojis", "stickers"]) {
@@ -304,10 +307,14 @@ try {
                 ]),
             )
             assert.equal(batch.success.length, 1)
-            assert.deepEqual(batch.failed, [{ name: bad.name }])
             good.ids.push(batch.success[0].id)
-            bad.rejected = true
+            // Record the outcome before asserting the failed item's shape, so a cleanup never has to resolve it
+            bad.rejected = batch.failed.some((item) => item.name === bad.name)
             save()
+            assert.equal(batch.failed.length, 1)
+            assert.equal(batch.failed[0].name, bad.name)
+            assert.equal(typeof batch.failed[0].providerMessage, "string")
+            assert.ok(batch.failed[0].providerMessage.length > 0)
             const readback = (await api("GET", `/guilds/${guildId}/${kind}`)).data
             assert.ok(readback.some((item) => item.id === good.ids[0]))
             assert.ok(!readback.some((item) => item.name === bad.name))

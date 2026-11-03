@@ -308,3 +308,16 @@ test("argument descriptors with contradictory bounds, defaults or custom setting
         snapshotCommandArguments({ first: { type: "integer", default: 1 }, second: { type: "integer" } }),
     ).toThrow(ConfigurationError)
 })
+
+// The schema reads only own enumerable string keys, so hidden metadata is refused rather than silently ignored
+test("an argument schema with a non-enumerable or symbol key is refused, and inherited keys are ignored", () => {
+    const hidden = Object.defineProperty({ text: { type: "text" } }, "metadata", { value: {}, enumerable: false })
+    expect(() => snapshotCommandArguments(hidden as never)).toThrow(ConfigurationError)
+    expect(() => snapshotCommandArguments({ text: { type: "text" }, [Symbol("metadata")]: {} } as never)).toThrow(
+        ConfigurationError,
+    )
+    const inherited = Object.assign(Object.create({ metadata: { type: "text" } }), { text: { type: "text" } })
+    expect(commandArgumentMetadata(snapshotCommandArguments(inherited))?.map((argument) => argument.name)).toEqual([
+        "text",
+    ])
+})

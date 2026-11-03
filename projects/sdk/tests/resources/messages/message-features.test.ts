@@ -158,7 +158,7 @@ test.each(modes)(
             embedIndices,
         })
         expect(forwarded.messageSnapshots?.[0]?.content).toBe("captured")
-        expect(requests[0]).toMatchObject({ url: "https://api.fluxer.app/v1/channels/20/messages", method: "POST" })
+        expect(requests[0]).toMatchObject({ url: "https://fluxer.com/api/v1/channels/20/messages", method: "POST" })
         expect(requests[0]?.body.message_reference).toEqual({
             message_id: "10",
             channel_id: "30",
@@ -330,6 +330,9 @@ test.each(modes)(
                 unwrap(await client.messages.edit({ id: "99", channelId: "20" }, { flags: 0 }))
                 const rejected = await client.messages.send("20", { content: "voice", flags: 1 << 13 })
                 expect(rejected.isErr() && rejected.error).toMatchObject({ _tag: "MessageError", reason: "input" })
+                // A voice note cannot have content, as Fluxer's MessageValidationService checks first
+                const error = rejected.isErr() ? rejected.error : undefined
+                expect(error?._tag === "MessageError" ? error.inputValidation?.path : undefined).toBe("content")
             } finally {
                 unwrap(await client.shutdown())
             }

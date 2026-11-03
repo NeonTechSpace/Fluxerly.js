@@ -4,6 +4,7 @@ import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest"
 import {
     ClientClosedError,
     ConfigurationError,
+    createClient,
     type EventContext,
     type EventMap,
     type EventName,
@@ -407,6 +408,37 @@ describe.each(modes)("%s test client", (mode) => {
         )
     }, 20_000)
 
+    test("idle and next reject an unknown wait option, so a misspelled timeoutMs cannot remove the deadline", async () => {
+        const driver = await open(mode)
+        const route = driver.test.rest.respond("GET /users/@me", { body: driver.test.fixtures.botUser() })
+        const misspelled = { timeOutMs: 20 } as never
+        const run = (wait: () => unknown) => async () => {
+            const result = wait()
+            if (Effect.isEffect(result)) await Effect.runPromise(result as Effect.Effect<unknown>)
+            else await result
+        }
+        for (const wait of [() => driver.test.idle(misspelled), () => route.next(misspelled)]) {
+            const error = await misuse(run(wait))
+            expect(error).toBeInstanceOf(ConfigurationError)
+            expect(error).toMatchObject({ hint: expect.stringContaining('Did you mean "timeoutMs"?') })
+        }
+    })
+
+    test("guild create, update and delete reach the shard their community ID routes to", async () => {
+        const driver = await open(mode, { sharding: { totalShards: 2, shardIds: [1] } })
+        const shards: Record<string, number[]> = { guildCreate: [], guildUpdate: [], guildDelete: [] }
+        for (const event of ["guildCreate", "guildUpdate", "guildDelete"] as const)
+            await driver.on(event, (_value, context) => void shards[event]!.push(context.shardId))
+        await driver.ready()
+        // 1 << 22 has odd timestamp bits, so Fluxer routes this community to shard 1 of 2. These payloads carry it in id
+        const guildId = String(1n << 22n)
+        const { fixtures } = driver.test
+        await driver.emit("GUILD_CREATE", fixtures.guildCreate({ guild: { id: guildId } }))
+        await driver.emit("GUILD_UPDATE", fixtures.guild({ id: guildId, name: "Renamed" }))
+        await driver.emit("GUILD_DELETE", { id: guildId, unavailable: true })
+        await expect.poll(() => shards).toEqual({ guildCreate: [1], guildUpdate: [1], guildDelete: [1] })
+    })
+
     test("a disconnect resumes the same session, even with 4007, while endSession identifies a new one", async () => {
         const clock = sdkClock()
         const driver = await open(mode)
@@ -567,11 +599,171 @@ test("a throwing response handler fails the request as a network error and logs 
     )
 })
 
+// Catches: The record kept only the name, message and stack, so a responder's AggregateError members and causes were lost
+test("a response handler failure keeps its AggregateError members and their causes in the record", async () => {
+    const test = createDefaultTestClient()
+    onTestFinished(() => test.shutdown())
+    test.rest.respond("POST /channels/:id/typing", () => {
+        throw new AggregateError(
+            [new Error("first fixture failure", { cause: new Error("fixture root cause") }), new Error("second")],
+            "fixture attempts failed",
+        )
+    })
+    await test.client.messages.typing(test.fixtures.ids.channel)
+    const record = test.logs().find(({ code }) => code === "testing.responderFailed")
+    expect(record?.error?.errors).toEqual([
+        expect.objectContaining({
+            message: "first fixture failure",
+            cause: expect.objectContaining({ message: "fixture root cause" }),
+        }),
+        expect.objectContaining({ message: "second" }),
+    ])
+})
+
+describe.each(modes)("test transport records (%s)", (mode) => {
+    const token = "synthetic-test-token-abcdef-123456"
+
+    /** A driver for a client with a known token and a sink, plus the rest call each API returns as a promise */
+    async function driverWithSink() {
+        const sunk: LogRecord[] = []
+        const driver = await open(mode, { token, logging: { sink: (record: LogRecord) => void sunk.push(record) } })
+        return {
+            driver,
+            sunk,
+            typing: () =>
+                mode === "default"
+                    ? (driver.test as DefaultTestClient).client.messages.typing(driver.test.fixtures.ids.channel)
+                    : Effect.runPromise(
+                          Effect.exit(
+                              (driver.test as NativeTestClient).client.messages.typing(
+                                  driver.test.fixtures.ids.channel,
+                              ),
+                          ),
+                      ),
+        }
+    }
+
+    test("hide the client's token when a response handler throws text holding it", async () => {
+        const { driver, sunk, typing } = await driverWithSink()
+        driver.test.rest.respond("POST /channels/:id/typing", () => {
+            throw new Error(`rejected ${token}`)
+        })
+        await typing()
+        for (const records of [driver.test.logs(), sunk]) {
+            const record = records.find(({ code }) => code === "testing.responderFailed")
+            expect(record?.error?.message).toBe("rejected [redacted]")
+            expect(JSON.stringify(record)).not.toContain(token)
+        }
+    })
+
+    test("hide the client's token in the path of an unmatched request", async () => {
+        const { driver, sunk } = await driverWithSink()
+        const request = { method: "GET", path: `/lookup/${token}` } as const
+        if (mode === "default") await (driver.test as DefaultTestClient).client.rest.request(request)
+        else await Effect.runPromise(Effect.exit((driver.test as NativeTestClient).client.rest.request(request)))
+        for (const records of [driver.test.logs(), sunk]) {
+            const record = records.find(({ code }) => code === "testing.unmatchedRequest")
+            expect(record).toBeDefined()
+            expect(JSON.stringify(record)).not.toContain(token)
+        }
+    })
+
+    /** Send one request that no test response matches, through either API */
+    async function unmatched(driver: Driver) {
+        const request = { method: "GET", path: "/lookup/unmatched" } as const
+        if (mode === "default") await (driver.test as DefaultTestClient).client.rest.request(request)
+        else await Effect.runPromise(Effect.exit((driver.test as NativeTestClient).client.rest.request(request)))
+    }
+
+    test("count a caller sink that throws or rejects on a transport record, without exposing the token", async () => {
+        const unmatchedOnly = (record: LogRecord) => record.code === "testing.unmatchedRequest"
+        const driver = await open(mode, {
+            token,
+            logging: {
+                sink: [
+                    (record: LogRecord) => {
+                        if (unmatchedOnly(record)) throw new Error(`sink rejected ${token}`)
+                    },
+                    (record: LogRecord) =>
+                        unmatchedOnly(record) ? Promise.reject(new Error(`sink rejected ${token}`)) : undefined,
+                ],
+            },
+        })
+        const unhandled: unknown[] = []
+        const onUnhandled = (reason: unknown) => void unhandled.push(reason)
+        process.on("unhandledRejection", onUnhandled)
+        onTestFinished(() => void process.off("unhandledRejection", onUnhandled))
+        const output = [
+            vi.spyOn(process.stderr, "write").mockReturnValue(true),
+            vi.spyOn(console, "error").mockReturnValue(undefined),
+        ]
+        await unmatched(driver)
+        // A rejected sink promise is observed once its rejection runs, which is done after one event loop turn
+        await turn()
+        expect(driver.test.counters().sinkFailures).toBe(2)
+        expect(unhandled).toEqual([])
+        expect(JSON.stringify(output.flatMap((spy) => spy.mock.calls))).not.toContain(token)
+    })
+
+    test("follow log levels changed while the client runs, and Debug categories from creation", async () => {
+        const driver = await open(mode, { logging: { level: "error", debug: ["rest"] } })
+        const recorded = () => driver.test.logs().filter((record) => record.code === "testing.unmatchedRequest").length
+        await unmatched(driver)
+        expect(recorded()).toBe(1)
+        driver.test.client.logging.configure({ level: "silent", debug: false })
+        await unmatched(driver)
+        expect(recorded()).toBe(1)
+        driver.test.client.logging.configure({ level: "warn" })
+        await unmatched(driver)
+        expect(recorded()).toBe(2)
+    })
+
+    test("name a request matcher that throws, and the request fails without treating it as a non-match", async () => {
+        const { driver, typing } = await driverWithSink()
+        driver.test.rest.respond((request) => (request.body as { readonly content: string }).content === "x", {
+            body: {},
+        })
+        await typing()
+        expect(driver.test.logs()).toContainEqual(
+            expect.objectContaining({
+                level: "error",
+                code: "testing.responderFailed",
+                message: expect.stringContaining("matcher"),
+                error: expect.objectContaining({ name: "TypeError" }),
+            }),
+        )
+        expect(driver.test.logs()).not.toContainEqual(expect.objectContaining({ code: "testing.unmatchedRequest" }))
+    })
+})
+
+test("a throwing response handler simulates a network failure, so shutdown still resolves after it", async () => {
+    const test = createDefaultTestClient()
+    test.rest.respond("POST /channels/:id/typing", () => {
+        throw new Error("simulated network failure")
+    })
+    expect((await test.client.messages.typing(test.fixtures.ids.channel)).isErr()).toBe(true)
+    await expect(test.shutdown()).resolves.toBeUndefined()
+    expect(test.failures()).toEqual([])
+})
+
 test("test clients reject caller transport and instance options before creating a client", () => {
     for (const option of [{ transport: {} }, { instance: { url: "https://fluxer.example" } }, null])
         expect(() => createDefaultTestClient(option as never)).toThrow(ConfigurationError)
     expect(() => createDefaultTestClient({ heartbeatIntervalMs: 0 })).toThrow(ConfigurationError)
 })
+
+// The test client adds its log capture to the caller's logging settings, so a malformed value must reach the same
+// validation as createClient instead of being copied into a valid object
+test.each([[[]], [["silent"]], [1], ["debug"]])(
+    "test clients reject logging %j as createClient does",
+    async (logging) => {
+        expect(() => createClient({ token: fixtureToken, logging } as never)).toThrow(ConfigurationError)
+        expect(() => createDefaultTestClient({ logging } as never)).toThrow(ConfigurationError)
+        const native = await Effect.runPromiseExit(Effect.scoped(createNativeTestClient({ logging } as never)))
+        expect(native._tag).toBe("Failure")
+        expect(Cause.squash((native as Exit.Failure<unknown, unknown>).cause)).toBeInstanceOf(ConfigurationError)
+    },
+)
 
 test("a native program can emit in the same fiber that became ready, while READY is still being delivered", async () => {
     const content = await Effect.runPromise(

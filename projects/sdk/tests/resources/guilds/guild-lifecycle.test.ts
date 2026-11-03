@@ -87,7 +87,7 @@ test.each(modes)("%s guild pages are bounded, frozen, and do not populate a memb
     expect(page[0]?.id).toBe("20")
     expect(Object.isFrozen(page) && Object.isFrozen(page[0]) && Object.isFrozen(page[0]?.features)).toBe(true)
     expect(await api.getGuild("20")).toBeUndefined()
-    expect(calls[0]?.pathname).toBe("/v1/users/@me/guilds")
+    expect(calls[0]?.pathname).toBe("/api/v1/users/@me/guilds")
     expect(Object.fromEntries(calls[0]!.searchParams)).toEqual({ limit: "2", with_counts: "false", before: "30" })
     for (const [query, path] of [
         [{ limit: 0 }, "query.limit"],
@@ -318,7 +318,7 @@ test.each(modes)(
         const late = api.fetchRoles("20")
         await started
         await api.leave("20")
-        expect(writes).toEqual([{ path: "/v1/users/@me/guilds/20?delete_messages=false", body: undefined }])
+        expect(writes).toEqual([{ path: "/api/v1/users/@me/guilds/20?delete_messages=false", body: undefined }])
         expect(await api.getGuild("20")).toBeUndefined()
         expect(await api.getGuild("21")).toBeDefined()
         expect(await api.getRole("20", "50")).toBeUndefined()

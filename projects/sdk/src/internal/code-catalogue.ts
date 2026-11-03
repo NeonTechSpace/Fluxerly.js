@@ -48,13 +48,13 @@ export const operationReasonMeanings = {
     busy: "Too many requests of this kind were already pending in the client, so nothing was sent",
     notFound: "Fluxer answered HTTP 404. The resource does not exist or is not visible to this bot",
     rejected:
-        "Fluxer refused the request. The error's apiError, or details.providerCode for a newer code, says why. For a missing permission, details.requiredPermissions lists the permissions the operation needs when the SDK knows them",
+        "Fluxer refused the request, or with outcome notDispatched the SDK refused it before sending. The error's apiError, or details.providerCode for a newer code, says why Fluxer refused. For a missing permission, details.requiredPermissions lists the permissions the operation needs when the SDK knows them",
     network: "A network error interrupted the request",
     response:
-        "Fluxer's answer did not have the expected format. The failing field or check is in details.responseField",
+        "Fluxer's answer did not have the expected format. When the SDK identifies the failing field or check, details.responseField names it",
     timeout: "The operation did not finish within its timeoutMs",
     rateLimit:
-        "Fluxer rate-limited the request, and the SDK could not wait and retry it, for example because the wait would pass the timeout",
+        "The request was rate-limited, and the SDK could not wait and retry it, for example because the wait would pass the timeout",
 } as const satisfies Readonly<Record<(typeof operationReasons)[number], string>>
 const operationMeaning = (subject: string) =>
     `A ${subject} request failed. The reason says why, as listed under operation reasons`
@@ -83,7 +83,7 @@ export const errorCodes = {
         error: "ConnectionError",
         meaning:
             "Instance discovery or the gateway connection failed. The phase is discovery or gateway, and the reason is network, protocol or closed. The message explains a known close code and names it",
-        action: "Check network access to the Fluxer instance. Follow the hint for rejected tokens and shard close codes",
+        action: "Check network access to the Fluxer instance. Follow the hint for rejected tokens and shard close codes. After a failed run, create a new client before connecting again",
     },
     "connection.timeout": {
         error: "ConnectionTimeoutError",
@@ -143,7 +143,7 @@ export const errorCodes = {
     "events.overflow": {
         error: "EventOverflowError",
         meaning: "A subscription's queue exceeded its limit and the overflow policy stopped it",
-        action: "Handle events faster, raise the pending limits or choose a dropping overflow policy",
+        action: 'Handle events faster or raise the pending limits. To drop events instead of stopping, use a handler registered with client.on and set its overflow to "dropOldest" or "dropNewest"',
     },
     "events.readBusy": {
         error: "EventReadBusyError",
@@ -216,7 +216,7 @@ export const errorCodes = {
         error: "AttachmentDownloadError",
         values: ["input", "untrustedUrl", "busy", "network", "response", "tooLarge", "timeout"],
         meaning:
-            "An attachment download failed. The reason untrustedUrl means the URL is not on this instance's media host, and tooLarge means the attachment is larger than maxBytes",
+            "An attachment download failed. The reason untrustedUrl means the URL is not on this instance's media host, and tooLarge means the attachment is larger than maxBytes. The reason response with a non-2xx status means the media server refused the download",
         action: "Pass attachments received from this client, and raise maxBytes for tooLarge",
     },
     "oauth.<reason>": {
@@ -273,8 +273,20 @@ export const errorCodes = {
     },
     "helper.<reason>": {
         error: "HelperError",
-        values: ["id", "markup", "time", "permissionBits", "link", "color", "text", "limit", "shardCount", "resource"],
-        meaning: "A formatting, parsing, text or error helper received a value it cannot use",
+        values: [
+            "id",
+            "markup",
+            "time",
+            "permissionBits",
+            "link",
+            "color",
+            "text",
+            "limit",
+            "shardCount",
+            "resource",
+            "audio",
+        ],
+        meaning: "A formatting, parsing, text, audio or error helper received a value it cannot use",
         action: "Pass a value of the documented form",
     },
     "asset.<reason>": {
@@ -406,7 +418,8 @@ export const logCodes = {
     },
     "lifecycle.taskFailed": {
         levels: ["debug", "error"],
-        meaning: "One run of a task started with client.schedule threw or failed. A repeating task keeps its schedule",
+        meaning:
+            "One run of a task started with client.schedule threw or failed. A repeating task keeps its schedule. fields.task is the task's name when it was given one",
         action: "Fix the task, or handle the failure with the client-level onError",
     },
     "lifecycle.tasksCancelled": {
@@ -444,7 +457,8 @@ export const logCodes = {
     },
     "lifecycle.cleanupFailed": {
         levels: ["error"],
-        meaning: "A cleanup step failed during shutdown. Shutdown still ran the remaining steps",
+        meaning:
+            "A cleanup step failed during shutdown. Shutdown still ran the remaining steps. A step in application code, such as a scheduled task or an onError hook, is named in the message, and a named task in fields.task",
         action: "Report it with the record's error if the SDK owns the failing step",
     },
     "gateway.receive": { levels: ["trace"], meaning: "A gateway frame was received" },
@@ -485,18 +499,27 @@ export const logCodes = {
         levels: ["debug"],
         meaning: "An opcode that this SDK version does not handle was ignored",
     },
+    "gateway.gatewayError": {
+        levels: ["debug", "warn"],
+        meaning:
+            "Fluxer sent an opcode 12 Gateway Error frame, which reports a refused voice join, with its code in fields.code. Debug while a gatewayError subscription receives it, Warn when none does",
+        action: "Subscribe to gatewayError to handle refused voice joins, or stop sending the Voice State Update Fluxer refuses",
+    },
     "gateway.identifyFilter": {
         levels: ["debug"],
-        meaning: "A shard asked Fluxer not to send dispatch types that nothing uses",
+        meaning:
+            "A shard asked Fluxer not to send the dispatch types in fields.ignoredEvents. fields.automatic says whether the SDK chose them or the application listed them",
     },
     "gateway.ignoredEventRegistered": {
         levels: ["warn"],
-        meaning: "A handler was registered for an event type that the running shards asked Fluxer to suppress",
-        action: "Register the handler before connecting, or remove the type from gateway.ignoredEvents",
+        meaning:
+            "Handlers are registered for events whose dispatch types the explicit gateway.ignoredEvents list all suppresses, so they receive nothing, except messageCreate for messages that mention the bot directly, with @here or with @everyone",
+        action: "Remove those dispatch types from gateway.ignoredEvents, or remove the handlers",
     },
     "rest.request": {
         levels: ["debug"],
-        meaning: "One REST attempt finished, with its route, status, duration and Fluxer error code",
+        meaning:
+            "One REST attempt finished, with its route, status, duration and Fluxer error code. OAuth clients log one for each request, without query, form or body",
     },
     "rest.retry": { levels: ["debug"], meaning: "A read is retried after a transient failure" },
     "rest.busy": {
@@ -508,8 +531,8 @@ export const logCodes = {
     "rest.rejected": {
         levels: ["warn"],
         meaning:
-            "Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem that persists. The message names the target channel or community when the route has one. It is logged even when the application handles the Result. When a handler or command fails with this rejection within one second and no onError hook receives the failure, the handler's failure record reports it instead. A later handler failure also logs its own record, because the Warn has already been emitted. Webhook and OAuth clients log rejected webhook tokens and OAuth client credentials the same way",
-        action: "Follow fields.hint. A bot that expects these rejections can lower the rest category level",
+            "Fluxer rejected a request with HTTP 401 or 403, usually a token or permission problem that persists. The message names the target channel or community when the route has one. It is logged even when the application handles the Result. When a handler or command fails with this rejection within one second and no onError hook receives the failure, the handler's failure record reports it instead. A later handler failure also logs its own record, because the Warn has already been emitted. Webhook and OAuth clients log rejected webhook tokens and OAuth client credentials the same way. Fluxer refuses a wrong or deleted webhook token with UNKNOWN_WEBHOOK and HTTP 404, which is logged here too",
+        action: "Follow fields.hint. A bot that expects these rejections can set the rest category level to error",
     },
     "rest.responseRejected": {
         levels: ["warn"],
@@ -534,14 +557,26 @@ export const logCodes = {
     "ratelimit.wait": {
         levels: ["debug", "warn"],
         meaning:
-            "A request was rate-limited and waits delayMs before retrying, at Warn for a second or more. The fields repeat what the 429 response sent, named like RateLimitObservation",
+            "A request was rate-limited and waits delayMs before retrying, at Warn for a second or more. The fields repeat what the 429 response sent, named like RateLimitObservation, and fields.apiError is Fluxer's code for the limit when the response named one. fields.pause says what the SDK paused. It is client for a global limit or for a 429 that did not identify its limit, such as one from a proxy, and bucket for a route limit. fields.global is true only when Fluxer declared the limit global",
         action: "Send fewer requests on that route if long waits repeat",
+    },
+    "ratelimit.queueHeld": {
+        levels: ["debug", "warn"],
+        meaning:
+            "Rate limits have held queued requests for a second. fields.reason says why. It is global for a global limit Fluxer declared, client for a pause after a 429 that named no limit, such as one from a proxy, and route for used-up route limits. fields.requests counts the held requests, delayMs is the longest known remaining wait and route names the route with the most requests waiting for its own limit. A global or client pause is a Warn and route limits a Debug. Each reason is logged at most once a minute, and diagnostics().rest.rateLimitHold shows the current hold",
+        action: "Send fewer requests at once if long holds repeat. A client pause that repeats points at a proxy or load balancer in front of Fluxer",
     },
     "ratelimit.deadline": {
         levels: ["debug", "warn"],
         meaning:
-            "A rate-limit wait would pass the operation's timeout, so the request fails without waiting. When a 429 response caused it, the fields repeat what that response sent, named like RateLimitObservation",
+            "A rate-limit wait would pass the operation's timeout, so the request fails without waiting. When a 429 response caused it, the fields repeat what that response sent, named like RateLimitObservation, and fields.apiError is Fluxer's code for the limit when the response named one",
         action: "Raise timeoutMs, or send fewer requests on that route",
+    },
+    "ratelimit.notResent": {
+        levels: ["warn"],
+        meaning:
+            "A webhook message, or a message sent without direct uploads, was rate-limited while it carried a Blob, File or stream attachment. Its body cannot be sent twice, so the request fails with reason rateLimit without waiting. The fields repeat what the 429 response sent, named like RateLimitObservation",
+        action: "Wait at least delayMs before sending again. Create a new stream first, or pass the attachment as bytes, such as a Uint8Array, so the SDK can wait and send it again",
     },
     "events.handlerFailed": {
         levels: ["debug", "error"],
@@ -556,7 +591,7 @@ export const logCodes = {
     "events.overflow": {
         levels: ["debug", "warn", "error"],
         meaning: "A subscription's queue exceeded its limit, so the subscription stopped",
-        action: "Handle events faster, raise the pending limits or choose a dropping overflow policy",
+        action: 'Handle events faster or raise the pending limits. To drop events instead of stopping, use a handler registered with client.on and set its overflow to "dropOldest" or "dropNewest"',
     },
     "events.dropped": {
         levels: ["warn"],
@@ -588,7 +623,7 @@ export const logCodes = {
     "commands.unmatched": {
         levels: ["debug"],
         meaning:
-            "A message with the command prefix did not run a command. fields.reason holds the cause: an unknown name (the closest command is in fields.suggestion), a group without a subcommand or text the parser rejected, whose explanation the message gives",
+            "A message with the command prefix did not run a command. fields.reason holds the cause: An unknown name (the closest command is in fields.suggestion), a group without a subcommand or text the parser rejected, whose explanation the message gives",
     },
     "commands.middlewareStopped": {
         levels: ["debug"],
@@ -616,12 +651,14 @@ export const logCodes = {
     },
     "collectors.failed": {
         levels: ["warn"],
-        meaning: "A collector stopped because of a failure",
+        meaning:
+            "A collector stopped because of a failure. fields.channelId names the collected channel, and fields.messageId the message of a reaction collector",
         action: "Read the collector's result for the error",
     },
     "collectors.dropped": {
         levels: ["debug"],
-        meaning: "A full collector ignored an event while its last callback finished",
+        meaning:
+            "A full collector ignored an event while its last callback finished. fields.channelId and, for a reaction collector, fields.messageId name what it collects",
     },
     "cache.policyFailed": {
         levels: ["debug", "error"],
@@ -639,11 +676,15 @@ export const logCodes = {
         meaning: "A message cleanup progress callback threw",
         action: "Fix the onProgress callback",
     },
-    "supervisor.spawn": { levels: ["info"], meaning: "The supervisor started a child process" },
+    "supervisor.spawn": {
+        levels: ["info"],
+        meaning:
+            "The supervisor started a child process. A SupervisorError with this code means a start or message failure instead, see supervisor.<reason>",
+    },
     "supervisor.spawnFailed": {
         levels: ["error"],
-        meaning: "The supervisor could not start a child process",
-        action: "Check the entry path and execArgv",
+        meaning: "The supervisor could not start a child process or send it a message",
+        action: "Read the record's error. For a start failure, check the entry path and execArgv. For a message failure, read the child's earlier output and log records",
     },
     "supervisor.exit": {
         levels: ["info", "warn"],
@@ -722,7 +763,7 @@ export const logCodes = {
     "sdk.unsafePayloads": {
         levels: ["warn"],
         meaning:
-            "Unsafe payload logging is on, so Trace records include gateway and REST payloads that can contain private content. Bot tokens and other secrets stay masked",
+            "Unsafe payload logging is on, so Trace records include gateway and REST payloads that can contain private content. Bot tokens and recognized credentials stay masked",
         action: "Turn it off outside local debugging",
     },
     "sdk.timerFailed": {
@@ -741,8 +782,8 @@ export const logCodes = {
     },
     "testing.responderFailed": {
         levels: ["error"],
-        meaning: "A test route's responder threw, so the request failed as a network error",
-        action: "Fix the responder",
+        meaning: "A test route's matcher or responder threw, so the request failed as a network error",
+        action: "If the failure was not intended, fix the matcher or responder. A responder that throws simulates a network failure",
     },
     "testing.socketsLeftOpen": {
         levels: ["warn"],

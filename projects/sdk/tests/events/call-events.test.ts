@@ -55,7 +55,7 @@ const soundWire = (extra: Record<string, unknown> = {}) => ({
     guild_id: null,
     sound_id: "90",
     hash: "abc123",
-    url: "https://media.fluxer.app/sounds/90.ogg",
+    url: "https://fluxerusercontent.com/sounds/90.ogg",
     duration_ms: 1_250,
     content_type: "audio/ogg",
     ...extra,
@@ -122,7 +122,7 @@ test("call and entrance-sound decoders project frozen camelCase copies without r
         guildId: null,
         soundId: "90",
         hash: "abc123",
-        url: "https://media.fluxer.app/sounds/90.ogg",
+        url: "https://fluxerusercontent.com/sounds/90.ogg",
         durationMs: 1_250,
         contentType: "audio/ogg",
     } satisfies EntranceSoundPlay)

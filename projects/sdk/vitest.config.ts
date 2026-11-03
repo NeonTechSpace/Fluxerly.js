@@ -14,6 +14,7 @@ const processTests = [
     "tests/live/**/*.test.{ts,js}",
     "tests/resources/cache/resource-cache-runtime.test.ts",
     "tests/resources/pagination/pagination-runtime.test.ts",
+    "tests/perf/**/*.test.ts",
 ]
 
 export default {
@@ -24,12 +25,20 @@ export default {
     },
     test: {
         maxWorkers: workers,
-        exclude: ["**/node_modules/**", "**/.git/**"],
+        // The examples' tests use node:test, as a bot project's own tests do, and run in the test:examples script
+        exclude: ["**/node_modules/**", "**/.git/**", "examples/**"],
         // SDK log output is captured per test and printed only when that test fails. A vi.waitFor poll without its own
-        // timeout is bounded by the test timeout instead of Vitest's one-second default
-        setupFiles: ["tests/support/quiet-output.ts", "tests/support/wait-deadline.ts"],
+        // timeout is bounded by the test timeout instead of Vitest's one-second default. No test may reach a Fluxer host
+        setupFiles: [
+            "tests/support/quiet-output.ts",
+            "tests/support/wait-deadline.ts",
+            "tests/support/no-fluxer-network.ts",
+        ],
         projects: [
-            { extends: true, test: { name: "sdk", exclude: ["**/node_modules/**", "**/.git/**", ...processTests] } },
+            {
+                extends: true,
+                test: { name: "sdk", exclude: ["**/node_modules/**", "**/.git/**", "examples/**", ...processTests] },
+            },
             {
                 extends: true,
                 test: {

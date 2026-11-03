@@ -67,7 +67,7 @@ test.each(modes)("%s deletes one exact attachment with one 204 request and no hi
     expect(await api.remove()).toBeUndefined()
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
-        url: "https://api.fluxer.app/v1/channels/20/messages/10/attachments/40",
+        url: "https://fluxer.com/api/v1/channels/20/messages/10/attachments/40",
         init: { method: "DELETE", redirect: "error" },
     })
     expect(calls[0]!.init.body).toBeUndefined()
@@ -191,12 +191,12 @@ test.each(modes)(
             expect(await api.get()).toBeUndefined()
             expect(await api.get(other)).toBe(retained)
         }
-        const fetchTarget = "GET https://api.fluxer.app/v1/channels/20/messages/10"
-        const removeTarget = "DELETE https://api.fluxer.app/v1/channels/20/messages/10/attachments/40"
+        const fetchTarget = "GET https://fluxer.com/api/v1/channels/20/messages/10"
+        const removeTarget = "DELETE https://fluxer.com/api/v1/channels/20/messages/10/attachments/40"
         // Each unknown delete was sent once and never replayed
         expect(calls).toEqual([
             fetchTarget,
-            "GET https://api.fluxer.app/v1/channels/20/messages/11",
+            "GET https://fluxer.com/api/v1/channels/20/messages/11",
             removeTarget,
             fetchTarget,
             removeTarget,

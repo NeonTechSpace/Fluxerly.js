@@ -1,6 +1,7 @@
 import type * as Effect from "effect/Effect"
-import type { InstanceResolveError, ResolvedInstance } from "#sdk/instance"
+import type { InstanceBadgePage, InstanceBadgeQuery, InstanceResolveError, ResolvedInstance } from "#sdk/instance"
 import type { RequestOptions } from "#sdk/client"
+import type { GuildOperationFailure } from "#sdk/guilds"
 
 export type { ResolvedInstance }
 
@@ -49,4 +50,15 @@ export interface Instance {
      * together with a cleanup defect as a defect that keeps the failure's value
      */
     resolve(options?: RequestOptions): Effect.Effect<ResolvedInstance, InstanceResolveError>
+    /**
+     * Read the custom badges that communities on this instance can show, by ID or one page at a time, such as the
+     * names and images for a Guild's badgeIds.
+     * It uses the client's REST slots and queue limits, and read failures retry like other reads.
+     * Nothing is cached, so keep the page and reuse it while its version is unchanged.
+     * Expected failures are GuildOperationError with operation instance.fetchBadges, or ClientClosedError
+     */
+    fetchBadges(
+        query?: InstanceBadgeQuery,
+        options?: RequestOptions,
+    ): Effect.Effect<InstanceBadgePage, GuildOperationFailure>
 }

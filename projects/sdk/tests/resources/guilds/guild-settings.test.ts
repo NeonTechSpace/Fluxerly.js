@@ -77,9 +77,9 @@ test.each(modes)(
             { auditReason: "  settings migration  " },
         )
         expect(calls).toEqual([
-            { path: "/v1/guilds/20", method: "GET", body: undefined, reason: null },
+            { path: "/api/v1/guilds/20", method: "GET", body: undefined, reason: null },
             {
-                path: "/v1/guilds/20",
+                path: "/api/v1/guilds/20",
                 method: "PATCH",
                 body: {
                     name: "Renamed guild",
@@ -390,7 +390,7 @@ async function setup(mode: Mode) {
 function rest(handler: (url: string, init: RequestInit) => Response) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : Promise.resolve(handler(url, init)),
     )
 }

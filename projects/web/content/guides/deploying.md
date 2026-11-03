@@ -2,9 +2,13 @@
 title: Deploy a bot
 navTitle: Deploying
 description: Keep a bot running with PM2, systemd or Docker, with the token in the environment and a clean shutdown
+search:
+    - keep a bot running 24/7
 ---
 
-A deployed bot is an ordinary Node.js process. A process manager starts it, passes the token through the environment, restarts it after a crash and stops it with a signal: SIGINT under PM2 and SIGTERM under systemd and Docker. A bot started with the default API's `runBot` handles both signals by default, closes the connection cleanly and lets the process exit. The native Effect `runBot` handles them only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` already interrupts the program on both signals
+A deployed bot is an ordinary Node.js process. A process manager starts it, passes the token through the environment, restarts it after a crash and stops it with a signal: SIGINT under PM2 and SIGTERM under systemd and Docker
+
+A bot started with the default API's `runBot` handles both signals by default, closes the connection cleanly and lets the process exit. The native Effect `runBot` handles them only with `processSignals: true`, because an Effect launcher such as `NodeRuntime.runMain` already interrupts the program on both signals
 
 ## Prepare the bot
 
@@ -32,7 +36,9 @@ For TypeScript, run `bot.ts` instead of `bot.js`. Node.js 24 runs TypeScript fil
 
 ## What happens on shutdown
 
-In the default API, unless `processSignals` is `false`, the SDK listens for SIGINT and SIGTERM and for no other signals. The native Effect `runBot` listens only with `processSignals: true`, so enable it when nothing else handles the signals and a drained stop is wanted. Without it, a launcher such as `NodeRuntime.runMain` interrupts the program instead, which skips the drain below, and with no launcher Node.js ends the process at once. When the process receives one of the signals, the SDK logs the signal and shuts the bot down:
+In the default API, unless `processSignals` is `false`, the SDK listens for SIGINT and SIGTERM and for no other signals. The native Effect `runBot` listens only with `processSignals: true`, so enable it when nothing else handles the signals and a drained stop is wanted. Without it, a launcher such as `NodeRuntime.runMain` interrupts the program instead, which skips the drain below, and with no launcher Node.js ends the process at once
+
+When the process receives one of the signals, the SDK logs the signal and shuts the bot down:
 
 - Stops accepting new events and gives running handlers, commands and scheduled tasks, the events already waiting for them and their requests up to 5 seconds to finish. Scheduled tasks that have not started are cancelled. The `drainMs` option of `runBot` changes that time, and `drainMs: 0` skips the wait
 - Signals the handlers and tasks still running to stop through their `signal`
@@ -44,7 +50,9 @@ In the default API, unless `processSignals` is `false`, the SDK listens for SIGI
 
 The SDK never calls `process.exit`. The process exits once nothing else keeps Node.js running. After `runBot` resolves, close database connections, timers and servers the application opened. A returned handler Promise, a running scheduled task and their REST requests get the drain window to finish. Track detached Promises, timers not started with `client.schedule` and work that needs more than that window, as shown in [application supervision](/docs/application-supervision/#drain-application-owned-work)
 
-Use a 30-second stop timeout before the process manager force-kills the bot. With the default `drainMs`, allow up to 5 seconds for the drain, up to 5 seconds to close gateway connections and up to 5 seconds for parallel session saves when a store is configured, plus time for remaining SDK cleanup and the application's cleanup after `runBot` resolves. Increase the timeout when `drainMs` is larger or application cleanup needs longer. A force-kill before session saves finish can prevent resuming after restart. Each listener handles only the first signal of its kind, so sending the same signal again during shutdown gets Node.js's default handling and usually ends the process at once
+Use a 30-second stop timeout before the process manager force-kills the bot. With the default `drainMs`, allow up to 5 seconds for the drain, up to 5 seconds to close gateway connections and up to 5 seconds for parallel session saves when a store is configured, plus time for remaining SDK cleanup and the application's cleanup after `runBot` resolves
+
+Increase the timeout when `drainMs` is larger or application cleanup needs longer. A force-kill before session saves finish can prevent resuming after restart. Each listener handles only the first signal of its kind, so sending the same signal again during shutdown gets Node.js's default handling and usually ends the process at once
 
 ## Logs
 
@@ -73,6 +81,8 @@ module.exports = {
 
 PM2 restarts the bot whenever it exits, and `exp_backoff_restart_delay` makes it wait longer after each quick failure. PM2 stops an app by sending SIGINT and force-kills it after `kill_timeout`, whose default of 1.6 seconds is shorter than a graceful gateway close
 
+Install PM2 using its [installation guide](https://pm2.keymetrics.io/docs/usage/quick-start/#installation) before running these commands
+
 ```sh
 pm2 start ecosystem.config.cjs
 pm2 logs fluxer-bot
@@ -82,6 +92,8 @@ pm2 save
 The `pm2 save` command records the running apps, and `pm2 startup` prints the command that starts PM2 again after a reboot
 
 ## Run with systemd
+
+Before enabling this service, create the `fluxer-bot` system user and install the bot and its dependencies in `/srv/fluxer-bot`. That user needs permission to read the project and run Node.js
 
 Create a unit file such as `/etc/systemd/system/fluxer-bot.service`
 
@@ -145,6 +157,29 @@ docker logs -f fluxer-bot
 ```
 
 The token reaches the container only at run time through `--env-file`. The `--init` flag runs a small init process that forwards signals to Node.js. The `docker stop` command sends SIGTERM, and `--stop-timeout 30` on `docker run` gives shutdown 30 seconds before a force-kill. With `--restart unless-stopped`, Docker restarts the bot after it exits unless it was stopped on purpose
+
+### Keep session and reminder files
+
+File-backed sessions and reminders need a writable folder that survives container replacement. Reuse the same named volume at `/data` on this Docker host, set `fileSessionStore("/data/sessions")` and keep reminder data at `/data/reminders.json`. Keep local state files out of the image
+
+Add these lines to `.dockerignore`:
+
+```text
+sessions
+reminders.json
+```
+
+Add this line to the `Dockerfile` before `USER node`:
+
+```dockerfile
+RUN install -d -o node -g node -m 0700 /data
+```
+
+Then add the volume to `docker run`:
+
+```sh
+docker run -d --name fluxer-bot --init --stop-timeout 30 --restart unless-stopped --env-file .env --mount type=volume,src=fluxer-bot-data,dst=/data fluxer-bot
+```
 
 ## Restart policy
 

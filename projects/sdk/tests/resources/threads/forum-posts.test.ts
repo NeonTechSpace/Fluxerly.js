@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope } from "effect"
 import { expect, onTestFinished, test } from "vitest"
-import { ChannelType } from "../../../src/index.js"
+import { ChannelType, MessageFlags } from "../../../src/index.js"
 import { createTestClient as createDefaultTestClient } from "../../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../../src/effect-testing.js"
 import { modes, type Mode } from "../../support/both-apis.js"
@@ -62,6 +62,52 @@ test.each(modes)("%s creates a forum post with a file in one multipart request",
     })
     // Fluxer's forum message schema has no nonce, so the post sends none
     expect(request.body).not.toHaveProperty("message.nonce")
+})
+
+// Fluxer's forum post schema reads the first message's attachments with the message attachment schema, whose waveform
+// may hold 4,096 characters (packages/schema/src/domains/message/AttachmentSchemas.ts:29 at 5f3fc0b1)
+test.each(modes)("%s creates a forum post whose first message is a voice note", async (mode) => {
+    const api = await open(mode)
+    const { fixtures } = api
+    const forum = fixtures.forumChannel()
+    const post = fixtures.thread({ parent_id: forum.id })
+    const route = api.rest.respond(`POST /channels/${forum.id}/threads`, {
+        status: 201,
+        body: { ...post, message: fixtures.message({ id: post.id, channel_id: post.id, content: "" }) },
+    })
+    const waveform = "A".repeat(4096)
+    const voice = { data: new Uint8Array([1, 2]), filename: "note.ogg", contentType: "audio/ogg", duration: 600 }
+    await settle(
+        api.client.threads.createPost(forum.id, {
+            name: "Standup",
+            message: { attachments: [{ ...voice, waveform }], flags: MessageFlags.VoiceMessage },
+        }),
+    )
+    const request = route.requests()[0]!
+    expect(request.files).toEqual([{ field: "files[0]", filename: "note.ogg", contentType: "audio/ogg", size: 2 }])
+    expect(request.body).toMatchObject({
+        name: "Standup",
+        message: {
+            flags: MessageFlags.VoiceMessage,
+            attachments: [{ id: 0, filename: "note.ogg", duration: 600, waveform }],
+        },
+    })
+    expect(request.body).not.toHaveProperty("message.content")
+    // The voice-note rules of a message send apply to the post's first message too
+    for (const [message, path] of [
+        [{ content: "Hi", attachments: [{ ...voice, waveform: "AAEC" }] }, "message.content"],
+        [{ attachments: [{ ...voice, waveform: `${waveform}A` }] }, "message.attachments[].waveform"],
+        [{ attachments: [voice] }, "message.attachments[].waveform"],
+    ] as const)
+        expect(
+            await expectErr(
+                api.client.threads.createPost(forum.id, {
+                    name: "Standup",
+                    message: { ...message, flags: MessageFlags.VoiceMessage } as never,
+                }),
+            ),
+        ).toMatchObject({ reason: "input", outcome: "notDispatched", inputValidation: { path } })
+    expect(api.requests()).toHaveLength(1)
 })
 
 test.each(modes)("%s creates a forum post without files as JSON", async (mode) => {

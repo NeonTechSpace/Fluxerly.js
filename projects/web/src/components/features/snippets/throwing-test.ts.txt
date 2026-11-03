@@ -1,3 +1,7 @@
+import assert from "node:assert/strict"
+import { test } from "node:test"
+import { createTestBot } from "@neontechspace/fluxerly/testing"
+
 test("a command that throws is reported", async () => {
     await using bot = createTestBot({
         commands: {

@@ -248,6 +248,17 @@ test.each([
 })
 
 const userAgents = { npm: "npm/11.6.0 node/v24.9.0", pnpm: "pnpm/10.18.0 npm/? node/v24.9.0", bun: "bun/1.2.23" }
+
+// Init writes AGENTS.md before any install creates a lockfile, so the manager that launched it picks the refresh command
+test.each([
+    ["npm", "npx --no fluxerly agents"],
+    ["pnpm", "pnpm exec fluxerly agents"],
+    ["bun", "bunx --no-install fluxerly agents"],
+] as const)("a starter made with %s records its refresh command in AGENTS.md", async (manager, command) => {
+    const result = await init(["--template", "js", "--no-install"], userAgents[manager])
+    expect(result.outcome).toBe(0)
+    expect(readFileSync(join(result.project, "AGENTS.md"), "utf8")).toContain(`run \`${command}\` to refresh`)
+})
 const flags = {
     npm: ["install", "--save-exact", "--save-dev"],
     pnpm: ["add", "--save-exact", "--save-dev"],
@@ -256,6 +267,8 @@ const flags = {
 const scripts = { npm: "npm", pnpm: "pnpm", bun: "bun run" }
 // Only test and start have a short form, so the check script needs the run command in every manager
 const checkScripts = { npm: "npm run check", pnpm: "pnpm run check", bun: "bun run check" }
+// npm runs dev only through its run command
+const devScripts = { npm: "npm run dev", pnpm: "pnpm dev", bun: "bun run dev" }
 
 /** The install commands each starter needs, as the printed steps have always named them */
 function expectedInstall(manager: PackageManager, template: "js" | "ts" | "effect") {
@@ -289,6 +302,9 @@ test.each(
     )
     expect(result.printed).toContain(`Check the bot without a token: ${scripts[manager]} test`)
     expect(result.printed).toContain(`Start the bot: ${scripts[manager]} start`)
+    expect(result.printed).toContain(
+        `While changing the bot, ${devScripts[manager]} restarts it after each saved change`,
+    )
     // Only a TypeScript starter has the check script, which a manager runs only through its run command
     expect(result.printed.includes(`Check the types: ${checkScripts[manager]}`)).toBe(template !== "js")
     // The next steps link the guide that explains the token and the invite

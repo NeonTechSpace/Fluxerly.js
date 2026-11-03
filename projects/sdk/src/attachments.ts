@@ -111,6 +111,27 @@ interface AttachmentMetadata {
     readonly description?: string
     /** Mark the file as a spoiler. Defaults to false */
     readonly spoiler?: boolean
+    /** Mark the file as explicit media, so Fluxer's apps treat it as sensitive, as they do media Fluxer's own check flags.
+     * Defaults to false. Marking a file does not make Fluxer refuse it. Fluxer still runs its own check, which can
+     * refuse explicit media where the community's explicit content filter applies, with apiError.code
+     * explicitContentCannotBeSent
+     */
+    readonly explicitMedia?: boolean
+    /** Length of an audio file in whole seconds, from 0 through 2,147,483,647, for a voice note.
+     * Fluxer replaces it with the length it measures when it can read the file. A voice note needs it, and Fluxer
+     * refuses one longer than the instance allows, 1,200 seconds by default.
+     * New uploads in message sends, replies, direct message sends, forum posts, webhook sends and messages.edit accept
+     * it, but an edit cannot add MessageFlags.VoiceMessage
+     */
+    readonly duration?: number
+    /** Waveform of an audio file for a voice note's preview, as Fluxer's apps draw it: Base64-encoded amplitude bytes,
+     * 1 through 4,096 UTF-16 code units after Fluxer's normalization, or at most 256 in a webhook send, the limit of
+     * Fluxer's multipart webhook schema. A voiceWaveform result fits a webhook for audio up to 19.2 seconds. The SDK
+     * does not compute or check the samples. A file with a waveform must be audio, which Fluxer checks from its media type.
+     * New uploads in message sends, replies, direct message sends, forum posts, webhook sends and messages.edit accept
+     * it, but an edit cannot add MessageFlags.VoiceMessage
+     */
+    readonly waveform?: string
     /** Not accepted for new uploads, use AttachmentReference to keep an existing attachment during an edit */
     readonly id?: never
 }
@@ -260,7 +281,7 @@ export interface Attachment {
     readonly url?: string
     /** Proxy URL returned by Fluxer */
     readonly proxyUrl?: string
-    /** Platform attachment bit flags, including spoiler bit 1 << 3 */
+    /** Platform attachment bits: Spoiler is `1 << 3`, explicit media is `1 << 4` and animated media is `1 << 5`. Unknown bits are kept as received */
     readonly flags: number
     /** Optional display title */
     readonly title?: string
@@ -276,13 +297,13 @@ export interface Attachment {
     readonly height?: number
     /** Optional encoded preview placeholder */
     readonly placeholder?: string
-    /** Optional server adult-content classification */
+    /** Optional server adult-content classification, separate from an uploader's explicit-media mark. To include both, check `attachment.nsfw === true || (attachment.flags & (1 << 4)) !== 0` */
     readonly nsfw?: boolean
     /** Optional audio/video duration in seconds */
     readonly duration?: number
     /** Optional base64-encoded audio waveform */
     readonly waveform?: string
-    /** Optional ISO timestamp supplied by Fluxer for expiry */
+    /** File-retention expiry reported by Fluxer as an ISO timestamp, separate from the download link's signature expiry */
     readonly expiresAt?: string
     /** Optional server expiry observation, not a live availability check */
     readonly expired?: boolean
@@ -385,7 +406,9 @@ export class AttachmentDownloadError extends FluxerlyError {
     readonly _tag = "AttachmentDownloadError"
     /** SDK-owned local input detail, or null for non-input and unattributable failures */
     readonly inputValidation: InputValidationDetail | null
-    /** Local validation, untrusted attachment URL, local scheduler saturation, transport, response decoding, output limit or deadline */
+    /** Local validation, untrusted attachment URL, local scheduler saturation, transport, a refused or malformed media
+     * response, output limit or deadline. The reason response with a non-2xx status means the media server refused the download
+     */
     readonly reason: "input" | "untrustedUrl" | "busy" | "network" | "response" | "tooLarge" | "timeout"
     /** HTTP status when a response was received, otherwise null */
     readonly status: number | null
@@ -401,6 +424,8 @@ export class AttachmentDownloadError extends FluxerlyError {
         readonly cause?: unknown
     }) {
         const { reason, status = null, inputValidation = null } = options
+        // A non-2xx answer from the media server is a refusal, not a malformed answer
+        const refused = reason === "response" && status !== null && (status < 200 || status > 299)
         super(
             operationErrorMessage({
                 subject: "Attachment",
@@ -408,18 +433,22 @@ export class AttachmentDownloadError extends FluxerlyError {
                 reason,
                 outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
                 status,
-                inputExplanation: inputValidation?.explanation ?? null,
+                inputExplanation: refused
+                    ? "The media server refused the download"
+                    : (inputValidation?.explanation ?? null),
                 facts: { read: true },
             }),
             {
                 code: `attachment.download.${reason}`,
-                hint: operationFailureHint({
-                    reason,
-                    outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
-                    status,
-                    read: true,
-                    inputPath: inputValidation?.path ?? null,
-                }),
+                hint: refused
+                    ? "Fetch the message again to get a current attachment URL, and check that the attachment still exists"
+                    : operationFailureHint({
+                          reason,
+                          outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
+                          status,
+                          read: true,
+                          inputPath: inputValidation?.path ?? null,
+                      }),
                 cause: options.cause,
                 details: operationDetails({ reason, status }),
             },

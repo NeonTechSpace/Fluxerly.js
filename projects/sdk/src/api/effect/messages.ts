@@ -300,7 +300,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Fetch one frozen page of pinned messages in descending pin-time order.
      * Use a decimal channel ID.
      * The limit option defaults to 50 and accepts 1–50.
-     * The before option is an ISO timestamp and defaults to the server's current time
+     * The before option is an ISO timestamp. Omit it to start with the newest visible pins
      *
      * Use nextBefore for the next page and pinnedAt for each pin's time.
      * Page ordering and the before bound use every fractional digit and normalize timezone offsets, while equal instants remain valid.
@@ -324,7 +324,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Accepts the same ReactionEmojiInput forms as addReaction
      *
      * Fluxer checks visibility and history access.
-     * For another user, the bot must have authored the message or have MANAGE_MESSAGES in its community.
+     * Removing another user's reaction requires ManageMessages in a community channel, even when the bot authored the message.
+     * This moderation is unavailable in private conversations.
      * Success follows HTTP 204, whether the reaction was present or already absent, without waiting for or synthesizing events.
      * The call uses addReaction's request limits, deadline, confirmed rate-limit retries and cancellation rules.
      * Expected failures identify removeUserReaction.
@@ -355,7 +356,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Remove all users' reactions for one emoji on the message.
      * Other emoji groups remain.
      * Success follows HTTP 204, even if no matching reactions existed.
-     * The removeUserReaction method's permissions, request limits, deadline, failure and cleanup rules apply.
+     * Requires ManageMessages in a community channel, even when the bot authored the message.
+     * The removeUserReaction method's request limits, deadline, failure and cleanup rules apply.
      * Expected failures identify clearReaction.
      * Fluxer emits a clear-emoji event, not individual removals, and the SDK does not create or wait for that event.
      * Other users' reactions cannot be restored by the bot as those users
@@ -369,7 +371,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Remove all users' reactions for all emoji on the message, without deleting the message.
      * No emoji selector is needed.
      * Success follows HTTP 204, whether reactions existed or not.
-     * The clearReaction method's permissions, request limits, deadline, failure and cleanup rules apply.
+     * Requires ManageMessages in a community channel, even when the bot authored the message.
+     * The clearReaction method's request limits, deadline, failure and cleanup rules apply.
      * Expected failures identify clearReactions.
      * Fluxer emits one clear-all event, and the SDK does not create per-emoji or per-user events or wait for notification.
      * Other users' reactions cannot be restored by the bot as those users
@@ -682,7 +685,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Success follows the decoded HTTP response, not gateway notification or recipient acknowledgement, and no gateway connection is needed.
      * Mentions are disabled by default, and allowedMentions opts in.
      * Embed image and thumbnail URLs can use attachment://filename for a matching new image or video upload.
-     * The flags input accepts only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * The flags input accepts MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications, plus MessageFlags.VoiceMessage for a voice note with exactly one audio attachment carrying duration and waveform.
      * Server-managed flags, including the crosspost flags, fail locally before dispatch.
      * Suppressing previews is different from omitting embeds
      *
@@ -711,6 +714,7 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * The nonce input can be a 1–32 character string or a nonnegative safe integer.
      * If omitted, the SDK creates one nonce per send execution, and the same nonce is reused for confirmed rate-limit retries.
+     * A supplied nonce is shared across all channels for this bot account, as MessageInput.nonce explains.
      * Fluxer tries to suppress duplicate sends for five minutes after saving a message.
      * This does not guarantee that a repeated or concurrent send posts only one message.
      * A lost response or cancellation after dispatch can leave a message posted, and the SDK neither retries nor rolls it back.
@@ -727,7 +731,7 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * Fluxer checks source access and destination permissions.
      * This uses send's shared request limits, the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured) and optional destination-message caching.
-     * The nonce input follows send's accepted values, generated default and reuse on confirmed rate-limit retries.
+     * The nonce input follows send's accepted values, generated default, reuse on confirmed rate-limit retries and account-wide scope.
      * Fluxer's five-minute duplicate suppression is best effort, not exactly-once delivery.
      * Success follows HTTP, not recipient acknowledgement.
      * A lost response or cancellation can leave the forward posted.
@@ -768,7 +772,8 @@ export interface Messages<M extends MessageCore = Message> {
      * @remarks
      * The task is an Effect that runs with the caller's services, and its scope, services and errors stay with the caller.
      * A defect in the refresh work joins the task's Cause.
-     * Interruption stops and awaits the helper
+     * Interruption stops and awaits the helper.
+     * The refresh delay uses the caller's Effect Clock. Its typing requests use the Clock captured when the client was created
      *
      * @example
      * ```ts
@@ -919,7 +924,10 @@ export interface Messages<M extends MessageCore = Message> {
      * New uploads use send's copying, attachment source, size, budget and cleanup rules, and inline multipart 429 responses do not replay file or stream sources.
      * Failed edits may leave temporary server data, without physical-erasure guarantees.
      * A flags-only edit is allowed.
-     * Omission preserves flags, supplied flags replace only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications, and 0 clears those two bits.
+     * Edits accept only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * When editing a message authored by the bot, supplied flags, including 0, replace Fluxer's sendable flag set and clear MessageFlags.VoiceMessage, which an edit cannot set again.
+     * On another author's message, Fluxer requires Manage Messages in a community and changes only SuppressEmbeds, preserving the other flags.
+     * Omit flags to preserve them, including the voice-note flag.
      * Server-managed flags, including the crosspost flags, fail locally before dispatch
      *
      * Eligible responses can enter the cache.

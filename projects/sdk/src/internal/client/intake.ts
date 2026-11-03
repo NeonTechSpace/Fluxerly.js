@@ -258,6 +258,7 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
     if (feedsNoCache(type)) return
     if (type === "USER_UPDATE") {
         userCache.invalidate("users")
+        userCache.invalidate("directMessages")
         return
     }
     if (type.startsWith("THREAD_")) {

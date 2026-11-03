@@ -13,8 +13,9 @@ import { IdentifyFlag, maxIgnoredEvents } from "../protocol/gateway.js"
 import { automaticNeeds, cacheNeeds, protectedDispatchTypes, type FilterCacheKind } from "./event-dispatches.js"
 
 /**
- * Most UTF-8 bytes the encoded ignored_events array may take. Fluxer closes a client message above 4,096 bytes, and
- * the rest of Identify (token, properties, shard and the largest presence) stays within the remaining 1,536 bytes
+ * Most UTF-8 bytes the encoded ignored_events array may take. Identify stays within 4,096 bytes, which Fluxer instances
+ * older than October 2026 also accept, because the rest of it (token, properties, shard and the largest presence) stays
+ * within the remaining 1,536 bytes
  */
 const maxIgnoredEventsBytes = 2_560
 
@@ -131,7 +132,7 @@ function ignoredList(
     if (Buffer.byteLength(JSON.stringify(list)) > maxIgnoredEventsBytes)
         return new ConfigurationError(
             "ignoredEvents",
-            `The option "gateway.ignoredEvents" must encode to at most 2,560 bytes of JSON, so the session start message fits Fluxer's 4,096-byte limit`,
+            `The option "gateway.ignoredEvents" must encode to at most 2,560 bytes of JSON, so the session start message fits within 4,096 bytes`,
         )
     return list
 }

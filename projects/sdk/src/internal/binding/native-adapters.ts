@@ -8,7 +8,8 @@ import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import type * as Scope from "effect/Scope"
 import * as Stream from "effect/Stream"
-import { AttachmentDownloadError, type Attachment, type AttachmentDownloadOptions } from "#sdk/attachments"
+import type { Attachment, AttachmentDownloadOptions } from "#sdk/attachments"
+import { usedAttachmentStream } from "#sdk/internal/rest"
 import type { CacheEntriesOptions, CacheKind, RequestOptions } from "#sdk/client"
 import type { MemberChunkOptions, MemberChunkQuery } from "#sdk/member-chunks"
 import { ClientClosedError, type ConfigurationError } from "#sdk/errors"
@@ -31,7 +32,7 @@ import { effectInstance, type ResolvedInstance } from "#sdk/api/effect/instance"
 import type { ClientOwner } from "#sdk/internal/client"
 import { memberChunkStream } from "#sdk/internal/member-chunks"
 import { readInput } from "#sdk/internal/defects"
-import type { RestRequest } from "#sdk/rest"
+import type { RestCallArguments, RestCallInput, RestRequest, RestRoute, RestRouteResponse } from "#sdk/rest"
 
 export const nativeInstanceResolve = <M extends MessageCore>(owner: ClientOwner<M>) => {
     // Resolution repeats discovery when needed, but the client keeps returning its first native instance view
@@ -44,6 +45,11 @@ export const nativeRestRequest =
     <M extends MessageCore>(owner: ClientOwner<M>) =>
     <T = unknown>(input: RestRequest) =>
         owner.request<T>(input)
+
+export const nativeRestCall =
+    <M extends MessageCore>(owner: ClientOwner<M>) =>
+    <R extends RestRoute>(route: R, ...input: RestCallArguments<R, RestCallInput<R>>) =>
+        owner.call<RestRouteResponse<R>>(route, input[0])
 
 export const nativeCacheEntries =
     <M extends MessageCore>(owner: ClientOwner<M>) =>
@@ -72,7 +78,7 @@ export const nativeAttachmentStream =
         let consumed = false
         return Stream.unwrap(
             Effect.suspend(() => {
-                if (consumed) return Effect.fail(new AttachmentDownloadError({ reason: "busy" }))
+                if (consumed) return Effect.fail(usedAttachmentStream())
                 consumed = true
                 return Effect.gen(function* () {
                     const source = yield* Effect.acquireRelease(

@@ -626,7 +626,7 @@ section[data-accent="violet"] {
 }
 
 .inline-code {
-    padding: 0.08em 0.38em;
+    padding: 0.14em 0.38em;
     font-family: var(--font-mono);
     font-size: max(0.9em, 15px);
     color: var(--color-ink);
@@ -787,8 +787,9 @@ section[id] {
     align-items: center;
     gap: 6px;
     max-width: 100%;
-    height: 44px;
-    padding: 0 4px 0 16px;
+    min-height: 44px;
+    /* A command that turns at a seam grows the box, with this room kept above and below its lines */
+    padding: 8px 4px 8px 16px;
     background: linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0) 50%), rgb(8 11 40 / 0.62);
     border: 1px solid rgb(195 200 230 / 0.18);
     border-radius: var(--corner-medium);
@@ -813,15 +814,14 @@ section[id] {
 
 /* On a phone a long command breaks onto a second line instead of being cut off */
 @media (max-width: 599px) {
-    .cmd-chip {
-        height: auto;
-        min-height: 44px;
-        padding-block: 5px;
-    }
-
     .cmd-chip code {
         white-space: normal;
     }
+}
+
+/* The button sits in the box's room, so a one line command's box stays 44 px */
+.cmd-chip .copy-button {
+    margin-block: -8px;
 }
 
 .copy-button {
@@ -928,6 +928,17 @@ section[id] {
         min-height: 44px;
     }
 
+    /* Search's Esc button is how a phone leaves search. Its layer grows it to 44 px each way and no further, centered on it */
+    .search-close {
+        position: relative;
+    }
+
+    .search-close::after {
+        content: "";
+        position: absolute;
+        inset: min(0px, calc(50% - 22px));
+    }
+
     .links a,
     .brand .name {
         display: inline-flex;
@@ -941,9 +952,10 @@ section[id] {
     }
 }
 
-/* The header keeps the site's frame on every page, also in the docs, which set a frame of their own. So it never shifts as
-   the reader moves between them */
-.site-header {
+/* The header and footer keep the site's frame on every page, also in the docs, which set a frame of their own. So they
+   never shift as the reader moves between them */
+.site-header,
+.site-footer {
     --page-margin: clamp(20px, 2.5vw, 48px);
     --frame: 1720px;
     --frame-pad: var(--page-margin);
@@ -951,7 +963,8 @@ section[id] {
 }
 
 @media (min-width: 1280px) and (max-width: 1919px) {
-    .site-header {
+    .site-header,
+    .site-footer {
         --page-margin: 56px;
     }
 }

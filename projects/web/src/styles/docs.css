@@ -14,7 +14,7 @@
 
    Chrome is quiet and content is vivid. Hairlines, separators and control outlines are white at a low alpha. The
    part's hue marks only what belongs to the part: links, the chosen tab's underline, the current outline entry, focus
-   rings and fold chevrons. Gold marks one place on a page, the current page in the course. Color lives in the code
+   rings and fold chevrons. Gold marks one place in the room, the current page in the course. Color lives in the code
    wells, where every kind of token has its own hue, and in the meaning colors of levels, methods and warnings */
 
 .docs {
@@ -36,11 +36,12 @@
     --ok: var(--color-success);
     --bad: #ff8f9c;
 
-    /* Text in clear steps: the title and headings brightest, running text a step below, secondary text and labels
-       below that. Navigation sits a step below the article, so the content comes forward. Every step reads at 15px
-       on the night and in every well */
+    /* Text in clear steps: the title and headings brightest, the lead, bold words and inline code a step below, running
+       text below that so a long page doesn't glare, secondary text and labels below that. Navigation sits a step below
+       the article, so the content comes forward. Every step reads at 15px on the night and in every well */
     --ink-high: #f7f8ff;
-    --ink-body: var(--color-ink-soft);
+    --ink-soft: var(--color-ink-soft);
+    --ink-body: var(--color-muted);
     --ink-muted: var(--color-faint);
     --ink-faint: var(--color-faint);
     --nav-ink: var(--color-faint);
@@ -72,8 +73,7 @@
     /* The reading column's measure in pixels, 76 characters of the article's 19px type, so the frame can add it up */
     --read-w: 947px;
     --room-gap: clamp(40px, 3.4vw, 72px);
-    /* The header and footer line up with the room on wide screens: sidebar, reading column, outline and the gaps.
-       Declared again here because a variable built from others takes the values where it is declared */
+    /* The room's frame on wide screens: sidebar, reading column, outline and the gaps. Declared again here because a variable built from others takes the values where it is declared */
     --frame: calc(var(--side-w) + var(--read-w) + var(--outline-w) + 2 * var(--room-gap));
     --frame-pad: 0px;
     --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
@@ -299,7 +299,6 @@ body.docs .site-header::before {
 .docs .site-footer {
     z-index: 2;
     background: var(--color-night);
-    border-top: 1px solid var(--line);
 }
 
 /* A station opened before the first frame opens at once, so the course never shifts under the reader after load */
@@ -912,7 +911,7 @@ html[data-course-settling] .course-station::details-content {
     margin: 18px 0 0;
     font-size: var(--type-lead);
     line-height: 1.55;
-    color: var(--ink-high);
+    color: var(--ink-soft);
     text-wrap: pretty;
 }
 
@@ -930,7 +929,7 @@ html[data-course-settling] .course-station::details-content {
 /* Running text keeps a reading measure of about 70 characters. Code, entries and tables may use the column's full
    width, which wide screens give them */
 .docs-article {
-    --measure: 38em;
+    --measure: 36em;
 
     container: article / inline-size;
 }
@@ -940,8 +939,13 @@ html[data-course-settling] .course-station::details-content {
     max-width: var(--measure);
 }
 
+/* A clear pause between paragraphs, well over the gap between their lines, so each reads as one step */
 .docs-prose :is(p, ul, ol, table, details, blockquote) {
-    margin: 0 0 1.1em;
+    margin: 0 0 1.4em;
+}
+
+.docs-prose p {
+    text-wrap: pretty;
 }
 
 .docs-prose :is(h2, h3, h4) {
@@ -953,14 +957,14 @@ html[data-course-settling] .course-station::details-content {
 
 .docs-prose h2 {
     position: relative;
-    margin: 2.1em 0 0.6em;
+    margin: 2.4em 0 0.6em;
     font-size: var(--type-heading);
     line-height: 1.2;
     letter-spacing: var(--tracking-snug);
 }
 
 .docs-prose h3 {
-    margin: 1.8em 0 0.5em;
+    margin: 2em 0 0.5em;
     font-size: var(--type-title);
     line-height: 1.3;
     letter-spacing: var(--tracking-snug);
@@ -974,11 +978,13 @@ html[data-course-settling] .course-station::details-content {
 
 .docs-prose strong {
     font-weight: var(--weight-semibold);
-    color: var(--ink-high);
+    color: var(--ink-soft);
 }
 
+/* A link keeps its part's hue, a little quieter than the pure accent beside the softer text, and its full line, which
+   is what tells it apart from that text */
 .docs-prose a {
-    color: var(--accent);
+    color: color-mix(in srgb, var(--accent) 72%, var(--ink-body));
     text-decoration: underline;
     text-decoration-thickness: 1.5px;
     text-decoration-color: color-mix(in srgb, var(--accent) 50%, transparent);
@@ -994,18 +1000,32 @@ html[data-course-settling] .course-station::details-content {
     text-decoration-color: currentColor;
 }
 
+/* The guide sections behind a list, under it as a quiet row of short names, so the list's lines lead and the row is
+   read as places to go. Each name stays whole on its line. The links keep a thin line and take their hue on hover */
+.docs-prose .explained {
+    font-size: var(--type-small);
+    line-height: 1.75;
+    color: var(--ink-faint);
+}
+
+.docs-prose .explained a {
+    color: var(--ink-soft);
+    text-decoration-thickness: 1px;
+    white-space: nowrap;
+}
+
 /* Inline code holds together: a span that fits on a line moves to the next line whole, and one longer than a line
    wraps only at the seams the build marks with <wbr>, such as before a dot or at a camelCase hump. A wrapped span
    leaves room at the line's end for the comma or period after it. Breaking inside a word part stays as the last
    resort for a part wider than the whole column */
 .docs-prose :not(pre, .cmd-chip) > code {
     display: inline;
-    padding: 0.08em 0.36em;
+    padding: 0.14em 0.36em;
     box-decoration-break: clone;
     font-family: var(--font-mono);
     font-size: max(0.84em, 15px);
     line-height: 1.6;
-    color: var(--ink-high);
+    color: var(--ink-soft);
     overflow-wrap: break-word;
     background: var(--tint);
     border-radius: var(--corner-small);
@@ -1521,6 +1541,50 @@ html[data-course-settling] .course-station::details-content {
         padding-left: 0;
         text-indent: 0;
     }
+
+    /* Code that runs past the right edge fades out there, so the reader sees it goes on, and the left edge fades once
+       it has scrolled. A block that fits has no scroll timeline, so it never fades */
+    .docs .code-frame pre.astro-code,
+    .docs .docs-prose pre.astro-code,
+    .docs .ref pre.astro-code {
+        mask-image: linear-gradient(to right, transparent, #000 var(--fade-start), #000 calc(100% - var(--fade-end)), transparent);
+        animation-name: code-fade-start, code-fade-end;
+        animation-duration: auto;
+        animation-timing-function: linear;
+        animation-fill-mode: both;
+        animation-timeline: scroll(self inline), scroll(self inline);
+        animation-range:
+            0 16px,
+            calc(100% - 40px) 100%;
+    }
+}
+
+@property --fade-start {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0px;
+}
+
+@property --fade-end {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0px;
+}
+
+@keyframes code-fade-start {
+    to {
+        --fade-start: 28px;
+    }
+}
+
+@keyframes code-fade-end {
+    from {
+        --fade-end: 48px;
+    }
+
+    to {
+        --fade-end: 0px;
+    }
 }
 
 /* A bare pre outside a frame is a well of its own. A pre inside a frame, in one of its language variants, is not */
@@ -1664,6 +1728,60 @@ html[data-course-settling] .course-station::details-content {
     margin: 8px 0 2px;
     padding: 6px 8px 0;
     color: var(--ink-muted);
+    border-top: 1px solid var(--hair);
+}
+
+/* The Fluxer commit this version was checked against, a quiet line under the version. The commit opens on GitHub, and a
+   clear layer gives its short name a whole touch target without spacing the line out */
+.fluxer-pin {
+    flex: none;
+    margin: 10px 0 0;
+    padding: 0 14px;
+    font-size: var(--type-small);
+    line-height: 1.4;
+    color: var(--nav-ink);
+}
+
+.fluxer-pin a,
+.docs-prose .fluxer-pin-note a {
+    position: relative;
+    font-family: var(--font-mono);
+}
+
+.fluxer-pin a {
+    color: var(--ink-muted);
+    text-decoration: underline;
+    text-decoration-color: var(--hair-strong);
+    text-underline-offset: 3px;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    transition:
+        color var(--speed-fast) ease,
+        text-decoration-color var(--speed-fast) ease;
+}
+
+.fluxer-pin a::after {
+    position: absolute;
+    inset: -13px -6px;
+    content: "";
+}
+
+.fluxer-pin a:hover {
+    color: var(--ink-high);
+    text-decoration-color: currentColor;
+}
+
+.fluxer-pin a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* The same commit at the end of the overview, set apart from the last section */
+.docs-prose .fluxer-pin-note {
+    margin-top: 40px;
+    padding-top: 16px;
+    font-size: var(--type-small);
+    color: var(--ink-faint);
     border-top: 1px solid var(--hair);
 }
 
@@ -1925,8 +2043,9 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 
 .search-dialog {
     width: min(680px, calc(100vw - 32px));
-    max-height: min(640px, calc(100vh - 96px));
-    margin: 11vh auto auto;
+    /* The page zoom on wide screens also scales viewport units, so they are divided back out to fit the window */
+    max-height: min(640px, calc(100vh / var(--page-zoom, 1) - 96px));
+    margin: calc(11vh / var(--page-zoom, 1)) auto auto;
     padding: 0;
     overflow: hidden;
     color: var(--color-ink);
@@ -2026,14 +2145,18 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     box-shadow: inset 2px 0 0 var(--tone, var(--accent));
 }
 
+/* Where a title and its group don't fit side by side, the group moves under the title rather than squeezing it */
 .search-hit-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     justify-content: space-between;
-    gap: 14px;
+    gap: 2px 14px;
 }
 
 .search-hit-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
     font-size: var(--type-body);
     font-weight: var(--weight-semibold);
     color: var(--ink-high);
@@ -2070,12 +2193,40 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     font-size: var(--type-body);
     line-height: 1.5;
     color: var(--ink-muted);
+    overflow-wrap: anywhere;
 }
 
 .search-hit-excerpt mark {
     font-weight: var(--weight-semibold);
     color: var(--tone-bright, var(--accent-bright));
     background: none;
+}
+
+/* A phone reads each result top to bottom in one order: where it comes from, its title, then the quieter excerpt, with
+   a faint line between results. The dialog takes the screen's height, so more results show at once */
+@media (max-width: 599px) {
+    .search-dialog {
+        max-height: calc(100svh - 32px);
+        margin-top: 16px;
+    }
+
+    .search-results li + li {
+        border-top: 1px solid var(--tint);
+    }
+
+    .search-hit-head {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+    }
+
+    .search-hit-group {
+        order: -1;
+    }
+
+    .search-hit-excerpt {
+        font-size: var(--type-small);
+    }
 }
 
 .search-status {
@@ -2087,6 +2238,26 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 
 .search-status:empty {
     display: none;
+}
+
+.search-status:has(.search-retry) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+}
+
+.search-retry {
+    min-height: 44px;
+    padding: 0 16px;
+    font: inherit;
+    font-size: var(--type-small);
+    color: var(--ink-high);
+    background: var(--tint);
+    border: 0;
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+    cursor: pointer;
 }
 
 /* Two columns: the outline folds into the top of the page */

@@ -1,7 +1,7 @@
 import { inspect } from "node:util"
 import { Effect, Exit, Scope } from "effect"
 import { expect, onTestFinished, test } from "vitest"
-import { describeError, type LogRecord } from "../../src/index.js"
+import { describeError, type FailureReport, type LogRecord } from "../../src/index.js"
 import { createTestBot as createDefaultTestBot } from "../../src/testing.js"
 import { createTestBot as createNativeTestBot } from "../../src/effect-testing.js"
 import { fixtureToken, modes, type Mode } from "../support/both-apis.js"
@@ -140,6 +140,68 @@ test.each(modes)(
                 body: { code: "ORDINARY_DIAGNOSTIC_CODE", message: "Unknown channel", inner: { code: 7, uses: 1 } },
                 secrets: [],
                 kept: ["ORDINARY_DIAGNOSTIC_CODE", '"code":7'],
+            },
+            "invite codes in invite audit entries and in vanity code changes": {
+                body: {
+                    audit_log_entries: [
+                        {
+                            id: "40",
+                            action_type: 40,
+                            target_id: "audit-canary-target",
+                            options: { max_uses: 0 },
+                            changes: [
+                                { key: "code", new_value: "audit-canary-change" },
+                                { key: "max_uses", new_value: 0 },
+                            ],
+                        },
+                        {
+                            id: "42",
+                            action_type: 42,
+                            target_id: "audit-canary-deleted",
+                            changes: [{ key: "code", old_value: "audit-canary-deleted" }],
+                        },
+                        {
+                            id: "1",
+                            action_type: 1,
+                            target_id: "1456074443980800001",
+                            changes: [
+                                {
+                                    key: "vanity_url_code",
+                                    old_value: "vanity-canary-old",
+                                    new_value: "vanity-canary-new",
+                                },
+                                { key: "name", old_value: "KEPT_OLD_NAME", new_value: "KEPT_NEW_NAME" },
+                            ],
+                        },
+                    ],
+                },
+                secrets: ["audit-canary", "vanity-canary"],
+                // Other audit entries keep their target, and other change pairs keep their values
+                kept: ["1456074443980800001", "KEPT_OLD_NAME", "KEPT_NEW_NAME", '"key":"code"'],
+            },
+            "signed upload URLs in single and multipart upload plans": {
+                body: {
+                    attachments: [
+                        {
+                            upload_mode: "singlepart",
+                            id: "0",
+                            upload_url:
+                                "https://uploads.example.test/a?X-Amz-Credential=upload-canary-credential&X-Amz-Signature=upload-canary-signature",
+                        },
+                        {
+                            upload_mode: "multipart",
+                            id: "1",
+                            parts: [
+                                {
+                                    part_number: 1,
+                                    upload_url: "https://relay.example.test/upload/a?t=upload-canary-relay",
+                                },
+                            ],
+                        },
+                    ],
+                },
+                secrets: ["upload-canary"],
+                kept: ['"upload_mode":"multipart"', '"part_number":1'],
             },
             "the client token inside plain values": {
                 body: { content: `echo ${token}`, embeds: [{ description: [`one ${token}`, "two"] }] },
@@ -376,6 +438,26 @@ test.each(modes)(
         expect(long.text.length).toBeLessThan(65_536 + 64)
         expect(long.text).toMatch(/\d+ more characters\)$/)
 
+        // Invite audit entries and signed upload URLs in a cut off body, cut after a change pair and inside one
+        const audit = (tail: string) =>
+            `{"audit_log_entries":[{"action_type":40,"target_id":"cut-canary-target","changes":[{"key":"code","new_value":"cut-canary-change"}],${tail}`
+        const afterChange = await payload(audit(`"reason":"${"r".repeat(70_000)}`), {
+            headers: { "content-type": "application/json" },
+        })
+        const insideChange = await payload(
+            `{"pad":"${"p".repeat(1_000)}","audit_log_entries":[{"action_type":41,"target_id":"cut-canary-update","changes":[{"key":"code","old_value":"cut-canary-inside${"c".repeat(70_000)}`,
+            { headers: { "content-type": "application/json" } },
+        )
+        const upload = await payload(
+            `{"attachments":[{"upload_url":"https://uploads.example.test/a?X-Amz-Signature=cut-canary-signature","pad":"${"u".repeat(70_000)}`,
+            { headers: { "content-type": "application/json" } },
+        )
+        for (const { record, text } of [afterChange, insideChange, upload]) {
+            expect(record.fields?.truncated).toBe(true)
+            expect(text).not.toContain("cut-canary")
+            expect(text).toContain("[redacted]")
+        }
+
         // Nesting beyond the traversal limit is cut off, with the credentials in it
         const deep = (levels: number) =>
             '{"a":'.repeat(levels) +
@@ -390,14 +472,75 @@ test.each(modes)(
     },
 )
 
-/** Failing handlers, one failure per value, returning the handlerFailed log records the client wrote */
-async function failureOf(mode: Mode, values: readonly unknown[]) {
+test("unsafe gateway payload records hide invite codes in invite dispatches and invite audit entries", async () => {
+    const bot = createDefaultTestBot({
+        logging: { dedupe: false, unsafe: { payloads: true, categories: ["gateway"] } },
+    })
+    onTestFinished(async () => {
+        bot.failures()
+        await bot.shutdown()
+    })
+    bot.client.on("raw", () => {})
+    await bot.ready()
+    const guild = bot.fixtures.ids.guild
+    const channel = bot.fixtures.ids.channel
+    const frames: Record<string, readonly [string, object, readonly string[]]> = {
+        "an invite deletion, which has no other invite field": [
+            "INVITE_DELETE",
+            { code: "gateway-canary-deleted", channel_id: channel, guild_id: guild },
+            ["gateway-canary-deleted"],
+        ],
+        "an invite creation audit entry": [
+            "GUILD_AUDIT_LOG_ENTRY_CREATE",
+            {
+                id: bot.fixtures.nextId(),
+                guild_id: guild,
+                action_type: 40,
+                target_id: "gateway-canary-audit",
+                changes: [{ key: "code", new_value: "gateway-canary-audit" }],
+            },
+            ["gateway-canary-audit"],
+        ],
+        "a vanity code change": [
+            "GUILD_AUDIT_LOG_ENTRY_CREATE",
+            {
+                id: bot.fixtures.nextId(),
+                guild_id: guild,
+                action_type: 1,
+                target_id: guild,
+                changes: [{ key: "vanity_url_code", old_value: "gateway-canary-old", new_value: "gateway-canary-new" }],
+            },
+            ["gateway-canary-old", "gateway-canary-new"],
+        ],
+    }
+    for (const [name, [type, data, secrets]] of Object.entries(frames)) {
+        const before = bot.logs().length
+        bot.emit(type, data)
+        await bot.idle()
+        const payloads = bot
+            .logs()
+            .slice(before)
+            .filter((record) => record.code === "gateway.payloadReceived")
+            .map((record) => String(record.fields?.payload))
+        expect(payloads, name).toHaveLength(1)
+        for (const secret of secrets) expect(payloads[0], `${name}: ${secret}`).not.toContain(secret)
+        expect(payloads[0], name).toContain(type)
+        expect(payloads[0], name).toContain(guild)
+    }
+})
+
+/** Failing handlers, one failure per value, returning the handlerFailed log records the client wrote, or with
+ * described set, the text of each failure report, which an onError hook receives in place of the Error record
+ */
+async function failureOf(mode: Mode, values: readonly unknown[], described?: string[]) {
     const index = { next: 0 }
     const records: LogRecord[] = []
-    const options = { logging: { sink: (record: LogRecord) => records.push(record) } }
+    // Failures that differ only in a masked credential print the same, so deduplication would count them as repeats
+    const options = { logging: { dedupe: false as const, sink: (record: LogRecord) => records.push(record) } }
     if (mode === "default") {
         const bot = createDefaultTestBot({
             ...options,
+            ...(described && { onError: (report: FailureReport) => void described.push(report.describe()) }),
             events: {
                 messageCreate: () => {
                     throw values[index.next++]
@@ -416,6 +559,9 @@ async function failureOf(mode: Mode, values: readonly unknown[]) {
         const bot = await Effect.runPromise(
             createNativeTestBot({
                 ...options,
+                ...(described && {
+                    onError: (report: FailureReport) => Effect.sync(() => void described.push(report.describe())),
+                }),
                 events: { messageCreate: () => Effect.fail(values[index.next++]) },
             }).pipe(Scope.provide(scope)),
         )
@@ -491,6 +637,130 @@ test.each(modes)("%s failure records mask credentials in messages, cause chains 
         for (const secret of secrets.filter((secret) => secret !== fixtureToken))
             expect(describeError(value), `${name}: ${secret}`).not.toContain(secret)
 })
+
+test.each(modes)(
+    "%s failure records, report descriptions and describeError mask passwords, cookies and API keys",
+    async (mode) => {
+        const shapes: Record<string, { value: unknown; secrets: readonly string[]; kept?: readonly string[] }> = {
+            "a password assignment and prose about a password": {
+                value: new Error("Database rejected password=pw-canary-assign, the password was wrong"),
+                secrets: ["pw-canary-assign"],
+                kept: ["the password was wrong"],
+            },
+            "a password in JSON text": {
+                value: new Error(JSON.stringify({ user: "bot", password: "pw-canary-json" })),
+                secrets: ["pw-canary-json"],
+                kept: ['"user":"bot"'],
+            },
+            "a password in a query string and a passwd assignment": {
+                value: new Error(
+                    "GET https://db.example.test/login?user=a&password=pw-canary-query failed passwd=pwcanarypasswd",
+                ),
+                secrets: ["pw-canary-query", "pwcanarypasswd"],
+                kept: ["https://db.example.test/login?user=a&password="],
+            },
+            "a Cookie header": {
+                value: new Error("Request failed Cookie: session=cookie-canary-header; theme=cookie-canary-theme"),
+                secrets: ["cookie-canary-header", "cookie-canary-theme"],
+                kept: ["Request failed Cookie:"],
+            },
+            "a Set-Cookie header in a cause": {
+                value: new Error("Saving failed", {
+                    cause: new Error("Upstream sent Set-Cookie: sid=cookie-canary-set; Path=/"),
+                }),
+                secrets: ["cookie-canary-set"],
+            },
+            "API key assignments": {
+                value: new Error("api_key=key-canary-snake rejected, apiKey: key-canary-camel-123"),
+                secrets: ["key-canary-snake", "key-canary-camel"],
+            },
+            "a thrown object with password and cookie fields": {
+                value: { detail: "save failed", password: "objectpwcanary", cookie: "session=objectcookiecanary" },
+                secrets: ["objectpwcanary", "objectcookiecanary"],
+                kept: ["save failed"],
+            },
+            // Catches: A quoted value was masked only up to its first space or punctuation mark
+            "quoted passwords with spaces, punctuation, a leading space and escaped quotes in JSON text": {
+                value: new Error(
+                    [
+                        JSON.stringify({ password: "blue pw-canary-spaced horse" }),
+                        JSON.stringify({ password: "Ab3&pw-canary-amp,x}y" }),
+                        JSON.stringify({ password: " pw-canary-leading" }),
+                        JSON.stringify({ password: 'left"pw-canary-escaped' }),
+                        JSON.stringify({ api_key: "prefix key-canary-spaced" }),
+                    ].join(" and "),
+                ),
+                secrets: ["pw-canary-spaced", "horse", "pw-canary-amp", "pw-canary-leading", "pw-canary-escaped"],
+                kept: [' and {"password":"'],
+            },
+            "quoted password assignments": {
+                value: new Error(
+                    "Login failed password=\"correct pw-canary-double\" and {'password': 'a b pw-canary-single'}, then password = 'x pw-canary-spaced-equals'",
+                ),
+                secrets: ["pw-canary-double", "pw-canary-single", "pw-canary-spaced-equals"],
+                kept: ["Login failed password=", ", then password = "],
+            },
+            "a thrown object with a password holding quotes and spaces": {
+                value: { detail: "login failed", password: `it's "pw-canary-inspected" now` },
+                secrets: ["pw-canary-inspected"],
+                kept: ["login failed"],
+            },
+            // Catches: A quoted cookie value ended the header, so the cookie after it stayed readable
+            "a Cookie header with a quoted value": {
+                value: new Error('Request failed Cookie: session="cookie-canary-quoted"; theme=cookie-canary-after'),
+                secrets: ["cookie-canary-quoted", "cookie-canary-after"],
+                kept: ["Request failed Cookie:"],
+            },
+            "a cookie header written into JSON text by hand": {
+                value: new Error('Saving failed {"cookie":"session="cookie-canary-handwritten"; theme=dark"}'),
+                secrets: ["cookie-canary-handwritten"],
+                kept: ["Saving failed"],
+            },
+            // Catches: Only the [ of a Set-Cookie array was masked
+            "Set-Cookie arrays in JSON text and in a thrown response's headers": {
+                value: new Error("Response failed", {
+                    cause: {
+                        status: 500,
+                        body: JSON.stringify({ "set-cookie": ["sid=cookie-canary-json-array"] }),
+                        headers: { "set-cookie": ["sid=cookie-canary-array; Path=/", "theme=cookie-canary-second"] },
+                    },
+                }),
+                secrets: ["cookie-canary-json-array", "cookie-canary-array", "cookie-canary-second"],
+            },
+            "cookies in Node raw headers, a fetch Headers object and a Map": {
+                value: {
+                    rawHeaders: ["Content-Type", "text/plain", "Set-Cookie", "sid=cookie-canary-raw"],
+                    headers: new Headers([
+                        ["set-cookie", "sid=cookie-canary-fetch"],
+                        ["cookie", "c=cookie-canary-request"],
+                    ]),
+                    pairs: new Map([["set-cookie", ["sid=cookie-canary-map"]]]),
+                },
+                secrets: ["cookie-canary-raw", "cookie-canary-fetch", "cookie-canary-request", "cookie-canary-map"],
+            },
+        }
+        const entries = Object.entries(shapes)
+        const values = entries.map(([, shape]) => shape.value)
+        const failed = await failureOf(mode, values)
+        const described: string[] = []
+        await failureOf(mode, values, described)
+        // Every failure is reported, none is dropped or replaced by a different failure
+        expect(failed).toHaveLength(entries.length)
+        expect(described).toHaveLength(entries.length)
+        const output = JSON.stringify(failed)
+        const descriptions = described.join("\n")
+        // Text around a masked credential stays readable
+        const messages = failed.map((record) => record.message).join("\n")
+        for (const [name, { value, secrets, kept }] of entries) {
+            for (const secret of secrets) {
+                expect(output, `${name} in a record: ${secret}`).not.toContain(secret)
+                expect(descriptions, `${name} in a report description: ${secret}`).not.toContain(secret)
+                expect(describeError(value), `${name} in describeError: ${secret}`).not.toContain(secret)
+            }
+            for (const text of kept ?? []) expect(messages, `${name} in a record: ${text}`).toContain(text)
+        }
+    },
+)
 
 test.each(modes)(
     "%s failure records and describeError hide URL user information in messages, causes and thrown strings",

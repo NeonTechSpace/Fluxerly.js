@@ -5,8 +5,8 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
 /**
  * Why gateway.send did not hand a command to the shard's connection.
  * The reason input means the shard ID, opcode or data is malformed, cannot be encoded as JSON, or encodes to more than
- * Fluxer's 4,096-byte message limit. The reason reserved means the opcode belongs to the SDK-managed session
- * (heartbeat, Identify or Resume) or is a server-only opcode that Fluxer answers by closing the connection.
+ * Fluxer's 16,384-byte message limit. The reason reserved means the opcode belongs to the SDK-managed session
+ * (heartbeat, Identify or Resume) or is a reserved or server-only opcode that Fluxer answers by closing the connection.
  * The reason notOwned means this client does not own the shard, and notReady means the shard is not currently
  * Connected or lost its connection before the command reached the socket.
  * The reason busy means 500 earlier gateway.send commands on that shard are still waiting for the pacing budget.
@@ -64,14 +64,14 @@ export class GatewaySendError extends FluxerlyError {
 
 const explanations: Record<GatewaySendError["reason"], string> = {
     input: "The shard ID, opcode or command data is invalid",
-    reserved: "The SDK manages this opcode itself, or only Fluxer sends it",
+    reserved: "The SDK manages this opcode itself, or Fluxer closes the connection when a client sends it",
     notOwned: "This client does not run the shard",
     notReady: "The shard is not connected",
     busy: "Too many earlier commands are waiting, because the SDK sends at most 500 commands per minute on each connection",
 }
 
 const hints: Record<GatewaySendError["reason"], string> = {
-    input: "Pass a non-negative integer shard ID and opcode, and JSON data that encodes to at most 4,096 bytes with its opcode",
+    input: "Pass a non-negative integer shard ID and opcode, and JSON data that encodes to at most 16,384 bytes with its opcode",
     reserved: "Use the SDK's own methods, such as presence.set, instead of sending session opcodes",
     notOwned: "Send on a shard listed in client.shards",
     notReady: "Retry after the shard is Connected again, for example after observing client state",

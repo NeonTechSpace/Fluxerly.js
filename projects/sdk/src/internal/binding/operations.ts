@@ -84,11 +84,14 @@ import type {
     ThreadEdit,
     ThreadFromMessageCreate,
     ThreadMemberIterationQuery,
+    ArchivedThreadIterationQuery,
     ThreadMemberPageQuery,
     ThreadMemberQuery,
     ThreadSearchQuery,
 } from "#sdk/threads"
 import type { MemberSearchIterationLimits, MemberSearchQuery } from "#sdk/member-search"
+import type { InstanceBadgeQuery } from "#sdk/instance"
+import { instanceBadges } from "#sdk/internal/instance-badges"
 import type { PermissionFetchOptions, PermissionInput, PermissionTarget } from "#sdk/permissions"
 import type { Attachment, AttachmentDownloadOptions } from "#sdk/attachments"
 import type { ClientOwner } from "#sdk/internal/client"
@@ -101,6 +104,7 @@ import {
     pinPagination,
     reactionUserPagination,
     threadMemberPagination,
+    archivedThreadPagination,
     type Pagination,
 } from "#sdk/internal/pagination"
 import { applicationCurrent } from "#sdk/internal/application"
@@ -159,6 +163,7 @@ import { inviteCreate, inviteDelete, inviteFetch, inviteList } from "#sdk/intern
 import {
     fetchThreadMember,
     fetchThreadMembers,
+    fetchThreadPostData,
     threadActive,
     threadArchived,
     threadCreate,
@@ -204,6 +209,7 @@ import {
     defaultKeepTyping,
     defaultMemberChunks,
     defaultRestRequest,
+    defaultRestCall,
 } from "./default-adapters.js"
 import type { DefaultContext } from "./execute.js"
 import {
@@ -217,6 +223,7 @@ import {
     nativeKeepTyping,
     nativeMemberChunks,
     nativeRestRequest,
+    nativeRestCall,
 } from "./native-adapters.js"
 import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
@@ -318,6 +325,9 @@ function defineOperations<M extends MessageCore>() {
     return checked({
         instance: {
             resolve: custom(defaultInstanceResolve<M>, nativeInstanceResolve<M>),
+            fetchBadges: op(1, (owner: Owner, query?: InstanceBadgeQuery, options?: RequestOptions) =>
+                owner.guild("instance.fetchBadges", () => instanceBadges(query), options),
+            ),
         },
         presence: {
             set: lookup((owner: Owner, input: PresenceInput) => owner.setPresence(input)),
@@ -337,6 +347,8 @@ function defineOperations<M extends MessageCore>() {
         rest: {
             // Generic in the response body and typed with each API's own request shape, so each API adapts it
             request: custom(defaultRestRequest<M>, nativeRestRequest<M>),
+            // Typed by each API's generic route signature, which the adapters erase to the shared route request
+            call: custom(defaultRestCall<M>, nativeRestCall<M>),
         },
         gateway: {
             // The default API passes its options as a fourth argument, which the public Effect member does not have
@@ -397,13 +409,13 @@ function defineOperations<M extends MessageCore>() {
             create: op(2, (owner: Owner, channelId: string, input: WebhookCreate, options?: AuditedRequestOptions) =>
                 owner.webhook("webhooks.create", () => webhookCreate(channelId, input, options), options),
             ),
-            fetch: op(1, (owner: Owner, id: string, options?: AuditedRequestOptions) =>
+            fetch: op(1, (owner: Owner, id: string, options?: RequestOptions) =>
                 owner.webhook("webhooks.fetch", () => webhookFetch(id), options),
             ),
-            fetchForChannel: op(1, (owner: Owner, channelId: string, options?: AuditedRequestOptions) =>
+            fetchForChannel: op(1, (owner: Owner, channelId: string, options?: RequestOptions) =>
                 owner.webhook("webhooks.fetchForChannel", () => webhookList(channelId, "channels"), options),
             ),
-            fetchForGuild: op(1, (owner: Owner, guildId: string, options?: AuditedRequestOptions) =>
+            fetchForGuild: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.webhook("webhooks.fetchForGuild", () => webhookList(guildId, "guilds"), options),
             ),
             edit: op(2, (owner: Owner, id: string, input: WebhookEdit, options?: AuditedRequestOptions) =>
@@ -805,6 +817,11 @@ function defineOperations<M extends MessageCore>() {
             search: op(2, (owner: Owner, channelId: string, query?: ThreadSearchQuery, options?: RequestOptions) =>
                 owner.channel("threads.search", () => threadSearch(channelId, query, owner.decodeMessage), options),
             ),
+            fetchPostData: op(
+                2,
+                (owner: Owner, channelId: string, threadIds: readonly string[], options?: RequestOptions) =>
+                    fetchThreadPostData(owner, channelId, threadIds, options),
+            ),
             join: op(1, (owner: Owner, threadId: string, options?: RequestOptions) =>
                 owner.channel("threads.join", () => threadMembership(threadId, undefined, "PUT"), options),
             ),
@@ -831,6 +848,11 @@ function defineOperations<M extends MessageCore>() {
                 2,
                 (owner: Owner, threadId: string, query: ThreadMemberIterationQuery, options?: RequestOptions) =>
                     threadMemberPagination(owner, threadId, query, options),
+            ),
+            iterateArchived: page(
+                2,
+                (owner: Owner, channelId: string, query: ArchivedThreadIterationQuery, options?: RequestOptions) =>
+                    archivedThreadPagination(owner, channelId, query, options),
             ),
         },
         attachments: {

@@ -74,8 +74,10 @@ function run(command, args, cwd, timeout = 120_000, env = process.env) {
     return stdout
 }
 
-function packageManager(args, cwd) {
-    return /\.[cm]?js$/.test(pnpm) ? run(process.execPath, [pnpm, ...args], cwd) : run(pnpm, args, cwd)
+function packageManager(args, cwd, timeout) {
+    return /\.[cm]?js$/.test(pnpm)
+        ? run(process.execPath, [pnpm, ...args], cwd, timeout)
+        : run(pnpm, args, cwd, timeout)
 }
 
 function examples(source) {
@@ -154,11 +156,14 @@ function guideCodeBlocks(guides) {
             const fence = new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*$`)
             const end = lines.findIndex((candidate, index) => index > line && fence.test(candidate))
             if (end < 0) throw new Error(`Unclosed ${language} guide example in ${guide.slug}`)
+            // A first line such as // bot.ts names the file a reader saves, so a later example can import it
+            const name = lines[line + 1]?.match(/^\/\/ ([\w-]+\.(?:js|ts))$/)?.[1]
             blocks.push({
                 guide: guide.slug,
                 language,
                 source: lines.slice(line + 1, end).join("\n"),
                 line: line + 1,
+                ...(name === undefined ? {} : { name }),
             })
             line = end
         }
@@ -205,12 +210,33 @@ console.log(
     `Authored website guide coverage: ${authoredGuideExamples.length} fenced JavaScript or TypeScript examples across ${websiteGuides.length} inventoried guides (${guideExampleCounts.default} default, ${guideExampleCounts.effect} Effect). JavaScript uses checkJs false and TypeScript is strict`,
 )
 
+// A relative import names a file that an example of the same guide declares with its first line, such as // bot.ts
+for (const example of authoredGuideExamples) {
+    assert.ok(
+        example.name === undefined ||
+            authoredGuideExamples.filter((other) => other.guide === example.guide && other.name === example.name)
+                .length === 1,
+        `${example.guide} names more than one example ${example.name}`,
+    )
+    for (const specifier of example.imports) {
+        if (!specifier.startsWith(".")) continue
+        const named = authoredGuideExamples.find(
+            (candidate) => candidate.guide === example.guide && `./${candidate.name}` === specifier,
+        )
+        assert.ok(named, `${example.guide}:${example.line} imports ${specifier}, which no example of that guide names`)
+        assert.equal(named.kind, example.kind, `${example.guide}:${example.line} imports an example of the other API`)
+    }
+}
+
+/** Write each guide's examples into a folder of their own, so named examples can be imported by their file names */
 function writeAuthoredGuideExamples(consumer, kind) {
     const javascript = []
     const typescript = []
     for (const [index, example] of authoredGuideExamples.entries()) {
         if (example.kind !== kind) continue
-        const file = `authored-guide-${example.guide}-${index + 1}.${example.language}`
+        const folder = `authored-guide-${example.guide}`
+        mkdirSync(join(consumer, folder), { recursive: true })
+        const file = `${folder}/${example.name ?? `example-${index + 1}.${example.language}`}`
         writeFileSync(join(consumer, file), example.source)
         const files = example.language === "js" ? javascript : typescript
         files.push(file)
@@ -233,46 +259,67 @@ const repositoryExamples = await Promise.all(
             const source = readFileSync(join(exampleRoot, folder, file), "utf8")
             const imports = await guideImportSpecifiers(source)
             const location = `examples/${folder}/${file}`
-            return { folder, file, source, language: file.slice(-2), kind: entryPointKind(imports, location) }
+            return {
+                folder,
+                file,
+                source,
+                language: file.slice(-2),
+                kind: entryPointKind(imports, location),
+                // A test such as bot.test.ts imports its bot by a relative path, and the bot's own test runs it
+                test: /\.test\.(?:js|ts)$/.test(file),
+            }
         }),
 )
-assert.ok(repositoryExamples.length > 0, "Expected repository example programs outside examples/starter")
+assert.ok(
+    repositoryExamples.some((example) => !example.test),
+    "Expected repository example programs outside examples/starter",
+)
 
 // Blank lines are layout only. The TypeScript to JavaScript conversion drops them, and bot.js may keep them for reading
 const javascriptProgram = async (source) =>
     (await normalizeJavaScriptExample(source)).replaceAll(/\n(?:[ \t]*\n)+/g, "\n")
-const pairedExampleFolders = [...new Set(repositoryExamples.map((example) => example.folder))].filter((folder) =>
-    ["bot.ts", "bot.js"].every((file) =>
-        repositoryExamples.some((example) => example.folder === folder && example.file === file),
-    ),
+// A relative import of a .ts file, such as a test's ./bot.ts, names the matching .js file in the JavaScript variant
+const javascriptVariant = (source) => javascriptTwin(source).replace(/(["']\.\.?\/[^"']+)\.ts(["'])/g, "$1.js$2")
+const pairedExamples = repositoryExamples.filter(
+    (example) =>
+        example.language === "ts" &&
+        repositoryExamples.some(
+            (other) => other.folder === example.folder && other.file === `${example.file.slice(0, -3)}.js`,
+        ),
 )
-for (const folder of pairedExampleFolders) {
-    const source = (file) =>
-        repositoryExamples.find((example) => example.folder === folder && example.file === file).source
+for (const { folder, file, source } of pairedExamples) {
+    const javascriptFile = `${file.slice(0, -3)}.js`
+    const javascript = repositoryExamples.find(
+        (example) => example.folder === folder && example.file === javascriptFile,
+    )
     assert.equal(
-        await javascriptProgram(source("bot.js")),
-        await javascriptProgram(javascriptTwin(source("bot.ts"))),
-        `examples/${folder}/bot.js must be the JavaScript variant the website derives from bot.ts`,
+        await javascriptProgram(javascript.source),
+        await javascriptProgram(javascriptVariant(source)),
+        `examples/${folder}/${javascriptFile} must be the JavaScript variant of ${file}`,
     )
 }
 const repositoryExampleCounts = Object.fromEntries(
     ["default", "effect"].map((kind) => [kind, repositoryExamples.filter((example) => example.kind === kind).length]),
 )
 console.log(
-    `Repository example coverage: ${repositoryExamples.length} programs in ${new Set(repositoryExamples.map((example) => example.folder)).size} folders (${repositoryExampleCounts.default} default, ${repositoryExampleCounts.effect} Effect), ${pairedExampleFolders.length} bot.js files matching their bot.ts. TypeScript is strict and JavaScript uses checkJs with strict settings except noImplicitAny`,
+    `Repository example coverage: ${repositoryExamples.length} files in ${new Set(repositoryExamples.map((example) => example.folder)).size} folders (${repositoryExampleCounts.default} default, ${repositoryExampleCounts.effect} Effect, ${repositoryExamples.filter((example) => example.test).length} tests), ${pairedExamples.length} JavaScript files matching their TypeScript. TypeScript is strict, program JavaScript uses checkJs with strict settings except noImplicitAny and test JavaScript uses checkJs false`,
 )
 
+/** Write each example folder into a folder of its own, so a test imports its bot by the same relative path */
 function writeRepositoryExamples(consumer, kind) {
-    const javascript = []
-    const typescript = []
+    const fixtures = { javascript: [], typescript: [], javascriptTests: [], programs: [] }
     for (const example of repositoryExamples) {
         if (example.kind !== kind) continue
-        const file = `repository-example-${example.folder}-${example.file}`
+        const folder = `repository-example-${example.folder}`
+        mkdirSync(join(consumer, folder), { recursive: true })
+        const file = `${folder}/${example.file}`
         writeFileSync(join(consumer, file), example.source)
-        const files = example.language === "js" ? javascript : typescript
-        files.push(file)
+        if (example.language === "ts") fixtures.typescript.push(file)
+        else if (example.test) fixtures.javascriptTests.push(file)
+        else fixtures.javascript.push(file)
+        if (!example.test) fixtures.programs.push({ file, language: example.language })
     }
-    return { javascript, typescript }
+    return fixtures
 }
 
 function completeEffectStarter() {
@@ -335,6 +382,8 @@ const buildOptions = JSON.parse(readFileSync(join(sdk, "tsconfig.json"), "utf8")
 assert.equal(buildOptions.removeComments, undefined, "The build must keep public comments in declarations")
 assert.equal(buildOptions.stripInternal, undefined, "The build must keep every public declaration")
 
+// The compiler options of the generated TypeScript starter, read once its own check script passed
+let starterCompilerOptions
 const temporaryRoot = realpathSync(tmpdir())
 const temporary = mkdtempSync(join(temporaryRoot, "fluxerly-package-check-"))
 try {
@@ -343,11 +392,13 @@ try {
     const stagedFiles = JSON.parse(readFileSync(staged.manifestPath, "utf8")).npm
     const files = stagedFiles.map((file) => file.path)
     // A ceiling about a fifth above the current size catches accidental duplication, such as embedded map sources.
-    // Raise it deliberately when the SDK itself grows
+    // Raise it deliberately when the SDK itself grows. It last grew from about 12.0 MB to 12.7 MB with the types
+    // generated from Fluxer's documents: The REST routes client.rest.call checks (src/rest-routes.ts, about 0.37 MB
+    // with its declarations and map) and the gateway payload types of the raw event (about 0.29 MB)
     const unpackedBytes = stagedFiles.reduce((total, file) => total + file.size, 0)
     assert.ok(
-        unpackedBytes <= 12_500_000,
-        `The npm package unpacks to ${unpackedBytes} bytes, above the 12.5 MB ceiling`,
+        unpackedBytes <= 15_200_000,
+        `The npm package unpacks to ${unpackedBytes} bytes, above the 15.2 MB ceiling`,
     )
     for (const entry of ["index", "effect", "testing", "effect-testing", "cache", "application", "sharding"]) {
         for (const extension of ["js", "js.map", "d.ts", "d.ts.map"]) {
@@ -555,9 +606,50 @@ try {
                     // The generated check script runs the compiler on the generated tsconfig.json and passes without
                     // changes
                     packageManager(["run", "check"], starter)
+                    starterCompilerOptions ??= JSON.parse(
+                        readFileSync(join(starter, "tsconfig.json"), "utf8"),
+                    ).compilerOptions
                 }
                 // node --test passes when it finds no test file, so the report must show the generated test passing
                 assert.match(packageManager(["test"], starter), /^(?:#|ℹ) pass 1$/m)
+
+                // A first test must explain a broken command and must end on a stuck one. Each case swaps the starter's
+                // command body, and the stuck case also shortens the generated timeout
+                const botFile = join(starter, template === "js" ? "bot.js" : "bot.ts")
+                const healthyBot = readFileSync(botFile, "utf8")
+                const withCommand = (body) => {
+                    const changed = healthyBot.replace('({ reply }) => reply("Pong!")', body)
+                    assert.notEqual(changed, healthyBot, `The ${template} starter's command body moved`)
+                    writeFileSync(botFile, changed)
+                }
+                const thrownText = "starter-check-thrown-text"
+                withCommand(
+                    template === "effect"
+                        ? `() => Effect.die(new Error("${thrownText}"))`
+                        : `() => { throw new Error("${thrownText}") }`,
+                )
+                assert.throws(
+                    () => packageManager(["test"], starter),
+                    (error) => error.status === 1 && `${error.stdout}${error.stderr}`.includes(thrownText),
+                    `The ${template} starter's test must fail with the text its command threw`,
+                )
+                const generatedManifest = JSON.parse(readFileSync(join(starter, "package.json"), "utf8"))
+                const shortened = generatedManifest.scripts.test.replace("--test-timeout=30000", "--test-timeout=2000")
+                assert.notEqual(shortened, generatedManifest.scripts.test, "The generated test script sets a timeout")
+                writeFileSync(
+                    join(starter, "package.json"),
+                    JSON.stringify({
+                        ...generatedManifest,
+                        scripts: { ...generatedManifest.scripts, test: shortened },
+                    }),
+                )
+                withCommand(template === "effect" ? "() => Effect.never" : "() => new Promise(() => {})")
+                // The hang guard is well past the shortened timeout, and a hang ends with no exit status
+                assert.throws(
+                    () => packageManager(["test"], starter, 60_000),
+                    (error) => error.status === 1,
+                    `The ${template} starter's test script must end a test whose command never settles`,
+                )
                 console.log(`fluxerly init ${template} starter project passed its generated test`)
             }
         }
@@ -802,8 +894,6 @@ try {
                     "bot-effect.ts",
                     "readme-example-*.ts",
                     ...additionalExamples,
-                    ...authoredGuideFixtures.typescript,
-                    ...repositoryExampleFixtures.typescript,
                 ],
             }),
         )
@@ -814,6 +904,8 @@ try {
         process.stdout.write(
             withoutSdkOutput(run(process.execPath, ["--enable-source-maps", "workflow.js", kind], consumer, 15_000)),
         )
+        // The other consumer programs have the Node.js types and no DOM library, as a Node.js-only project does. Effect
+        // 4.1.0 failed that check, which is why the peer range starts at 4.1.2
         writeFileSync(
             join(consumer, "run-bot-tsconfig.json"),
             JSON.stringify({
@@ -829,7 +921,7 @@ try {
                     checkJs: true,
                     allowImportingTsExtensions: true,
                     erasableSyntaxOnly: true,
-                    lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                    lib: ["ES2024"],
                 },
                 include:
                     kind === "default"
@@ -851,7 +943,7 @@ try {
                         noUncheckedIndexedAccess: true,
                         noEmit: true,
                         allowImportingTsExtensions: true,
-                        lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                        lib: ["ES2024"],
                     },
                     files: additionalExamples,
                 }),
@@ -874,7 +966,7 @@ try {
                         allowJs: true,
                         checkJs: true,
                         allowImportingTsExtensions: true,
-                        lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                        lib: ["ES2024"],
                     },
                     files: authoredGuideFixtures.typescript,
                 }),
@@ -896,7 +988,7 @@ try {
                         checkJs: false,
                         noEmit: true,
                         allowImportingTsExtensions: true,
-                        lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+                        lib: ["ES2024"],
                     },
                     files: authoredGuideFixtures.javascript,
                 }),
@@ -917,7 +1009,7 @@ try {
             allowJs: true,
             checkJs: true,
             allowImportingTsExtensions: true,
-            lib: kind === "default" ? ["ES2024"] : ["ES2024", "ESNext.Disposable", "DOM"],
+            lib: ["ES2024"],
         }
         for (const { language, files, compilerOptions } of [
             {
@@ -931,6 +1023,13 @@ try {
                 files: repositoryExampleFixtures.javascript,
                 compilerOptions: { ...exampleCompilerOptions, noImplicitAny: false },
             },
+            // A test's helpers take option objects whose shapes only the TypeScript test declares, so its JavaScript
+            // variant is checked for syntax and imports, while the TypeScript test is strict
+            {
+                language: "javascript-test",
+                files: repositoryExampleFixtures.javascriptTests,
+                compilerOptions: { ...exampleCompilerOptions, checkJs: false },
+            },
         ]) {
             if (files.length === 0) continue
             const config = `repository-example-${language}-tsconfig.json`
@@ -938,12 +1037,27 @@ try {
             run(process.execPath, [compiler, "-p", config], consumer)
         }
         console.log(
-            `${kind} repository example programs passed: ${repositoryExampleFixtures.javascript.length} JavaScript and ${repositoryExampleFixtures.typescript.length} TypeScript`,
+            `${kind} repository examples compiled: ${repositoryExampleFixtures.javascript.length + repositoryExampleFixtures.javascriptTests.length} JavaScript and ${repositoryExampleFixtures.typescript.length} TypeScript`,
         )
-        // The default API's JavaScript and TypeScript files are the same program, so its JavaScript files run here
+        // A project from fluxerly init compiles with its own settings, without exactOptionalPropertyTypes and
+        // noUncheckedIndexedAccess. Some types infer differently without them, so guide and example TypeScript is
+        // compiled a second time with exactly those settings, as a reader's project compiles it
+        assert.ok(starterCompilerOptions, "The starter project check must run before the starter settings pass")
+        const starterSettingsFiles = [...authoredGuideFixtures.typescript, ...repositoryExampleFixtures.typescript]
+        writeFileSync(
+            join(consumer, "starter-settings-tsconfig.json"),
+            JSON.stringify({ compilerOptions: starterCompilerOptions, files: starterSettingsFiles }),
+        )
+        run(process.execPath, [compiler, "-p", "starter-settings-tsconfig.json"], consumer)
+        console.log(
+            `${kind} guide and example TypeScript passed with the starter project's settings: ${starterSettingsFiles.length} files`,
+        )
+        // The default API's JavaScript and TypeScript files are the same program, so its JavaScript files run here.
+        // The examples' own tests run in the SDK's test:examples script
         copyFileSync(join(fixtureDirectory, "repository-examples.js"), join(consumer, "repository-examples.js"))
-        const runnableExamples =
-            kind === "default" ? repositoryExampleFixtures.javascript : repositoryExampleFixtures.typescript
+        const runnableExamples = repositoryExampleFixtures.programs
+            .filter(({ language }) => language === (kind === "default" ? "js" : "ts"))
+            .map(({ file }) => file)
         process.stdout.write(
             withoutSdkOutput(
                 run(process.execPath, ["repository-examples.js", kind, ...runnableExamples], consumer, 15_000),

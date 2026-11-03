@@ -73,9 +73,29 @@ test("every live package script and direct runner check resolves to declared sce
     const scripts = Object.keys(packageJson.scripts).filter(
         (script) => (script === "test:live" || script.startsWith("test:live:")) && script !== "test:live:all",
     )
-    expect(checks.size).toBe(scripts.length + 3)
+    for (const script of scripts)
+        expect(checks.has(script === "test:live" ? "sandbox" : script.slice("test:live:".length))).toBe(true)
     for (const check of checks.values())
         for (const { harness, args } of check.commands) expect(declaredCheck(harness, args)).toBeDefined()
+})
+
+// Rewriting the committed capture fixture is a deliberate maintainer step, and the 1 MiB attachment variant is a
+// quicker form of `--attachments`, which the runner already runs
+const notRunByRunner = ["gateway-capture-write", "messages-attachments-small"]
+
+test("the runner runs every SDK-work scenario", () => {
+    const run = new Set(
+        [...liveChecks().values()].flatMap((check) =>
+            check.commands.map(({ harness, args }) => declaredCheck(harness, args)?.key),
+        ),
+    )
+    const sdkWork = Object.entries(checkClasses).flatMap(([harness, scenarios]) =>
+        Object.entries(scenarios)
+            .filter(([, declaration]) => declaration.level === "sdk-work")
+            // A scenario with a lock per API mode is found under its default mode's key
+            .map(([scenario]) => declaredCheck(harness, ["default", ...(scenario ? scenario.split(" ") : [])]).key),
+    )
+    expect(sdkWork.filter((key) => !run.has(key) && !notRunByRunner.includes(key))).toEqual([])
 })
 
 test("the runner treats only checks whose every command is SDK work as runnable", () => {
@@ -84,6 +104,12 @@ test("the runner treats only checks whose every command is SDK work as runnable"
     expect(checks.get("presence")?.sdkWork).toBe(false)
     expect(checks.get("pins")).toMatchObject({ sdkWork: true, lockClass: "test-owned" })
     expect(checks.get("administration")).toMatchObject({ sdkWork: true, lockClass: "shared-state" })
+})
+
+test("message retention checks exclude other checks' guild-wide parent-deletion invalidation", () => {
+    const checks = liveChecks()
+    for (const name of ["cache", "attachments"]) expect(checks.get(name)?.lockClass).toBe("shared-state")
+    expect(declaredCheck("messages.js", ["default", "--attachments-small"])?.lockClass).toBe("shared-state")
 })
 
 test("scenario keys follow the arguments after the mode in any order", () => {

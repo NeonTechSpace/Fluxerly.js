@@ -89,34 +89,94 @@ function pathFailure(path: unknown): InputValidationFailure | undefined {
     return undefined
 }
 
-/** Encode query parameters in insertion order, skipping undefined values */
+const queryTypeMessage =
+    "REST query must be an object of string, number or boolean values, or arrays of them for a repeated parameter"
+
+/** Encode query parameters in insertion order, skipping undefined values and repeating a name once per array item */
 function encodeQuery(query: unknown): string | InputValidationFailure {
     if (query === undefined) return ""
-    if (!record(query) || Array.isArray(query))
-        return inputValidationFailure(
-            "query",
-            "type",
-            "REST query must be an object of string, number or boolean values",
-        )
+    if (!record(query) || Array.isArray(query)) return inputValidationFailure("query", "type", queryTypeMessage)
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) {
         if (value === undefined) continue
         if (key === "") return inputValidationFailure("query", "format", "REST query parameter names must not be empty")
-        if (typeof value === "number" && !Number.isFinite(value))
-            return inputValidationFailure("query", "type", "REST query numbers must be finite")
-        if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")
-            return inputValidationFailure(
-                "query",
-                "type",
-                "REST query must be an object of string, number or boolean values",
-            )
-        params.append(key, String(value))
+        for (const item of Array.isArray(value) ? (value as readonly unknown[]) : [value]) {
+            if (typeof item === "number" && !Number.isFinite(item))
+                return inputValidationFailure("query", "type", "REST query numbers must be finite")
+            if (typeof item !== "string" && typeof item !== "number" && typeof item !== "boolean")
+                return inputValidationFailure("query", "type", queryTypeMessage)
+            params.append(key, String(item))
+        }
     }
     const encoded = params.toString()
     if (encoded.length > queryMaxLength)
         return inputValidationFailure("query", "length", "The encoded REST query must not exceed 8,192 characters")
     return encoded
 }
+
+/** The files entry an attachments entry describes, matched by its id as Fluxer's multipart parser does, or undefined */
+function fileIndex(id: unknown, count: number): number | undefined {
+    const index = typeof id === "number" ? id : typeof id === "string" && /^\d+$/.test(id) ? Number(id) : Number.NaN
+    return Number.isSafeInteger(index) && index >= 0 && index < count ? index : undefined
+}
+
+/**
+ * The attachments list sent beside files. Fluxer reads each entry whose id is a files index as that new file's metadata
+ * and every other entry as an existing attachment to keep, and on an edit the list replaces the message's attachments.
+ * So the caller's entries for existing attachments are kept first, a caller entry for a new file may add its title or
+ * description and repeat its filename or flags, and the files' own metadata follows
+ */
+function withCallerAttachments(
+    caller: unknown,
+    metadata: readonly Record<string, unknown>[],
+): unknown[] | InputValidationFailure {
+    if (caller === undefined) return [...metadata]
+    if (!Array.isArray(caller))
+        return inputValidationFailure("body.attachments", "type", "With files, body.attachments must be an array")
+    const kept: unknown[] = []
+    const merged = metadata.map((entry) => ({ ...entry }))
+    const described = new Set<number>()
+    for (const entry of caller as readonly unknown[]) {
+        if (!record(entry) || Array.isArray(entry) || entry.id === undefined)
+            return inputValidationFailure(
+                "body.attachments[]",
+                "type",
+                "Each body.attachments entry must be an object with the id of an existing attachment or of a files entry",
+            )
+        const index = fileIndex(entry.id, merged.length)
+        if (index === undefined) {
+            kept.push(entry)
+            continue
+        }
+        const unsupported = unsupportedKeyFailure(entry, newFileFields, "body.attachments[]", "a new file's entry")
+        if (unsupported) return unsupported
+        if (described.has(index))
+            return inputValidationFailure(
+                "body.attachments[]",
+                "unique",
+                "Each files entry may have at most one body.attachments entry",
+            )
+        described.add(index)
+        const target = merged[index]!
+        for (const key of newFileFields) {
+            if (key === "id" || entry[key] === undefined || entry[key] === target[key]) continue
+            if (target[key] !== undefined)
+                return inputValidationFailure(
+                    `body.attachments[].${key}`,
+                    "relationship",
+                    `A new file's ${key} in body.attachments must match its files entry`,
+                )
+            target[key] = entry[key]
+        }
+    }
+    return [...kept, ...merged]
+}
+
+/**
+ * Keys a caller entry for a new file may set, as Fluxer's inline attachment format names them. Title and description
+ * are added when its files entry has none, and any key its files entry already sets must repeat that value
+ */
+const newFileFields = ["id", "title", "description", "filename", "flags"]
 
 /** Serialize the JSON body and any files, which Fluxer's multipart convention describes in body.attachments */
 function encodeBody(
@@ -135,22 +195,21 @@ function encodeBody(
         const { path, constraint, explanation } = attachments.detail
         return inputValidationFailure(path.replace(/^attachments/, "files"), constraint, explanation)
     }
-    if (
-        attachments.files.length &&
-        body !== undefined &&
-        (!record(body) || Array.isArray(body) || "attachments" in body)
-    )
-        return inputValidationFailure(
-            "body",
-            "relationship",
-            "With files, the body must be omitted or a JSON object without attachments",
-        )
+    if (attachments.files.length && body !== undefined && (!record(body) || Array.isArray(body)))
+        return inputValidationFailure("body", "relationship", "With files, the body must be omitted or a JSON object")
     if (body === undefined && !attachments.files.length) return undefined
+    let payload = body
+    if (attachments.files.length) {
+        const listed = withCallerAttachments(
+            (body as Record<string, unknown> | undefined)?.attachments,
+            attachments.metadata ?? [],
+        )
+        if (listed instanceof InputValidationFailure) return listed
+        payload = { ...(body as object | undefined), attachments: listed }
+    }
     let json: string | undefined
     try {
-        json = JSON.stringify(
-            attachments.files.length ? { ...(body as object | undefined), attachments: attachments.metadata } : body,
-        )
+        json = JSON.stringify(payload)
     } catch {
         // allow-silent: An unserializable body becomes the typed input failure returned below
         json = undefined
@@ -164,6 +223,60 @@ function majorResource(segments: readonly string[]): string {
     for (let index = 0; index < segments.length - 1; index++)
         if (majorResources.has(segments[index]!) && /^\d+$/.test(segments[index + 1]!)) return segments[index + 1]!
     return "rest"
+}
+
+const routeFields = ["params", "query", "body", "files", "auditReason", "timeoutMs", "signal"]
+const routePattern = /^(GET|POST|PUT|PATCH|DELETE) (\/\S*)$/
+/** Parameter names short enough to repeat in an explanation without copying arbitrary caller text */
+const nameableParameter = /^[A-Za-z_][\w]{0,63}$/
+
+/**
+ * Turn one client.rest.call into the client.rest.request it sends: The route's method, and its path template with
+ * each {name} replaced by that path parameter, percent-encoded as one segment. The query, body, files and options pass
+ * through unchanged, so the result meets the same validation as a caller-described request
+ */
+export function routeRequest(route: unknown, input: unknown): Record<string, unknown> | InputValidationFailure {
+    const match = typeof route === "string" ? routePattern.exec(route) : null
+    if (!match)
+        return inputValidationFailure(
+            "route",
+            "format",
+            "REST routes must be a method and a path template, such as GET /channels/{channel_id}/messages",
+        )
+    if (input !== undefined && (!record(input) || Array.isArray(input)))
+        return inputValidationFailure("input", "type", "REST route requests must be objects")
+    const fields = (input ?? {}) as Record<string, unknown>
+    const unsupported = unsupportedKeyFailure(fields, routeFields, "input", "the REST route request")
+    if (unsupported) return unsupported
+    const params = fields.params
+    if (params !== undefined && (!record(params) || Array.isArray(params)))
+        return inputValidationFailure("params", "type", "REST path parameters must be an object of strings or numbers")
+    const values = (params ?? {}) as Record<string, unknown>
+    const names: string[] = []
+    let failure: InputValidationFailure | undefined
+    const path = match[2]!.replace(/\{([^{}]*)\}/g, (_, name: string) => {
+        names.push(name)
+        const value = Object.hasOwn(values, name) ? values[name] : undefined
+        const named = nameableParameter.test(name) ? ` ${name}` : ""
+        if (value === undefined)
+            failure ??= inputValidationFailure("params", "required", `The route needs the path parameter${named}`)
+        else if (
+            !(typeof value === "string" && value !== "") &&
+            !(typeof value === "number" && Number.isSafeInteger(value))
+        )
+            failure ??= inputValidationFailure(
+                "params",
+                "type",
+                `The path parameter${named} must be a non-empty string or a safe integer`,
+            )
+        else return encodeURIComponent(String(value))
+        return ""
+    })
+    if (failure) return failure
+    const extra = unsupportedKeyFailure(values, names, "params", "the route's path parameters")
+    if (extra) return extra
+    const { params: _params, ...rest } = fields
+    return { ...rest, method: match[1], path }
 }
 
 /** Validate one caller request. Failures carry SDK-authored paths and explanations, never the rejected values */

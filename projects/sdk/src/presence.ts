@@ -93,14 +93,14 @@ export class PresenceError extends FluxerlyError {
                 inputExplanation:
                     inputValidation?.explanation ??
                     (reason === "limit"
-                        ? "The member selection is too large. The limits are 1,000 members per community, 10,000 members across at most 100 communities, and 4,096 bytes per gateway request"
+                        ? "The member selection is too large. The limits are 1,000 members per community, 10,000 members across at most 100 communities, and 16,384 bytes per gateway request"
                         : null),
             }),
             {
                 code: `presence.${reason}`,
                 hint:
                     reason === "limit"
-                        ? "Select fewer members, or clear the selection of communities that no longer need member presences"
+                        ? "Reduce the member count or request size when those limits apply. Clearing releases member capacity. A sent community selection keeps its community slot until that shard starts a fresh gateway session or the client confirms a community leave"
                         : operationFailureHint({
                               reason,
                               outcome: "notDispatched",

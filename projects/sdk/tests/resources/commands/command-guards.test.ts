@@ -63,11 +63,11 @@ const memberWire = {
 /** Answer the four permission reads for guild 40, where member 30 holds ManageMessages through role 41 */
 function permissionRoutes(call: RecordedCall): Response | undefined {
     if (call.method !== "GET") return undefined
-    if (call.path === `/v1/guilds/${guildId}`) return Response.json(guildWire)
-    if (call.path === `/v1/guilds/${guildId}/members/30`) return Response.json(memberWire)
-    if (call.path === `/v1/guilds/${guildId}/roles`)
+    if (call.path === `/api/v1/guilds/${guildId}`) return Response.json(guildWire)
+    if (call.path === `/api/v1/guilds/${guildId}/members/30`) return Response.json(memberWire)
+    if (call.path === `/api/v1/guilds/${guildId}/roles`)
         return Response.json([roleWire(guildId, "0"), roleWire("41", moderator)])
-    if (call.path === "/v1/channels/20") return Response.json(channelWire)
+    if (call.path === "/api/v1/channels/20") return Response.json(channelWire)
     return undefined
 }
 
@@ -106,9 +106,11 @@ const { permission_overwrites: _omitted, ...channelWithoutOverwrites } = channel
 /** Answer a channel read with a private conversation, a guild channel or a failure, by channel ID */
 function channelKinds(call: RecordedCall): Response | undefined {
     if (call.method !== "GET") return undefined
-    for (const id of ["20", "21"]) if (call.path === `/v1/channels/${id}`) return Response.json(directMessageWire(id))
-    for (const id of ["22", "23"]) if (call.path === `/v1/channels/${id}`) return Response.json({ ...channelWire, id })
-    if (call.path === "/v1/channels/24") return Response.json({ message: "Internal", code: 0 }, { status: 400 })
+    for (const id of ["20", "21"])
+        if (call.path === `/api/v1/channels/${id}`) return Response.json(directMessageWire(id))
+    for (const id of ["22", "23"])
+        if (call.path === `/api/v1/channels/${id}`) return Response.json({ ...channelWire, id })
+    if (call.path === "/api/v1/channels/24") return Response.json({ message: "Internal", code: 0 }, { status: 400 })
     return undefined
 }
 
@@ -119,7 +121,7 @@ function channelKinds(call: RecordedCall): Response | undefined {
 function threadRoutes(call: RecordedCall): Response | undefined {
     if (call.method !== "GET") return undefined
     const { ManageMessages, SendMessages, SendMessagesInThreads } = Permissions
-    if (call.path === `/v1/guilds/${guildId}/roles`)
+    if (call.path === `/api/v1/guilds/${guildId}/roles`)
         return Response.json([
             roleWire(guildId, "0"),
             roleWire("41", String(ManageMessages | SendMessages | SendMessagesInThreads)),
@@ -128,9 +130,9 @@ function threadRoutes(call: RecordedCall): Response | undefined {
         ["25", "20"],
         ["27", "26"],
     ])
-        if (call.path === `/v1/channels/${id}`)
+        if (call.path === `/api/v1/channels/${id}`)
             return Response.json(fixtures.thread({ id, guild_id: guildId, parent_id: parentId }))
-    if (call.path === "/v1/channels/26")
+    if (call.path === "/api/v1/channels/26")
         return Response.json({
             ...channelWire,
             id: "26",
@@ -145,7 +147,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
 
     test("guildOnly, dmOnly and ownerOnly deny with their reasons and allow matching messages", async () => {
         const remote = await commandFixture((call) =>
-            call.method === "GET" && call.path === "/v1/channels/20"
+            call.method === "GET" && call.path === "/api/v1/channels/20"
                 ? Response.json(directMessageWire("20"))
                 : undefined,
         )
@@ -188,7 +190,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
         expect(reasons).toEqual([guardDenials.guildOnly, guardDenials.dmOnly, guardDenials.ownerOnly])
         expect(reports).toEqual([])
         // Only dmOnly on the guild-less message reads the channel. The guildId decides guildOnly without requests
-        expect(remote.calls.map((call) => `${call.method} ${call.path}`)).toEqual(["GET /v1/channels/20"])
+        expect(remote.calls.map((call) => `${call.method} ${call.path}`)).toEqual(["GET /api/v1/channels/20"])
     })
 
     test("dmOnly allows only a confirmed private channel and denies guild channels without a guildId", async () => {
@@ -233,8 +235,8 @@ describe.each(modes)("%s built-in guards", (mode) => {
         expect(rejected).toEqual(["22", "23"])
         expect(rejections).toEqual(Array(2).fill({ _tag: "CommandGuardRejected", reason: guardDenials.dmOnly }))
         expect(remote.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
-            "GET /v1/channels/21",
-            "GET /v1/channels/23",
+            "GET /api/v1/channels/21",
+            "GET /api/v1/channels/23",
         ])
         expect(reports).toEqual([])
     })
@@ -265,7 +267,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
 
     test("ownerOnly without IDs reads the application owner once per client and decides from it", async () => {
         const remote = await commandFixture((call) =>
-            call.method === "GET" && call.path === "/v1/oauth2/applications/@me"
+            call.method === "GET" && call.path === "/api/v1/oauth2/applications/@me"
                 ? Response.json(applicationWire("30"))
                 : undefined,
         )
@@ -289,14 +291,14 @@ describe.each(modes)("%s built-in guards", (mode) => {
 
         expect(executed).toEqual(["30", "30"])
         expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.ownerOnly }])
-        expect(remote.calls.filter((call) => call.path === "/v1/oauth2/applications/@me")).toHaveLength(1)
+        expect(remote.calls.filter((call) => call.path === "/api/v1/oauth2/applications/@me")).toHaveLength(1)
         expect(reports).toEqual([])
     })
 
     test("ownerOnly without IDs fails the command when the owner read fails, and reads again next time", async () => {
         let available = false
         const remote = await commandFixture((call) =>
-            call.method === "GET" && call.path === "/v1/oauth2/applications/@me"
+            call.method === "GET" && call.path === "/api/v1/oauth2/applications/@me"
                 ? available
                     ? Response.json(applicationWire("30"))
                     : Response.json({ message: "Missing access", code: 0 }, { status: 403 })
@@ -326,7 +328,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
         available = true
         remote.deliver("!owner")
         await vi.waitFor(() => expect(executed).toEqual(["owner"]))
-        expect(remote.calls.filter((call) => call.path === "/v1/oauth2/applications/@me")).toHaveLength(2)
+        expect(remote.calls.filter((call) => call.path === "/api/v1/oauth2/applications/@me")).toHaveLength(2)
         expect(rejected).toEqual([])
         expect(reports).toHaveLength(1)
     })
@@ -370,19 +372,19 @@ describe.each(modes)("%s built-in guards", (mode) => {
             joined_at: null,
         })
         const cached = async (): Promise<Record<string, boolean>> => ({
-            [`/v1/guilds/${guildId}`]: (await settle(client.guilds.get(guildId))) !== undefined,
-            [`/v1/guilds/${guildId}/members/30`]:
+            [`/api/v1/guilds/${guildId}`]: (await settle(client.guilds.get(guildId))) !== undefined,
+            [`/api/v1/guilds/${guildId}/members/30`]:
                 (await settle(client.members.get({ guildId, userId: "30" }))) !== undefined,
-            [`/v1/guilds/${guildId}/roles`]:
+            [`/api/v1/guilds/${guildId}/roles`]:
                 (await settle(client.roles.get({ guildId, id: guildId }))) !== undefined &&
                 (await settle(client.roles.get({ guildId, id: "41" }))) !== undefined,
-            "/v1/channels/20": (await settle(client.channels.get("20"))) !== undefined,
+            "/api/v1/channels/20": (await settle(client.channels.get("20"))) !== undefined,
         })
-        await vi.waitFor(async () => expect((await cached())[`/v1/guilds/${guildId}`]).toBe(true))
+        await vi.waitFor(async () => expect((await cached())[`/api/v1/guilds/${guildId}`]).toBe(true))
         const before = await cached()
         const missing = Object.keys(before).filter((path) => !before[path])
-        expect(missing).toContain(`/v1/guilds/${guildId}/members/30`)
-        expect(missing).not.toContain(`/v1/guilds/${guildId}`)
+        expect(missing).toContain(`/api/v1/guilds/${guildId}/members/30`)
+        expect(missing).not.toContain(`/api/v1/guilds/${guildId}`)
 
         remote.deliver("!purge", { guildId })
         await vi.waitFor(() => expect(executed).toEqual(["purge"]))
@@ -408,7 +410,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
 
     test("requirePermissions denies a channel whose read has no overwrite list, as Fluxer always sends one", async () => {
         const remote = await commandFixture((call) =>
-            call.method === "GET" && call.path === "/v1/channels/20"
+            call.method === "GET" && call.path === "/api/v1/channels/20"
                 ? Response.json(channelWithoutOverwrites)
                 : permissionRoutes(call),
         )
@@ -435,7 +437,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
     test("requirePermissions fails the command, rather than denying it, when the snapshots do not fit together", async () => {
         // The member holds role 77, which the role list lacks, as when a role is deleted between the two reads
         const remote = await commandFixture((call) =>
-            call.method === "GET" && call.path === `/v1/guilds/${guildId}/members/30`
+            call.method === "GET" && call.path === `/api/v1/guilds/${guildId}/members/30`
                 ? Response.json({ ...memberWire, roles: ["41", "77"] })
                 : permissionRoutes(call),
         )
@@ -485,11 +487,11 @@ describe.each(modes)("%s built-in guards", (mode) => {
         expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.missing(["SendMessages"]) }])
         expect(reports).toEqual([])
         const reads = (thread: string, parent: string) => [
-            `/v1/guilds/${guildId}`,
-            `/v1/guilds/${guildId}/members/30`,
-            `/v1/guilds/${guildId}/roles`,
-            `/v1/channels/${thread}`,
-            `/v1/channels/${parent}`,
+            `/api/v1/guilds/${guildId}`,
+            `/api/v1/guilds/${guildId}/members/30`,
+            `/api/v1/guilds/${guildId}/roles`,
+            `/api/v1/channels/${thread}`,
+            `/api/v1/channels/${parent}`,
         ]
         expect(remote.calls.map((call) => call.path)).toEqual([
             ...reads("25", "20"),
@@ -523,9 +525,9 @@ describe.each(modes)("%s built-in guards", (mode) => {
         await vi.waitFor(() => expect(executed.length + rejected.length + reports.length).toBe(2))
         expect(executed).toEqual(["25"])
         expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.missing(["SendMessages"]) }])
-        expect(remote.calls.filter((call) => call.path.startsWith("/v1/channels/")).map((call) => call.path)).toEqual([
-            "/v1/channels/20",
-        ])
+        expect(
+            remote.calls.filter((call) => call.path.startsWith("/api/v1/channels/")).map((call) => call.path),
+        ).toEqual(["/api/v1/channels/20"])
         expect(reports).toEqual([])
     })
 
@@ -533,8 +535,8 @@ describe.each(modes)("%s built-in guards", (mode) => {
         const future = { ...channelWithoutOverwrites, id: "27", type: 13 }
         const forum = { ...channelWire, id: "26", type: 15 }
         const remote = await commandFixture((call) => {
-            if (call.method === "GET" && call.path === "/v1/channels/26") return Response.json(forum)
-            if (call.method === "GET" && call.path === "/v1/channels/27") return Response.json(future)
+            if (call.method === "GET" && call.path === "/api/v1/channels/26") return Response.json(forum)
+            if (call.method === "GET" && call.path === "/api/v1/channels/27") return Response.json(future)
             return permissionRoutes(call)
         })
         const connected = await connect(mode)
@@ -564,7 +566,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
         }
         let channelRead: object = channelWithoutOverwrites
         const remote = await commandFixture((call) =>
-            call.method === "GET" && call.path === "/v1/channels/20"
+            call.method === "GET" && call.path === "/api/v1/channels/20"
                 ? Response.json(channelRead)
                 : permissionRoutes(call),
         )
@@ -588,7 +590,7 @@ describe.each(modes)("%s built-in guards", (mode) => {
         await vi.waitFor(() => expect(rejected).toHaveLength(1))
         // The fresh read's role overwrite removes the permission that role 41 grants
         expect(rejected).toEqual([{ _tag: "CommandGuardRejected", reason: guardDenials.missing(["ManageMessages"]) }])
-        expect(remote.calls.filter((call) => call.path === "/v1/channels/20")).toHaveLength(1)
+        expect(remote.calls.filter((call) => call.path === "/api/v1/channels/20")).toHaveLength(1)
         expect(reports).toEqual([])
     })
 

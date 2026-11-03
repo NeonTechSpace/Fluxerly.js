@@ -12,9 +12,11 @@ export interface ExpressionReference {
     readonly id: string
 }
 
-/** A community's custom emoji identity, name and animation flag.
+/** A community's custom emoji identity, name and animation flag, and the uploader's user ID when Fluxer sent it.
  * Pass this snapshot to message reaction helpers or emoji management methods. It contains no image bytes or
- * creator account, and it does not update when the emoji is renamed or deleted
+ * creator account, and it does not update when the emoji is renamed or deleted.
+ * Fluxer's nsfw field is not kept, because Fluxer marks it deprecated and always sends false. A raw
+ * client.rest.request GET of /guilds/{guild_id}/emojis returns it
  *
  * @category Emoji and stickers
  */
@@ -23,11 +25,18 @@ export interface GuildEmoji extends ExpressionReference {
     readonly name: string
     /** Whether the image is animated */
     readonly animated: boolean
+    /** User ID of the account that uploaded it, from list reads such as emojis.fetchAll and stickers.fetchAll.
+     * Absent from other sources: Creations, edits and the gateway's community snapshots and expression updates do not
+     * include it, so a cached emoji or sticker can lack it. Fetch the list for a value
+     */
+    readonly creatorId?: string
 }
 
 /** A community's custom sticker identity and display metadata, including its description and suggestion tags.
  * This frozen snapshot contains no image bytes or creator account. Use stickers.edit to replace metadata,
- * not to replace the underlying image
+ * not to replace the underlying image.
+ * Fluxer's nsfw field is not kept, because Fluxer marks it deprecated and always sends false. A raw
+ * client.rest.request GET of /guilds/{guild_id}/stickers returns it
  *
  * @category Emoji and stickers
  */
@@ -111,7 +120,7 @@ export interface EmojiEdit {
 }
 
 /** Replace sticker metadata without reading or merging remote state. Images cannot be replaced.
- * A fetched sticker can be spread into this input. Its matching identity and animation fields are ignored
+ * A fetched sticker can be spread into this input. Its matching identity, animation and creatorId fields are ignored
  *
  * @category Emoji and stickers
  */
@@ -141,11 +150,16 @@ export interface ExpressionBatch<A> {
     /** Created resources. They remain created even when another entry fails */
     readonly success: readonly A[]
     /** Failed names in provider order. Duplicate names cannot be correlated to an input index.
-     * Raw localized provider error text is deliberately excluded from SDK data and diagnostics
+     * The provider's explanation is kept only as providerMessage and never appears in SDK errors, logs or diagnostics
      */
     readonly failed: readonly {
         /** Name reported for a failed creation, which may identify more than one input when names repeat */
         readonly name: string
+        /** Fluxer's explanation of this failure, such as a full community or an unreadable image, when it sent one.
+         * It is display text localized for the bot's account, not a stable code: Show it to a person, but do not
+         * match it in code or treat it as a reviewed diagnostic. It is untrusted provider text
+         */
+        readonly providerMessage?: string
     }[]
 }
 

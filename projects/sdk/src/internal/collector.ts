@@ -126,6 +126,8 @@ export class MessageCollector<M extends MessageCore = Message> {
     #drain: ReturnType<typeof setImmediate> | undefined
     #release: (() => void) | undefined
     #settings: Settings<M> | undefined
+    /** The collected channel, which its drop and failure records name so that several collectors stay apart */
+    #fields: { readonly channelId: string } | undefined
     readonly #deadline: number
     #idleDeadline: number
     #busy = false
@@ -213,6 +215,7 @@ export class MessageCollector<M extends MessageCore = Message> {
     }
 
     start(owner: ClientOwner<M>, channelId: string) {
+        this.#fields = { channelId }
         // Filter failures need these even when no callback worker runs
         this.#logger = owner.logging
         this.#failures = owner.failures
@@ -286,6 +289,7 @@ export class MessageCollector<M extends MessageCore = Message> {
                     category: "collectors",
                     code: "collectors.dropped",
                     message: "A full message collector ignored an event while its last callback finished",
+                    fields: this.#fields,
                 },
             )
             return
@@ -377,8 +381,9 @@ export class MessageCollector<M extends MessageCore = Message> {
                     level: "warn",
                     category: "collectors",
                     code: "collectors.failed",
-                    message: `A message collector failed: ${error.message}`,
-                    fields: { reason: error.reason },
+                    // The channel in the message keeps equal failures of collectors in different channels apart
+                    message: `A message collector${this.#fields ? ` in channel ${this.#fields.channelId}` : ""} failed: ${error.message}`,
+                    fields: { reason: error.reason, ...this.#fields },
                     error,
                     origin: error.reason === "handler" || error.reason === "filter" ? "application" : "sdk",
                 })

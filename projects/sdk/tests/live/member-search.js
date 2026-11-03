@@ -8,6 +8,7 @@ import { acquireLock, checkSandboxIdentity, finalizeOwned, loadSandboxEnvironmen
 import { createReporter } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createRetryingSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -159,7 +160,8 @@ const api = async (method, path, body) => (await sandboxApi(method, path, body))
 const rawMemberSearch = (body) => api("POST", `/guilds/${guildId}/members-search`, body)
 
 async function waitForRawMemberSearch(body) {
-    const deadline = performance.now() + 30_000
+    // Each round sends one search, so its paced slot extends the 30 s indexing window, up to 16 rounds
+    const deadline = performance.now() + pacedDeadlineMs(30_000, 16)
     let page
     do {
         page = await rawMemberSearch(body)
@@ -183,7 +185,7 @@ const watchdog = setTimeout(() => {
     // The process is terminating; a lock that cannot be released stays without masking the bounded-run failure
     lock?.release()
     process.exit(1)
-}, 90_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     lock = acquireLock()
@@ -388,7 +390,7 @@ try {
                 globalThis.fetch = async (url, options) => {
                     const target = new URL(String(url))
                     if (
-                        target.pathname === `/v1/guilds/${guildId}/members-search` &&
+                        target.pathname === `/api/v1/guilds/${guildId}/members-search` &&
                         options?.method === "POST" &&
                         ++attempts === 1
                     )
@@ -441,7 +443,7 @@ try {
                 attempts = 0
                 globalThis.fetch = (url, options) => {
                     const target = new URL(String(url))
-                    if (target.pathname !== `/v1/guilds/${guildId}/members-search` || options?.method !== "POST")
+                    if (target.pathname !== `/api/v1/guilds/${guildId}/members-search` || options?.method !== "POST")
                         return rawFetch(url, options)
                     attempts += 1
                     return new Promise((_, reject) => {

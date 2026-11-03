@@ -354,11 +354,11 @@ test("builders snapshot supported structural getter fields across both public en
         "fetch",
         vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = input instanceof Request ? input.url : String(input)
-            if (url === "https://fluxer.app/.well-known/fluxer") {
+            if (url === "https://fluxer.com/.well-known/fluxer") {
                 if (init?.method !== "GET") throw new Error(`Unexpected fetch: ${init?.method} ${url}`)
                 return Response.json(hostedDiscoveryDocument)
             }
-            if (url !== "https://api.fluxer.app/v1/channels/20/messages" || init?.method !== "POST")
+            if (url !== "https://fluxer.com/api/v1/channels/20/messages" || init?.method !== "POST")
                 throw new Error(`Unexpected fetch: ${init?.method} ${url}`)
             if (typeof init?.body !== "string") throw new Error("Message fetch body must be JSON text")
             requests.push(JSON.parse(init.body) as { embeds?: unknown })

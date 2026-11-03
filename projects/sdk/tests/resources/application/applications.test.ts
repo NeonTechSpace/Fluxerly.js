@@ -84,7 +84,7 @@ test.each(modes)("%s projects a frozen current-bot application allowlist without
     expect(Object.hasOwn(api.client.application, "get")).toBe(false)
     expect(calls).toEqual([
         {
-            path: "/v1/oauth2/applications/@me",
+            path: "/api/v1/oauth2/applications/@me",
             method: "GET",
             authorization: "Bot fixture",
         },

@@ -6,16 +6,11 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { Effect, Scope, Exit, Stream } from "effect"
-import {
-    acquireLock,
-    finalizeOwned,
-    loadSandboxEnvironment,
-    openJournal,
-    verifySandboxIdentity,
-} from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { acquireLock, finalizeOwned, loadSandboxEnvironment, openJournal, sandboxBotId } from "./support/harness.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -61,20 +56,21 @@ async function gather(query) {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
-}, 180_000).unref()
+}, harnessWatchdogMs()).unref()
 try {
     lock = acquireLock()
     const sandbox = loadSandboxEnvironment()
     token = sandbox.token
     guildId = sandbox.guildId
     stage = "sandbox_identity"
-    botId = (await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)).botId
+    botId = await sandboxBotId(async (path) => (await api("GET", path)).data, sandbox)
     verified = true
     report(stage)
     if (journalFile.exists()) {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         const sdk = await import(mode === "default" ? "../../dist/index.js" : "../../dist/effect.js")

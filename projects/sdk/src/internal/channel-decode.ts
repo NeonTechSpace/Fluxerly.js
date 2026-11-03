@@ -120,9 +120,7 @@ function decodeCommonFields(value: Record<string, unknown>): Record<string, unkn
         (value.nsfw_override !== undefined &&
             value.nsfw_override !== null &&
             typeof value.nsfw_override !== "boolean") ||
-        (value.content_warning_level !== undefined &&
-            value.content_warning_level !== 0 &&
-            value.content_warning_level !== 1) ||
+        (value.content_warning_level !== undefined && !int32(value.content_warning_level)) ||
         (value.content_warning_text !== undefined &&
             value.content_warning_text !== null &&
             !text(value.content_warning_text, 0, 200)) ||

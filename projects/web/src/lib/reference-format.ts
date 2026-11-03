@@ -59,7 +59,7 @@ function typePieces(type: Type): Piece[] {
         case "query":
             return [text("typeof ", "k"), ...typePieces(type.t)]
         case "op":
-            return [text(`${type.op} `, "k"), ...wrapped(type.t)]
+            return [text(`${type.op} `, "k"), ...wrapped(type.t, "op")]
         case "idx":
             return [...wrapped(type.o), { mode: "list", open: "[", close: "]", items: [typePieces(type.i)] }]
         case "cond":
@@ -86,13 +86,15 @@ function typePieces(type: Type): Piece[] {
 
 // Parentheses only where the grammar needs them. An intersection binds tighter than a union, so it needs none inside
 // one. Conditionals and function types need them inside unions and intersections, and every loose type needs them
-// inside arrays and operators
-function wrapped(type: Type, within?: "union" | "and"): Piece[] {
+// inside operators. Before a [] or ? that follows the type, an inferred type and an operator such as keyof need them
+// too, so an array of inferred elements prints as readonly (infer Each)[] and keyof X[] stays the keys of an array
+function wrapped(type: Type, within?: "union" | "and" | "op"): Piece[] {
     const pieces = typePieces(type)
     const kind = typeof type === "object" && "k" in type ? type.k : undefined
     const functionType = kind === "obj" && isFunctionType(type as ObjectType)
+    const operand = kind === "union" || kind === "and" || kind === "cond" || functionType
     const loose =
-        within === "union" ? kind === "cond" || functionType : within === "and" ? kind === "union" || kind === "cond" || functionType : kind === "union" || kind === "and" || kind === "cond" || functionType
+        within === "union" ? kind === "cond" || functionType : within === "and" ? kind === "union" || kind === "cond" || functionType : within === "op" ? operand : operand || kind === "infer" || kind === "op"
     return loose ? [text("("), ...pieces, text(")")] : pieces
 }
 

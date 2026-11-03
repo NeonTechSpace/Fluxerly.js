@@ -1,6 +1,7 @@
 ---
 // Documentation Markdown. Inline drops the paragraph so a sentence can sit inside a row or a heading. Self is the
-// reference URL of the symbol the text documents, which its prose does not mark
+// reference URL of the symbol the text documents, which its prose does not mark. Entry is the entry point whose names
+// the text means, for a page that has no entry in its route
 import { renderMarkdown } from "../../../lib/markdown"
 
 interface Props {
@@ -8,10 +9,11 @@ interface Props {
     inline?: boolean
     class?: string
     self?: string
+    entry?: string
 }
 
-const { md, inline = false, class: className, self } = Astro.props
-const html = md ? await renderMarkdown(md, { self }) : ""
+const { md, inline = false, class: className, self, entry } = Astro.props
+const html = md ? await renderMarkdown(md, { self, entry: entry ?? Astro.params.entry }) : ""
 const body = inline ? html.trim().replace(/^<p>([\s\S]*)<\/p>$/, "$1") : html
 ---
 

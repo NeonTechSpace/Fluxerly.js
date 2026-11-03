@@ -168,10 +168,11 @@ export interface BotEventOptions<K extends EventName, M extends MessageCore = Me
 }
 
 /** One optional handler per event, as a function or an object with a handler and delivery settings.
- * When a queue fills, runBot drops the oldest waiting event, logs a Warn record and counts the drop, and the bot keeps
- * running. With a partition, the overflow option's rule decides which event is dropped.
- * Handlers for messageCreate run up to eight at a time by default, so they can finish out of order, and other events run
- * one at a time.
+ * By default, a full queue drops the oldest waiting events, logs a Warn record and counts the drop, and the bot keeps
+ * running. With a partition, the overflow option's rule decides which event is dropped. Set overflow to "dropNewest" to
+ * drop the arriving event instead, or to "stop" to stop the bot with CriticalWorkerStoppedError.
+ * By default, messageCreate and partitioned handlers run up to eight callbacks at a time, so they can finish out of
+ * order, and other handlers run one at a time.
  * A failed handler is reported with its original error to onError, or logged in full, without stopping the
  * bot or retrying that handler
  *
@@ -244,7 +245,7 @@ export interface BotOptions<
      * Own enumerable entries are read once when runBot is called. Undefined handlers are skipped.
      * Pass a function, or an object with a handler and its own delivery settings.
      * By default messageCreate and partitioned handlers run up to 8 callbacks at a time and other events 1.
-     * When a queue fills, the oldest waiting event is dropped with a Warn record, and the bot keeps running.
+     * By default, when a queue fills, the oldest waiting event is dropped with a Warn record, and the bot keeps running.
      * With a partition, the overflow option's rule decides which event is dropped.
      * Bot-authored messageCreate and messageUpdate events skip these handlers unless ignoreBots is false
      */

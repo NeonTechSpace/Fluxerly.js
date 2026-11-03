@@ -20,7 +20,7 @@ const accent = "cyan"
         <Fragment slot="title">An Automatic Shard Count</Fragment>
         <Fragment slot="text">
             <p>A shard is one gateway connection, carrying the events of part of the bot's communities. With <code class="inline-code">sharding: "auto"</code>, the SDK counts the communities at the first connect and opens one shard for every 2,000</p>
-            <p>When the bot outgrows that plan while it runs, Fluxer closes a shard with code 4011, and the SDK moves every shard to a larger plan in the same process. The bot keeps running. Events sent during the move are missed, and the move is logged once at Warn</p>
+            <p>Fluxer checks a shard's community count only when the shard starts a new session. When Fluxer refuses a new session with close code 4011, the SDK moves every shard to a larger plan in the same process. The bot keeps running. Events sent during the move are missed, and the move is logged once at Warn</p>
         </Fragment>
         <CodePanel file="bot.ts" label="A bot that chooses its own shard count" code={shardingAuto} />
     </Scene>
@@ -28,8 +28,8 @@ const accent = "cyan"
     <Scene id="sessions" step={2} side="right" {accent} guide={guide("sharding", "resume-after-a-restart")} guideLabel="Session Resume in the Sharding Guide">
         <Fragment slot="title">Restarts That Resume</Fragment>
         <Fragment slot="text">
-            <p>A restarted bot normally starts new sessions and misses what happened while it was down. Fluxer keeps a disconnected session for 60 seconds, and <code class="inline-code">fileSessionStore</code> saves each shard's session at a clean shutdown and offers it at the next start. Its folder, <code class="inline-code">sessions</code> here, holds session IDs that let the token resume a session, so keep it out of version control and readable only by the bot's account</p>
-            <p>A quick restart, such as a deploy, then resumes and receives the missed events within Fluxer's replay limits. Each snapshot is written to a temporary file and renamed into place, so a crash never leaves a half-written one, and a store problem never stops the bot</p>
+            <p>A restarted bot normally starts new sessions and misses what happened while it was down. Fluxer keeps a disconnected session for 60 seconds, and <code class="inline-code">fileSessionStore</code> saves each connected shard's session at a clean shutdown and offers it at the next start. Its folder, <code class="inline-code">sessions</code> here, holds session IDs that let the token resume a session, so keep it out of version control and readable only by the bot's account</p>
+            <p>A quick restart, such as a deploy, can then resume and receive the missed events within Fluxer's replay limits. A shard that was not connected at shutdown starts a new session. Each snapshot is written to a temporary file and renamed into place, so a crash never leaves a half-written one, and a store problem never stops the bot</p>
         </Fragment>
         <CodePanel file="bot.ts" label="A bot that saves its sessions to disk" code={sessionStore} />
     </Scene>
@@ -47,7 +47,7 @@ const accent = "cyan"
         <Fragment slot="title">Crashed Processes Come Back</Fragment>
         <Fragment slot="text">
             <p>When one process is not enough, the SDK's supervisor starts several Node.js child processes, gives each its shards and stops them all on shutdown</p>
-            <p>A child that exits unexpectedly is replaced, up to three times in a row with a growing delay. A child that runs for a minute after becoming ready gets its full budget back, so only a crash loop uses it up</p>
+            <p>A child that exits unexpectedly is replaced, up to three times in a row with a growing delay. A child that runs for a minute after finishing setup gets its full budget back, so only a crash loop uses it up</p>
         </Fragment>
         <CodePanel file="TypeScript" label="The supervisor's parent process" code={supervisor} />
     </Scene>
@@ -61,7 +61,7 @@ const accent = "cyan"
         <CodePanel file="TypeScript" label="The health report's shape" code={botHealth} />
     </Scene>
 
-    <Scene id="deploy" step={6} side="right" {accent} guide={guide("deploying", "run-with-systemd")} guideLabel="Deploying in the Docs">
+    <Scene id="deploy" step={6} side="right" {accent} guide={guide("production-checklist")} guideLabel="The Production Checklist">
         <Fragment slot="title">Deploy with the Token in the Environment</Fragment>
         <Fragment slot="text">
             <p>A deployed bot is an ordinary Node.js process. Here systemd reads the token from a file that only root can read, so the bot's own account never needs access to it, and the token never sits in the code</p>

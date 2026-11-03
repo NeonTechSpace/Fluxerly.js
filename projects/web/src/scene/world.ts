@@ -105,7 +105,13 @@ const glintDelay = 1
 // The ring a message leaves on the water under the conductor: its radius as shares of the conductor
 // width as it starts and as it fades
 const ringFrom = 0.12
-const ringTo = 0.74
+const ringTo = 1.3
+
+// The ribbon and nebula are painted in shares of a box. That box is the hero, except on an upright phone, where shares of a
+// narrow, tall hero would press them together sideways to a quarter of their width. There the box keeps the wide shape they are
+// composed for, and the conductor stands at the share of it where it stands on a wide screen, so the phone shows the slice around it
+const artAspect = 16 / 9
+const artConductor = 0.74
 
 // Layers: the twin is seen only by the reflection camera, the stars and the dome only by the main camera
 const twinLayer = 1
@@ -128,6 +134,8 @@ export function createWorld(hero: HTMLElement): World | null {
     const camera = new PerspectiveCamera()
     const plane = new PlaneGeometry(1, 1)
     const size = new Vector2()
+    const artSize = new Vector2()
+    const artLeft = { value: 0 }
     const pulseAlong = new Vector3(-1, -1, -1)
     const pulseStrength = new Vector3()
 
@@ -200,7 +208,7 @@ export function createWorld(hero: HTMLElement): World | null {
         plane,
         new ShaderMaterial({
             ...veilShader,
-            uniforms: { ...backdropUniforms(veilRatio), uPulseAlong: { value: pulseAlong }, uPulseStrength: { value: pulseStrength } },
+            uniforms: { ...backdropUniforms(veilRatio), uArtSize: { value: artSize }, uArtLeft: artLeft, uPulseAlong: { value: pulseAlong }, uPulseStrength: { value: pulseStrength } },
             transparent: true,
             blending: AdditiveBlending,
             premultipliedAlpha: true,
@@ -310,6 +318,9 @@ export function createWorld(hero: HTMLElement): World | null {
         renderer.setPixelRatio(pixelRatio)
         renderer.setSize(width, height, false)
         size.set(width, height)
+        const artWidth = next.uprightPhone ? Math.max(width, height * artAspect) : width
+        artSize.set(artWidth, height)
+        artLeft.value = next.uprightPhone ? artConductor * artWidth - (next.conductor.left + next.conductor.width / 2) : 0
         camera.near = 1
         camera.far = focal * skyRatio * 1.6
         project(next, lift)
@@ -385,7 +396,7 @@ export function createWorld(hero: HTMLElement): World | null {
         if (since >= 0 && since < ringSeconds) {
             const p = since / ringSeconds
             const radius = box.width * (ringFrom + (ringTo - ringFrom) * (1 - (1 - p) ** 2.2))
-            ring.set(twinX, -focal, radius, (1 - p) ** 2 * Math.min(1, p / 0.06))
+            ring.set(twinX, -focal, radius, (1 - p) ** 1.6 * Math.min(1, p / 0.06))
         } else {
             ring.w = 0
         }

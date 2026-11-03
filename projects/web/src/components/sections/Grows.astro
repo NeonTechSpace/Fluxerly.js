@@ -20,7 +20,7 @@ const columns = [
     },
     {
         title: "Effect, When You Want It",
-        text: "Effect is a TypeScript library for structured programs. The native entry point has the same features with typed failures and scoped cleanup, and it is never required",
+        text: `Build a reusable Effect program with typed failures and scoped cleanup. This example exports <code class="inline-code">main</code> for the application's launcher. The <a class="prose-link" href="${guide("effect-first-bot", "run-the-complete-bot")}">First Effect Bot</a> guide shows a complete runnable file`,
         filename: "app.ts",
         code: effectLayer,
     },
@@ -53,7 +53,7 @@ const columns = [
             }
         </div>
         <p class="footnote">
-            JavaScript needs no TypeScript. TypeScript projects add TypeScript and <code class="inline-code">@types/node</code>. ES modules only, on the Node.js
+            JavaScript needs no TypeScript. TypeScript projects add TypeScript 7 and <code class="inline-code">@types/node</code>. ES modules only, on the Node.js
             versions in the <a class="prose-link" href={guide("support-and-compatibility")}>support guide</a>
         </p>
     </div>
@@ -84,7 +84,7 @@ const columns = [
         margin-top: clamp(48px, 3.8vw, 72px);
     }
 
-    /* Floor and ceiling, literally: the three steps rise from left to right */
+    /* The three steps go down from left to right, in reading order */
     .column {
         display: grid;
         grid-template-rows: subgrid;
@@ -98,12 +98,17 @@ const columns = [
             align-items: start;
         }
 
-        /* Each step is one piece, and the steps rise left to right by the same amount. They are lined up by
+        /* The balloon floats in the room above the lower steps, so it doesn't push the first step away from the intro */
+        .grows :global(.keepsake) {
+            margin-bottom: -200px;
+        }
+
+        /* Each step is one piece, and the steps go down left to right by the same amount. They are lined up by
            their titles, so the code panels' different lengths cannot flatten the stairs */
         .column {
             grid-template-rows: auto;
             grid-row: auto;
-            margin-top: calc((2 - var(--step)) * 96px);
+            margin-top: calc(var(--step) * 96px);
         }
     }
 

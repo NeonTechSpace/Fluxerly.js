@@ -6,13 +6,17 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { Effect, Exit, Scope, Stream } from "effect"
 import WebSocket from "ws"
 import { acquireLock, finalizeOwned, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
+import { createMemberRequestPacing, memberRequestMaxWaitMs } from "./support/member-request-pacing.js"
 import { createFailureClassifier, createOutcomeReporter } from "./support/reporting.js"
 import { fromExit, settle as value } from "./support/results.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const absentId = "9223372036854775807"
 const report = createOutcomeReporter({ mode })
+// Keeps both modes within Fluxer's member request limit, which drops an extra request without a reply
+const reserveMemberRequest = createMemberRequestPacing()
 let stage = "configuration"
 let lock
 let client
@@ -57,7 +61,7 @@ function observeGateway() {
                     assert.ok(sockets.size < 2)
                     const url = new URL(this.url)
                     assert.equal(url.protocol, "wss:")
-                    assert.equal(url.host, "gateway.fluxer.app")
+                    assert.equal(url.host, "gateway.fluxer.com")
                     sockets.set(this, { ready: 0, resumed: 0 })
                 }
                 if (event === "message") {
@@ -117,7 +121,8 @@ function observeGateway() {
         clearDrop() {
             dropping = undefined
         },
-        waitForDropped: () => waitFor(() => dropped),
+        // A paced request may wait for the member request window before it is sent
+        waitForDropped: () => waitFor(() => dropped, 15_000 + memberRequestMaxWaitMs),
         ready: () => waitFor(() => client.state === "Connected" && guildSeen, 35_000),
         interrupt() {
             assert.ok(!problem)
@@ -145,6 +150,7 @@ function observeGateway() {
 }
 
 async function consume(query, options, signal) {
+    await reserveMemberRequest()
     const batches = []
     const accept = (chunk) => {
         // The verified sandbox fits one provider batch. This harness never accumulates an arbitrary live guild roster
@@ -179,7 +185,7 @@ async function consume(query, options, signal) {
 const watchdog = setTimeout(() => {
     report(stage, false, { code: "process_timeout", lockRetained: lock !== undefined })
     process.exit(1)
-}, 240_000).unref()
+}, harnessWatchdogMs()).unref()
 try {
     assert.ok(mode === "default" || mode === "effect")
     assert.equal(process.argv.length, 3)
@@ -234,6 +240,17 @@ try {
     assert.equal(searched.presences, undefined)
     report(stage)
 
+    stage = "frame_above_4096_bytes"
+    // Fluxer instances older than October 2026 close a frame above 4,096 bytes with 4002, which would end this connection
+    const largeQuery = `${name}${"\u4e2d".repeat(1_700)}`
+    assert.ok(Buffer.byteLength(largeQuery) > 4_096 && largeQuery.length <= 4_096)
+    let before = watch.count()
+    const large = await consume({ query: largeQuery, limit: 1 })
+    assert.equal(large.members.length, 0)
+    assert.equal(watch.count(), before + 1)
+    assert.equal(client.state, "Connected")
+    report(stage, true, { queryBytes: Buffer.byteLength(largeQuery) })
+
     stage = "full_list_readback"
     let full
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -260,7 +277,7 @@ try {
     report(stage, true, { visiblePresenceObserved: full.presences.length > 0, multiBatchLive: false })
 
     stage = "repeated_full_list_request"
-    let before = watch.count()
+    before = watch.count()
     const limited = await outcome(consume({ all: true }))
     if (limited.ok) {
         // Hosting can disable gateway rate limits. Acceptance cannot verify the confirmed-rejection path

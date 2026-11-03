@@ -15,6 +15,8 @@ A bot talks to Fluxer in two ways:
 
 Receiving events needs the gateway. Sending a message or reading data does not, so a script that only posts one message can skip connecting
 
+A route or event without a named method still works, as [raw requests and raw events](/docs/raw-requests-and-events/) shows
+
 <details>
 <summary>Outgoing gateway commands and presence</summary>
 
@@ -41,7 +43,7 @@ Invalid settings throw a `ConfigurationError` right away, before anything connec
 
 An [event](/docs/glossary/#event) is something Fluxer reports through the gateway, such as `messageCreate` or `guildMemberAdd`. A [handler](/docs/glossary/#handler) is the function that runs for it. With `runBot`, handlers go in the `events` option, and prefix commands in the `commands` option. A [guild](/docs/glossary/#guild) in the API is a community in Fluxer, so `guildMemberAdd` reports a member joining a community
 
-There is no ready event. The `runBot` function logs a line when the bot is connected, and its `setup` option runs startup work before the bot connects. With `createClient`, a successful `client.connect()` Result confirms that the bot is connected
+There is no ready event. The `runBot` function logs a line when the bot is connected, and its `setup` option runs startup work before the bot connects. To run code after that, see [Run code once the bot is connected](/docs/starter-lifetime/#run-code-once-the-bot-is-connected). With `createClient`, a successful `client.connect()` Result confirms that the bot is connected
 
 Handler failures are isolated. A failing handler is reported to `onError`, or logged when there is no `onError`, and the bot keeps running. Each handler also receives a cancellation `signal`, which the SDK triggers when the bot stops. The [events guide](/docs/events-and-collectors/) covers waiting for replies and handling bursts
 
@@ -53,7 +55,7 @@ Expected request failures, such as a rejected message send, are returned rather 
 - Wrap the call in `orThrow(...)` when a failure should end the current function. It returns the value, or throws the error
 - Return the Result from a handler or command to let the SDK report a failure to `onError`
 
-Every SDK error has a stable `code`, a readable message and often a `hint`. Printing it with `describeError(error)` shows all of that and the chain of causes, with credentials masked. The [error and log codes](/docs/codes/) page lists every code. The [reliability guide](/docs/reliability/) explains which failures are safe to retry
+Every SDK error has a stable `code`, a readable message and often a `hint`. Printing it with `describeError(error)` shows all of that and the chain of causes, with recognized credentials masked. The [error and log codes](/docs/codes/) page lists every code. The [reliability guide](/docs/reliability/) explains which failures are safe to retry
 
 ## Caches
 

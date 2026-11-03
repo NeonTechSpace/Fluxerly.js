@@ -37,14 +37,14 @@ const npmMark =
 
     <!-- How you work: package manager, and whether to add the SDK or start a project. Opens from the caret, along the water, over the scene, never in the flow -->
     <div class="menu" id="waterline-menu" hidden data-menu>
-        <div class="menu-row" role="radiogroup" aria-label="Package manager" data-group="pm">
-            {packageManagers.map((item) => <button class="option" type="button" role="radio" aria-checked={item.id === first.id ? "true" : "false"} data-value={item.id}>{item.label}</button>)}
-        </div>
+        <fieldset class="menu-row" data-group="pm"><legend class="sr-only">Package manager</legend>
+            {packageManagers.map((item) => <label class="option" data-value={item.id}><input type="radio" name="waterline-pm" value={item.id} checked={item.id === first.id} />{item.label}</label>)}
+        </fieldset>
         <span class="menu-divider" aria-hidden="true"></span>
-        <div class="menu-row" role="radiogroup" aria-label="Command" data-group="mode">
-            <button class="option" type="button" role="radio" aria-checked="true" data-value="install">install</button>
-            <button class="option" type="button" role="radio" aria-checked="false" data-value="init">init</button>
-        </div>
+        <fieldset class="menu-row" data-group="mode"><legend class="sr-only">Command</legend>
+            <label class="option" data-value="install"><input type="radio" name="waterline-mode" value="install" checked />install</label>
+            <label class="option" data-value="init"><input type="radio" name="waterline-mode" value="init" />init</label>
+        </fieldset>
     </div>
     </div>
 
@@ -96,15 +96,71 @@ const npmMark =
             return { tool: words.slice(0, at).join(" "), pkg: words[at], tail: words.slice(at + 1).join(" ") }
         }
 
-        // Opens over the box where there's no room under it, measured each time as the command's length can change
+        // The menu leaves the hero, which clips what overflows it, for the page's top layer, and sits under the box there.
+        // A browser without popovers, such as Safari before 17 or Firefox before 125, keeps it in the hero
+        const canLift = "showPopover" in HTMLElement.prototype
+        const isLifted = (menu: HTMLElement) => canLift && menu.matches(":popover-open")
+        const placeLifted = (menu: HTMLElement) => {
+            const box = menu.parentElement!.getBoundingClientRect()
+            menu.style.top = `${box.bottom + 4}px`
+            menu.style.right = `${document.documentElement.clientWidth - box.right}px`
+        }
+        const lift = (menu: HTMLElement, lifted: boolean) => {
+            if (!lifted) {
+                if (isLifted(menu)) menu.hidePopover()
+                menu.removeAttribute("popover")
+                menu.style.removeProperty("top")
+                menu.style.removeProperty("right")
+                return
+            }
+            menu.popover = "manual"
+            menu.showPopover()
+            placeLifted(menu)
+            const below = menu.getBoundingClientRect().bottom - window.innerHeight
+            if (below > 0) window.scrollBy({ top: below + 8, behavior: "instant" })
+        }
+        const overlaps = (a: DOMRect, b: DOMRect) => a.bottom > b.top && a.top < b.bottom && a.right > b.left && a.left < b.right
+
+        // Opens under the box where that is inside the hero and the window. Otherwise over the box, or beside it, as on a
+        // phone on its side, where that covers none of the hero's other controls, such as Get Started. So opening it never
+        // scrolls the page. On a screen with room for none of these it opens under the box anyway and is brought into view,
+        // leaving the hero, which clips what overflows it, when it would end below it. Measured each time, as the
+        // command's length can change
         const fitMenu = () => {
             const menu = root.querySelector<HTMLElement>("[data-menu]")
             if (!menu || menu.hidden) return
             delete menu.dataset.up
+            delete menu.dataset.side
+            lift(menu, false)
             const hero = root.closest<HTMLElement>("[data-hero]")?.getBoundingClientRect()
-            const room = Math.min(window.innerHeight, hero?.bottom ?? window.innerHeight)
-            if (menu.getBoundingClientRect().bottom > room) menu.dataset.up = ""
+            const top = Math.max(0, hero?.top ?? 0)
+            const bottom = Math.min(window.innerHeight, hero?.bottom ?? window.innerHeight)
+            const width = document.documentElement.clientWidth
+            const controls = [...(root.closest("[data-hero]")?.querySelectorAll<HTMLElement>("a, button") ?? [])].filter((control) => !root.contains(control))
+            const fits = () => {
+                const box = menu.getBoundingClientRect()
+                return box.top >= top && box.bottom <= bottom && box.left >= 0 && box.right <= width && !controls.some((control) => overlaps(control.getBoundingClientRect(), box))
+            }
+            if (fits()) return
+            menu.dataset.up = ""
+            if (fits()) return
+            delete menu.dataset.up
+            menu.style.setProperty("--side-room", `${width - menu.parentElement!.getBoundingClientRect().right}px`)
+            menu.dataset.side = ""
+            if (fits()) return
+            delete menu.dataset.side
+            if (menu.getBoundingClientRect().bottom <= (hero?.bottom ?? window.innerHeight)) menu.scrollIntoView({ block: "nearest" })
+            else if (canLift) lift(menu, true)
+            else menu.dataset.up = ""
         }
+        window.addEventListener(
+            "scroll",
+            () => {
+                const menu = root.querySelector<HTMLElement>("[data-menu]")
+                if (menu && isLifted(menu)) placeLifted(menu)
+            },
+            { passive: true },
+        )
 
         const render = () => {
             const manager = packageManagers.find((item) => item.id === pm) ?? packageManagers[0]
@@ -114,12 +170,8 @@ const npmMark =
             for (const element of root.querySelectorAll<HTMLElement>("[data-pkg]")) element.innerHTML = parts.pkg.replace("/", "<wbr>/")
             for (const element of root.querySelectorAll<HTMLElement>("[data-tail]")) element.textContent = parts.tail
             fitMenu()
-            for (const option of root.querySelectorAll<HTMLElement>('[data-group="pm"] [data-value]')) {
-                option.setAttribute("aria-checked", option.dataset.value === pm ? "true" : "false")
-            }
-            for (const option of root.querySelectorAll<HTMLElement>('[data-group="mode"] [data-value]')) {
-                option.setAttribute("aria-checked", option.dataset.value === mode ? "true" : "false")
-            }
+            for (const option of root.querySelectorAll<HTMLInputElement>('[data-group="pm"] input')) option.checked = option.value === pm
+            for (const option of root.querySelectorAll<HTMLInputElement>('[data-group="mode"] input')) option.checked = option.value === mode
             const copy = root.querySelector<HTMLButtonElement>("[data-copy]")
             if (copy) copy.dataset.copy = command
         }
@@ -128,6 +180,7 @@ const npmMark =
         const menu = root.querySelector<HTMLElement>("[data-menu]")
         const setOpen = (open: boolean) => {
             if (!pick || !menu) return
+            if (!open) lift(menu, false)
             menu.hidden = !open
             pick.setAttribute("aria-expanded", open ? "true" : "false")
             if (open) fitMenu()
@@ -143,18 +196,18 @@ const npmMark =
             }
         })
 
-        for (const option of root.querySelectorAll<HTMLButtonElement>('[data-group="pm"] [data-value]')) {
-            option.addEventListener("click", () => {
-                if (!isManager(option.dataset.value)) return
-                pm = option.dataset.value
+        for (const option of root.querySelectorAll<HTMLInputElement>('[data-group="pm"] input')) {
+            option.addEventListener("change", () => {
+                if (!isManager(option.value)) return
+                pm = option.value
                 write(pmKey, pm)
                 render()
                 window.dispatchEvent(new CustomEvent("fluxerly:pm", { detail: pm }))
             })
         }
-        for (const option of root.querySelectorAll<HTMLButtonElement>('[data-group="mode"] [data-value]')) {
-            option.addEventListener("click", () => {
-                mode = option.dataset.value === "init" ? "init" : "install"
+        for (const option of root.querySelectorAll<HTMLInputElement>('[data-group="mode"] input')) {
+            option.addEventListener("change", () => {
+                mode = option.value === "init" ? "init" : "install"
                 write(modeKey, mode)
                 render()
             })
@@ -339,8 +392,9 @@ const npmMark =
         transform: none;
     }
 
-    /* Still turns the caret and swaps the copy icons at once */
-    .row[data-still] :is(.pick, .copy) :global(svg) {
+    /* Still turns the caret, swaps the copy icons and opens the menu at once */
+    .row[data-still] :is(.pick, .copy) :global(svg),
+    .row[data-still] .menu {
         transition: none;
     }
 
@@ -372,6 +426,13 @@ const npmMark =
             display var(--speed-normal) allow-discrete;
     }
 
+    /* Lifted out of the hero onto the top layer, placed by script */
+    .menu:popover-open {
+        position: fixed;
+        inset: auto;
+        margin: 0;
+    }
+
     .menu[hidden] {
         display: none;
         opacity: 0;
@@ -387,8 +448,11 @@ const npmMark =
 
     .menu-row {
         display: flex;
+        min-inline-size: 0;
         gap: 2px;
+        margin: 0;
         padding: 2px;
+        border: 0;
         background: rgb(255 255 255 / 0.04);
         border-radius: var(--corner-round);
     }
@@ -400,6 +464,9 @@ const npmMark =
     }
 
     .option {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
         height: 28px;
         padding-inline: 12px;
         font: inherit;
@@ -420,9 +487,22 @@ const npmMark =
         color: var(--color-ink);
     }
 
-    .option[aria-checked="true"] {
+    .option:has(input:checked) {
         color: #06101a;
         background: linear-gradient(180deg, var(--color-cyan-light), var(--color-cyan));
+    }
+
+    .option:has(input:focus-visible) {
+        outline: 2px solid var(--color-cyan);
+        outline-offset: 2px;
+    }
+
+    .option input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
     }
 
     /* Mirrored around the water line and softened by it */
@@ -447,10 +527,6 @@ const npmMark =
 
     /* The options reach 44 px for a finger, without growing on screen */
     @media (any-pointer: coarse) {
-        .option {
-            position: relative;
-        }
-
         .option::before {
             content: "";
             position: absolute;
@@ -466,6 +542,13 @@ const npmMark =
 
         .menu-divider {
             display: none;
+        }
+    }
+
+    /* The narrowest phones keep the menu on one row with tighter options, so it fits under the box on the first screen */
+    @media (max-width: 359px) {
+        .option {
+            padding-inline: 7px;
         }
     }
 
@@ -489,7 +572,8 @@ const npmMark =
         .chip {
             height: auto;
             min-height: var(--coin);
-            padding-block: 2px;
+            /* The command's lines keep the same clear room from the edge as a command chip's */
+            padding-block: 8px;
         }
 
         code {
@@ -499,32 +583,56 @@ const npmMark =
             text-align: left;
         }
 
+        /* The buttons sit in that room, so a one line command's box stays as tall as the coin */
         .tool-button {
             flex: none;
+            margin-block: -8px;
         }
 
         .reflection {
             display: none;
         }
 
-        /* Stacked layout: the menu opens under the chip instead of beside it, its two groups wrapping where they don't fit */
+        /* Stacked layout: the menu opens under the chip instead of beside it, its two groups wrapping where they don't fit.
+           It is kept low, so it fits under the box in the hero of the smallest phones, and its options reach 44 px for a
+           finger with their clear layer */
         .menu {
             left: auto;
             right: 0;
             bottom: auto;
-            top: calc(100% + 8px);
+            top: calc(100% + 4px);
             flex-wrap: wrap;
             justify-content: flex-end;
             width: max-content;
             max-width: calc(100vw - 2 * var(--page-margin));
             height: auto;
-            padding-block: 6px;
+            padding-block: 3px;
         }
 
         /* Without room under the row, which script measures as it opens, the menu opens over it */
         .menu[data-up] {
             top: auto;
-            bottom: calc(100% + 8px);
+            bottom: calc(100% + 4px);
+        }
+
+        /* Nor over it, as on a phone on its side 320 px tall: beside the row, level with the box as on a wide screen, its
+           two groups on two rows with their reach for a finger apart, within the room script measures to the window's edge */
+        .menu[data-side] {
+            left: calc(100% + 10px);
+            right: auto;
+            top: auto;
+            bottom: 0;
+            row-gap: 14px;
+            justify-content: flex-start;
+            max-width: calc(var(--side-room) - 10px - var(--page-margin));
+        }
+
+        .menu[data-side] .menu-divider {
+            display: none;
+        }
+
+        .menu[data-side] .option {
+            padding-inline: 7px;
         }
     }
 </style>

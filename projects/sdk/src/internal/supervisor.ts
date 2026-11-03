@@ -367,6 +367,8 @@ export interface ChildSettings<T extends object, Configure> {
     readonly clientOptions: Omit<T, "token" | "sharding">
     /** The child's session store, added to the shards the parent assigns */
     readonly sessions: SessionStore | undefined
+    /** The child's cache refill choice for resumed sessions, added to the shards the parent assigns */
+    readonly refillCaches: unknown
     readonly token: string | undefined
     readonly configure: Configure
 }
@@ -392,14 +394,19 @@ export function readChildOptions<T extends object, Configure extends (context: n
     if (invalid) return invalid
     const copied: Record<string, unknown> = {}
     let sessions: SessionStore | undefined
+    let refillCaches: unknown
     for (const key of childClientOptionKeys) {
         const value = clientOptions?.[key]
-        if (key === "sharding") sessions = (value as SupervisorChildSharding | undefined)?.sessions
-        else if (value !== undefined) copied[key] = value
+        if (key === "sharding") {
+            const sharding = value as SupervisorChildSharding | undefined
+            sessions = sharding?.sessions
+            refillCaches = sharding?.refillCaches
+        } else if (value !== undefined) copied[key] = value
     }
     const configure = options.configure
     return {
         sessions,
+        refillCaches,
         clientOptions: copied as Omit<T, "token" | "sharding">,
         token: options.token,
         // Keep the options object as the receiver, as a method call on it would
@@ -413,7 +420,12 @@ export function childClientOptions<T extends object>(
     assignment: SupervisorAssignment,
     bridge: ChildBridge,
 ): T {
-    const sharding = settings.sessions === undefined ? assignment : { ...assignment, sessions: settings.sessions }
+    // The child client validates refillCaches with its own sharding options
+    const sharding = {
+        ...assignment,
+        ...(settings.sessions === undefined ? {} : { sessions: settings.sessions }),
+        ...(settings.refillCaches === undefined ? {} : { refillCaches: settings.refillCaches }),
+    }
     return attachAccountLimits(
         attachIdentifyGate(
             { ...settings.clientOptions, token: settings.token, sharding } as unknown as T,
@@ -835,6 +847,7 @@ function prettyOutputLine(line: string, label: string, color: boolean): string {
         if (sdkRecord(value)) {
             const entry = value as unknown as LogRecord
             markSdkErrors(entry.error)
+            if (Array.isArray(entry.otherErrors)) for (const other of entry.otherErrors) markSdkErrors(other)
             return prettyLine(entry, color)
                 .split("\n")
                 .map((part) => `${label} ${part}`)
@@ -1309,6 +1322,7 @@ export class SupervisorOwner {
     #disconnect(slot: ChildSlot, child: ChildProcess, generation: number) {
         if (slot.child !== child || slot.generation !== generation) return
         slot.connectionState = null
+        slot.diagnostics = null
         this.#refreshReadiness()
         if (this.#stopping || this.#failed || slot.disconnectTimer) return
         if (slot.startupTimer) clearTimeout(slot.startupTimer)
@@ -1944,6 +1958,8 @@ export class SupervisorOwner {
             Deferred.doneUnsafe(this.#terminal, Effect.void)
             Deferred.doneUnsafe(this.#readiness, Effect.fail(new SupervisorError(null, "closed")))
         }
+        // Report duplicate records that no later record announced, as the logging options promise for shutdown
+        this.#configuration?.logger.flush()
         this.#configuration = undefined
         Deferred.doneUnsafe(this.#stopped, Effect.void)
     }

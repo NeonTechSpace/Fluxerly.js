@@ -15,10 +15,13 @@ assert.ok(
 
 let rejectConnection = false
 const identifies = new Recorder()
+// The close code each connection ended with, as the gateway received it
+const closeCodes = new Recorder()
 const gateway = await startLoopback({
     command(command, connection) {
         assert.equal(command.op, 2, "The starter must send only Identify and heartbeats")
         identifies.record(command.d.token)
+        connection.socket.once("close", (code) => closeCodes.record(code))
         if (rejectConnection) connection.socket.close(4004, "Fixture authentication rejection")
         else gateway.dispatch(connection, "READY", { session_id: "fixture" })
     },
@@ -28,7 +31,7 @@ const redirectedWebSocketUrl = `data:text/javascript,${encodeURIComponent(`
     import WebSocket from ${JSON.stringify(sdkWebSocketUrl)}
     export default class FixtureWebSocket extends WebSocket {
         constructor(url, options) {
-            assert.equal(url, "wss://gateway.fluxer.app/?v=1&encoding=json")
+            assert.equal(url, "wss://gateway.fluxer.com/?v=1&encoding=json")
             super(${JSON.stringify(`${gateway.gatewayUrl}/?v=1&encoding=json`)}, options)
         }
     }
@@ -137,7 +140,7 @@ try {
         },
     ] = requests.items
     assert.deepEqual(request, {
-        url: "https://api.fluxer.app/v1/channels/20/messages",
+        url: "https://fluxer.com/api/v1/channels/20/messages",
         method: "POST",
         authorization: "Bot fixture-only",
     })
@@ -155,9 +158,12 @@ try {
     assert.deepEqual(linesMatching(/private fixture detail/), [])
     assert.equal(gateway.connections.size, 1, "An expected reply failure must not stop the bot")
 
-    assert.equal(process.emit("SIGINT"), true, "The starter did not install its signal handler")
+    // Node.js watch mode, which the generated dev script uses, stops the bot with SIGTERM before each restart
+    assert.equal(process.emit("SIGTERM"), true, "The starter did not install its signal handler")
     await running
     await gateway.closed()
+    // Code 1000 ends the Fluxer session, so restarts in watch mode leave no session open for 60 seconds each
+    assert.deepEqual(await closeCodes.reach(1), [1000], "A requested stop must end the session")
     assertSignalHandlersRestored()
     assert.equal(process.exitCode, initialExitCode, "Requested shutdown must be a clean application stop")
     assert.deepEqual(linesMatching(/botFailed/), [], "Requested shutdown must not be reported as a failure")

@@ -241,7 +241,9 @@ test.each(modes)("%s reports Fluxer's peer-to-peer move refusal as a rejection w
         reason: "rejected",
         outcome: "rejected",
         status: 400,
-        details: { providerCode: "USER_NOT_IN_VOICE" },
+        apiError: { code: "userNotInVoice", providerCode: "USER_NOT_IN_VOICE" },
+        details: { apiError: "USER_NOT_IN_VOICE" },
+        hint: expect.stringContaining("peer-to-peer"),
     })
     expect(patchCalls).toBe(1)
 })

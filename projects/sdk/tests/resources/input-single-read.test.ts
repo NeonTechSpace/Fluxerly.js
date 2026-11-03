@@ -36,7 +36,7 @@ function changingOption(key: string, first: unknown, later: unknown, other: Reco
 test.each(modes)("%s deleteMany copies the IDs once and sends the validated copy", async (mode) => {
     const bodies: unknown[] = []
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
-        expect(url).toBe("https://api.fluxer.app/v1/channels/20/messages/bulk-delete")
+        expect(url).toBe("https://fluxer.com/api/v1/channels/20/messages/bulk-delete")
         bodies.push(JSON.parse(String(init.body)))
         return new Response(null, { status: 204 })
     })

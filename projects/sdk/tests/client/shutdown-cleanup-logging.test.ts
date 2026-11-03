@@ -179,3 +179,114 @@ test("explicit shutdown logs and counts a socket close that throws", async () =>
     expect(observed.failedRecords[0]?.error).toMatchObject({ message: closeFailure.message })
     expect(observed.counted).toBe(1)
 })
+
+// Catches: An interrupted scheduled task reported its cleanup defect as a task failure and dropped it, so shutdown
+// succeeded and runBot exited with 0 although a scoped resource failed to release
+test("a scheduled task's cleanup defect fails shutdown and counts as a cleanup failure", async () => {
+    const fault = new Error("release-sentinel")
+    let observed: { exit: Exit.Exit<void>; failedRecords: number; counted: number } | undefined
+    await Effect.runPromiseExit(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const test = yield* createTestClient()
+                yield* test.ready()
+                const started = yield* Deferred.make<void>()
+                yield* test.client.schedule(
+                    Deferred.succeed(started, undefined).pipe(
+                        Effect.andThen(Effect.never),
+                        Effect.ensuring(Effect.die(fault)),
+                    ),
+                )
+                yield* Deferred.await(started)
+                const exit = yield* Effect.exit(test.client.shutdown())
+                observed = {
+                    exit,
+                    failedRecords: test.logs().filter((record) => record.code === "lifecycle.cleanupFailed").length,
+                    counted: test.counters().cleanupFailures,
+                }
+            }),
+        ),
+    )
+    if (!observed) throw new Error("The scenario did not finish")
+    expect(Exit.isFailure(observed.exit)).toBe(true)
+    const defects = Exit.isFailure(observed.exit)
+        ? observed.exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)
+        : []
+    expect(defects).toContain(fault)
+    expect(observed.counted).toBe(1)
+    expect(observed.failedRecords).toBe(1)
+})
+
+// Catches: A scheduled task's cleanup record named only its step number, so two named tasks sharing a release helper
+// could not be told apart
+test("a named scheduled task's cleanup record names the task", async () => {
+    let records: LogRecord[] = []
+    await Effect.runPromiseExit(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const test = yield* createTestClient()
+                yield* test.ready()
+                const started = yield* Deferred.make<void>()
+                yield* test.client.schedule(
+                    Deferred.succeed(started, undefined).pipe(
+                        Effect.andThen(Effect.never),
+                        Effect.ensuring(Effect.die(new Error("release-sentinel"))),
+                    ),
+                    { name: "daily report" },
+                )
+                yield* Deferred.await(started)
+                yield* Effect.exit(test.client.shutdown())
+                records = test.logs().filter((record) => record.code === "lifecycle.cleanupFailed")
+            }),
+        ),
+    )
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ fields: { task: "daily report" } })
+    expect(records[0]?.message).toContain('"daily report"')
+})
+
+// Catches: Shutdown cleared an interrupted onError hook's report before the hook finished, then dropped the defect its
+// cleanup raised, so shutdown succeeded and no record or counter showed the failed release
+test("an onError hook's cleanup defect fails shutdown and counts as a cleanup failure", async () => {
+    const fault = new Error("hook-release-sentinel")
+    let observed: { exit: Exit.Exit<void>; released: boolean; records: LogRecord[]; counted: number } | undefined
+    await Effect.runPromiseExit(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const started = yield* Deferred.make<void>()
+                let released = false
+                const test = yield* createTestClient({
+                    onError: () =>
+                        Deferred.succeed(started, undefined).pipe(
+                            Effect.andThen(Effect.never),
+                            Effect.ensuring(
+                                Effect.sync(() => {
+                                    released = true
+                                }).pipe(Effect.andThen(Effect.die(fault))),
+                            ),
+                        ),
+                })
+                yield* test.ready()
+                yield* test.client.schedule(Effect.fail(new Error("task failed")))
+                yield* Deferred.await(started)
+                const exit = yield* Effect.exit(test.client.shutdown())
+                observed = {
+                    exit,
+                    released,
+                    records: test.logs().filter((record) => record.code === "lifecycle.cleanupFailed"),
+                    counted: test.counters().cleanupFailures,
+                }
+            }),
+        ),
+    )
+    if (!observed) throw new Error("The scenario did not finish")
+    expect(observed.released).toBe(true)
+    const defects = Exit.isFailure(observed.exit)
+        ? observed.exit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)
+        : []
+    expect(defects).toEqual([fault])
+    expect(observed.counted).toBe(1)
+    expect(observed.records).toHaveLength(1)
+    expect(observed.records[0]).toMatchObject({ error: { message: fault.message } })
+    expect(observed.records[0]?.message).toContain("onError hook")
+})

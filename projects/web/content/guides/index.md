@@ -23,6 +23,10 @@ The [core concepts](/docs/core-concepts/) explain the few ideas behind every gui
 
 [Where do I…?](/docs/where-do-i/) finds the guide for a task. [Troubleshooting](/docs/troubleshooting/), the [error and log codes](/docs/codes/) and the [FAQ](/docs/faq/) help when something fails
 
+## Voice
+
+Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it. Until then, voice states, member voice controls such as move, mute, deafen and disconnect, voice notes, and audio or video attachments work. The [voice controls](/docs/guilds-and-permissions/#voice-controls-versus-a-voice-connection) cover what works today
+
 ## Find a method
 
 The [API reference](/docs/api/) lists the available methods and types.

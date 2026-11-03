@@ -28,8 +28,9 @@ import { defectReason, readCaller, readInput, suspendMarked } from "#sdk/interna
 import { memberChunkIterationOptions } from "#sdk/internal/member-chunks"
 import { operationSignalError } from "#sdk/internal/operation-signal"
 import { collectReactions } from "#sdk/internal/reaction-collector"
-import type { AttachmentDownloadSource } from "#sdk/internal/rest"
-import type { RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
+import { usedAttachmentStream, type AttachmentDownloadSource } from "#sdk/internal/rest"
+import type { RestCallInput as DefaultRestCallInput, RestRequest as DefaultRestRequest } from "#sdk/api/default/rest"
+import type { RestCallArguments, RestRoute, RestRouteResponse } from "#sdk/rest"
 import { throwIfErr } from "#sdk/internal/failures"
 import { executeOperation, fromExit, localValue, type DefaultContext } from "./execute.js"
 import type { RequestOptions, AttachmentStreamOptions, MemberChunkOptions } from "#sdk/api/default/options"
@@ -208,7 +209,7 @@ export const defaultAttachmentStream =
                         async next() {
                             if (delivered) return { done: true, value: undefined }
                             delivered = true
-                            return { done: false, value: err(new AttachmentDownloadError({ reason: "busy" })) }
+                            return { done: false, value: err(usedAttachmentStream()) }
                         },
                         async return() {
                             return { done: true, value: undefined }
@@ -373,6 +374,11 @@ export const defaultRestRequest =
     <M extends MessageCore>({ owner, execute }: DefaultContext<M>) =>
     <T = unknown>(input: DefaultRestRequest) =>
         execute(owner.request<T>(input), "rest.request", input)
+
+export const defaultRestCall =
+    <M extends MessageCore>({ owner, execute }: DefaultContext<M>) =>
+    <R extends RestRoute>(route: R, ...input: RestCallArguments<R, DefaultRestCallInput<R>>) =>
+        execute(owner.call<RestRouteResponse<R>>(route, input[0]), "rest.request", input[0])
 
 export const defaultCacheEntries =
     <M extends MessageCore>({ owner }: DefaultContext<M>) =>

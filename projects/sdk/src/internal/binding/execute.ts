@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import { err, ok, ResultAsync, type Result } from "neverthrow"
 import { operationSignalError } from "#sdk/internal/operation-signal"
-import { currentRejectionScope, withRejectionScope } from "#sdk/internal/rejection-scope"
+import { RejectionScope, currentCallbackRun, withRejectionScope } from "#sdk/internal/rejection-scope"
 import { causeReasons, defectReason, inputDefect, readCaller, thrownReason } from "#sdk/internal/defects"
 import {
     CancelledError,
@@ -101,13 +101,16 @@ export const executeOperation = <A, E extends OperationFailure>(
         const controller = signal ? new AbortController() : undefined
         abort = () => controller?.abort()
         // Read while the calling handler code runs, so a rejection inside a handler is reported once
-        const scope = currentRejectionScope()
+        const run = currentCallbackRun()
+        const scope = run instanceof RejectionScope ? run : undefined
         if (signal) {
             // Treat registration as owned before calling it: A custom signal can attach then throw
             registered = true
             readCaller(() => signal!.addEventListener("abort", abort!, { once: true }))
         }
         // Interrupt the operation itself rather than discarding a losing race's cleanup cause
+        // The calling callback awaits an SDK call until this operation settles, which a manual test clock reads
+        const endCall = run?.beginCall()
         return new ResultAsync(
             (async () => {
                 let exit: Exit.Exit<A, E>
@@ -118,6 +121,8 @@ export const executeOperation = <A, E extends OperationFailure>(
                     )
                 } catch (error) {
                     exit = Exit.failCause(Cause.die(error))
+                } finally {
+                    endCall?.()
                 }
                 if (registered) {
                     registered = false

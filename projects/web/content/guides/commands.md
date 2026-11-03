@@ -10,7 +10,7 @@ These examples extend [the starter bot](/docs/quick-start/). Add commands to its
 
 ## Register commands
 
-Each key of `commands` becomes a command name. The `reply` helper accepts a string or full message content and replies to the incoming message
+Each key of `commands` becomes a command name. Names and aliases use ASCII letters, digits, `_` or `-` and start with a letter or digit, so `!помощь` cannot be a command. The `reply` helper accepts a string or full message content and replies to the incoming message
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -47,7 +47,11 @@ Commands keep the order of the object's own string keys. Omit `arguments` to rec
 
 ## Convert arguments before execution
 
-The router converts the words after the command name into typed values before running it. By default it splits the text on whitespace and keeps quote characters, so `!greet "Ada Lovelace"` arrives as the two words `"Ada` and `Lovelace"`. The option `parse: commands.parseQuoted` opts in to quoting: Single or double quotes keep words together and are removed from the argument, and a backslash writes the next character literally. A double quote opens a span anywhere. A single quote opens one only at the start of a word and closes it unless a letter or digit follows, so an apostrophe inside a word, as in `!say don't`, stays literal, `'it's fine'` is `it's fine` and `'Yes', 'No'` is `Yes,` and `No`. A word that begins with an apostrophe, such as `'twas`, opens a span, so write `\'twas`. This bot uses it to accept `!greet "Ada Lovelace"` and `!remind 10m Stretch`
+The router converts the words after the command name into typed values before running it. By default it splits the text on whitespace and keeps quote characters, so `!greet "Ada Lovelace"` arrives as the two words `"Ada` and `Lovelace"`. The option `parse: commands.parseQuoted` opts in to quoting: Single or double quotes keep words together and are removed from the argument, and a backslash writes the next character literally
+
+A double quote opens a span anywhere. A single quote opens one only at the start of a word and closes it unless a letter or digit follows, so an apostrophe inside a word, as in `!say don't`, stays literal, `'it's fine'` is `it's fine` and `'Yes', 'No'` is `Yes,` and `No`
+
+A word that begins with an apostrophe, such as `'twas`, opens a span, so write `\'twas`. This bot uses it to accept `!greet "Ada Lovelace"` and `!remind 10m Stretch`
 
 ```ts
 import { commands, runBot } from "@neontechspace/fluxerly"
@@ -85,6 +89,10 @@ The `remind` command hands the wait to [`client.schedule`](/docs/starter-lifetim
 
 In TypeScript, `values.name` is a string and `values.delay` is a number of milliseconds. A missing, invalid or extra argument stops the command before `execute`, and `runBot` answers with the reason and the command's usage, such as `Missing name. Usage: !greet <name>`. That reply is the `onReject: "reply"` default of `runBot`. Set `onReject: "silent"` to send nothing, or pass a function for custom feedback. A router from `commands.create` gives no feedback unless `onReject` is set
 
+An argument with `optional: true` may be left out. For example, `name: { type: "text", optional: true }` accepts `!greet` without a name, giving `values.name` the value `undefined`. The reply can use `values.name ?? "there"` for a fallback
+
+Required arguments must come before optional ones, and an argument with `rest: true` must be last. An `integer`, `number` or `duration` argument with a `default` may also be left out
+
 A `duration` argument reads text such as `90s`, `5m` or `1h30m` and produces milliseconds. Add `wholeSeconds: true` to reject a millisecond part such as `1m500ms`, for a value that must be whole seconds, like the `durationMs` of a [ban](/docs/guilds-and-permissions/#moderate-members). Its `default`, when given, must then be whole seconds too
 
 Other argument types include:
@@ -98,7 +106,7 @@ Other argument types include:
 
 Accepting an ID does not mean the user may act on that resource
 
-To convert a single word outside a command, such as a button label or a stored setting, `commands.parseArgument("5m", { type: "duration" })` applies a descriptor with the same rules as the router. It returns `undefined` for a rejected word and the descriptor's `default` for a missing one. A `member` descriptor also needs `{ guildId }` as its third parameter
+To convert a single word outside a command, such as a button label or a stored setting, `commands.parseArgument("5m", { type: "duration" })` applies a built-in descriptor with the same rules as the router. It returns `undefined` for a rejected word and the descriptor's `default` for a missing one. A `member` descriptor also needs `{ guildId }` as its third parameter. For a custom descriptor, call its parse function directly
 
 <details>
 <summary>How are ID and member arguments checked?</summary>
@@ -140,7 +148,9 @@ await runBot({
 })
 ```
 
-The router never replies to these messages by itself. The callback runs for every one of them and anyone can cause that, so an application that replies should limit how often. A channel may also hold other bots with the same prefix, so reply to an unknown name or a syntax mistake only when this bot should answer for that prefix. A custom `parse` function can give its own explanation by returning `{ reason: "Separate the words with spaces" }` instead of `undefined`. The reason reaches `onUnmatched` unchanged, so it should be fixed text that leaves the sender's input out
+The router never replies to these messages by itself. The callback runs for every one of them and anyone can cause that, so an application that replies should limit how often. A channel may also hold other bots with the same prefix, so reply to an unknown name or a syntax mistake only when this bot should answer for that prefix
+
+A custom `parse` function can give its own explanation by returning `{ reason: "Separate the words with spaces" }` instead of `undefined`. The reason reaches `onUnmatched` unchanged, so it should be fixed text that leaves the sender's input out
 
 To suggest a name in a reply of the application's own, `commands.suggest("pnig", ["ping", "help"])` applies the rule behind `suggestion` to any list of names and returns `"ping"`. Pass only names that may be revealed, because the helper does not know which commands are hidden
 
@@ -193,8 +203,16 @@ A guard returns `true` to allow the command, `false` to deny it without an autom
 <details>
 <summary>How the built-in guards read data</summary>
 
-The `requirePermissions` guard decides with `permissions.fetch` and `preferCache`: It reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. Cached values follow the gateway events applied so far, so check again with a fresh `permissions.fetch` before an action where a stale grant matters. The denial names each missing permission by Fluxer's label, such as `Manage community`. In a thread, it also reads the parent channel the same way and decides from the parent's permissions as Fluxer does, with `SendMessages` granted exactly when `SendMessagesInThreads` is. A failed read fails the command, which is reported with the command name. When Fluxer sent the channel without its permission overwrite list, the guard denies the command because it cannot confirm the channel's permissions. Its decision does not guarantee that Fluxer allows a later action.
-The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name. Enable `cache.directMessages` to avoid a read for each command in the same conversation.
+The `requirePermissions` guard decides with `permissions.fetch` and `preferCache`: It reads the community, member, roles and channel from enabled caches first and fetches only what is missing, at most once each per command. Cached values follow the gateway events applied so far, so check again with a fresh `permissions.fetch` before an action where a stale grant matters
+
+The denial names each missing permission by Fluxer's label, such as `Manage community`. In a thread, it also reads the parent channel the same way and decides from the parent's permissions as Fluxer does, with `SendMessages` granted exactly when `SendMessagesInThreads` is. A failed read fails the command, which is reported with the command name
+
+When Fluxer sent the channel without its permission overwrite list, the guard denies the command because it cannot confirm the channel's permissions. Its decision does not guarantee that Fluxer allows a later action
+
+The `dmOnly` guard denies a message that has a `guildId` without a request. Otherwise it confirms a private conversation from the direct-message cache or the channel cache, or reads the channel once. A cached or fetched community channel denies the command. A read that fails for any other reason, such as a network failure or timeout, leaves the channel unconfirmed and fails the command, which is reported with the command name
+
+Enable `cache.directMessages` to avoid a read for each command in the same conversation
+
 The `ownerOnly()` guard reads the application's owner from Fluxer on the first command and keeps it for the client's lifetime. A failed read fails the command, and the next command reads again
 
 </details>
@@ -202,7 +220,8 @@ The `ownerOnly()` guard reads the application's owner from Fluxer on the first c
 <details>
 <summary>How cooldowns are stored</summary>
 
-A cooldown takes `durationMs` and `per`, which is `"user"` by default, `"channel"` or `"guild"`. Without a `store`, the router keeps cooldowns in memory in this process. That store holds 10,000 keys by default. Set the router's `cooldowns: { maxEntries }` option to change the limit, for example `cooldowns: { maxEntries: 50_000 }`.
+A cooldown takes `durationMs` and `per`, which is `"user"` by default, `"channel"` or `"guild"`. Without a `store`, the router keeps cooldowns in memory in this process. That store holds 10,000 keys by default. Set the router's `cooldowns: { maxEntries }` option to change the limit, for example `cooldowns: { maxEntries: 50_000 }`
+
 A full store never turns a user away: It removes expired keys first, then the key that would expire soonest, which lets that key run again early. Pass a `store` to share cooldowns between processes
 
 </details>
@@ -215,9 +234,46 @@ A skipped answer still counts as a rejection and is logged at Debug. An `onRejec
 
 </details>
 
+### Answer in another language
+
+The built-in answers are in English. To answer in another language, pass a function as `onReject` and read the rejection's `_tag`:
+
+```ts
+import { runBot, type PrefixCommandRejection } from "@neontechspace/fluxerly"
+
+function inGerman(rejection: PrefixCommandRejection): string | undefined {
+    switch (rejection._tag) {
+        case "CommandArgumentRejected":
+            return rejection.reason === "Missing" ? `Es fehlt: ${rejection.argument}` : `Ungültig: ${rejection.argument}`
+        case "CommandCooldownActive":
+            return `Bitte noch ${Math.ceil((rejection.retryAtMs - Date.now()) / 1000)} Sekunden warten`
+        case "CommandGuardRejected":
+            return rejection.reason
+    }
+}
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        onReject: ({ reply }, rejection) => {
+            const text = inGerman(rejection)
+            return text ? reply(text) : undefined
+        },
+        commands: {
+            ping: { description: "Check that the bot can reply", execute: ({ reply }) => reply("Pong!") },
+        },
+    },
+})
+```
+
+The function runs for every rejection, so a user who keeps trying during a cooldown gets an answer each time
+
 ## Control how commands run
 
-By default `runBot` runs up to eight commands at a time, and when more messages wait than the queue holds, it drops the oldest waiting message with a Warn record. The `commands` option also accepts the delivery settings of an event handler, `concurrency`, `partition`, `partitionReady`, `overflow`, `maxPendingMessages` and `maxPendingBytes`, and passes them to the router unchanged. Invalid values throw `ConfigurationError` when `runBot` is called. This bot runs the commands of each channel one at a time in the order they arrived, and stops instead of dropping commands when 64 messages are waiting
+By default `runBot` runs up to eight commands at a time, and when more messages wait than the queue holds, it drops the oldest waiting message with a Warn record. The `commands` option also accepts the delivery settings of an event handler, `concurrency`, `partition`, `partitionReady`, `overflow`, `maxPendingMessages` and `maxPendingBytes`, and passes them to the router unchanged
+
+Invalid values throw `ConfigurationError` when `runBot` is called. This bot runs the commands of each channel one at a time in the order they arrived, and stops instead of dropping commands when 64 messages are waiting
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -238,7 +294,9 @@ await runBot({
 
 With `overflow: "stop"`, a full queue stops the bot with `CriticalWorkerStoppedError`, which names the `messageCreate` subscription and the limit it exceeded. Leave `overflow` unset to keep the bot running and drop waiting messages instead. With a `partition`, the drops come from the longest backlog, as the [events guide](/docs/events-and-collectors/) describes
 
-A partition can need its own setup before its commands run. With `partitionReady`, the SDK calls the hook with the key before the first waiting message of that key starts, and the key's messages wait in the queue, using no command slot, until the returned promise settles. Other keys keep running meanwhile. The hook needs `partition` and otherwise `runBot` throws `ConfigurationError`. A hook that throws, rejects or returns an `Err` result reports each waiting message of that key to the `onError` of the commands when they have one, otherwise to the client-level `onError` or the log, like a throwing `partition` function and an overflow that stops the router, and those messages run no command. The [events guide](/docs/events-and-collectors/#wait-for-a-communitys-setup) covers the timing rules, which are the same for commands
+A partition can need its own setup before its commands run. With `partitionReady`, the SDK calls the hook with the key before the first waiting message of that key starts, and the key's messages wait in the queue, using no command slot, until the returned promise settles. Other keys keep running meanwhile. The hook needs `partition` and otherwise `runBot` throws `ConfigurationError`
+
+A hook that throws, rejects or returns an `Err` result reports each waiting message of that key to the `onError` of the commands when they have one, otherwise to the client-level `onError` or the log, like a throwing `partition` function and an overflow that stops the router, and those messages run no command. The [events guide](/docs/events-and-collectors/#wait-for-a-communitys-setup) covers the timing rules, which are the same for commands
 
 ```ts
 import { runBot } from "@neontechspace/fluxerly"
@@ -325,6 +383,35 @@ await runBot({
 Sending `!help` lists each command with its description. Each page holds up to 2,000 characters, which fits one message. The `sendHelp` function sends a single page as a plain message, and several pages as reaction pages that the command's author flips with ◀ and ▶. The `help` function only builds the pages, for a bot that sends them its own way. A router created with `commands.create` has the same `help` method
 
 The `paginate` function shows any list of pages the same way, as in `({ paginate }) => paginate(["Rules 1 to 5", "Rules 6 to 10"])`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. The pages stop listening after 60 seconds without a click or 5 minutes in total, and the bot then removes its arrows. Pass `users` to let other people flip them. [Reaction pages](/docs/events-and-collectors/#show-pages-with-reactions) explains the options
+
+A command that returns or awaits `sendHelp()` or `paginate()` with several pages stays active until listening ends. Eight open sessions can fill the router's default command slots, making later commands wait. With `partition: "channel"`, one session makes later commands in that channel wait
+
+For independent page sessions, build the pages with `help()` and send them through `client.messages.paginate` in a [scheduled task](/docs/starter-lifetime/#run-work-later-or-on-a-schedule). A failure then goes to the client's `onError` or the log
+
+```ts
+import { runBot } from "@neontechspace/fluxerly"
+
+await runBot({
+    token: process.env.FLUXER_BOT_TOKEN,
+    commands: {
+        prefix: "!",
+        commands: {
+            help: {
+                description: "List the commands",
+                execute: ({ client, message, help }) => {
+                    const pages = help()
+                    client.schedule((signal) =>
+                        client.messages.paginate(message.channelId, pages, {
+                            users: [message.author.id],
+                            signal,
+                        }),
+                    )
+                },
+            },
+        },
+    },
+})
+```
 
 To keep a command out of help and out of unknown-command suggestions, for example an owner-only tool, register it with `hidden: true`. Hidden commands still run when someone types their name, so hiding does not restrict access. Protect each command that needs it with a guard
 

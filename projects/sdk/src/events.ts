@@ -6,6 +6,7 @@ import type { MessageReaction, MessageReactionBatch, MessageReactionEmojiRemoval
 import type { InviteMetadata } from "./invites.js"
 import type { AuditLogEntry } from "./audit-logs.js"
 import type { GuildChannel, GuildThreadChannel, ThreadMember } from "./channels.js"
+import type { GatewayDispatchPayloads, GatewayErrorData } from "./gateway-payloads.js"
 
 /** Notice that the webhooks in a channel changed.
  * No webhook details or token are included. Fetch the current set explicitly if needed.
@@ -131,7 +132,8 @@ export interface GuildHealthUpdate {
  * Join classification requires a Fluxer bot gateway implementing the unavailable-marker distinction.
  * Older or custom instances that omit the marker for startup snapshots cannot be classified reliably.
  * The SDK does not detect that support or infer joins from readiness, elapsed time or cache contents.
- * A supplied marker other than false is invalid for an available snapshot and fails the gateway as a protocol error
+ * A supplied marker other than false is invalid for an available snapshot. The event is skipped by default, or ends the
+ * connection without retry when gateway.onMalformedDispatch is "terminate"
  * @example
  * ```ts
  * import type { Client } from "@neontechspace/fluxerly"
@@ -218,7 +220,8 @@ export interface GuildLifecycleEvents {
  * Community-scoped updates include guildId, while valid account-scoped observations can omit it.
  * Listening for this event does not request community-member presence subscriptions or guarantee delivery.
  * The hosted provider delivers bot presence through community subscriptions, not friends or group DMs.
- * Common statuses are online, idle, dnd and offline. Other strings are retained if Fluxer adds statuses
+ * Common statuses are online, idle, dnd and offline. A status this SDK version does not recognize is reported as unknown.
+ * Fluxer's user snapshot on a presence update is not kept, because it can lack fields. Read the raw event for it
  *
  * @example
  * ```ts
@@ -324,17 +327,17 @@ export interface VoiceState {
     readonly connectionId: string
     /** Gateway session ID, when supplied by Fluxer */
     readonly sessionId?: string
-    /** Whether the community has muted this connection */
+    /** Whether the community has muted this connection. Fluxer names it mute */
     readonly isMuted: boolean
-    /** Whether the community has deafened this connection */
+    /** Whether the community has deafened this connection. Fluxer names it deaf */
     readonly isDeafened: boolean
-    /** Whether the participant has muted themselves */
+    /** Whether the participant has muted themselves. Fluxer names it self_mute */
     readonly isSelfMuted: boolean
-    /** Whether the participant has deafened themselves */
+    /** Whether the participant has deafened themselves. Fluxer names it self_deaf */
     readonly isSelfDeafened: boolean
     /** Whether Fluxer identifies this connection as mobile */
     readonly isMobile: boolean
-    /** Whether Fluxer reports this connection as prevented from speaking */
+    /** Whether Fluxer reports this connection as prevented from speaking. Fluxer names it suppress */
     readonly isSuppressed: boolean
     /** Whether the participant is publishing camera video. An omitted flag reads as false */
     readonly isSelfVideoOn: boolean
@@ -343,7 +346,10 @@ export interface VoiceState {
      * Fluxer sets it to false while the participant lacks the Stream permission. An omitted flag reads as false
      */
     readonly isSelfStreaming: boolean
-    /** Whether the participant's client supports end-to-end encrypted voice. An omitted flag reads as false */
+    /**
+     * Whether the participant's client supports encrypted call media. Fluxer's server issues the room key, so this is
+     * not end-to-end encryption. An omitted flag reads as false
+     */
     readonly isE2eeCapable: boolean
     /**
      * Whether this connection exchanges media peer-to-peer and not through LiveKit. A channel or call is peer-to-peer
@@ -519,7 +525,9 @@ export interface ThreadDeletion {
 export interface ThreadListSync {
     /** Community whose threads were replaced */
     readonly guildId: string
-    /** Channels whose threads were replaced. Absent when the list replaces every thread in the community */
+    /** Channels whose threads were replaced. Absent when the list replaces every thread in the community.
+     * Fluxer names it channel_ids
+     */
     readonly parentIds?: readonly string[]
     /** Every active thread the bot can view in the replaced scope, each with the bot's membership when it is a member */
     readonly threads: readonly GuildThreadChannel[]
@@ -531,13 +539,16 @@ export interface ThreadListSync {
  * @category Events and collectors
  */
 export interface ThreadMembersUpdate {
-    /** Decimal ID of the thread */
+    /** Decimal ID of the thread. Fluxer names it id */
     readonly threadId: string
     /** Community that holds the thread */
     readonly guildId: string
     /** Approximate number of thread members after the change, capped at 50 */
     readonly memberCount: number
-    /** Members who joined, each with their community membership when Fluxer has one for the account. Empty when none joined */
+    /** Members who joined, each with their community membership when Fluxer has one for the account. Empty when none joined.
+     * Fluxer also sends each joined member's presence, which this event leaves out. To get their later presence updates,
+     * select them with presence.setMembers and listen to presenceUpdate
+     */
     readonly added: readonly ThreadMember[]
     /** Decimal IDs of the accounts that left. Empty when none left */
     readonly removedUserIds: readonly string[]
@@ -727,7 +738,7 @@ export type EventInvocation<M extends MessageCore = Message> = {
  * A new listener does not receive earlier events from the cache.
  * Requests do not generate synthetic events. Changes can be missed during disconnection and recovery.
  * Bulk events remain one event instead of also delivering their individual entries.
- * Message events use this client's messageFields selection. Known malformed received data still fails the connection even if excluded.
+ * Message events use this client's messageFields selection, and excluded fields are still checked. A malformed known event is skipped and logged by default, and cache entries it could have changed are cleared. Set gateway.onMalformedDispatch to "terminate" to end the connection without retry instead.
  * Community and account cache handling, where documented below, occurs before event delivery
  *
  * @category Events and collectors
@@ -918,9 +929,14 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
     /** A private-channel call ended, or became unavailable when unavailable is true */
     readonly callDelete: CallDelete
     /** Every received gateway dispatch in its wire form, including types this SDK version does not decode.
-     * The body is not part of the SDK's compatibility contract. See RawDispatch
+     * When documented is true, comparing t with a dispatch type gives d the type Fluxer's documentation describes.
+     * The body is not part of the SDK's compatibility contract. See RawDispatchEvent
      */
-    readonly raw: RawDispatch
+    readonly raw: RawDispatchEvent
+    /** An opcode 12 Gateway Error frame, which Fluxer sends when it refuses a voice join the session asked for.
+     * It is not a dispatch and never arrives as raw. See GatewayErrorEvent
+     */
+    readonly gatewayError: GatewayErrorEvent
 }
 
 /** One gateway dispatch as Fluxer sent it, before the SDK decodes or validates its body.
@@ -931,7 +947,10 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
  * Each delivery is logged at Trace with code events.raw.
  * A raw dispatch is offered before its decoded event, but its handler runs after the SDK has updated caches for it, so it cannot read the values the dispatch replaced.
  * The body object is shared by every raw subscriber, so treat it as read-only.
- * A raw subscriber turns off automatic event suppression, while explicitly ignored types never arrive
+ * A raw subscriber turns off automatic event suppression. Types in an explicit gateway.ignoredEvents list do not arrive, apart from the mention and reaction batch exceptions that GatewayOptions.ignoredEvents describes.
+ * Some dispatches have no typed event, such as THREAD_MEMBER_UPDATE and VOICE_SERVER_UPDATE. Read them here and validate their data yourself.
+ * The raw event delivers each one as a RawDispatchEvent, which adds documented and types d for documented dispatch types.
+ * An opcode 12 Gateway Error frame is not a dispatch and arrives as the gatewayError event instead
  *
  * @category Events and collectors
  */
@@ -946,6 +965,89 @@ export interface RawDispatch {
     readonly d: unknown
 }
 
+/** What the raw event delivers: A dispatch whose type Fluxer's documentation describes, or one it does not.
+ * Check documented first, then compare t with a dispatch type, and TypeScript gives d that type's documented shape with
+ * Fluxer's own field names. A dispatch type that is new, or that the documentation at the SDK's reviewed Fluxer commit
+ * does not describe, still arrives, with documented false and an unknown d.
+ * The types check nothing at runtime: d is still the unvalidated body Fluxer sent, which can lack a documented field or
+ * carry newer ones, so check a value before relying on it
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function logOwnThreadMembership(client: Client) {
+ *     return client.on("raw", (dispatch) => {
+ *         if (!dispatch.documented || dispatch.t !== "THREAD_MEMBER_UPDATE") return
+ *         // d has the thread member object's fields and guild_id, under Fluxer's own names
+ *         console.log(`The bot's membership of thread ${dispatch.d.id} in guild ${dispatch.d.guild_id} changed`)
+ *     })
+ * }
+ * ```
+ *
+ * @category Events and collectors
+ */
+export type RawDispatchEvent =
+    | { readonly [T in keyof GatewayDispatchPayloads]: DocumentedRawDispatch<T> }[keyof GatewayDispatchPayloads]
+    | UndocumentedRawDispatch
+
+/** A raw dispatch whose type T Fluxer's documentation describes, with d typed by GatewayDispatchPayloads.
+ * The type is a description, not a check, as RawDispatchEvent explains
+ *
+ * @category Events and collectors
+ */
+export interface DocumentedRawDispatch<T extends keyof GatewayDispatchPayloads> extends RawDispatch {
+    /** The dispatch type, one that GatewayDispatchPayloads describes */
+    readonly t: T
+    /** The unvalidated body, typed by the documentation at the SDK's reviewed Fluxer commit */
+    readonly d: GatewayDispatchPayloads[T]
+    /** True: The SDK's types describe this dispatch type */
+    readonly documented: true
+}
+
+/** A raw dispatch whose type GatewayDispatchPayloads does not describe, such as one Fluxer added after the SDK's reviewed
+ * commit. Its d is unknown, so validate it before use
+ *
+ * @category Events and collectors
+ */
+export interface UndocumentedRawDispatch extends RawDispatch {
+    /** False: No SDK type describes this dispatch type */
+    readonly documented: false
+}
+
+/** One opcode 12 Gateway Error frame as Fluxer sent it, delivered as the gatewayError event.
+ * Fluxer sends it to the session that sent a Voice State Update, such as one sent with client.gateway.send, when it
+ * refuses the join. At the SDK's reviewed Fluxer commit the codes are VOICE_P2P_CONSENT_REQUIRED, when the call is
+ * peer-to-peer and the join did not say p2p: true, VOICE_P2P_UNAVAILABLE and VOICE_CHANNEL_FULL. Other refused joins
+ * get no frame. The connection stays open, and the frame does not stop or reconnect the shard
+ *
+ * The frame is not a dispatch: It has no t or s, raw subscribers never receive it, Resume does not replay it, and a
+ * frame sent while the shard is disconnected is lost. gateway.ignoredEvents never suppresses it, and subscribing does not
+ * change automatic event filtering.
+ * Each subscription has its own queue and limits, like every event. Frames reach a subscription in the order the shard
+ * received them, but a gatewayError handler and a raw handler run independently, so either can finish first.
+ * Nothing is built while no subscription exists. Each frame is logged with code gateway.gatewayError, at Debug while a
+ * subscription receives it and at Warn otherwise.
+ * The data is not validated. Its type is the documented one, so check code before relying on it
+ *
+ * @example
+ * ```ts
+ * import type { Client } from "@neontechspace/fluxerly"
+ * export function reportRefusedVoiceJoins(client: Client) {
+ *     return client.on("gatewayError", (frame) => {
+ *         if (frame.d.code === "VOICE_CHANNEL_FULL") console.log(`Shard ${frame.shardId} could not join voice: ${frame.d.message}`)
+ *     })
+ * }
+ * ```
+ *
+ * @category Events and collectors
+ */
+export interface GatewayErrorEvent {
+    /** Local shard that received the frame, whose session sent the refused Voice State Update */
+    readonly shardId: number
+    /** Unvalidated frame data with Fluxer's field names, code and message */
+    readonly d: GatewayErrorData
+}
+
 /**
  * Event-name strings accepted by on, events and waitFor in both entry points
  *
@@ -955,7 +1057,8 @@ export type EventName = keyof EventMap
 
 /** Limit the waiting queue for one event subscription or collector.
  * Each registration owns its own queue. Filling it stops that registration, or drops events for a handler whose overflow policy drops them, and never affects unrelated subscriptions.
- * These limits measure pending payloads and received JSON bytes, not total application memory use
+ * These limits measure pending payloads and received JSON bytes, not total application memory use.
+ * A subscription rejects any other option, including a misspelled one or a handler option such as overflow, with ConfigurationError
  *
  * @category Events and collectors
  */
@@ -989,7 +1092,10 @@ export interface EventWaitOptions<K extends EventName, M extends MessageCore = M
 /** Queue limits, parallelism, ordering and overflow behavior for one on callback registration.
  * Callbacks are not retried. A callback or middleware failure, including a synchronous throw, is reported and releases
  * the invocation's slot and partition key without stopping later event delivery.
- * Closure waits for active callback cleanup. The type parameter T is the event payload that a partition function receives
+ * The Effect API waits for handler cleanup registered with Effect. The default API signals handlers to stop without
+ * waiting for returned application promises, so applications must wait for their own cleanup before releasing resources.
+ * Registration, including a command router's attach, rejects an option not listed here, such as a misspelled one, with ConfigurationError.
+ * The type parameter T is the event payload that a partition function receives
  *
  * @category Events and collectors
  */

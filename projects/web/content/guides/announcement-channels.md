@@ -83,7 +83,7 @@ export async function publishUpdate(client: Client, channelId: string, content: 
 
     const published = await client.messages.publish(sent.value)
     if (published.isErr()) {
-        console.warn(`Message ${sent.value.id} in channel ${channelId} was sent but not published`)
+        console.warn(`Message ${sent.value.id} in channel ${channelId} was sent, but publishing it is not confirmed`)
     }
     return published
 }
@@ -104,7 +104,7 @@ export function publishUpdateWithEffect(client: Client, channelId: string, conte
         const sent = yield* client.messages.send(channelId, content)
         return yield* client.messages.publish(sent).pipe(
             Effect.tapError(() =>
-                Effect.logWarning(`Message ${sent.id} in channel ${channelId} was sent but not published`),
+                Effect.logWarning(`Message ${sent.id} in channel ${channelId} was sent, but publishing it is not confirmed`),
             ),
         )
     })
@@ -242,7 +242,7 @@ export async function readAnnouncementSource(client: Client, message: Message) {
 }
 ```
 
-The public community snapshot includes its ID, name, description, icon, banner, public features and whether it is discoverable. Member and presence counts can be `null`. This read does not join the community or grant access to its channels. Fetching the original message can fail even when the public community read succeeds
+The public community snapshot includes its ID, name, description, icon, banner, public features, custom badge IDs and whether it is discoverable. Member and presence counts can be `null`. This read does not join the community or grant access to its channels. Fetching the original message can fail even when the public community read succeeds
 
 With the native Effect API:
 

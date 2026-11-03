@@ -26,6 +26,24 @@ The `reply` helper accepts a string or full message content and already applies 
 
 By default `messageCreate` handlers run up to eight at a time and other events one at a time. A burst that fills a handler's queue drops the oldest waiting event with a Warn record instead of stopping the bot. [Configuration](/docs/configuration/#events-and-the-gateway) shows how to change this for one event
 
+## Run code once the bot is connected
+
+There is no ready event, and `setup` runs before the bot connects. For work that needs a connection, watch the client's state from `setup`. This function posts one message the first time every shard is connected:
+
+```ts
+import type { Client } from "@neontechspace/fluxerly"
+
+export function announceWhenConnected(client: Client, channelId: string) {
+    const observer = client.observeState((state) => {
+        if (state !== "Connected") return
+        observer.close()
+        return client.messages.send(channelId, "The bot is online")
+    })
+}
+```
+
+Remove the `close()` call to run again after each reconnect, although a slow listener can skip states. A throw or returned Err goes to `onError` or the log. Being connected does not mean the caches already hold every community. In the Effect API, `client.observeState()` returns a Stream of the same states
+
 ## Run work later or on a schedule
 
 The `client.schedule` method runs a task after a delay or repeatedly, and the bot owns it. Call it from `setup`, an event handler or a command. It returns at once, so a command that schedules a reminder finishes and frees its command slot, as in the [commands guide](/docs/commands/#convert-arguments-before-execution). This function posts a status message every hour once `setup` calls it with the bot's client:
@@ -35,6 +53,7 @@ import type { Client } from "@neontechspace/fluxerly"
 
 export function postHourlyStatus(client: Client, channelId: string) {
     return client.schedule((signal) => client.messages.send(channelId, "Still running", { signal }), {
+        name: "hourly status",
         intervalMs: 60 * 60 * 1_000,
     })
 }
@@ -42,18 +61,50 @@ export function postHourlyStatus(client: Client, channelId: string) {
 
 Pass `delayMs` to run a task once after a delay, or `intervalMs` to repeat it. Without options the task runs once right away, which suits background work started in `setup`. A repeating task waits `intervalMs` before its first run unless `delayMs` says otherwise, and each later run starts `intervalMs` after the previous one ended, so runs never overlap. The returned task's `close()` cancels its later runs
 
-A task that throws, rejects or returns an Err result is reported to `onError`, or logged at Error with the code `lifecycle.taskFailed`. A repeating task keeps running after a failed run, so one network error does not end it, and a problem that lasts is reported at every run. To stop after a failure, the task can call `close()` itself
+A task that throws, rejects or returns an Err result is reported to `onError`, or logged at Error with the code `lifecycle.taskFailed`. The optional `name` appears in that record and in the report's `taskName`, so failures of different tasks stay apart. A repeating task keeps running after a failed run, so one network error does not end it, and a problem that lasts is reported at every run. To stop after a failure, the task can call `close()` itself
 
 When the bot stops, tasks that have not run yet are cancelled. A requested stop lets a run in progress finish within the `drainMs` window, then cancels it through its `signal`. One Info record with the code `lifecycle.tasksCancelled` counts the tasks that stopping cut short. Tasks live in memory only, so a restart loses pending reminders. Keep work that must survive a restart outside the SDK, as in [the reminder recipe](/docs/starter-lifetime/#keep-reminders-across-restarts)
 
 In the Effect API the task is an Effect, as in `client.schedule(client.messages.send(channelId, "Still running"), { intervalMs: 3_600_000 })`, and the call returns an Effect to run. Each run keeps the services of the code that scheduled it, and stopping the bot interrupts a run in progress
 
-### Keep reminders across restarts
+### Run a task every day at a set time
 
-The SDK does not own storage, so the application saves each reminder in its own store when it is created and schedules it again after a restart. This example supports integer delays up to 2,147,483,647 ms, about 24.9 days. A longer or non-integer delay makes `addReminder` reject with `ConfigurationError` before anything is saved, so for a longer reminder, your application has to wait until the delay fits. This example keeps the due time, channel ID and text in a JSON file, and a real bot would use its database. Call `addReminder` from a command, such as the `remind` command in the [commands guide](/docs/commands/#convert-arguments-before-execution), and pass `restoreReminders` as the `setup` option of `runBot`
+An `intervalMs` of one day drifts by each run's length and shifts by an hour when daylight saving time starts or ends. To run at a set local time, schedule one run at a time and schedule the next one when it starts:
 
 ```ts
-import { readFile, writeFile } from "node:fs/promises"
+import type { Client } from "@neontechspace/fluxerly"
+
+// The first 09:00 after a time, in the process's time zone, which the TZ environment variable sets, such as TZ=Europe/Berlin
+function nextNine(after: Date) {
+    const next = new Date(after)
+    next.setHours(9, 0, 0, 0)
+    if (next <= after) next.setDate(next.getDate() + 1)
+    return next
+}
+
+export function postEveryMorning(client: Client, channelId: string, at = nextNine(new Date())) {
+    client.schedule(
+        (signal) => {
+            postEveryMorning(client, channelId, nextNine(at))
+            return client.messages.send(channelId, "Good morning", { signal })
+        },
+        { delayMs: Math.max(0, at.getTime() - Date.now()) },
+    )
+}
+```
+
+Call `postEveryMorning` once from `setup`. Each run schedules the next 09:00 after its own, not after the current time, so a timer that wakes a moment early cannot post twice. Scheduling the next run first keeps the series going when a send fails
+
+### Keep reminders across restarts
+
+The SDK does not own storage, so the application saves each reminder in its own store when it is created and schedules it again after a restart. This example supports integer delays up to 2,147,483,647 ms, about 24.9 days
+
+A longer or non-integer delay makes `addReminder` reject with `RangeError` before anything is saved, so for a longer reminder, the application has to wait until the delay fits. This example keeps the due time, channel ID and text in a JSON file, and a real bot would use its database
+
+Call `addReminder` from a command, such as the `remind` command in the [commands guide](/docs/commands/#convert-arguments-before-execution), and pass `restoreReminders` as the `setup` option of `runBot`
+
+```ts
+import { readFile, rename, writeFile } from "node:fs/promises"
 import type { Client } from "@neontechspace/fluxerly"
 
 type Reminder = { id: string; dueAt: number; channelId: string; text: string }
@@ -62,9 +113,16 @@ const file = "reminders.json"
 const saved = new Map<string, Reminder>()
 let writing = Promise.resolve()
 
-// One write at a time, so the file ends with the latest list. A failed write reaches its caller and blocks no later write
+// One write at a time, so the file ends with the latest list. Each list goes to a temporary file that then replaces the
+// saved one, so a process stopped during a write leaves the previous list readable. A failed write reaches its caller and
+// blocks no later write
 function save() {
-    writing = writing.catch(() => {}).then(() => writeFile(file, JSON.stringify([...saved.values()])))
+    writing = writing
+        .catch(() => {})
+        .then(async () => {
+            await writeFile(`${file}.tmp`, JSON.stringify([...saved.values()]))
+            await rename(`${file}.tmp`, file)
+        })
     return writing
 }
 
@@ -78,7 +136,6 @@ function scheduleReminder(client: Client, reminder: Reminder) {
         },
         { delayMs: Math.max(0, reminder.dueAt - Date.now()) },
     )
-    saved.set(reminder.id, reminder)
 }
 
 export async function restoreReminders(client: Client) {
@@ -86,18 +143,31 @@ export async function restoreReminders(client: Client) {
         if (error.code !== "ENOENT") throw error
         return "[]"
     })
-    for (const reminder of JSON.parse(json) as Reminder[]) scheduleReminder(client, reminder)
+    for (const reminder of JSON.parse(json) as Reminder[]) {
+        saved.set(reminder.id, reminder)
+        scheduleReminder(client, reminder)
+    }
 }
 
+// The reminder is saved before it is scheduled, so a failed save leaves nothing to send later
 export async function addReminder(client: Client, channelId: string, delayMs: number, text: string) {
-    scheduleReminder(client, { id: crypto.randomUUID(), dueAt: Date.now() + delayMs, channelId, text })
-    await save()
+    if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 2_147_483_647)
+        throw new RangeError(`Unsupported delay: ${delayMs} ms`)
+    const reminder = { id: crypto.randomUUID(), dueAt: Date.now() + delayMs, channelId, text }
+    saved.set(reminder.id, reminder)
+    try {
+        await save()
+    } catch (error) {
+        saved.delete(reminder.id)
+        throw error
+    }
+    scheduleReminder(client, reminder)
 }
 ```
 
-On every start, `restoreReminders` schedules each saved reminder with the time left until it is due, or zero when it is already overdue. A reminder leaves the store only after its message was sent. A failed send returns the Err result, so the SDK reports it as a failed run, and the reminder stays saved for the next start to retry. A missing file means no reminders yet, while any other read error stops the bot before it connects
+On every start, `restoreReminders` schedules each saved reminder with the time left until it is due, or zero when it is already overdue. A failed save makes `addReminder` reject without scheduling anything. A reminder leaves the store only after its message was sent. A failed send returns the Err result, so the SDK reports it as a failed run, and the reminder stays saved for the next start to retry. A missing file means no reminders yet, while any other read error stops the bot before it connects
 
-A reminder can be sent twice when the bot stops after sending it and before removing it. The example does not handle several processes sharing one store
+A reminder can be sent twice when a send's response is lost, or when the bot stops after sending it and before removing it. The example does not handle several processes sharing one store
 
 In the Effect API the scheduled task is an Effect that sends the message and then removes the reminder, as in `client.messages.send(channelId, text).pipe(Effect.andThen(remove))` with `remove` as an Effect. A failed send skips the removal and is reported like any failed run, and `setup` returns the Effect that restores the saved reminders
 

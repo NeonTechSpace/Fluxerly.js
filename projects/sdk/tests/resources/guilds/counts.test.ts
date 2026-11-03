@@ -40,7 +40,7 @@ async function gatewayFixture() {
     const gateway = await startGatewayServer({ sessionId: "counts" })
     const unexpectedRequests: string[] = []
     stubFetchWithHostedDiscovery(async (url: string) => {
-        if (url === "https://api.fluxer.app/v1/gateway/bot") return Response.json({ url: "wss://gateway.fluxer.app" })
+        if (url === "https://fluxer.com/api/v1/gateway/bot") return Response.json({ url: "wss://gateway.fluxer.com" })
         // Recorded rather than asserted here, because a throw would reach the SDK as a transport failure
         unexpectedRequests.push(url)
         return new Response(null, { status: 599 })

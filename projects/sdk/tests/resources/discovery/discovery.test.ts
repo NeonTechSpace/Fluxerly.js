@@ -36,6 +36,7 @@ const directoryGuild = (extra: Record<string, unknown> = {}) => ({
     member_count: 12,
     online_count: 3,
     features: ["DISCOVERABLE"],
+    badge_ids: ["900"],
     verification_level: 2,
     ...extra,
 })
@@ -90,7 +91,7 @@ test.each(modes)("%s reads one volatile directory page with explicit metadata an
     expect(urls).toHaveLength(2)
     for (const url of urls) {
         const sent = new URL(url)
-        expect(`${sent.origin}${sent.pathname}`).toBe("https://api.fluxer.app/v1/discovery/guilds")
+        expect(`${sent.origin}${sent.pathname}`).toBe("https://fluxer.com/api/v1/discovery/guilds")
         expect(Object.fromEntries(sent.searchParams)).toEqual({
             limit: "2",
             offset: "4",
@@ -102,6 +103,21 @@ test.each(modes)("%s reads one volatile directory page with explicit metadata an
         })
         expect([...sent.searchParams]).toHaveLength(7)
     }
+})
+
+test.each(modes)("%s keeps a listed community's custom badge IDs", async (mode) => {
+    const client = await setup(mode)
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json({
+            guilds: [directoryGuild(), directoryGuild({ id: "201", badge_ids: undefined })],
+            total: 2,
+            category_counts: [],
+        }),
+    )
+    const page = await settle(client.discovery.search())
+    expect(page.guilds[0]).toMatchObject({ id: "200", badgeIds: ["900"] })
+    expect(Object.isFrozen(page.guilds[0]!.badgeIds)).toBe(true)
+    expect(page.guilds[1]).not.toHaveProperty("badgeIds")
 })
 
 test.each(modes)("%s rejects invalid directory queries and malformed page entries", async (mode) => {
@@ -263,7 +279,7 @@ test.each(modes)("%s submits required fields, normalizes tags and patches withou
     const bodies: unknown[] = [],
         methods: string[] = []
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
-        expect(url).toBe("https://api.fluxer.app/v1/guilds/200/discovery")
+        expect(url).toBe("https://fluxer.com/api/v1/guilds/200/discovery")
         methods.push(init.method!)
         if (init.method === "DELETE") return new Response(null, { status: 204 })
         bodies.push(JSON.parse(init.body as string))

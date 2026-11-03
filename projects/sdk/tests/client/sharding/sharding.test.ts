@@ -117,7 +117,7 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
             return
         }
         response.setHeader("Content-Type", "application/json")
-        response.end('{"url":"wss://gateway.fluxer.app"}')
+        response.end('{"url":"wss://gateway.fluxer.com"}')
     })
     const gateway = new WebSocketServer({ server })
 
@@ -173,8 +173,9 @@ async function gatewayFixture(autoReady = true, sendHelloAutomatically = true) {
     wsTarget.url = `ws://${address.address}:${address.port}`
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
         const requested = new URL(url)
-        expect(requested.origin).toBe("https://api.fluxer.app")
-        return fetch(`http://${address.address}:${address.port}${requested.pathname}${requested.search}`, init)
+        expect(url.startsWith("https://fluxer.com/api/")).toBe(true)
+        const path = requested.pathname.slice("/api".length)
+        return fetch(`http://${address.address}:${address.port}${path}${requested.search}`, init)
     })
 
     return {

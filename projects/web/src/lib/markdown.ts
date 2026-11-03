@@ -13,37 +13,15 @@ let processor: Promise<MarkdownRenderer> | undefined
 
 /** Markdown as HTML, with what its prose names marked for peeks. Each comment is read on its own, so it is its own
  * section, and its glossary terms are quiet. A comment names the symbol it documents as self, so it does not mark
- * itself */
-export async function renderMarkdown(markdown: string, options: { self?: string } = {}): Promise<string> {
+ * itself, and its page's entry point, so a name it mentions leads to that entry point first */
+export async function renderMarkdown(markdown: string, options: { self?: string; entry?: string } = {}): Promise<string> {
     processor ??= createMarkdownProcessor({
         shikiConfig: { theme: fluxerlyTheme as never, langs: [gitignoreGrammar as never], transformers: [collapseLongCode] },
         remarkPlugins: [remarkBareNames, remarkGuides, remarkLongCode, remarkFrameBars, remarkEntries],
         rehypePlugins: [[rehypePeek, { terms: peekData().terms, comment: true }], rehypeCodeBreaks],
         smartypants: false,
     })
-    return (await (await processor).render(markdown, { frontmatter: options.self ? { peekSelf: options.self } : {} })).code
-}
-
-// Words whose period does not end a sentence
-const abbreviations = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx)$/i
-
-/** One paragraph of Markdown as its first sentence, the summary, then the rest of its sentences as one paragraph, the
- * words unchanged. A paragraph's last period is left out, as everywhere on the site. Text with blank lines, lists,
- * quotes, headings or code blocks stays as it is */
-export function leadParagraphs(markdown: string | undefined): string | undefined {
-    const text = markdown?.trim()
-    if (!text || /\n\s*\n/.test(text) || /^\s*(?:[-*+] |\d+[.)] |#|>|```|\|)/m.test(text)) return markdown
-    // Inline code and links are set aside first, so a period inside them never ends a sentence
-    const kept: string[] = []
-    const masked = text.replace(/`[^`]*`|\[[^\]]*\]\([^)]*\)/g, (match) => `\u0000${kept.push(match) - 1}\u0001`).replace(/\s*\n\s*/g, " ")
-    const restore = (part: string) => part.replace(/\u0000(\d+)\u0001/g, (_, index) => kept[Number(index)]!)
-    const ending = (part: string) => part.replace(/(?<!\.)\.$/, "")
-    for (const match of masked.matchAll(/\.\s+(?=[A-Z"(\u0000])/g)) {
-        const before = masked.slice(0, match.index)
-        if (abbreviations.test(before) || !/[\w)"'\u0001]$/.test(before)) continue
-        return `${restore(before)}\n\n${restore(ending(masked.slice(match.index + match[0].length)))}`
-    }
-    return restore(ending(masked))
+    return (await (await processor).render(markdown, { frontmatter: { ...(options.self && { peekSelf: options.self }), ...(options.entry && { peekEntry: options.entry }) } })).code
 }
 
 // Names in comment prose

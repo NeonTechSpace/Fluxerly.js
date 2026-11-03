@@ -74,17 +74,17 @@ test.each(modes)("%s sends audit reasons only on supported role and member mutat
     await api.role(false, "50", options)
 
     expect(calls).toEqual([
-        { method: "POST", path: "/v1/guilds/20/roles", reason: "routine audit" },
-        { method: "PATCH", path: "/v1/guilds/20/roles/50", reason: "routine audit" },
-        { method: "PATCH", path: "/v1/guilds/20/roles", reason: "routine audit" },
-        { method: "PATCH", path: "/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
-        { method: "DELETE", path: "/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
-        { method: "DELETE", path: "/v1/guilds/20/roles/50", reason: "routine audit" },
-        { method: "PATCH", path: "/v1/guilds/20/members/30", reason: "routine audit" },
-        { method: "PATCH", path: "/v1/guilds/20/members/@me", reason: "routine audit" },
-        { method: "PATCH", path: "/v1/guilds/20/members/30", reason: "routine audit" },
-        { method: "PUT", path: "/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
-        { method: "DELETE", path: "/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
+        { method: "POST", path: "/api/v1/guilds/20/roles", reason: "routine audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/roles/50", reason: "routine audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/roles", reason: "routine audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
+        { method: "DELETE", path: "/api/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
+        { method: "DELETE", path: "/api/v1/guilds/20/roles/50", reason: "routine audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/members/30", reason: "routine audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/members/@me", reason: "routine audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/members/30", reason: "routine audit" },
+        { method: "PUT", path: "/api/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
+        { method: "DELETE", path: "/api/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
     ])
 
     const readOptions = { auditReason: "not applicable" } as RequestOptions
@@ -124,7 +124,11 @@ test.each(modes)("%s moderates with explicit defaults, reasons and timeout obser
     expect(Date.parse(timed.communicationDisabledUntil!)).toBeGreaterThanOrEqual(before + 300_000)
     expect(Object.isFrozen(timed)).toBe(true)
     expect(await api.getMember()).toEqual(timed)
-    expect(calls.at(-1)).toMatchObject({ method: "PATCH", path: "/v1/guilds/20/members/30", reason: "repeated spam" })
+    expect(calls.at(-1)).toMatchObject({
+        method: "PATCH",
+        path: "/api/v1/guilds/20/members/30",
+        reason: "repeated spam",
+    })
     expect((await api.clearTimeout()).communicationDisabledUntil).toBeNull()
     expect(calls.at(-1)?.body).toEqual({ communication_disabled_until: null })
     await api.kick()
@@ -132,14 +136,14 @@ test.each(modes)("%s moderates with explicit defaults, reasons and timeout obser
     await api.ban()
     expect(calls.at(-1)).toMatchObject({
         method: "PUT",
-        path: "/v1/guilds/20/bans/30",
+        path: "/api/v1/guilds/20/bans/30",
         body: { ban_duration_seconds: 0, delete_message_seconds: 0 },
     })
     // Durations are milliseconds, sent to Fluxer as whole seconds
     await api.ban({ durationMs: 60_000, deleteMessagesMs: 604_800_000, reason: "違反" }, { auditReason: "spam" })
     expect(calls.at(-1)?.body).toEqual({ ban_duration_seconds: 60, delete_message_seconds: 604_800, reason: "違反" })
     await api.unban()
-    expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/guilds/20/bans/30", body: undefined })
+    expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/api/v1/guilds/20/bans/30", body: undefined })
     expect(api.state()).toBe("Disconnected")
 })
 
@@ -168,7 +172,7 @@ test.each(modes)("%s validates moderation input before dispatch and rejects malf
         expect(failure).toMatchObject({ reason: "input", outcome: "notDispatched", inputValidation: { path } })
         if (path !== "input" && path !== "input.reason") expect((failure as Error).message).toContain("whole seconds")
     }
-    for (const reason of ["", "   ", "é", "bad\nheader", "x".repeat(513)])
+    for (const reason of ["", "   ", "\ud800", "bad\nheader", "x".repeat(513)])
         await expect(api.kick({ auditReason: reason })).rejects.toMatchObject({
             reason: "input",
             outcome: "notDispatched",
@@ -235,6 +239,39 @@ test.each(modes)("%s ban lists are remote, frozen and fail without partial resul
         await expect(api.bans()).rejects.toMatchObject({ reason: "response" })
     payload = []
     expect(await api.bans()).toEqual([])
+})
+
+test.each(modes)("%s keeps the banned account's public identity on each ban", async (mode) => {
+    const banned = (id: string, extra: Record<string, unknown> = {}) => ({
+        user: {
+            id,
+            username: "same-name",
+            discriminator: "0042",
+            global_name: "Display",
+            avatar: null,
+            avatar_color: null,
+            flags: 0,
+            ...extra,
+        },
+        reason: null,
+        moderator_id: "31",
+        banned_at: "2026-09-09T00:00:00Z",
+        expires_at: null,
+    })
+    rest(async () =>
+        Response.json([
+            banned("30"),
+            banned("32", { discriminator: "0007" }),
+            { ...banned("33"), user: { id: "33", username: "partial" } },
+        ]),
+    )
+    const api = await setup(mode, { members: true })
+    const bans = await api.bans()
+    expect(bans[0]).toMatchObject({ userId: "30", user: { id: "30", discriminator: "0042", displayName: "Display" } })
+    expect(bans[1]).toMatchObject({ userId: "32", user: { discriminator: "0007" } })
+    expect(Object.isFrozen(bans[0]!.user)).toBe(true)
+    expect(bans[2]).toMatchObject({ userId: "33", username: "partial" })
+    expect(bans[2]).not.toHaveProperty("user")
 })
 
 test.each(modes)("%s keeps moderator ID 0 on a ban placed by Fluxer staff", async (mode) => {
@@ -431,27 +468,27 @@ test.each(modes)(
         expect((await api.roles.edit({ permissions: 0n })).permissions).toBe(0n)
 
         expect(calls).toEqual([
-            { path: "/v1/guilds/20/roles", method: "GET", body: undefined, features: null },
+            { path: "/api/v1/guilds/20/roles", method: "GET", body: undefined, features: null },
             {
-                path: "/v1/guilds/20/roles",
+                path: "/api/v1/guilds/20/roles",
                 method: "POST",
                 body: { name: "enabled", color: 0, permissions: bit.toString() },
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/guilds/20/roles",
+                path: "/api/v1/guilds/20/roles",
                 method: "POST",
                 body: { name: "cleared", color: 0, permissions: "0" },
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/guilds/20/roles/50",
+                path: "/api/v1/guilds/20/roles/50",
                 method: "PATCH",
                 body: { permissions: bit.toString() },
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/guilds/20/roles/50",
+                path: "/api/v1/guilds/20/roles/50",
                 method: "PATCH",
                 body: { permissions: "0" },
                 features: "view_channel_members_permission",
@@ -1658,7 +1695,7 @@ test.each(modes)("%s keeps hoist display writes separate and invalidates late ro
     await late
     expect(await api.getRole()).toBeUndefined()
     expect(calls.at(-1)).toEqual({
-        path: "/v1/guilds/20/roles/hoist-positions",
+        path: "/api/v1/guilds/20/roles/hoist-positions",
         method: "PATCH",
         body: [{ id: "50", hoist_position: -1 }],
     })
@@ -1666,7 +1703,7 @@ test.each(modes)("%s keeps hoist display writes separate and invalidates late ro
     await api.roles.list()
     await api.roles.resetHoist()
     expect(await api.getRole()).toBeUndefined()
-    expect(calls.at(-1)).toEqual({ path: "/v1/guilds/20/roles/hoist-positions", method: "DELETE", body: undefined })
+    expect(calls.at(-1)).toEqual({ path: "/api/v1/guilds/20/roles/hoist-positions", method: "DELETE", body: undefined })
 })
 
 test.each(modes)(
@@ -1740,7 +1777,7 @@ async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Pro
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(url, init),
     )
 }
@@ -1966,7 +2003,7 @@ test.each(modes)("%s targeted role requests preserve other roles and do not trus
     const writes: string[] = []
     rest(async (url, init) => {
         if (init.method === "GET") return Response.json(member("30", roles))
-        expect(url).toBe("https://api.fluxer.app/v1/guilds/20/members/30/roles/50")
+        expect(url).toBe("https://fluxer.com/api/v1/guilds/20/members/30/roles/50")
         expect(init.body).toBeUndefined()
         writes.push(init.method!)
         roles = init.method === "PUT" ? [...new Set([...roles, "50"])] : roles.filter((id) => id !== "50")
@@ -2086,9 +2123,9 @@ test.each(modes)(
         }
         // A rejection that no retry can fix is sent once
         expect(writes).toEqual([
-            "PATCH /v1/guilds/20/members/30",
-            "DELETE /v1/guilds/20/members/30",
-            "PUT /v1/guilds/20/bans/30",
+            "PATCH /api/v1/guilds/20/members/30",
+            "DELETE /api/v1/guilds/20/members/30",
+            "PUT /api/v1/guilds/20/bans/30",
         ])
     },
 )
@@ -2099,7 +2136,7 @@ test.each(modes)("%s shares member read rate state without blocking guild reads"
     let calls = 0
     rest(async (url) => {
         calls++
-        if (url.includes("/members")) return Response.json({ retry_after: 60 }, { status: 429 })
+        if (url.includes("/members")) return Response.json({ retry_after: 60, global: false }, { status: 429 })
         return Response.json(guild)
     })
     const api = await setup(mode)

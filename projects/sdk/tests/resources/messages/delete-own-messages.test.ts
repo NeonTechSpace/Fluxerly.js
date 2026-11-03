@@ -29,8 +29,8 @@ test("default deleteOwnMessages operations use exact bodyless 202 routes and rej
     expect((await client.messages.deleteOwnMessages("20", { confirm: true })).isOk()).toBe(true)
     expect((await client.guilds.deleteOwnMessages("30", { confirm: true })).isOk()).toBe(true)
     expect(requests.map(({ url }) => url)).toEqual([
-        "https://api.fluxer.app/v1/channels/20/messages/bulk-delete-mine",
-        "https://api.fluxer.app/v1/users/@me/guilds/30/messages/bulk-delete-mine",
+        "https://fluxer.com/api/v1/channels/20/messages/bulk-delete-mine",
+        "https://fluxer.com/api/v1/users/@me/guilds/30/messages/bulk-delete-mine",
     ])
     for (const request of requests) {
         expect(request.init.method).toBe("POST")
@@ -236,9 +236,9 @@ test("native deleteOwnMessages operations use exact bodyless routes and preserve
         ),
     )
     expect(requests.map(({ url }) => url)).toEqual([
-        "https://api.fluxer.app/v1/channels/20/messages/bulk-delete-mine",
-        "https://api.fluxer.app/v1/users/@me/guilds/30/messages/bulk-delete-mine",
-        "https://api.fluxer.app/v1/users/@me/guilds/30/messages/bulk-delete-mine",
+        "https://fluxer.com/api/v1/channels/20/messages/bulk-delete-mine",
+        "https://fluxer.com/api/v1/users/@me/guilds/30/messages/bulk-delete-mine",
+        "https://fluxer.com/api/v1/users/@me/guilds/30/messages/bulk-delete-mine",
     ])
     for (const request of requests) {
         expect(request.init.method).toBe("POST")

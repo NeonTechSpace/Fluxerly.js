@@ -73,8 +73,9 @@ import MotionTour from "./MotionTour.astro"
 
         // At the very top of the page the header always shows
         const inTopArea = (y: number) => y <= threshold
-        // Focus inside the header, or an open menu or popover, keeps it shown
-        const isHeld = () => header.contains(document.activeElement) || header.querySelector('[aria-expanded="true"]') !== null
+        // Keyboard focus inside the header, or an open menu or popover, keeps it shown. The focus a mouse click leaves on a
+        // button doesn't
+        const isHeld = () => header.querySelector(':focus-visible, [aria-expanded="true"]') !== null
 
         // Drawn from the position already read, so the attributes are written without reading the page's layout
         // back in between

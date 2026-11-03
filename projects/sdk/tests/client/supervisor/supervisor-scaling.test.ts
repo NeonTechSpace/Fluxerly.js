@@ -15,9 +15,9 @@ import { supervisor as nativeSupervisor } from "../../../src/effect.js"
 import type { SupervisorOptions, SupervisorStatus } from "../../../src/supervisor.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { forkScripted as forkScriptedChildren, type ScriptedChild as Child } from "../../support/scripted-child.js"
-import { startInstance } from "../../support/instance.js"
+import { instanceDocument, startInstance } from "../../support/instance.js"
 import { captureLogs } from "../../support/log-capture.js"
-import { fakeHostTime, hostTurnsUntil } from "../../support/client-clock.js"
+import { fakeHostTime, hostTurnsUntil, sdkClock } from "../../support/client-clock.js"
 import { sendJson, type RecordedRequest, type RouteHandler } from "../../support/rest-server.js"
 
 const forkScripted = (holdShutdown?: (index: number) => boolean) => forkScriptedChildren(fork, 200, holdShutdown)
@@ -196,6 +196,46 @@ test.each(modes)(
 )
 
 test.each(modes)(
+    "%s totalShards auto waits out a rate-limited instance discovery that fits the startup deadline",
+    async (mode) => {
+        try {
+            const clock = sdkClock()
+            let discoveries = 0
+            const { instance } = await startInstance({
+                routes: {
+                    "GET /v1/users/@me/guilds": guildPages(1),
+                    "GET /.well-known/fluxer": (request, response) =>
+                        ++discoveries === 1
+                            ? sendJson(response, { code: "RATE_LIMITED", message: "Rate limited", retry_after: 1 }, 429)
+                            : sendJson(response, instanceDocument(`http://${request.headers.host}`)),
+                },
+            })
+            forkScripted()
+            const owner = await managed(mode, {
+                ...base,
+                totalShards: "auto",
+                processes: 1,
+                token: "fixture-only-not-a-credential",
+                instance: { url: instance, allowInsecure: true },
+                logging: { level: "silent" },
+            })
+            const starting = owner.start()
+            await clock.waiting(1_000)
+            expect(discoveries).toBe(1)
+            await clock.advance(1_000)
+            expect(await starting).toBeUndefined()
+            expect(discoveries).toBe(2)
+            expect(owner.status().children.map((child) => child.assignment)).toEqual([
+                { totalShards: 1, shardIds: [0] },
+            ])
+            await owner.shutdown()
+        } finally {
+            fork.mockReset()
+        }
+    },
+)
+
+test.each(modes)(
     "%s a failed automatic count fails start with reason shardCount and the count's error",
     async (mode) => {
         try {
@@ -362,6 +402,7 @@ function diagnosticsSnapshot() {
             queuedCapacity: 256,
             queuedJsonBytes: 0,
             queuedJsonByteCapacity: 4_194_304,
+            rateLimitHold: null,
         },
         uploads: { reservedBytes: 0, byteCapacity: 104_857_600 },
         gatewayRequests: { activeRequests: 0, activeCapacity: 4 },

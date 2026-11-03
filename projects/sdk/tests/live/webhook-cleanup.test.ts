@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url"
 import { afterEach, expect, test, vi } from "vitest"
 import { copyHarnessSupport, lockFiles } from "./support/fixture-root.js"
 import { jsonLines, type JsonLine } from "./support/json-lines.js"
+import { recoveredOnlyExitCode } from "./support/reporting.js"
 
 const childTimeoutMs = 60_000
 // Allow every sequential child its own limit, plus one child limit for fixture setup and cleanup
@@ -27,8 +28,9 @@ const fixtureToken = "fixture-token-not-a-credential"
 const privateFailure = "fixture-private-finalizer-detail"
 const marker = "fluxerly-wh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const journalPath = (root: string) => join(root, ".env.test.webhooks.local")
-// A shortened harness deadline, distinct from every other timer the harness sets
-const watchdogMs = 1_000
+// A harness deadline distinct from every other timer the harness sets, so the trap can find it. It never expires on its
+// own within the child timeout: The driver fires it once the harness has finished, so no record races the deadline
+const watchdogMs = 179_999
 
 afterEach(() => {
     for (const root of temporaryRoots.splice(0)) {
@@ -117,25 +119,25 @@ function fixture(journal?: object) {
             const deletions = []
             let nextChannel = 310
             const identity = {
-                "/v1/applications/@me": { id: "150", bot: { id: "200" } },
-                "/v1/users/@me": { id: "200", bot: true },
-                "/v1/guilds/100": { id: "100" },
+                "/api/v1/applications/@me": { id: "150", bot: { id: "200" } },
+                "/api/v1/users/@me": { id: "200", bot: true },
+                "/api/v1/guilds/100": { id: "100" },
             }
             const fixtureFetch = async (url, options = {}) => {
                 const path = new URL(url).pathname
                 const method = options.method ?? "GET"
                 if (method === "GET" && identity[path]) return Response.json(identity[path])
                 console.log(JSON.stringify({ fixture: "remote_request", method, path }))
-                if (process.env.FLUXERLY_WEBHOOKS_CLEANUP_FAILURE === "1" && path === "/v1/guilds/100/webhooks")
+                if (process.env.FLUXERLY_WEBHOOKS_CLEANUP_FAILURE === "1" && path === "/api/v1/guilds/100/webhooks")
                     throw Error(${JSON.stringify(privateFailure)})
-                if (path === "/v1/guilds/100/webhooks") return Response.json(hooks)
-                if (path === "/v1/guilds/100/channels" && method === "GET") return Response.json(channels)
-                if (path === "/v1/guilds/100/channels" && method === "POST") {
+                if (path === "/api/v1/guilds/100/webhooks") return Response.json(hooks)
+                if (path === "/api/v1/guilds/100/channels" && method === "GET") return Response.json(channels)
+                if (path === "/api/v1/guilds/100/channels" && method === "POST") {
                     const channel = { id: String(nextChannel++), ...JSON.parse(options.body), guild_id: "100" }
                     channels.push(channel)
                     return Response.json(channel)
                 }
-                const [, , kind, id] = path.split("/")
+                const [, , , kind, id] = path.split("/")
                 const list = kind === "webhooks" ? hooks : kind === "channels" ? channels : undefined
                 const index = list?.findIndex((item) => item.id === id) ?? -1
                 if (method === "DELETE" && index >= 0) {
@@ -149,24 +151,42 @@ function fixture(journal?: object) {
             globalThis.fetch = fixtureFetch
             // A writer that stays alive until the deadline, as an unproven shutdown could leave one
             if (process.env.FLUXERLY_WEBHOOKS_ACTIVE_WRITER === "1") setInterval(() => {}, 1_000)
-            // The harness deadline is the only timer with the shortened delay the test selected
+            // The harness deadline is the only timer with the delay the test selected
             const watchdogMs = Number(process.env.FLUXERLY_LIVE_WATCHDOG_MS)
             const set = globalThis.setTimeout
-            let watchdog
+            let watchdog, expire
             globalThis.setTimeout = (callback, delay, ...args) => {
                 const timer = set(callback, delay, ...args)
-                if (delay === watchdogMs) watchdog = timer
+                if (delay === watchdogMs) {
+                    watchdog = timer
+                    expire = () => callback(...args)
+                }
                 return timer
             }
             const clear = globalThis.clearTimeout
             globalThis.clearTimeout = (timeout) => {
-                if (timeout === watchdog) console.log(JSON.stringify({ fixture: "watchdog_cleared" }))
+                if (timeout === watchdog) {
+                    expire = undefined
+                    console.log(JSON.stringify({ fixture: "watchdog_cleared" }))
+                }
                 return clear(timeout)
             }
+            globalThis[Symbol.for("fluxerly.fixture.expireWatchdog")] = () => expire?.()
             process.on("exit", () =>
                 console.log(JSON.stringify({ fixture: "fetch_restored", restored: globalThis.fetch === fixtureFetch })),
             )
             process.on("exit", () => console.log(JSON.stringify({ fixture: "recovery_state", hooks, channels, deletions })))
+        `,
+    )
+    // Runs the harness as the main script would, then lets a deadline the harness kept expire. The harness has
+    // finished its finalizers by then, so the deadline record always follows them
+    writeFileSync(
+        join(root, "driver.mjs"),
+        `
+            import { resolve } from "node:path"
+            process.argv[1] = resolve("tests/live/webhooks.mjs")
+            await import("./tests/live/webhooks.mjs")
+            globalThis[Symbol.for("fluxerly.fixture.expireWatchdog")]()
         `,
     )
     return root
@@ -183,7 +203,7 @@ function run(
         expectedStatus?: number
     } = {},
 ) {
-    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/webhooks.mjs", mode], {
+    const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "driver.mjs", mode], {
         cwd: root,
         env: {
             ...process.env,
@@ -240,7 +260,7 @@ test.each([
     )
     expect(lines).toContainEqual(expect.objectContaining({ passed: false, reason: "deadline", journalRetained: true }))
     // Owned channels were created, but no cleanup request follows an unproven shutdown
-    expect(remoteRequests(lines, "GET").filter((line) => line.path === "/v1/guilds/100/webhooks")).toEqual([])
+    expect(remoteRequests(lines, "GET").filter((line) => line.path === "/api/v1/guilds/100/webhooks")).toEqual([])
     expect(JSON.parse(readFileSync(journalPath(root), "utf8")).channels).toHaveLength(2)
     expect(lockFiles(root)).toEqual([".env.test.local.lock.webhooks"])
 })
@@ -257,7 +277,7 @@ test.each(["default", "effect"])(
         expect(JSON.parse(readFileSync(journalPath(root), "utf8")).channels).toHaveLength(2)
         expect(lockFiles(root)).toEqual([])
 
-        const recovered = run(root, mode, { expectedStatus: 0 })
+        const recovered = run(root, mode, { expectedStatus: recoveredOnlyExitCode })
         expect(recovered).toContainEqual(
             expect.objectContaining({ check: "webhook_and_channels_cleanup_verified", passed: true }),
         )
@@ -278,7 +298,7 @@ const pendingJournal = {
 
 test.each(["default", "effect"])("%s webhook live recovery removes only the owned token-edited webhook", (mode) => {
     const root = fixture(pendingJournal)
-    const lines = run(root, mode, { recovery: true, expectedStatus: 0 })
+    const lines = run(root, mode, { recovery: true, expectedStatus: recoveredOnlyExitCode })
     expect(lines).toContainEqual(
         expect.objectContaining({ check: "webhook_and_channels_cleanup_verified", passed: true }),
     )

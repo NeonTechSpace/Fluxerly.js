@@ -9,7 +9,7 @@
 
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { newAgentsFile } from "./agents-section.js"
+import { newAgentsFile, type AgentsPackageManager } from "./agents-section.js"
 
 /** The starters init writes, in the order the prompt offers them */
 export const starterTemplates = ["js", "ts", "effect"] as const
@@ -44,7 +44,10 @@ test("the bot answers !ping with Pong! and ignores other messages", async () => 
     await testBot.ready()
 
     // The say method sends a message as a user and returns the messages the bot sent in response
-    assert.deepEqual((await testBot.say("!ping")).map((message) => message.content), ["Pong!"])
+    const replies = await testBot.say("!ping")
+    // Checked first, because a failed assertion and a failed cleanup together can hide the reason behind SuppressedError
+    assert.deepEqual(testBot.failures(), [])
+    assert.deepEqual(replies.map((message) => message.content), ["Pong!"])
     assert.deepEqual(await testBot.say("hello"), [])
 })
 `
@@ -75,7 +78,10 @@ test("the bot answers !ping with Pong! and ignores other messages", async () => 
 `
 
 // Node.js runs .ts files directly by removing their types, so the scripts need no build step. Removing types checks
-// nothing, so a TypeScript starter also gets a check script that runs the compiler
+// nothing, so a TypeScript starter also gets a check script that runs the compiler.
+// The dev script restarts the bot when a file changes. Node.js stops the running bot with SIGTERM and waits for it to
+// exit, and runBot then closes the connection with code 1000, which ends the Fluxer session instead of leaving it open.
+// The test script ends a test that never settles: The timeout fails the test, and only forcing the exit stops the process
 const packageJson = (botFile: string) =>
     `${JSON.stringify(
         {
@@ -83,7 +89,8 @@ const packageJson = (botFile: string) =>
             type: "module",
             scripts: {
                 start: `node --env-file-if-exists=.env ${botFile}`,
-                test: "node --test",
+                dev: `node --watch --env-file-if-exists=.env ${botFile}`,
+                test: "node --test --test-timeout=30000 --test-force-exit",
                 ...(botFile.endsWith(".ts") ? { check: "tsc" } : {}),
             },
         },
@@ -111,12 +118,17 @@ const tsconfig = `${JSON.stringify(
 )}\n`
 
 /** The files init writes for a template, in the order it reports them */
-function starterFiles(project: string, packageRoot: string, template: StarterTemplate): ReadonlyMap<string, string> {
+function starterFiles(
+    project: string,
+    packageRoot: string,
+    template: StarterTemplate,
+    manager: AgentsPackageManager | undefined,
+): ReadonlyMap<string, string> {
     const shared = (): [string, string][] => [
         [".env.example", "FLUXER_BOT_TOKEN=\n"],
         [".env", "FLUXER_BOT_TOKEN=\n"],
         [".gitignore", `${ignoredLines.join("\n")}\n`],
-        ["AGENTS.md", newAgentsFile(project, packageRoot)],
+        ["AGENTS.md", newAgentsFile(project, packageRoot, manager)],
     ]
     if (template === "js")
         return new Map([
@@ -142,11 +154,26 @@ export interface StarterResult {
     readonly ignored: readonly string[]
 }
 
-/** Append the starter's lines that `file` lacks, keeping its content and line endings, and return the lines added */
+/**
+ * Whether a later line of a .gitignore can re-include `rule`: A negation of the rule itself, also when it escapes
+ * characters with a backslash as in !\.env, or any negated pattern with a wildcard. This is no full Git matcher. A
+ * wildcard that spares the file only costs an extra line, while a negation of another path, such as the common
+ * !.env.example, adds nothing
+ */
+function reincludes(line: string, rule: string): boolean {
+    if (!line.startsWith("!")) return false
+    return /[*?[]/.test(line) || line.replace(/^!\/?/, "").replace(/\\(.)/g, "$1").replace(/\/$/, "") === rule
+}
+
+/** Append the starter lines that `file` does not effectively ignore, keeping its text, and return the lines added */
 function addMissingIgnoredLines(file: string): readonly string[] {
     const text = readFileSync(file, "utf8")
-    const present = new Set(text.split(/\r?\n/).map((line) => line.trim()))
-    const missing = ignoredLines.filter((line) => !present.has(line))
+    // Git ignores trailing spaces, while a leading space is part of the pattern
+    const lines = text.split(/\r?\n/).map((line) => line.trimEnd())
+    const missing = ignoredLines.filter((rule) => {
+        const last = lines.lastIndexOf(rule)
+        return last === -1 || lines.slice(last + 1).some((line) => reincludes(line, rule))
+    })
     if (missing.length === 0) return []
     const lineEnd = text.includes("\r\n") ? "\r\n" : "\n"
     // A file that ends without a line break gets one first, so the added lines start on their own line
@@ -160,8 +187,9 @@ export function writeStarterProject(
     project: string,
     packageRoot: string,
     template: StarterTemplate = "js",
+    manager?: AgentsPackageManager,
 ): StarterResult {
-    const files = starterFiles(project, packageRoot, template)
+    const files = starterFiles(project, packageRoot, template, manager)
     const conflicts = [...files.keys()].filter(
         (name) => name !== ".env" && name !== ".gitignore" && existsSync(join(project, name)),
     )

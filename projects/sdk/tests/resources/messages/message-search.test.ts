@@ -72,7 +72,7 @@ test.each(modes)(
         expect(await settle(client.messages.get({ id: "10", channelId: "20" }))).toBeUndefined()
         expect(requests).toEqual([
             {
-                path: "/v1/search/messages",
+                path: "/api/v1/search/messages",
                 method: "POST",
                 body: JSON.stringify({
                     scope: "current",
@@ -434,7 +434,7 @@ test.each(modes)(
         expect(requests).toEqual([
             {
                 method: "POST",
-                path: "/v1/search/messages",
+                path: "/api/v1/search/messages",
                 body: {
                     scope: "current",
                     context_guild_id: "40",

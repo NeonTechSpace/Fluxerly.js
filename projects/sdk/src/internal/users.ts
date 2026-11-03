@@ -7,6 +7,7 @@ import type {
     DirectMessageChannel,
     DirectMessageGroupEdit,
     DirectMessageLatestMessages,
+    ProfileBadge,
     User,
     UserProfile,
     UserProfileFields,
@@ -14,8 +15,10 @@ import type {
 } from "#sdk/users"
 import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
-import { decodeMessage } from "./message.js"
+import { decodeMessage, mentionPreferenceKnown } from "./message.js"
 import { identifier, imageDataUri, record, safeInteger as integer } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
+import { timestamp } from "./decode/timestamp.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { channelName, normalizedText } from "./field-text.js"
 
@@ -35,6 +38,8 @@ export interface UserRequest<A> {
     readonly verifyType?: "private" | "group"
     /** Skips all user-cache conflict guards and writes while retaining the shared REST scheduler and retries */
     readonly noCache?: boolean
+    /** A POST that only reads, so its failures count as reads like those of a GET. It is not sent again automatically */
+    readonly read?: true
 }
 
 type UserValidationResult<A> = UserRequest<A> | InputValidationFailure
@@ -69,6 +74,7 @@ export function decodeUser(value: unknown): User | undefined {
         isBot: value.bot === true,
         isSystem: value.system === true,
         flags: value.flags,
+        ...(mentionPreferenceKnown(value.mention_flags) ? { mentionFlags: value.mention_flags } : {}),
     })
 }
 
@@ -95,6 +101,7 @@ function decodeNicknames(value: unknown): Record<string, string> | undefined {
     return nicknames
 }
 
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per channel field
 export function decodeDirectMessage(value: unknown): DirectMessageChannel | undefined {
     if (
         !record(value) ||
@@ -105,7 +112,11 @@ export function decodeDirectMessage(value: unknown): DirectMessageChannel | unde
         (value.name !== undefined && !nullableText(value.name)) ||
         (value.icon !== undefined && !nullableText(value.icon)) ||
         (value.owner_id !== undefined && value.owner_id !== null && !identifier(value.owner_id)) ||
-        (value.last_message_id !== undefined && value.last_message_id !== null && !identifier(value.last_message_id))
+        (value.last_message_id !== undefined && value.last_message_id !== null && !identifier(value.last_message_id)) ||
+        (value.last_pin_timestamp !== undefined &&
+            value.last_pin_timestamp !== null &&
+            !timestamp(value.last_pin_timestamp)) ||
+        (value.nsfw !== undefined && typeof value.nsfw !== "boolean")
     )
         return undefined
     const recipients = decodeRecipients((value.recipients ?? []) as unknown[])
@@ -121,6 +132,8 @@ export function decodeDirectMessage(value: unknown): DirectMessageChannel | unde
         ownerId: value.owner_id ?? null,
         lastMessageId: value.last_message_id ?? null,
         nicknames: Object.freeze(nicknames),
+        ...(value.last_pin_timestamp === undefined ? {} : { lastPinTimestamp: value.last_pin_timestamp }),
+        ...(value.nsfw === undefined ? {} : { nsfw: value.nsfw }),
     }) as DirectMessageChannel
 }
 
@@ -136,7 +149,7 @@ export function userFetch(id: string): UserValidationResult<User> {
         ...(id === "@me" ? {} : { id }),
         decode: (value) => {
             const user = decodeUser(value)
-            return user && (id === "@me" || user.id === id) ? user : undefined
+            return user === undefined || id === "@me" || user.id === id ? user : rejectCheck("targetMismatch")
         },
     }
 }
@@ -169,9 +182,12 @@ export function userProfile(id: string, query?: UserProfileQuery): UserValidatio
                 (value.profile_limited !== undefined && typeof value.profile_limited !== "boolean")
             )
                 return undefined
+            // Each part stops the decoder at once, so a failure names the field that failed
             const user = decodeUser(value.user)
+            if (!user) return undefined
             const profile = decodeUserProfileFields(value.user_profile, true)
-            if (!user || user.id !== id || !profile) return undefined
+            if (!profile) return undefined
+            if (user.id !== id) return rejectCheck("targetMismatch")
 
             const member = value.guild_member
             if (member !== undefined) {
@@ -188,9 +204,69 @@ export function userProfile(id: string, query?: UserProfileQuery): UserValidatio
                 if (!decodedGuildProfile) return undefined
                 guildProfile = decodedGuildProfile
             }
-            return Object.freeze({ user, profile, guildProfile, isLimited: value.profile_limited === true })
+            let profileBadges: readonly ProfileBadge[] | undefined
+            if (value.profile_badges !== undefined) {
+                if (!Array.isArray(value.profile_badges)) return undefined
+                const badges: ProfileBadge[] = []
+                for (const entry of value.profile_badges as unknown[]) {
+                    const badge = decodeProfileBadge(entry)
+                    if (!badge) return undefined
+                    badges.push(badge)
+                }
+                profileBadges = Object.freeze(badges)
+            }
+            return Object.freeze({
+                user,
+                profile,
+                guildProfile,
+                isLimited: value.profile_limited === true,
+                ...(profileBadges === undefined ? {} : { profileBadges }),
+            })
         },
     }
+}
+
+/** Decode one profile badge, keeping a kind this SDK does not know as Fluxer sent it */
+// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per badge field
+function decodeProfileBadge(value: unknown): ProfileBadge | undefined {
+    if (
+        !record(value) ||
+        typeof value.kind !== "string" ||
+        typeof value.label !== "string" ||
+        !nullableText(value.asset) ||
+        !(value.aspect_ratio === null || (typeof value.aspect_ratio === "number" && value.aspect_ratio > 0)) ||
+        !nullableText(value.caption) ||
+        !nullableText(value.href)
+    )
+        return undefined
+    // Instances from before custom badges send neither key nor asset_url, and their key always equals kind
+    const key = value.key === undefined ? value.kind : value.key
+    const assetUrl = value.asset_url === undefined ? null : value.asset_url
+    if (typeof key !== "string" || !nullableText(assetUrl)) return undefined
+    if (value.small_asset !== undefined && typeof value.small_asset !== "string") return undefined
+    if (value.count !== undefined && value.count !== null && !integer(value.count)) return undefined
+    if (value.accessible_label !== undefined && !nullableText(value.accessible_label)) return undefined
+    let details: ProfileBadge["details"]
+    if (value.details !== undefined && value.details !== null) {
+        const { title, lines } = record(value.details) ? value.details : {}
+        if (typeof title !== "string" || !Array.isArray(lines) || !lines.every((line) => typeof line === "string"))
+            return undefined
+        details = Object.freeze({ title, lines: Object.freeze([...(lines as string[])]) })
+    }
+    return Object.freeze({
+        key,
+        kind: value.kind,
+        label: value.label,
+        asset: value.asset,
+        assetUrl,
+        ...(value.small_asset === undefined ? {} : { smallAsset: value.small_asset }),
+        aspectRatio: value.aspect_ratio,
+        caption: value.caption,
+        href: value.href,
+        ...(typeof value.count === "number" ? { count: value.count } : {}),
+        ...(typeof value.accessible_label === "string" ? { accessibleLabel: value.accessible_label } : {}),
+        ...(details === undefined ? {} : { details }),
+    })
 }
 
 function decodeUserProfileFields(value: unknown, accountProfile: boolean): UserProfileFields | undefined {
@@ -236,7 +312,9 @@ export function directMessageOpen(id: string): UserValidationResult<DirectMessag
         json,
         decode: (value) => {
             const channel = decodeDirectMessage(value)
-            return channel?.type === "dm" && channel.recipients.some((user) => user.id === id) ? channel : undefined
+            return channel === undefined || (channel.type === "dm" && channel.recipients.some((user) => user.id === id))
+                ? channel
+                : rejectCheck("targetMismatch")
         },
     }
 }
@@ -252,7 +330,7 @@ export function directMessageFetch(id: string): UserValidationResult<DirectMessa
         resource: "directMessages",
         decode: (value) => {
             const channel = decodeDirectMessage(value)
-            return channel?.id === id ? channel : undefined
+            return channel === undefined || channel.id === id ? channel : rejectCheck("targetMismatch")
         },
     }
 }
@@ -312,6 +390,8 @@ export function directMessageLatestMessages(
         resource: "directMessages",
         json,
         noCache: true,
+        // Fluxer only reads here (user/services/UserChannelService.ts:257-289 at 5f3fc0b1)
+        read: true,
         decode: (value) => {
             if (!record(value) || Object.keys(value).some((id) => !channelIds.includes(id))) return undefined
             const messages: Record<string, MessageCore | null> = {}

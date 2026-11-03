@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest"
+import type { LogRecord } from "../../../src/index.js"
 import { modes, setup as setupClient, type Mode } from "../../support/both-apis.js"
 import { sdkClock } from "../../support/client-clock.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
@@ -81,7 +82,7 @@ test.each(modes)("%s reads remote vanity state and edits without fetching counts
         expect(Object.isFrozen(result)).toBe(true)
     }
     expect(requests.map((request) => request.method)).toEqual(["GET", "PATCH", "PATCH", "PATCH", "PATCH"])
-    expect(requests.every((request) => request.url === "https://api.fluxer.app/v1/guilds/200/vanity-url")).toBe(true)
+    expect(requests.every((request) => request.url === "https://fluxer.com/api/v1/guilds/200/vanity-url")).toBe(true)
     expect(requests.map((request) => request.reason)).toEqual([null, ...Array(4).fill("Fixture change")])
     code = "remote-change"
     const read = await settle(client.guilds.fetchVanityUrl("200"))
@@ -116,7 +117,9 @@ test.each(modes)("%s rejects invalid codes and omitted removal before dispatch",
         })
     }
     await expect(settle(client.guilds.fetchVanityUrl("../private"))).rejects.toMatchObject({ reason: "input" })
-    await expect(settle(client.guilds.editVanityUrl("200", "valid-code", { auditReason: "é" }))).rejects.toMatchObject({
+    await expect(
+        settle(client.guilds.editVanityUrl("200", "valid-code", { auditReason: "lone \ud800" })),
+    ).rejects.toMatchObject({
         reason: "input",
     })
     expect(fetch).not.toHaveBeenCalled()
@@ -184,4 +187,22 @@ test.each(modes)("%s invalidates cached guilds and pending reads after a vanity 
     await pending
     const local = client.guilds.get("200")
     expect(await settle(local)).toBeUndefined()
+})
+
+// Catches: The request body that sets a vanity code had no invite-shaped key, so unsafe REST logging printed the code
+test.each(modes)("%s unsafe REST payload logging masks the vanity code in the request body", async (mode) => {
+    const records: LogRecord[] = []
+    const client = await setupClient(mode, {
+        token: "fixture_only",
+        logging: {
+            unsafe: { payloads: true, categories: ["rest"] },
+            sink: (record: LogRecord) => void records.push(record),
+        },
+    })
+    stubFetchWithHostedDiscovery(async () => Response.json({ code: "vanity-canary-sent", uses: 0 }))
+    await settle(client.guilds.editVanityUrl("200", "vanity-canary-sent"))
+    const sent = records.filter((record) => record.code === "rest.payloadSent")
+    expect(sent).toHaveLength(1)
+    expect(String(sent[0]!.fields?.payload)).toBe('{"code":"[redacted]"}')
+    expect(JSON.stringify(records)).not.toContain("vanity-canary-sent")
 })

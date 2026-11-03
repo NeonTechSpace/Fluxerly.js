@@ -2,7 +2,8 @@ import type { MemberReference } from "./guilds.js"
 
 /**
  * Describe positional arguments by name, such as `{ text: { type: "text" }, count: { type: "integer" } }`.
- * The router reads the schema's own enumerable properties in order, ignoring inherited and non-enumerable properties.
+ * The router reads the schema's own enumerable string properties in order and ignores inherited properties.
+ * A non-enumerable own property or a symbol key throws ConfigurationError.
  * Converted values keep those property names.
  * Names must begin with an ASCII letter and use only ASCII letters, digits or `_`.
  * Required arguments must precede optional arguments, including arguments with a `default`, and only the final text or custom argument may use `rest`.

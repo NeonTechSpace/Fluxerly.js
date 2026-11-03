@@ -43,6 +43,10 @@ export interface CrosspostSourceGuild {
     readonly icon?: string | null
     /** Source banner hash, with null meaning no banner and omission meaning unavailable */
     readonly banner?: string | null
+    /** Decimal IDs of the source community's custom badges, when Fluxer supplies them. Read their names and images with
+     * client.instance.fetchBadges
+     */
+    readonly badgeIds?: readonly string[]
 }
 
 /** Frozen source metadata for a published message copy or a channel-follow notice.
@@ -59,7 +63,9 @@ export interface CrosspostSource {
  * This object and its nested data cannot be changed. They record what Fluxer returned at that time, not a live message with methods.
  * Later edits, deletions and reaction changes do not update it.
  * If an optional field is missing, Fluxer did not supply it. Do not read that as false or empty.
- * A null value preserves the explicit value Fluxer returned.
+ * A field whose type includes null holds null when Fluxer sent null. The embeds, attachments and stickers arrays are
+ * always present, and empty when Fluxer sent null or nothing. Inside an attachment or embed, a member Fluxer sent as
+ * null is left out, as if Fluxer had not sent it.
  * References and mentioned accounts are included only as supplied, without extra fetches.
  * Clients configured with messageFields return SelectedMessage instead of the complete Message shape
  * @example
@@ -87,23 +93,29 @@ export interface Message extends MessageReference {
      * In a community, Fluxer creates a normal message and reports false when the sender lacks the Send TTS Messages permission
      */
     readonly tts?: boolean
-    /** Creation timestamp as an ISO 8601 string with a timezone, when supplied */
+    /** Creation timestamp as an ISO 8601 string with a timezone, when supplied. Fluxer names it timestamp */
     readonly createdAt?: string
-    /** Latest edit timestamp as an ISO 8601 string with a timezone. Null means no edit was reported, absence means unknown */
+    /** Latest edit timestamp as an ISO 8601 string with a timezone. Null means no edit was reported, absence means unknown.
+     * Fluxer names it edited_timestamp
+     */
     readonly editedAt?: string | null
-    /** Fluxer's integer message type, when supplied, such as MessageType.Reply. Values added by Fluxer in the future are retained */
+    /** Fluxer's integer message type, when supplied, such as MessageType.Reply. Values added by Fluxer in the future are retained.
+     * Fluxer's call field on a call message is not kept, as MessageType.Call explains. The raw event or a raw
+     * client.rest.request read of the message returns it
+     */
     readonly type?: number
     /** Fluxer's integer flag set, when supplied. Unrecognized bits are retained, and absence does not mean zero */
     readonly flags?: number
     /** Community containing the message, when supplied. Absence alone does not establish that the channel is private */
     readonly guildId?: string
-    /** Whether Fluxer reports an @everyone or @here mention. Absence means unknown */
+    /** Whether Fluxer reports an @everyone or @here mention. Absence means unknown. Fluxer names it mention_everyone */
     readonly mentionedEveryone?: boolean
     /**
      * Whether Fluxer reported a here mention on a messageCreate event. Fluxer sends the flag only as true, so absence
      * means it reported none rather than false.
      * Gateway messageCreate events only: REST reads and messageUpdate events never carry it. It is delivered on the
-     * event only and is not kept in the message cache, whose copy of the message omits it
+     * event only and is not kept in the message cache, whose copy of the message omits it.
+     * Fluxer names it mention_here
      */
     readonly mentionedHere?: boolean
     /**
@@ -119,7 +131,8 @@ export interface Message extends MessageReference {
      * It is frozen, and an ID without an entry has no nickname there. Fluxer omits it for every other channel and when the
      * group has no nicknames, so absence does not mean the channel is not a group direct message.
      * Gateway messageCreate events only: REST reads and messageUpdate events never carry it. It is delivered on the
-     * event only and is not kept in the message cache, whose copy of the message omits it
+     * event only and is not kept in the message cache, whose copy of the message omits it.
+     * Fluxer names it nicks
      */
     readonly nicknames?: Readonly<Record<string, string>>
     /** Message text without trimming, possibly empty for a message containing only media */
@@ -134,10 +147,13 @@ export interface Message extends MessageReference {
     readonly mentions?: readonly MessageUser[]
     /** Accounts referenced by non-notifying text, embeds or forward snapshots.
      * These are separate from active mentions and never change notification behavior. Null, absence and an empty array
-     * preserve the distinct values supplied by Fluxer
+     * preserve the distinct values supplied by Fluxer.
+     * Fluxer names it users
      */
     readonly referencedUsers?: readonly MessageUser[] | null
-    /** Mentioned role IDs in received order. An empty array means none were reported, absence means unknown */
+    /** Mentioned role IDs in received order. An empty array means none were reported, absence means unknown.
+     * Fluxer names it mention_roles
+     */
     readonly mentionRoleIds?: readonly string[]
     /** Channel mentions supplied with the message. Null and absence preserve distinct response values */
     readonly mentionChannels?: readonly MessageChannelMention[] | null
@@ -234,22 +250,23 @@ export interface MessageUser {
     readonly id: string
     /** Username or webhook name at observation time */
     readonly username: string
-    /** True when Fluxer marked the identity as a bot, otherwise false */
+    /** True when Fluxer marked the identity as a bot, otherwise false. Fluxer names it bot */
     readonly isBot: boolean
     /** Provider discriminator when supplied */
     readonly discriminator?: string
-    /** Account-wide display name, null when explicitly unset */
+    /** Account-wide display name, null when explicitly unset. Fluxer names it global_name */
     readonly displayName?: string | null
     /** Avatar asset hash, null when explicitly absent */
     readonly avatar?: string | null
     /** Dominant avatar color, null when explicitly absent */
     readonly avatarColor?: number | null
-    /** Whether Fluxer marked this as an official system account */
+    /** Whether Fluxer marked this as an official system account. Fluxer names it system */
     readonly isSystem?: boolean
     /** Public account flags when supplied. Unrecognized 32-bit values are retained */
     readonly flags?: number
     /** Account-wide reply mention preference: 0 for none, 1 to prefer a mention, or 2 to prefer no mention.
-     * This is displayable context only. Sending and replying continue to use explicit AllowedMentions
+     * Absent when Fluxer omits it or sends a value this SDK version does not know, so a new preference never fails the
+     * read. This is displayable context only. Sending and replying continue to use explicit AllowedMentions
      */
     readonly mentionFlags?: 0 | 1 | 2
 }
@@ -319,7 +336,9 @@ export interface MessageReactionSummary {
 export interface MessageContextReference {
     /** Source channel ID as a decimal string, required even when no source message is identified */
     readonly channelId: string
-    /** Source message ID as a decimal string. A missing or null response value omits this field */
+    /** Source message ID as a decimal string. A missing or null response value omits this field.
+     * Fluxer names it message_id
+     */
     readonly id?: string
     /** Source community ID, or null when Fluxer explicitly supplied no community. Absence means unknown */
     readonly guildId?: string | null
@@ -336,13 +355,17 @@ export interface MessageContextReference {
 export interface MessageSnapshot {
     /** Source text at capture time, including null when explicitly supplied */
     readonly content?: string | null
-    /** Source message creation time as an ISO 8601 string with a timezone */
+    /** Source message creation time as an ISO 8601 string with a timezone. Fluxer names it timestamp */
     readonly createdAt: string
-    /** Source edit time at capture, as an ISO 8601 string, or null when explicitly supplied */
+    /** Source edit time at capture, as an ISO 8601 string, or null when explicitly supplied.
+     * Fluxer names it edited_timestamp
+     */
     readonly editedAt?: string | null
-    /** Account IDs mentioned in the source, not account objects. No account lookup is performed */
+    /** Account IDs mentioned in the source, not account objects. No account lookup is performed.
+     * Fluxer names it mentions
+     */
     readonly mentionUserIds?: readonly string[] | null
-    /** Role IDs mentioned in the source at capture time */
+    /** Role IDs mentioned in the source at capture time. Fluxer names it mention_roles */
     readonly mentionRoleIds?: readonly string[] | null
     /** Source channel mentions in captured display order */
     readonly mentionChannels?: readonly MessageChannelMention[] | null
@@ -433,8 +456,13 @@ export interface AllowedMentions {
 
 /** Known bits in a received message's flags, including server-managed publishing state.
  * Test an observed bit with bitwise AND, such as `(message.flags & MessageFlags.IsCrosspost) !== 0`.
- * Only SuppressEmbeds and SuppressNotifications are writable through message or webhook send and edit operations.
- * Combine those two with bitwise OR. Server-managed bits and all other bits are rejected locally before dispatch
+ * Only SuppressEmbeds and SuppressNotifications are writable through message or webhook send and edit operations,
+ * and VoiceMessage through a send that carries a voice note.
+ * Combine those two with bitwise OR. Server-managed bits and all other bits are rejected locally before dispatch.
+ * When editing a message authored by the bot, or a webhook's message through that webhook, supplied flags replace
+ * Fluxer's sendable flag set and clear VoiceMessage. On another author's message through the bot client, Fluxer
+ * requires Manage Messages in a community and changes only SuppressEmbeds, preserving the other flags. Omit flags to
+ * preserve them
  *
  * @category Messages
  */
@@ -457,7 +485,11 @@ export const MessageFlags: Readonly<{
     readonly FailedToMentionSomeRolesInThread: 256
     /** Writable bit that suppresses push and desktop notifications */
     readonly SuppressNotifications: 4096
-    /** Bit that marks a voice message. Message and webhook send and edit operations reject it before dispatch */
+    /** Bit that marks a voice note, an uploaded audio file unrelated to voice channel connections. Message sends,
+     * replies, direct message sends, a forum post's first message and webhook sends accept it with one new attachment
+     * that has duration and waveform. A webhook voice note's waveform may hold at most 256 characters, and any other
+     * at most 4,096. Edits and webhook forwards reject it before dispatch
+     */
     readonly VoiceMessage: 8192
 }> = Object.freeze({
     Crossposted: 1,
@@ -482,7 +514,9 @@ export const MessageType: Readonly<{
     readonly RecipientAdd: 1
     /** A notice that a user was removed from a group conversation or a thread */
     readonly RecipientRemove: 2
-    /** A call in a private conversation */
+    /** A call in a private conversation. The SDK does not keep Fluxer's call participants or end time, because it does
+     * not support calls
+     */
     readonly Call: 3
     /** A notice that a group conversation or thread was renamed */
     readonly ChannelNameChange: 4
@@ -524,7 +558,8 @@ export const MessageType: Readonly<{
 
 /**
  * One known bit from MessageFlags, including server-managed bits observed in received messages.
- * Only SuppressEmbeds and SuppressNotifications can be combined for send or edit input
+ * Message sends, replies, forum posts and webhook sends accept SuppressEmbeds, SuppressNotifications and VoiceMessage, which requires a voice-note attachment.
+ * Edits and webhook forwards accept only SuppressEmbeds and SuppressNotifications
  *
  * @category Messages
  */
@@ -613,15 +648,20 @@ export type MessageContent<A> =
  */
 export type MessageInput = MessageBody & {
     /** Correlation nonce chosen by the application, or omit for one SDK-generated nonce per send execution.
-     * For five minutes after saving a message, Fluxer tries to suppress another send with the same nonce. This does not guarantee exactly-once delivery
+     * For five minutes after saving a message, Fluxer tries to suppress another send with the same nonce. This does not guarantee exactly-once delivery.
+     * A supplied nonce is shared across all channels for this bot account. Use a different nonce for each intended message. While the earlier send is cached, reusing its nonce in another channel fails with a not found error whose provider code is UNKNOWN_MESSAGE
      */
     readonly nonce?: MessageNonce
     /** Existing mentions permitted to notify. Defaults to no mention notifications, including the reply author's */
     readonly allowedMentions?: AllowedMentions
     /** Reply target address, whose channelId must equal the send destination */
     readonly messageReference?: MessageReference
-    /** Writable flag set containing only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
-     * Omit to use Fluxer's default. Server-managed and unsupported bits fail locally before dispatch
+    /** Writable flag set containing only MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and
+     * MessageFlags.VoiceMessage. Omit to use Fluxer's default. Server-managed and unsupported bits fail locally before dispatch.
+     * VoiceMessage sends a voice note, an uploaded audio file that Fluxer's apps show with a player. It is unrelated to
+     * voice channel connections. It needs exactly one new attachment with duration and waveform, and no content, embeds
+     * or stickers, which the SDK checks before dispatch. A forum post's first message and a webhook send accept it too,
+     * and a webhook voice note's waveform may hold at most 256 characters
      */
     readonly flags?: number
     /** Ask Fluxer to send the message as text-to-speech. Omit or use false for a normal message.
@@ -670,7 +710,10 @@ export type EditMessageOptions = {
     /** Mentions permitted to notify during this edit, defaulting to none, including the reply author */
     readonly allowedMentions?: AllowedMentions
     /** Replacement writable flags containing only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
-     * Omit to preserve flags, or use 0 to clear both writable bits. Server-managed and unsupported bits fail locally before dispatch
+     * When editing a message authored by the bot, supplied flags replace Fluxer's sendable flag set and clear
+     * MessageFlags.VoiceMessage, which an edit cannot set again. On another author's message, Fluxer requires Manage
+     * Messages in a community and changes only SuppressEmbeds, preserving the other flags. Omit flags to preserve them.
+     * Server-managed and unsupported bits fail locally before dispatch
      */
     readonly flags?: number
 }

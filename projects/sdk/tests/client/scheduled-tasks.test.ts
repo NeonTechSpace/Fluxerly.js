@@ -5,7 +5,7 @@ import { runBot as runNativeBot } from "../../src/effect.js"
 import { createTestBot as createDefaultTestBot, type TestRequest, type TestResponse } from "../../src/testing.js"
 import { createTestBot as createNativeTestBot } from "../../src/effect-testing.js"
 import { TestHarness } from "../../src/internal/testing/harness.js"
-import { modes, type Mode } from "../support/both-apis.js"
+import { fixtureToken, modes, type Mode } from "../support/both-apis.js"
 import { sdkClock, type SdkClock } from "../support/client-clock.js"
 
 afterEach(() => {
@@ -206,6 +206,55 @@ describe.each(modes)("%s scheduled tasks", (mode) => {
         })
     })
 
+    // Two tasks that share a callback and fail the same way would otherwise give one record with no way to tell them apart
+    test("named tasks that fail the same way are logged and reported apart, by name", async () => {
+        const reports: FailureReport[] = []
+        const hooked = await openBot(mode, (report) => void reports.push(report))
+        const logged = await openBot(mode)
+        const build = async () => {
+            throw new Error("The report could not be built")
+        }
+        for (const bot of [hooked, logged]) {
+            bot.schedule(build, { name: "daily report" })
+            bot.schedule(build, { name: "weekly report" })
+        }
+        await vi.waitFor(() => expect(reports).toHaveLength(2))
+        expect(reports.map((report) => report.taskName).sort()).toEqual(["daily report", "weekly report"])
+        expect(reports.map((report) => report.describe().split("\n")[0]).sort()).toEqual([
+            'The scheduled task "daily report" failed',
+            'The scheduled task "weekly report" failed',
+        ])
+        await vi.waitFor(() => expect(logged.failures()).toHaveLength(2))
+        expect(
+            logged
+                .failures()
+                .map((record) => record.fields?.task)
+                .sort(),
+        ).toEqual(["daily report", "weekly report"])
+        for (const record of logged.failures())
+            expect(record.message).toContain(`The scheduled task "${String(record.fields?.task)}" failed`)
+    })
+
+    // Catches: describe() masked only the error, so a credential in the task name was printed in its first line
+    test("a report description masks the client token and a labelled credential in the task name", async () => {
+        const reports: FailureReport[] = []
+        const bot = await openBot(mode, (report) => void reports.push(report))
+        const name = `sync ${fixtureToken} password=task-canary-pw`
+        bot.schedule(
+            async () => {
+                throw new Error("The sync failed")
+            },
+            { name },
+        )
+        await vi.waitFor(() => expect(reports).toHaveLength(1))
+        const description = reports[0]!.describe()
+        expect(description).not.toContain(fixtureToken)
+        expect(description).not.toContain("task-canary-pw")
+        expect(description.split("\n")[0]).toBe('The scheduled task "sync [redacted] password=[redacted]" failed')
+        // Application code still receives the name it gave
+        expect(reports[0]!.taskName).toBe(name)
+    })
+
     // Catches: The test kit counted a task failure as unhandled only for an application-made error, so a run that failed
     // because Fluxer rejected its request was missing from failures() and from the shutdown check
     test("a run failed by a Fluxer rejection without an onError hook is an unhandled failure", async () => {
@@ -345,6 +394,8 @@ describe.each(modes)("%s scheduled tasks", (mode) => {
         expect(field(bot.misuse(valid, { delayMs: -1 }))).toBe("delayMs")
         expect(field(bot.misuse(valid, { delayMs: 1.5 }))).toBe("delayMs")
         expect(field(bot.misuse(valid, { intervalMs: 0 }))).toBe("intervalMs")
+        for (const name of ["", "x".repeat(101), "line\nbreak", 7])
+            expect(field(bot.misuse(valid, { name }))).toBe("name")
         expect(field(bot.misuse(valid, { every: 1_000 }))).toBe("configuration")
         expect(field(bot.misuse(valid, "hourly"))).toBe("configuration")
         await bot.shutdown()

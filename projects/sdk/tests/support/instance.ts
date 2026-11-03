@@ -7,7 +7,7 @@ import { wsTarget } from "./ws-redirect.js"
 export { hostedDiscoveryDocument, hostedOperationCalls, stubFetchWithHostedDiscovery } from "./hosted-discovery.js"
 
 /** The gateway address that the hosted discovery document announces */
-export const hostedGateway = "wss://gateway.fluxer.app/?v=1&encoding=json"
+export const hostedGateway = "wss://gateway.fluxer.com/?v=1&encoding=json"
 const nativeFetch = globalThis.fetch
 
 /** An instance discovery document whose endpoints all point at one loopback origin */
@@ -77,7 +77,7 @@ export async function startHostedLoopback(
         expect(requested.filter((url) => url !== hostedGateway)).toEqual([])
     })
     const fetch = stubFetchWithHostedDiscovery((url, init) =>
-        nativeFetch(url.replace("https://api.fluxer.app", rest.origin), init),
+        nativeFetch(url.replace("https://fluxer.com/api", rest.origin), init),
     )
     return { rest, gateway, fetch }
 }

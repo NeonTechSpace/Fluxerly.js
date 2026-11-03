@@ -2,6 +2,8 @@
 title: Example bots
 navTitle: Examples
 description: Small, complete bots for moderation, reaction roles, welcomes and tickets, ready to copy and run
+search:
+    - ticket system
 ---
 
 Each example on this page is one complete file shaped like the [quick start](/docs/quick-start/)'s bot: It exports its options as `bot` with `defineBot` and passes them to `runBot` when Node.js runs the file. Copy it, set a few environment variables and run it. Every example logs failures in full and stops cleanly on Ctrl+C
@@ -12,7 +14,7 @@ Start with the [small bot](/docs/small-bot/) for a guided tour of commands, argu
 
 Set up a project as in the [quick start](/docs/quick-start/): A folder with `"type": "module"` in `package.json` and the SDK installed. Save the example as `bot.js`, or as `bot.ts` to keep the TypeScript version, which Node.js 24 runs directly
 
-A generated project's test imports `bot` from that file, so it runs the example without a token or a network. The test checks `!ping`, which most examples do not have, so change it to the example's own commands or events, as [Testing a bot](/docs/testing/) shows. Examples with required variables read them in `setup`, so a test that calls `ready()` sets them first
+Each example's folder on GitHub also holds its own test, `bot.test.js` or `bot.test.ts`, to use instead of the generated project's `!ping` test. It runs the example without a token or a network, as [Testing a bot](/docs/testing/) shows. Examples with required variables read them in `setup`, so their tests set them before calling `ready()`
 
 Put the token and the example's other variables in a `.env` file, one `KEY=value` line each, and keep that file out of version control
 
@@ -28,6 +30,17 @@ Start the bot with Node.js loading that file:
 ```
 
 A missing variable stops the bot at startup with an explanation. Channels, roles and messages are configured by their decimal [IDs](/docs/glossary/#id). The [deploying guide](/docs/deploying/) shows how to keep a bot running on a server
+
+### Copy the required IDs
+
+In Fluxer's desktop interface:
+
+- Right-click the channel and choose **Copy channel ID**
+- Right-click the target message and choose **Copy message ID**
+- In the community's role settings, right-click the role and choose **Copy role ID**
+- Right-click the ticket category and choose **Copy category ID**
+
+Put each copied ID in its matching `.env` variable
 
 ### Give the bot its permissions
 
@@ -55,7 +68,15 @@ Some examples also change roles or members. Fluxer allows that only when the bot
 
 ## Moderation commands
 
-Five prefix commands for moderators: `!timeout @member 10m reason` stops a member from talking for 1 minute to 7 days, `!kick @member reason` removes a member from the community, `!ban @member reason` bans a member permanently, `!tempban @member 7d reason` bans a member for 1 minute to 2 years, and `!clear 20` deletes up to 20 recent messages in the channel. Each reason is optional. Each command has a [guard](/docs/glossary/#guard) that checks the moderator's own permission. The `!timeout`, `!kick`, `!ban` and `!tempban` commands also check role hierarchy through `members.fetchCanManage`, with the moderator's ID as `actorUserId`. When a command fails, a [middleware](/docs/glossary/#middleware) function tells the moderator without showing error details in the channel
+Five prefix commands for moderators:
+
+- `!timeout @member 10m reason` stops a member from talking for 1 minute to 7 days
+- `!kick @member reason` removes a member from the community
+- `!ban @member reason` bans a member permanently
+- `!tempban @member 7d reason` bans a member for 1 minute to 2 years
+- `!clear 20` deletes up to 20 recent messages in the channel
+
+Each reason is optional. Each command has a [guard](/docs/glossary/#guard) that checks the moderator's own permission. The `!timeout`, `!kick`, `!ban` and `!tempban` commands also check role hierarchy through `members.fetchCanManage`, with the moderator's ID as `actorUserId`. When a command fails, a [middleware](/docs/glossary/#middleware) function tells the moderator without showing error details in the channel
 
 - Variables: `FLUXER_BOT_TOKEN`
 - Bot permissions: `ViewChannel`, `SendMessages`, `ReadMessageHistory`, `ModerateMembers`, `KickMembers`, `BanMembers` and `ManageMessages`. The bot's highest role must also rank above the members it acts on
@@ -65,6 +86,15 @@ Five prefix commands for moderators: `!timeout @member 10m reason` stops a membe
 ```ts
 {{example:moderation/bot.ts}}
 ```
+
+<details>
+<summary>Effect version</summary>
+
+```ts
+{{example:moderation/bot-effect.ts}}
+```
+
+</details>
 
 The `!clear` command previews the exact messages first and then deletes only those. The reply reports how many deletions were requested, because Fluxer confirms each batch rather than each message. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/moderation)
 
@@ -79,6 +109,15 @@ Members react to one existing message to receive an opt-in role, and remove thei
 {{example:reaction-roles/bot.ts}}
 ```
 
+<details>
+<summary>Effect version</summary>
+
+```ts
+{{example:reaction-roles/bot-effect.ts}}
+```
+
+</details>
+
 Configure only a role that members may give themselves. The bot sees only reactions made while it runs, so a member who reacted while it was offline removes the reaction and adds it again. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/reaction-roles) and [communities and permissions](/docs/guilds-and-permissions/) for more about role hierarchy
 
 ## Welcome messages
@@ -92,6 +131,15 @@ The bot greets each new member in a configured channel with a mention and an emb
 {{example:welcome/bot.ts}}
 ```
 
+<details>
+<summary>Effect version</summary>
+
+```ts
+{{example:welcome/bot-effect.ts}}
+```
+
+</details>
+
 A welcome message that was sent but whose role grant failed stays posted, and the failure is logged. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/welcome) and [events and collectors](/docs/events-and-collectors/) for more about member and community events
 
 ## Support tickets
@@ -104,5 +152,14 @@ A member sends `!ticket` to open a private channel visible to them, the staff ro
 ```ts
 {{example:tickets/bot.ts}}
 ```
+
+<details>
+<summary>Effect version</summary>
+
+```ts
+{{example:tickets/bot-effect.ts}}
+```
+
+</details>
 
 The bot reads its own user ID with `client.users.getSelf()`, which returns the account Fluxer reported when the bot connected, without a request. The `!close` command deletes only channels in the ticket category whose names start with `ticket-`. See [the source on GitHub](https://github.com/NeonTechSpace/Fluxerly.js/tree/main/projects/sdk/examples/tickets) and [commands](/docs/commands/) for more about guards and cooldowns

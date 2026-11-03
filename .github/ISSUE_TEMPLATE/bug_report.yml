@@ -86,7 +86,7 @@ body:
       label: Where does the failure occur?
       description: For another live instance, include its software version in the reproduction if known. Private hostnames need not be disclosed
       options:
-        - The public fluxer.app instance
+        - The public fluxer.com instance
         - Another live Fluxer instance
         - The SDK's in-memory testing client
         - A local mock or custom transport

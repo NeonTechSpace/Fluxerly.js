@@ -7,9 +7,11 @@ import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
 import type { InviteDeleteEvent } from "#sdk/events"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, nonNegativeInteger as integer, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
+import { decodeUser } from "./users.js"
 import type { AuditedRequestOptions } from "#sdk/client"
 
 const hostedInvite = "https://fluxer.gg"
@@ -46,9 +48,19 @@ function decode(value: unknown, inviteBase = hostedInvite): Invite | undefined {
         (!record(value.guild) ||
             !identifier(value.guild.id) ||
             typeof value.guild.name !== "string" ||
+            (value.guild.icon !== undefined && value.guild.icon !== null && typeof value.guild.icon !== "string") ||
+            (value.guild.features !== undefined &&
+                !(
+                    Array.isArray(value.guild.features) &&
+                    value.guild.features.every((item) => typeof item === "string")
+                )) ||
+            (value.guild.badge_ids !== undefined &&
+                !(Array.isArray(value.guild.badge_ids) && value.guild.badge_ids.every(identifier))) ||
             !integer(value.presence_count))
     )
         return undefined
+    const guild = value.guild as Record<string, unknown> | undefined
+    const inviter = record(value.inviter) ? decodeUser(value.inviter) : undefined
     return Object.freeze({
         code: value.code,
         url: `${inviteBase}/${encodeURIComponent(value.code)}`,
@@ -61,8 +73,15 @@ function decode(value: unknown, inviteBase = hostedInvite): Invite | undefined {
         ...(value.type === 0
             ? {
                   guild: Object.freeze({
-                      id: (value.guild as { id: string }).id,
-                      name: (value.guild as { name: string }).name,
+                      id: guild!.id as string,
+                      name: guild!.name as string,
+                      ...(guild!.icon === undefined ? {} : { icon: guild!.icon as string | null }),
+                      ...(guild!.features === undefined
+                          ? {}
+                          : { features: Object.freeze([...(guild!.features as string[])]) }),
+                      ...(guild!.badge_ids === undefined
+                          ? {}
+                          : { badgeIds: Object.freeze([...(guild!.badge_ids as string[])]) }),
                   }),
                   presenceCount: value.presence_count as number,
               }
@@ -70,6 +89,7 @@ function decode(value: unknown, inviteBase = hostedInvite): Invite | undefined {
         ...(value.inviter === undefined
             ? {}
             : { inviterId: value.inviter === null ? null : (value.inviter as { id: string }).id }),
+        ...(inviter === undefined ? {} : { inviter }),
         memberCount: value.member_count,
         ...(value.expires_at === undefined ? {} : { expiresAt: value.expires_at as string | null }),
         temporary: value.temporary,
@@ -217,7 +237,7 @@ export function inviteCreate(
         json: JSON.stringify({ max_age: maxAgeSeconds, max_uses: maxUses, unique, temporary }),
         decode: (value, instance) => {
             const item = metadata(value, instance?.invite ?? inviteBase)
-            return item?.channel.id === channelId ? item : undefined
+            return item === undefined || item.channel.id === channelId ? item : rejectCheck("targetMismatch")
         },
     }
 }

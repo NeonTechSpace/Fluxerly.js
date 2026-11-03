@@ -29,13 +29,15 @@ import {
     finalizeOwned,
     loadSandboxEnvironment,
     openJournal,
+    processValue,
     shutdownDefaultClient,
-    verifySandboxIdentity,
+    sandboxBotId,
 } from "./support/harness.js"
 import { closeScenarioScope } from "./support/scenario-scope.js"
-import { createOutcomeReporter } from "./support/reporting.js"
+import { createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
 import { solidPngBase64 } from "./support/solid-png.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -87,6 +89,10 @@ const typing = process.argv[3] === "--typing"
 const plainRun = process.argv.length === 3
 let moderationUserId = process.env.FLUXER_TEST_MODERATION_USER_ID
 const forceRecovery = recover || cache || collectors || attachments || reactions || pins || guilds || channels
+// The SDK sends its first heartbeat a full interval, about 41 seconds, after each Hello, resumed sockets included. The
+// heartbeat loop is the same for every scenario, so only --recover waits for an acknowledgement after resuming. The
+// others prove the resume itself: RESUMED on a new socket and the Connected state
+const proveResumeHeartbeat = recover
 // Each scenario keeps its own journal, so scenarios can run together while a rerun of one still finds its journal
 const journalFile = openJournal(process.argv[3] ? `messages-${process.argv[3].replace(/^--/, "")}` : "messages")
 const report = createOutcomeReporter({ mode })
@@ -111,7 +117,8 @@ let gatewayProbe
 const reportFailure = (error) => console.log(JSON.stringify({ mode, check: stage, ...safeFailure(error) }))
 
 async function waitForTypingRequests(requests, minimum) {
-    const deadline = performance.now() + 15_000
+    // The first typing request and its refresh both start within this wait, each with a paced slot
+    const deadline = performance.now() + pacedDeadlineMs(15_000, 2)
     while (requests.length < minimum) {
         assert.ok(performance.now() < deadline, "Typing refresh deadline")
         await sleep(20)
@@ -154,7 +161,7 @@ function observeGateway() {
             const [first, initial] = [...sockets][0]
             const url = new URL(first.url)
             assert.equal(url.protocol, "wss:")
-            assert.equal(url.host, "gateway.fluxer.app")
+            assert.equal(url.host, "gateway.fluxer.com")
             assert.equal(initial.ready, 1)
             assert.equal(initial.resumed, 0)
             // Only this process's authenticated SDK socket is interrupted, never the host network or another bot
@@ -170,13 +177,16 @@ function observeGateway() {
                     const [socket, observed] = replacement
                     // Re-identifying into a fresh READY session must not pass as successful session resumption
                     assert.equal(observed.ready, 0)
-                    if (observed.resumed === 1 && observed.heartbeat > 0 && client.state === "Connected") {
+                    const acknowledged = !proveResumeHeartbeat || observed.heartbeat > 0
+                    if (observed.resumed === 1 && acknowledged && client.state === "Connected") {
                         assert.notEqual(socket, first)
                         assert.equal(first.readyState, WebSocket.CLOSED)
                         assert.ok(states.includes("Recovering"))
-                        assert.ok(Number.isFinite(client.gatewayLatencyMs) && client.gatewayLatencyMs >= 0)
                         report("live_session_resumed", true)
-                        report("post_resume_heartbeat", true)
+                        if (proveResumeHeartbeat) {
+                            assert.ok(Number.isFinite(client.gatewayLatencyMs) && client.gatewayLatencyMs >= 0)
+                            report("post_resume_heartbeat", true)
+                        }
                         break
                     }
                 }
@@ -276,8 +286,12 @@ async function waitForAuditEntry(botId, actionType, targetId, auditReason, chann
     assert.fail(`Audit entry deadline for action ${actionType}`)
 }
 
-async function waitForCondition(matches, deadlineMessage) {
-    const deadline = performance.now() + 10_000
+/**
+ * Wait for a local condition. `requests` counts the paced requests that start during the wait, such as a handler's
+ * reply, so their slots extend the 10 s deadline. A wait for gateway events alone keeps 10 s
+ */
+async function waitForCondition(matches, deadlineMessage, requests = 0) {
+    const deadline = performance.now() + (requests === 0 ? 10_000 : pacedDeadlineMs(10_000, requests))
     while (!matches()) {
         assert.ok(performance.now() < deadline, deadlineMessage)
         await sleep(20)
@@ -343,7 +357,7 @@ async function verifyOptionalTools(ops, channelId, botId) {
     try {
         stage = "optional_tools_command_dispatch"
         const first = await ops.send({ content: invocation })
-        await waitForCondition(() => replies.length === 1, "Optional command reply deadline")
+        await waitForCondition(() => replies.length === 1, "Optional command reply deadline", 1)
         assert.deepEqual(executions, [first.id])
         const reply = replies[0]
         report(stage, true)
@@ -364,7 +378,7 @@ async function verifyOptionalTools(ops, channelId, botId) {
         prefix = "?"
         invocation = `${prefix}${commandName}`
         const second = await ops.send({ content: invocation })
-        await waitForCondition(() => rejections.length === 1, "Optional command feedback deadline")
+        await waitForCondition(() => rejections.length === 1, "Optional command feedback deadline", 1)
         assert.equal(rejections[0]._tag, "CommandCooldownActive")
         assert.ok(rejections[0].retryAtMs > Date.now())
         const feedbackHistory = await api("GET", `/channels/${channelId}/messages?limit=100`)
@@ -383,11 +397,11 @@ async function verifyOptionalTools(ops, channelId, botId) {
 
         stage = "optional_tools_unmatched_feedback"
         const unknown = await ops.send({ content: `${prefix}unknown-${marker}` })
-        await waitForCondition(() => unmatchedReplies.length === 1, "Unknown-command feedback deadline")
+        await waitForCondition(() => unmatchedReplies.length === 1, "Unknown-command feedback deadline", 1)
         assert.equal(unmatched[0].messageId, unknown.id)
         assert.deepEqual(unmatched[0].outcome, { _tag: "CommandUnknownName", name: `unknown-${marker}` })
         const malformed = await ops.send({ content: `${prefix}${commandName} "unterminated` })
-        await waitForCondition(() => unmatchedReplies.length === 2, "Parser-rejection feedback deadline")
+        await waitForCondition(() => unmatchedReplies.length === 2, "Parser-rejection feedback deadline", 1)
         assert.equal(unmatched[1].messageId, malformed.id)
         assert.equal(unmatched[1].outcome._tag, "CommandParserRejected")
         assert.equal(typeof unmatched[1].outcome.reason, "string")
@@ -612,7 +626,7 @@ async function verifyGuildCache(ops, target, roleId, botId) {
     let dispatched = 0
     globalThis.fetch = async (...args) => {
         const response = await originalFetch(...args)
-        if (args[1]?.method === "PATCH" && new URL(args[0]).pathname === `/v1/guilds/${guildId}/roles/${roleId}`) {
+        if (args[1]?.method === "PATCH" && new URL(args[0]).pathname === `/api/v1/guilds/${guildId}/roles/${roleId}`) {
             dispatched++
             assert.equal(response.status, 200)
             await response.arrayBuffer()
@@ -821,7 +835,7 @@ async function verifyGuildRoles(ops, roleId, botId) {
             const response = await beforeLoss(...args)
             if (
                 args[1]?.method === "PATCH" &&
-                new URL(args[0]).pathname === `/v1/guilds/${guildId}/roles/hoist-positions`
+                new URL(args[0]).pathname === `/api/v1/guilds/${guildId}/roles/hoist-positions`
             ) {
                 hoistDispatches++
                 assert.equal(response.status, 204)
@@ -917,7 +931,8 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
     const received = []
     const stops = []
     const collect = async (options) => {
-        const collector = await ops.collect(message, { timeoutMs: 10_000, ...options })
+        // A collector's window covers the reactions and handler requests it waits for, at most two by default
+        const collector = await ops.collect(message, { timeoutMs: pacedDeadlineMs(10_000, 2), ...options })
         stops.push(() => collector.stop())
         return collector
     }
@@ -946,10 +961,18 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         const raw = await api("GET", `/channels/${channelId}/messages/${message.id}/reactions/${path}/users?limit=1`)
         assert.equal(raw.status, 200)
         assert.deepEqual(page, {
+            // Every account field Fluxer sends is kept, under its SDK name
             items: raw.data.items.map((user) => ({
                 id: user.id,
                 username: user.username,
                 isBot: user.bot === true,
+                ...(user.discriminator === undefined ? {} : { discriminator: user.discriminator }),
+                ...(user.global_name === undefined ? {} : { displayName: user.global_name }),
+                ...(user.avatar === undefined ? {} : { avatar: user.avatar }),
+                ...(user.avatar_color === undefined ? {} : { avatarColor: user.avatar_color }),
+                ...(user.system === undefined ? {} : { isSystem: user.system }),
+                ...(user.flags === undefined ? {} : { flags: user.flags }),
+                ...(user.mention_flags === undefined ? {} : { mentionFlags: user.mention_flags }),
             })),
             hasMore: raw.data.has_more,
             nextAfter: raw.data.next_after,
@@ -1080,11 +1103,19 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         assert.deepEqual(await reactors(customPath), [botId])
         report(stage, true)
         stage = "reaction_progress_edit_readback"
-        const progress = await collect({ emoji: "🔥", maxReactions: 2, progressEdit: "SDK reaction progress observed" })
+        // Each of the two rounds reads back until the progress edit shows, within its own paced poll window
+        const progressPollMs = pacedDeadlineMs(10_000, 7)
+        const progress = await collect({
+            emoji: "🔥",
+            maxReactions: 2,
+            progressEdit: "SDK reaction progress observed",
+            // Two adds, two progress edits and a removal, and both rounds' polls
+            timeoutMs: pacedDeadlineMs(10_000, 5) + 2 * progressPollMs,
+        })
         for (let index = 0; index < 2; index++) {
             await ops.add(message, "🔥")
             await wait("messageReactionAdd", (value) => value.emoji.name === "🔥")
-            const deadline = performance.now() + 10_000
+            const deadline = performance.now() + progressPollMs
             let verified = false
             while (performance.now() < deadline) {
                 const raw = await api("GET", `/channels/${channelId}/messages/${message.id}`)
@@ -1134,7 +1165,7 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
             progressCleaned = false
         const gap = await collect({
             emoji: "🔥",
-            timeoutMs: 30_000,
+            timeoutMs: pacedDeadlineMs(30_000, 1),
             maxReactions: 2,
             progressWait: true,
             onProgress: (state) => {
@@ -1162,6 +1193,8 @@ async function verifyReactions(ops, channelId, botId, interrupt) {
         const resumedCollector = await collect({
             emoji: "👍",
             filter: (reaction) => reaction.userId === botId,
+            // A removal, three reads and the add start before this collector ends
+            timeoutMs: pacedDeadlineMs(10_000, 5),
         })
         stage = "reaction_subscription_after_resume"
         await ops.remove(message, emoji)
@@ -1364,7 +1397,8 @@ async function verifyAttachments(ops, channelId) {
     stage = "attachments_collector_registration"
     const wait = await ops.collect({
         filter: (message) => message.attachments.some((file) => file.filename === filename),
-        timeoutMs: 90_000,
+        // The upload is a plan, up to 10 parts, a completion and the message request, each with a paced slot
+        timeoutMs: pacedDeadlineMs(90_000, 13),
     })
     report(stage, true)
     stage = smallAttachments ? "attachments_1_mib_send" : "attachments_50_mib_send"
@@ -1381,7 +1415,7 @@ async function verifyAttachments(ops, channelId) {
                 },
             ],
         },
-        { timeoutMs: 60_000 },
+        { timeoutMs: pacedDeadlineMs(60_000, 13) },
     )
     const file = sent.attachments[0]
     stage = "attachments_created_metadata"
@@ -1396,13 +1430,8 @@ async function verifyAttachments(ops, channelId) {
     stage = "attachments_download_byte_readback"
     const url = new URL(file.url)
     assert.equal(url.protocol, "https:")
-    assert.ok(
-        url.hostname === "fluxerusercontent.com" ||
-            url.hostname.endsWith(".fluxerusercontent.com") ||
-            url.hostname === "fluxer.app" ||
-            url.hostname.endsWith(".fluxer.app"),
-    )
-    const download = await rawFetch(url, { redirect: "error", signal: AbortSignal.timeout(60_000) })
+    assert.ok(url.hostname === "fluxerusercontent.com" || url.hostname.endsWith(".fluxerusercontent.com"))
+    const download = await rawFetch(url, { redirect: "error", signal: AbortSignal.timeout(pacedDeadlineMs(60_000, 1)) })
     assert.ok(download.ok)
     const hash = createHash("sha256")
     let size = 0
@@ -1417,7 +1446,9 @@ async function verifyAttachments(ops, channelId) {
     stage = "attachments_events_cache_and_history"
     const collected = await wait()
     assert.equal(collected.messages[0]?.attachments[0]?.id, file.id)
+    stage = "attachments_cache_retention"
     await waitForCache(ops.get, sent, (message) => message?.attachments[0]?.id === file.id)
+    stage = "attachments_fetch_and_history"
     assert.equal((await ops.fetch(sent)).attachments[0]?.id, file.id)
     assert.ok((await ops.history()).some((message) => message.id === sent.id && message.attachments[0]?.id === file.id))
     const raw = (await api("GET", `/channels/${channelId}/messages/${sent.id}`)).data
@@ -1453,11 +1484,12 @@ async function verifyAttachments(ops, channelId) {
 
 async function verifyEmbeds(ops, channelId) {
     stage = "embeds_send_collect_and_cache"
-    const imageUrl = "https://fluxer.app/static/img/web-apple-touch-icon.d11b564b6ae672d1.png"
+    const imageUrl = "https://fluxer.com/static/img/web-apple-touch-icon.d11b564b6ae672d1.png"
     const title = `embed-${randomUUID()}`
     const wait = await ops.collect({
         filter: (message) => message.embeds.some((embed) => embed.title === title),
-        timeoutMs: 10_000,
+        // The send starts within the collector's window
+        timeoutMs: pacedDeadlineMs(10_000, 1),
     })
     const waiting = wait()
     // Observe failure immediately while the send is in flight
@@ -1467,10 +1499,10 @@ async function verifyEmbeds(ops, channelId) {
             {
                 title,
                 description: "SDK-owned sandbox embed",
-                url: "https://fluxer.app",
+                url: "https://fluxer.com",
                 color: 0x3d66b8,
                 timestamp: "2026-09-08T14:30:00.000Z",
-                author: { name: "Sandbox bot", url: "https://fluxer.app", iconUrl: imageUrl },
+                author: { name: "Sandbox bot", url: "https://fluxer.com", iconUrl: imageUrl },
                 footer: { text: "Owned fixture", iconUrl: imageUrl },
                 image: { url: imageUrl, description: "Fluxer public icon" },
                 thumbnail: { url: imageUrl, description: "Fluxer public thumbnail" },
@@ -1495,7 +1527,7 @@ async function verifyEmbeds(ops, channelId) {
     assert.equal(actual?.embeds?.[0]?.title, title)
     assert.equal(actual?.embeds?.[0]?.fields?.[1]?.inline, false)
     stage = "embeds_destination_url"
-    assert.equal(new URL(actual?.embeds?.[0]?.url).href, "https://fluxer.app/")
+    assert.equal(new URL(actual?.embeds?.[0]?.url).href, "https://fluxer.com/")
     stage = "embeds_image_url"
     assert.equal(actual?.embeds?.[0]?.image?.url, imageUrl)
     stage = "embeds_thumbnail_url"
@@ -1559,7 +1591,7 @@ async function verifyCacheProjectionConflict(send, fetch, get, channelId) {
         if (
             !held &&
             args[1]?.method === "GET" &&
-            new URL(args[0]).pathname === `/v1/channels/${channelId}/messages/${sent.id}`
+            new URL(args[0]).pathname === `/api/v1/channels/${channelId}/messages/${sent.id}`
         ) {
             held = true
             const source = response.body?.getReader()
@@ -1611,7 +1643,8 @@ async function verifyCacheProjectionConflict(send, fetch, get, channelId) {
     const pending = fetch(sent)
     const settled = pending.catch(() => undefined)
     try {
-        const deadline = performance.now() + 10_000
+        // The held read may still wait for its paced slot when this deadline starts
+        const deadline = performance.now() + pacedDeadlineMs(10_000, 1)
         while (!ready) {
             assert.ok(performance.now() < deadline, "Held read deadline")
             await sleep(20)
@@ -1993,7 +2026,7 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         updates = seen.guildChannelUpdate.length
         globalThis.fetch = async (...args) => {
             const response = await originalFetch(...args)
-            if (args[1]?.method === "PATCH" && new URL(args[0]).pathname === `/v1/channels/${explicit.id}`) {
+            if (args[1]?.method === "PATCH" && new URL(args[0]).pathname === `/api/v1/channels/${explicit.id}`) {
                 dispatched++
                 assert.equal(response.status, 200)
                 await response.arrayBuffer()
@@ -2159,7 +2192,7 @@ async function verifyModeration(ops, botId) {
             await sleep(20)
         }
     }
-    const memberPath = `https://api.fluxer.app/v1/guilds/${guildId}/members/${moderationUserId}`
+    const memberPath = `https://fluxer.com/api/v1/guilds/${guildId}/members/${moderationUserId}`
     let loseTimeoutResponse = false
     let timeoutAttempts = 0
     globalThis.fetch = async (url, init) => {
@@ -2228,7 +2261,8 @@ async function verifyModeration(ops, botId) {
         await waitFor(() => notices.some((n) => n.event === "guildBanAdd"))
         report(stage, true)
         stage = "moderation_temporary_ban_remote_expiry"
-        const expiryDeadline = performance.now() + 130_000
+        // One ban list read per 5 s round, each with a paced slot, while the one-minute ban expires
+        const expiryDeadline = performance.now() + pacedDeadlineMs(130_000, 27)
         while ((await ops.bans()).some((ban) => ban.userId === moderationUserId)) {
             assert.ok(performance.now() < expiryDeadline)
             await sleep(5_000)
@@ -2306,7 +2340,7 @@ async function verifyBatchDeletion(ops, channelId, botId) {
         const uncertain = await seed()
         let attempts = 0
         globalThis.fetch = async (url, init) => {
-            if (String(url) === `https://api.fluxer.app/v1/channels/${channelId}/messages/bulk-delete`) {
+            if (String(url) === `https://fluxer.com/api/v1/channels/${channelId}/messages/bulk-delete`) {
                 attempts++
                 const response = await rawFetch(url, init)
                 if (response.status === 204) {
@@ -2371,7 +2405,7 @@ async function verifyCleanup(ops, channelId, botId) {
     assert.equal(partialPlan.selectedMessages.length, 101)
     let submissions = 0
     globalThis.fetch = async (url, init) => {
-        if (String(url) === `https://api.fluxer.app/v1/channels/${channelId}/messages/bulk-delete`) {
+        if (String(url) === `https://fluxer.com/api/v1/channels/${channelId}/messages/bulk-delete`) {
             submissions++
             const response = await rawFetch(url, init)
             if (submissions === 2 && response.status === 204) {
@@ -2701,6 +2735,7 @@ function observeMessageChanges(channelId) {
                 seeds.push(seed)
             }
             if (get) {
+                stage = "cache_gateway_create"
                 for (const seed of seeds) {
                     const snapshot = await waitForCache(
                         get,
@@ -2808,7 +2843,7 @@ async function verifyPagination(ops, channelId, botId) {
     let held
     globalThis.fetch = async (...args) => {
         const url = new URL(args[0])
-        if (url.origin !== "https://api.fluxer.app" || url.pathname !== `/v1/channels/${channelId}/messages`)
+        if (url.origin !== "https://fluxer.com" || url.pathname !== `/api/v1/channels/${channelId}/messages`)
             return previousFetch(...args)
         requests++
         if (responseMode === "retry") {
@@ -3102,7 +3137,7 @@ async function verifyNonce(ops, channelId) {
     globalThis.fetch = async (...args) => {
         const request = args[1]
         const url = new URL(String(args[0]))
-        if (url.pathname === `/v1/channels/${channelId}/messages` && request?.method === "POST") {
+        if (url.pathname === `/api/v1/channels/${channelId}/messages` && request?.method === "POST") {
             const payload = JSON.parse(String(request.body))
             if (payload.nonce === lostNonce) {
                 submits++
@@ -3134,7 +3169,14 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
     const filter = (message) => message.author.id === botId && message.content.startsWith(marker)
     async function collectAndSend(maxMessages, count, timeoutMs, reason, idleMs) {
         stage = `collector_${reason}`
-        const collector = await open({ filter, maxMessages, timeoutMs, ...(idleMs === undefined ? {} : { idleMs }) })
+        // The sends start within the collector's window, each with a paced slot. A collector that must end by timeout
+        // still does, just as much later
+        const collector = await open({
+            filter,
+            maxMessages,
+            timeoutMs: count === 0 ? timeoutMs : pacedDeadlineMs(timeoutMs, count),
+            ...(idleMs === undefined ? {} : { idleMs }),
+        })
         const sent = []
         try {
             // Intake is ready before sending. No retry of ambiguous mutations; the existing channel journal owns cleanup
@@ -3176,7 +3218,8 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
         const collector = await open({
             filter: (message) => message.author.id === botId && message.content.startsWith(progressMarker),
             maxMessages: count,
-            timeoutMs: 30_000,
+            // Up to two sends and their two progress replies start within the window
+            timeoutMs: pacedDeadlineMs(30_000, 4),
             progressReply: acknowledgement,
             progressGate: (message) => {
                 firstMessage ??= message.id
@@ -3255,7 +3298,8 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
         const collector = await open({
             filter: (message) => message.author.id === botId && message.content.startsWith(progressMarker),
             maxMessages: 1,
-            timeoutMs: 30_000,
+            // The one send starts within the window
+            timeoutMs: pacedDeadlineMs(30_000, 1),
             progressWait: true,
             progressCancel: reason === "cancellation",
             ...(reason === "idle" ? { idleMs: 5_000 } : {}),
@@ -3330,7 +3374,8 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
         const gap = await open({
             filter: (message) => message.author.id === botId && message.content.startsWith(progressMarker),
             maxMessages: 1,
-            timeoutMs: 30_000,
+            // The one send starts within the window
+            timeoutMs: pacedDeadlineMs(30_000, 1),
             progressWait: true,
             onProgress: (event, message) => {
                 if (event === "started") {
@@ -3378,13 +3423,10 @@ async function verifyCollectors(open, send, channelId, botId, interrupt) {
 }
 
 // Failure containment only: A forced exit is never reported as successful cleanup
-setTimeout(
-    () => {
-        report("process_timeout", false)
-        process.exit(1)
-    },
-    attachments || attachmentSources || moderation || search ? 240_000 : typing ? 60_000 : 120_000,
-).unref()
+setTimeout(() => {
+    report("process_timeout", false)
+    process.exit(1)
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
@@ -3417,12 +3459,13 @@ try {
     lock = acquireLock()
     stage = "configuration"
     const sandbox = loadSandboxEnvironment()
-    moderationUserId ??= sandbox.env.FLUXER_TEST_MODERATION_USER_ID
-    if (moderation) assert.match(moderationUserId ?? "", /^[1-9][0-9]*$/)
+    // The moderation target comes from this process only. A stored ID never authorizes kicking or banning an account
+    if (moderation) moderationUserId = processValue("FLUXER_TEST_MODERATION_USER_ID")
     token = sandbox.token
     guildId = sandbox.guildId
     stage = "sandbox_identity"
-    const { user } = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, sandbox)
+    // Only the bot's ID is used from the identity reads
+    const user = { id: await sandboxBotId(async (path) => (await api("GET", path)).data, sandbox) }
     verified = true
     report(stage, true)
     stage = "recover_prior_test"
@@ -3430,6 +3473,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage, true)
     } else {
         journal = { guildId }
@@ -3461,7 +3505,7 @@ try {
                 // Refresh spacing is measured from when the SDK sent each request, not from its network response
                 const at = performance.now()
                 const response = await rawFetch(...args)
-                if (typing && url.pathname === `/v1/channels/${channel.id}/typing`) {
+                if (typing && url.pathname === `/api/v1/channels/${channel.id}/typing`) {
                     typingRequests.push({
                         at,
                         body: args[1]?.body,
@@ -3619,7 +3663,8 @@ try {
                                 }
                             },
                             get: cacheGet,
-                            searchRequests: () => sdkRequests.filter((path) => path === "/v1/search/messages").length,
+                            searchRequests: () =>
+                                sdkRequests.filter((path) => path === "/api/v1/search/messages").length,
                         },
                         channel.id,
                     )
@@ -3936,7 +3981,8 @@ try {
                             collect: async (message, target, roleId, options) => {
                                 const collector = client.messages.collectReactions(message, {
                                     emoji: "✅",
-                                    timeoutMs: 10_000,
+                                    // The reaction, the role add and the message edit start within the window
+                                    timeoutMs: pacedDeadlineMs(10_000, 3),
                                     filter: (reaction) => reaction.userId === user.id,
                                     onReaction: async (_reaction, signal) => {
                                         await run(client.members.addRole(target, roleId, { ...options, signal }))
@@ -4155,7 +4201,8 @@ try {
                         cancelDownload: async (attachment, size, signal) => {
                             const result = await client.attachments.download(attachment, {
                                 maxBytes: size,
-                                timeoutMs: 60_000,
+                                // Four downloads start together and queue in the pacer
+                                timeoutMs: pacedDeadlineMs(60_000, 4),
                                 signal,
                             })
                             assert.ok(result.isErr())
@@ -4252,7 +4299,7 @@ try {
                 const sent = await client.messages.send(channel.id, { content: ping })
                 assert.ok(sent.isOk())
                 seed = sent.value
-                timer = setTimeout(() => done.resolve(null), 20_000)
+                timer = setTimeout(() => done.resolve(null), pacedDeadlineMs(20_000, 1))
                 const replied = await done.promise
                 assert.ok(replied?.isOk())
                 reply = replied.value
@@ -4366,7 +4413,7 @@ try {
                                             ),
                                         get: cacheGet,
                                         searchRequests: () =>
-                                            sdkRequests.filter((path) => path === "/v1/search/messages").length,
+                                            sdkRequests.filter((path) => path === "/api/v1/search/messages").length,
                                     },
                                     channel.id,
                                 ),
@@ -4801,7 +4848,8 @@ try {
                                                 client.messages
                                                     .collectReactions(message, {
                                                         emoji: "✅",
-                                                        timeoutMs: 10_000,
+                                                        // The reaction, role add and edit start within it
+                                                        timeoutMs: pacedDeadlineMs(10_000, 3),
                                                         filter: (reaction) => reaction.userId === user.id,
                                                         onReaction: () =>
                                                             Effect.gen(function* () {
@@ -5075,7 +5123,11 @@ try {
                                     Stream.toAsyncIterable(client.attachments.stream(attachment, options)),
                                 cancelDownload: async (attachment, size, signal) => {
                                     const cancelled = await Effect.runPromiseExit(
-                                        client.attachments.download(attachment, { maxBytes: size, timeoutMs: 60_000 }),
+                                        client.attachments.download(attachment, {
+                                            maxBytes: size,
+                                            // Four downloads start together and queue in the pacer
+                                            timeoutMs: pacedDeadlineMs(60_000, 4),
+                                        }),
                                         { signal },
                                     )
                                     assert.ok(Exit.isFailure(cancelled))
@@ -5219,7 +5271,7 @@ try {
                             }
                         }
                         seed = yield* client.messages.send(channel.id, { content: ping })
-                        reply = yield* Deferred.await(done).pipe(Effect.timeout(20_000))
+                        reply = yield* Deferred.await(done).pipe(Effect.timeout(pacedDeadlineMs(20_000, 1)))
                         yield* subscription.close()
                         yield* subscription.waitForClose()
                         if (cache) {
@@ -5271,7 +5323,7 @@ try {
                     report("scope_cleanup", false)
                 }
             }
-            if ((attachments || attachmentSources) && Exit.isFailure(exit))
+            if (Exit.isFailure(exit))
                 for (const reason of exit.cause.reasons.slice(0, 8)) {
                     if (reason._tag === "Fail") reportFailure(reason.error)
                     else if (reason._tag === "Die") reportFailure(reason.defect)
@@ -5322,7 +5374,7 @@ try {
     }
 } catch (error) {
     // Never print assertions, HTTP bodies, native causes, configured identities or credentials
-    if (attachments || attachmentSources || reactions || pins || guilds || channels || moderation) reportFailure(error)
+    reportFailure(error)
     report(stage, false)
     process.exitCode = 1
 } finally {

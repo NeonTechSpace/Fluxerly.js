@@ -229,6 +229,11 @@ function encodeCommandData(data: unknown): { readonly json: string | undefined }
     }
 }
 
+/** A guild-count page refused by a rate limit whose wait fits the count deadline, so the same page is asked again */
+class CountRetry {
+    constructor(readonly waitMs: number) {}
+}
+
 /** Translate a failed guild-count read into the startup failure that connect and run report */
 function automaticPlanFailure(
     error: GuildOperationError | ClientClosedError,
@@ -274,6 +279,18 @@ const accountLimits = new WeakMap<object, AccountLimits>()
 /** Attach non-public account limit sharing to the helper-owned client configuration object */
 export function attachAccountLimits<T extends object>(options: T, limits: AccountLimits): T {
     accountLimits.set(options, limits)
+    return options
+}
+
+const creationClocks = new WeakMap<object, Clock.Clock>()
+
+/**
+ * Attach a non-public Clock that client creation provides in place of the caller's, used only by the default test
+ * client's manual clock. Every SDK timer captured at creation then follows it, and so does the default-API work the
+ * client's logger provides
+ */
+export function attachCreationClock<T extends object>(options: T, clock: Clock.Clock): T {
+    creationClocks.set(options, clock)
     return options
 }
 
@@ -437,6 +454,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
         this.instance = new InstanceResolver(configuration.instance, scope, {
             http: transport.http,
+            now: () => logical.now(),
             onDiscovered: (resolved) => {
                 this.#instanceLinks = resolved.links
                 const migration = resolved.domainMigration
@@ -496,7 +514,8 @@ export class ClientOwner<M extends MessageCore = Message> {
             ...(configuration.sessions && configuration.refillCaches
                 ? { restored: (shardId: number) => void this.#restoredShards.add(shardId) }
                 : {}),
-            // Fluxer replays every missed dispatch on Resume except THREAD_LIST_SYNC, so cached threads may be stale
+            // Fluxer replays missed dispatches on Resume except member chunks, member-list updates, guild sync, THREAD_LIST_SYNC
+            // and thread member-list updates, so cached threads may be stale
             resumed: (shardId) => this.channelCache?.dropThreads(this.#shardGuilds(shardId)),
             readyUser: (body, shardId) => this.#readyUser(body, shardId),
         }
@@ -602,7 +621,12 @@ export class ClientOwner<M extends MessageCore = Message> {
                     level: "warn",
                     category: "gateway",
                     code: "gateway.ignoredEventRegistered",
-                    message: `Handlers for ${suppressed.join(", ")} receive nothing on shard ${shardId}, because gateway.ignoredEvents suppresses every gateway event that delivers them`,
+                    message: `Handlers for ${suppressed.join(", ")} receive nothing on shard ${shardId}, because gateway.ignoredEvents lists every dispatch type that delivers them${
+                        // Fluxer still sends a mentioning MESSAGE_CREATE (fluxer_gateway/src/session/session_dispatch.erl:383-389 at 5f3fc0b1)
+                        suppressed.includes("messageCreate")
+                            ? ". The exception is messageCreate, which still receives messages that mention the bot directly, with @here or with @everyone"
+                            : ""
+                    }`,
                     shardId,
                     fields: { events: suppressed.join(",") },
                 })
@@ -682,6 +706,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                 queuedCapacity: rest.queuedCapacity,
                 queuedJsonBytes: rest.queuedJsonBytes,
                 queuedJsonByteCapacity: rest.queuedJsonByteCapacity,
+                rateLimitHold: rest.rateLimitHold,
             }),
             uploads: Object.freeze({ reservedBytes: rest.reservedUploadBytes, byteCapacity: rest.uploadByteCapacity }),
             gatewayRequests: Object.freeze(this.#gatewayRequests.diagnostics()),
@@ -825,7 +850,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
     /**
      * Invalidate a shard's cached observations when its connection is lost. Guild-scoped entries stay while the shard
-     * can still resume, because Fluxer's Resume replays every missed dispatch or refuses the session, and
+     * can still resume, because Fluxer's Resume replays every missed dispatch that changes them or refuses the session, and
      * #clearShardGuilds releases them once a new session is needed. Messages and users are cleared at once
      */
     #gapShard(shardId: number, resumable: boolean) {
@@ -1238,10 +1263,15 @@ export class ClientOwner<M extends MessageCore = Message> {
         return this.#open((token) => this.rest.request<T>(token, input))
     }
 
+    /** Send one request for a typed route of Fluxer's API description through this client's REST scheduler */
+    call<T>(route: unknown, input: unknown): Effect.Effect<RestResponse<T>, RestRequestFailure> {
+        return this.#open((token) => this.rest.call<T>(token, route, input))
+    }
+
     /**
      * Send one application command on a ready local shard through that socket's paced path.
      * Validation happens before anything is queued. The data is copied through JSON so later caller changes cannot
-     * alter the frame, and a frame above Fluxer's 4,096-byte limit is rejected rather than closing the connection
+     * alter the frame, and a frame above the 16,384-byte gateway limit is rejected rather than closing the connection
      */
     gatewaySend(shardId: number, op: number, d: unknown, options?: unknown): Effect.Effect<void, GatewaySendFailure> {
         // Only encoding the caller data is marked, so a throw from its getters or toJSON is an application fault
@@ -1276,9 +1306,9 @@ export class ClientOwner<M extends MessageCore = Message> {
             const result = readCaller(() => encodeCommandData(d))
             if ("failure" in result) return input("d", "Command data must be encodable as JSON", result.failure)
             const encoded = result.json
-            if (encoded === undefined) return input("d", "Command data must be a JSON value; use null for no data")
+            if (encoded === undefined) return input("d", "Command data must be a JSON value. Use null for no data")
             if (Buffer.byteLength(`{"op":${op},"d":${encoded}}`) > maxClientPayloadBytes)
-                return input("d", "The encoded command must be at most 4,096 bytes")
+                return input("d", "The encoded command must be at most 16,384 bytes")
             const shard = this.#shards.get(shardId)
             if (!shard) return Effect.fail(new GatewaySendError({ reason: "notOwned", shardId, opcode: op }))
             if (shard.state !== "Connected" || shard.submit === undefined)
@@ -1974,7 +2004,10 @@ export class ClientOwner<M extends MessageCore = Message> {
     /**
      * Count the bot's guilds by paging the current-user guild list within timeoutMs. Automatic sharding and the
      * supervisor's automatic plan both size their plans from this count. A page that does not move past the previous
-     * one fails at once as a discovery ConnectionError, instead of paging until the deadline
+     * one fails at once as a discovery ConnectionError, instead of paging until the deadline. A page refused by a rate
+     * limit with a wait that ends before the deadline, such as a rate-limited instance discovery, is asked again after
+     * that wait. The wait counts toward timeoutMs and is not a startup attempt. A longer or unknown wait fails at once
+     * with RateLimitError
      */
     countGuilds(timeoutMs: number): Effect.Effect<number, ConnectionFailure> {
         const owner = this
@@ -1986,17 +2019,33 @@ export class ClientOwner<M extends MessageCore = Message> {
             while (true) {
                 const remaining = Math.floor(deadline - nowMs(clock))
                 if (remaining <= 0) return yield* Effect.fail(new ConnectionTimeoutError(timeoutMs))
-                const page = yield* owner
+                const read = yield* owner
                     .guild(
                         "guilds.fetchPage",
                         () => guildList({ limit: guildCountPageSize, ...(after === undefined ? {} : { after }) }),
                         { timeoutMs: remaining },
                     )
                     .pipe(
-                        mapFailureCause(failures(GuildOperationError, ClientClosedError), (error) =>
-                            automaticPlanFailure(error, timeoutMs),
-                        ),
+                        mapFailureCause(failures(GuildOperationError, ClientClosedError), (error) => {
+                            // Route limits on the page are already waited out by the request itself. A wait that
+                            // remains, such as one for instance discovery, is waited here when it fits the deadline
+                            const wait = error instanceof GuildOperationError ? error.retryAfterMs : null
+                            return error instanceof GuildOperationError &&
+                                error.reason === "rateLimit" &&
+                                wait !== null &&
+                                wait > 0 &&
+                                wait < deadline - nowMs(clock)
+                                ? new CountRetry(wait)
+                                : automaticPlanFailure(error, timeoutMs)
+                        }),
+                        Effect.result,
                     )
+                if (read._tag === "Failure") {
+                    if (!(read.failure instanceof CountRetry)) return yield* Effect.fail(read.failure)
+                    yield* Effect.sleep(read.failure.waitMs)
+                    continue
+                }
+                const page = read.success
                 // As in guilds.iterate, a page that repeats or goes back past the cursor would page until the deadline
                 const cursor = after
                 if (cursor !== undefined && page.some((guild) => BigInt(guild.id) <= BigInt(cursor)))
@@ -2383,7 +2432,9 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
     scope: Scope.Scope,
     native = false,
 ): Effect.Effect<ClientOwner<SelectedMessage<F>>, ConfigurationError> {
-    return Effect.gen(function* () {
+    const clock = typeof options === "object" && options !== null ? creationClocks.get(options) : undefined
+    if (clock !== undefined) creationClocks.delete(options as object)
+    const create = Effect.gen(function* () {
         const identifyGate = typeof options === "object" && options !== null ? identifyGates.get(options) : undefined
         const limits = typeof options === "object" && options !== null ? accountLimits.get(options) : undefined
         if (typeof options === "object" && options !== null) {
@@ -2395,6 +2446,7 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
             Effect.gen(function* () {
                 const context = yield* Effect.context<never>()
                 if (native) configuration.logging.context = context
+                else if (clock !== undefined) configuration.logging.clock = clock
                 const callback = configuration.onError as ((report: unknown) => unknown) | undefined
                 const hook = callback
                     ? (report: InternalReport): Effect.Effect<unknown, unknown> =>
@@ -2439,4 +2491,5 @@ export function makeClient<F extends MessageFields | undefined = undefined>(
             }),
         )
     })
+    return clock === undefined ? create : create.pipe(Effect.provideService(Clock.Clock, clock))
 }

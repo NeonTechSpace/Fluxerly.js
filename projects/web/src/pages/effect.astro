@@ -49,9 +49,9 @@ const accent = "violet"
         <Fragment slot="title">Run the Complete Bot</Fragment>
         <Fragment slot="text">
             <p>The Effect <code class="inline-code">runBot</code> takes one options object, like the default one. Each handler returns an Effect, here the reply, so the SDK runs that work and can interrupt it</p>
-            <p>Ctrl+C stops the bot. The SDK interrupts what is still running and waits for its cleanup, and a failure that stops the bot is logged once with a failing exit code</p>
+            <p>With <code class="inline-code">processSignals</code> on, as here, Ctrl+C gives running handlers up to five seconds to finish, then interrupts what is left and waits for its cleanup. A failure that stops the bot is logged once with a failing exit code</p>
         </Fragment>
-        <Fragment slot="point">Stopping the bot interrupts its work and waits for cleanup</Fragment>
+        <Fragment slot="point">Stopping the bot lets work finish, then interrupts the rest and waits for cleanup</Fragment>
         <CodePanel file="bot.ts" label="The complete Effect bot" code={botEffect} />
     </Scene>
 
@@ -93,6 +93,6 @@ const accent = "violet"
         </Fragment>
         <Fragment slot="point">A test supplies fake services through a Layer</Fragment>
         <CodePanel file="services.ts" label="Application services and the client Layer" code={effectServices} />
-        <CodePanel file="TypeScript" label="A deterministic test of the handler" code={effectTestPing} />
+        <CodePanel file="TypeScript" label="A test helper that runs the handler with fakes" code={effectTestPing} />
     </Scene>
 </FeaturePage>

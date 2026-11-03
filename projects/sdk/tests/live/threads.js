@@ -19,9 +19,10 @@ import {
     snowflake,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createDeadlineSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -35,15 +36,21 @@ const report = createReporter({ mode }, { passed: true })
 
 // Whole-run bounds derived from the work: About 120 requests and 25 event waits, which normally take well under a
 // second each, get two minutes. Up to 15 thread searches 2 s apart, 10 audit reads 1 s apart and one minute for a spent
-// per-minute edge limit come on top. Cleanup makes about 20 requests and gets its own budget with one more edge window
+// per-minute edge limit come on top. The shared pacer then adds a slot for each request: at most 91 in the operation,
+// counting both clients' discovery, every search and audit poll and full permission reads, and at most 34 in cleanup.
+// The process watchdog in support/watchdogs.js covers both
 const eventWaitMs = 15_000
 const searchAttempts = 15
 const searchIntervalMs = 2_000
 const auditAttempts = 10
 const auditIntervalMs = 1_000
 const edgeWindowMs = 60_000
-const operationMs = 120_000 + searchAttempts * searchIntervalMs + auditAttempts * auditIntervalMs + edgeWindowMs
-const cleanupMs = 30_000 + edgeWindowMs
+const operationMs = pacedDeadlineMs(
+    120_000 + searchAttempts * searchIntervalMs + auditAttempts * auditIntervalMs + edgeWindowMs,
+    91,
+    { clients: 2 },
+)
+const cleanupMs = pacedDeadlineMs(30_000 + edgeWindowMs, 34)
 
 let lock, journal, bot, hook, scope, token, guildId, botId
 let verified = false
@@ -57,7 +64,7 @@ const deadlineTimer = setTimeout(() => operationDeadline.abort(), operationMs).u
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: !!journal }))
     process.exit(1)
-}, operationMs + cleanupMs).unref()
+}, harnessWatchdogMs()).unref()
 
 const pause = (ms) => sleep(ms, undefined, { signal: operationDeadline.signal })
 // Cache reads return a value in the default API and an Effect in the native API
@@ -595,6 +602,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { guildId, botId, marker: `fluxerly-threads-${randomUUID().replaceAll("-", "")}`, threadIds: [] }

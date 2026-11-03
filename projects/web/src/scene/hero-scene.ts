@@ -1,11 +1,14 @@
 // The live hero sky for Immersive. GSAP lives in this chunk alone. It drives the shared world,
 // which the Still frame draws as well, so both states show the same sky, and the conductor's
-// living face, see face.ts and face-life.ts.
+// living face, cap and bow tie, see face.ts, cap.ts, bow.ts and face-life.ts.
 
 import { gsap } from "gsap"
 import { seededRandom } from "../lib/stars"
+import { createBow, type Bow } from "./bow"
+import { createCap, type Cap } from "./cap"
 import { createFace, type Face } from "./face"
 import { createFaceLife } from "./face-life"
+import { setHeroFaceMoving } from "./face-turn"
 import { lastArrival, quietAt } from "./rhythm"
 import { createWorld, restPose, type Pose } from "./world"
 import { hideFrame, showFrame, stillFrame } from "./still-frame"
@@ -93,6 +96,8 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     conductor.style.willChange = "transform"
 
     let face: Face | null = null
+    let cap: Cap | null = null
+    let bow: Bow | null = null
     // The scene second the face's parts were all here, which it wakes from
     let faceFrom = Infinity
     const life = createFaceLife(seededRandom(4817), quietAt)
@@ -144,9 +149,12 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     let copiedAt = -1e9
     let chargeAt = -1e9
     const mainButton = hero.querySelector<HTMLElement>(".control.primary")
-    for (const on of ["pointerenter", "focus"]) mainButton?.addEventListener(on, () => (leaning = true))
-    for (const off of ["pointerleave", "blur"]) mainButton?.addEventListener(off, () => (leaning = false))
-    window.addEventListener("fluxerly:copied", () => (copiedAt = sceneTime))
+    // Released with the scene, so switching to Still and back leaves no listener holding an old scene
+    const listening = new AbortController()
+    const { signal } = listening
+    for (const on of ["pointerenter", "focus"]) mainButton?.addEventListener(on, () => (leaning = true), { signal })
+    for (const off of ["pointerleave", "blur"]) mainButton?.addEventListener(off, () => (leaning = false), { signal })
+    window.addEventListener("fluxerly:copied", () => (copiedAt = sceneTime), { signal })
 
     const tick = (time: number) => {
         const layout = world.layout
@@ -192,7 +200,8 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         const sent = Math.max(lastArrival(t), copiedAt)
         if (sent > chargeAt && t - sent < 0.2 && t - chargeAt > chargeFill + chargeHold + chargeFade) chargeAt = sent
         const charged = t - chargeAt
-
+        const charge = smooth(0, chargeFill, charged)
+        const chargeOut = 1 - smooth(chargeFill + chargeHold, chargeFill + chargeHold + chargeFade, charged)
 
         // Immersive: resting the pointer on a companion turns the conductor's eyes to it after a blink
         if (immersive && pointer.inside && world.under.index >= 0) {
@@ -215,16 +224,28 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
 
         // Eye contact while the pointer moves or a glance holds. Otherwise it looks around by itself
         const contact = pointer.inside && (t - pointerMoved < gazeRest || glanceUntil >= 0)
+        // The cap fills with the body's breath and with the waves' charge, so it moves in time with both
+        const faceState = life.update({
+            time: t,
+            wake,
+            gaze: contact ? gazeTarget : null,
+            attention: state.glow,
+            joy: copied,
+            breath: 0.5 * (1 - Math.cos((tau * t) / breathSeconds)),
+            charge: charge * chargeOut,
+        })
         face.render({
             time: t,
             wake,
-            state: life.update({ time: t, wake, gaze: contact ? gazeTarget : null, attention: state.glow, joy: copied }),
+            state: faceState,
             glow: pose.glow,
-            charge: smooth(0, chargeFill, charged),
-            chargeLevel: Math.min(1, charged / 0.3) * (1 - smooth(chargeFill + chargeHold, chargeFill + chargeHold + chargeFade, charged)) * wake,
+            charge,
+            chargeLevel: Math.min(1, charged / 0.3) * chargeOut * wake,
             viewX: state.px,
             viewY: state.py,
         })
+        cap?.render(faceState.cap)
+        bow?.render(faceState.bow)
     }
 
     // The sky renders only while some of the hero is on screen. Below it, a frame nobody sees would
@@ -235,12 +256,14 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         if (running || !loaded || released || document.hidden || !inView) return
         gsap.ticker.add(tick)
         running = true
+        setHeroFaceMoving(owner, face !== null)
     }
 
     const stop = () => {
         if (!running) return
         gsap.ticker.remove(tick)
         running = false
+        setHeroFaceMoving(owner, false)
     }
 
     const onVisibility = () => (document.hidden ? stop() : start())
@@ -414,6 +437,7 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         resizeObserver.disconnect()
         window.removeEventListener("scroll", onPageScroll)
         canvas.removeEventListener("webglcontextlost", onContextLost)
+        listening.abort()
         if (conductorOwner === owner) {
             conductor.style.transform = ""
             conductor.style.willChange = ""
@@ -422,6 +446,10 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
         world.release()
         face?.release()
         face = null
+        cap?.release()
+        cap = null
+        bow?.release()
+        bow = null
     }
 
     // If the GPU drops the context, fall back to the CSS sky underneath. A kept frame may be stale
@@ -435,20 +463,40 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
     }
     canvas.addEventListener("webglcontextlost", onContextLost)
 
-    // The face comes after the sky and takes over from the painted glass when all its parts are here. If it can't, the
-    // conductor simply stays as painted
+    // The face comes after the sky and takes over from the painted glass when all its parts are here, and the cap and the bow tie
+    // with it, so all wake together from rest. If the face can't, the conductor simply stays as painted, and if only the cap or the
+    // bow can't, so does that part
     const startFace = () => {
         if (!faceSlot) return
         const made = createFace(faceSlot)
         if (!made) return
-        made.load()
-            .then(() => {
+        const madeCap = createCap(conductor)
+        const mascot = conductor.querySelector<HTMLImageElement>("[data-mascot]")
+        const madeBow = mascot ? createBow(conductor, mascot) : null
+        const partHere = (madePart: Cap | Bow | null, name: string) =>
+            madePart
+                ? madePart.load().then(
+                      () => true,
+                      (reason) => {
+                          if (!released) console.warn(`The conductor's ${name} stays as painted:`, reason)
+                          madePart.release()
+                          return false
+                      },
+                  )
+                : false
+        Promise.all([made.load(), partHere(madeCap, "cap"), partHere(madeBow, "bow tie")])
+            .then(([, withCap, withBow]) => {
                 if (released) {
                     made.release()
+                    madeCap.release()
+                    madeBow?.release()
                     return
                 }
                 faceSlot.append(made.canvas)
                 face = made
+                setHeroFaceMoving(owner, running)
+                if (withCap) cap = madeCap
+                if (withBow) bow = madeBow
                 faceFrom = sceneTime
                 // Its first frame at rest, then it fades in over the painted glass, whose sharpness differs a little
                 tick(gsap.ticker.time)
@@ -457,6 +505,8 @@ export function createHeroScene(hero: HTMLElement): HeroScene | null {
             .catch((reason) => {
                 if (!released) console.warn("The conductor's face stays as painted:", reason)
                 made.release()
+                madeCap.release()
+                madeBow?.release()
             })
     }
 

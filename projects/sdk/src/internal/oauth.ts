@@ -3,14 +3,17 @@
  * Invariant: Consent, storage and refresh coordination stay application-owned, credentials never appear in errors or logs, and
  * every request goes through the HTTP transport seam. Implements [SDK contracts: Results and failures](/docs/SDK-CONTRACTS.md#results-and-failures)
  */
+import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as Exit from "effect/Exit"
 import * as Scope from "effect/Scope"
 import type {
     OAuthAuthorizationInput,
     OAuthCodeExchangeInput,
     OAuthConfig,
+    OAuthAuthorization,
     OAuthConnection,
     OAuthIdentity,
     OAuthIntrospection,
@@ -29,7 +32,8 @@ import { nowMs } from "#sdk/internal/clock"
 import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transport/index"
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
 import { guildList } from "#sdk/internal/guild-lifecycle"
-import { identifier, record } from "#sdk/internal/decode/primitives"
+import { identifier, int32, record } from "#sdk/internal/decode/primitives"
+import { failingFieldPath } from "#sdk/internal/decode/trace"
 import { readCaller, suspendInput, suspendMarked } from "#sdk/internal/defects"
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
 import {
@@ -51,7 +55,8 @@ function text(value: unknown): value is string {
 }
 
 // Fluxer OAuth form/query strings use createStringType(1), capped at 256 UTF-16 units.
-// Reject normalization changes rather than changing opaque state, credentials or redirects
+// Reject normalization changes rather than changing opaque state or credentials. Redirect URIs follow Fluxer's own
+// normalization in redirectUri below
 function canonicalText(value: unknown): value is string {
     return (
         text(value) &&
@@ -64,23 +69,48 @@ function canonicalText(value: unknown): value is string {
 
 const oauthScopeInputCapacity = 256
 
-function redirectUri(value: unknown): value is string {
-    if (!canonicalText(value)) return false
+/** Fluxer's normalizeString for OAuth text: Remove form feed and U+202E, then trim
+ * (packages/schema/src/primitives/SchemaPrimitives.ts:20 to :21 at 5f3fc0b1)
+ */
+const normalizeString = (value: string) =>
+    // oxlint-disable-next-line no-control-regex -- the provider strips form feed before validating text
+    value.replace(/[\u000c\u202e]/g, "").trim()
+
+/** An IPv4 address of four decimal parts or a bracketed IPv6 address, as Fluxer's isIPLiteralHost reads a host */
+const ipLiteralHost = (hostname: string) =>
+    /^\d+\.\d+\.\d+\.\d+$/.test(hostname) ||
+    (hostname.startsWith("[") && hostname.endsWith("]") && hostname.includes(":"))
+
+/**
+ * Read a redirect URI as Fluxer does at each step, or return undefined when Fluxer would refuse it. Authorization
+ * compares the normalized text exactly with the application's registered redirect URIs, then stores its URL
+ * serialization with the code, and the token exchange compares its redirect_uri exactly with that serialization
+ * (fluxer_api/src/api/oauth/OAuth2Service.ts:55 to :60, :116 to :129 and :271 to :279 at 5f3fc0b1). So authorize
+ * receives the normalized text and the exchange its serialization. Fluxer registers HTTPS URIs, and HTTP ones only
+ * for a loopback host or an IP address (packages/schema/src/domains/oauth/OAuthSchemas.ts:368 to :380). Both forms
+ * must fit Fluxer's 256-unit limit, and credentials or a fragment are refused locally
+ */
+function redirectUri(value: unknown): { readonly authorize: string; readonly exchange: string } | undefined {
+    if (!text(value) || !value.isWellFormed()) return undefined
+    const authorize = normalizeString(value)
+    if (authorize.length === 0 || authorize.length > 256) return undefined
     try {
-        const url = new URL(value)
+        const url = new URL(authorize)
         const loopback =
             url.hostname === "localhost" ||
             url.hostname === "127.0.0.1" ||
             url.hostname === "[::1]" ||
             url.hostname.endsWith(".localhost")
-        return (
-            !url.username &&
+        const exchange = url.toString()
+        return !url.username &&
             !url.password &&
             !url.hash &&
-            (url.protocol === "https:" || (url.protocol === "http:" && loopback))
-        )
+            exchange.length <= 256 &&
+            (url.protocol === "https:" || (url.protocol === "http:" && (loopback || ipLiteralHost(url.hostname))))
+            ? { authorize, exchange }
+            : undefined
     } catch {
-        return false
+        return undefined
         // allow-silent: An unparsable redirect URI is rejected as invalid input
     }
 }
@@ -128,6 +158,13 @@ function identity(value: unknown): OAuthIdentity | undefined {
         return undefined
     if (value.email !== undefined && value.email !== null && typeof value.email !== "string") return undefined
     if (value.verified !== undefined && value.verified !== null && typeof value.verified !== "boolean") return undefined
+    if (
+        (value.flags !== undefined && !int32(value.flags)) ||
+        (value.avatar_color !== undefined && value.avatar_color !== null && !int32(value.avatar_color)) ||
+        (value.bot !== undefined && typeof value.bot !== "boolean") ||
+        (value.system !== undefined && typeof value.system !== "boolean")
+    )
+        return undefined
     return Object.freeze({
         id: value.id,
         username: value.username,
@@ -136,6 +173,47 @@ function identity(value: unknown): OAuthIdentity | undefined {
         avatar: value.avatar,
         ...(value.email === undefined ? {} : { email: value.email }),
         ...(value.verified === undefined ? {} : { verified: value.verified }),
+        ...(value.flags === undefined ? {} : { flags: value.flags }),
+        ...(value.avatar_color === undefined ? {} : { avatarColor: value.avatar_color }),
+        ...(value.bot === undefined ? {} : { isBot: value.bot }),
+        ...(value.system === undefined ? {} : { isSystem: value.system }),
+    })
+}
+
+/** GET /oauth2/@me, an OAuth2MeResponse (packages/schema/src/domains/oauth/OAuthSchemas.ts:237 at 5f3fc0b1) */
+function authorization(value: unknown): OAuthAuthorization | undefined {
+    if (!record(value) || !record(value.application)) return undefined
+    const application = value.application
+    if (
+        !identifier(application.id) ||
+        typeof application.name !== "string" ||
+        (application.icon !== null && typeof application.icon !== "string") ||
+        (application.description !== null && typeof application.description !== "string") ||
+        typeof application.bot_public !== "boolean" ||
+        typeof application.bot_require_code_grant !== "boolean" ||
+        !int32(application.flags) ||
+        !Array.isArray(value.scopes) ||
+        value.scopes.length > 50 ||
+        !value.scopes.every((scope) => typeof scope === "string") ||
+        typeof value.expires !== "string" ||
+        Number.isNaN(Date.parse(value.expires))
+    )
+        return undefined
+    const user = value.user === undefined ? undefined : identity(value.user)
+    if (value.user !== undefined && user === undefined) return undefined
+    return Object.freeze({
+        application: Object.freeze({
+            id: application.id,
+            name: application.name,
+            icon: application.icon,
+            description: application.description,
+            botPublic: application.bot_public,
+            botRequireCodeGrant: application.bot_require_code_grant,
+            flags: application.flags,
+        }),
+        scopes: Object.freeze([...(value.scopes as string[])]),
+        expiresAt: value.expires,
+        ...(user === undefined ? {} : { user }),
     })
 }
 
@@ -218,9 +296,15 @@ function inputError(
     })
 }
 
-function responseError(operation: OAuthOperation, status: number): OAuthOperationError {
+function responseError(operation: OAuthOperation, status: number, responseField?: string): OAuthOperationError {
     const mutation = operation === "oauth.exchangeCode" || operation === "oauth.refresh" || operation === "oauth.revoke"
-    return new OAuthError({ operation, reason: "response", outcome: mutation ? "unknown" : "rejected", status })
+    return new OAuthError({
+        operation,
+        reason: "response",
+        outcome: mutation ? "unknown" : "rejected",
+        status,
+        responseField,
+    })
 }
 
 function operationError(
@@ -280,7 +364,11 @@ async function body(
     const chunks: Uint8Array[] = []
     let length = 0
     for (;;) {
-        const item = await reader.read()
+        const item = await reader.read().catch((error: unknown) => {
+            // A failed read leaves the stream errored, so release must not cancel it again
+            state.done = true
+            throw new TransportError(error, "response body read")
+        })
         if (item.done) {
             state.done = true
             break
@@ -357,8 +445,8 @@ export class OAuthOwner {
     }
 
     /**
-     * Log a rejected client ID and secret once per operation and code, even when the application handles the failure,
-     * because it persists until someone changes the configuration. A rejected user access token concerns one user, so
+     * Log a rejected client ID and secret even when the application handles the failure, because it persists until
+     * someone changes the configuration. A rejected user access token concerns one user, so
      * it is only returned
      */
     #logRejection(error: unknown, context: Context.Context<never>) {
@@ -533,14 +621,14 @@ export class OAuthOwner {
                 "the OAuth authorization input",
             )
             if (unsupported) return Effect.fail(unsupportedInput("oauth.authorizationUrl", unsupported))
-            const redirectUriValue = input.redirectUri
-            if (!redirectUri(redirectUriValue))
+            const redirect = redirectUri(input.redirectUri)
+            if (redirect === undefined)
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
                         "redirectUri",
                         "format",
-                        "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
+                        "Redirect URI must be HTTPS, or HTTP for a loopback host or an IP address, without credentials or a fragment, and at most 256 UTF-16 code units",
                     ),
                 )
             const state = input.state
@@ -646,7 +734,7 @@ export class OAuthOwner {
                     ),
                 )
             const request = {
-                redirectUri: redirectUriValue,
+                redirectUri: redirect.authorize,
                 scopes: Object.freeze(scopes),
                 state,
                 codeChallenge,
@@ -687,6 +775,77 @@ export class OAuthOwner {
         decode: (body: unknown) => A | undefined,
         progress: { knownResponseFailure: OAuthOperationError | undefined },
         emptyResponse = false,
+    ): Effect.Effect<A, OAuthOperationError> {
+        // What the Debug request record reports: The status and the time until response headers, as REST records it
+        const seen: { status: number | null; durationMs: number | null } = { status: null, durationMs: null }
+        return Clock.clockWith((clock) => {
+            const started = nowMs(clock)
+            const responded = (status: number) => {
+                seen.status = status
+                seen.durationMs = Math.round(nowMs(clock) - started)
+            }
+            return this.#exchange(operation, api, path, init, decode, progress, emptyResponse, responded).pipe(
+                Effect.onExit((exit) =>
+                    Effect.withFiber((fiber) =>
+                        Effect.sync(() =>
+                            this.#logRequest(
+                                init.method ?? "GET",
+                                path,
+                                seen.status,
+                                seen.durationMs ?? Math.round(nowMs(clock) - started),
+                                exit,
+                                fiber.context,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        })
+    }
+
+    /** One Debug rest.request record per OAuth request, with its method, route, status and duration but no query,
+     * form, body or Authorization value */
+    #logRequest(
+        method: string,
+        path: string,
+        status: number | null,
+        durationMs: number,
+        exit: Exit.Exit<unknown, unknown>,
+        context: Context.Context<never>,
+    ) {
+        if (!this.logging.enabled("debug", "rest")) return
+        const route = path.split("?")[0]!
+        const outcome =
+            status !== null
+                ? `returned ${status}`
+                : Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+                  ? "was cancelled"
+                  : "failed before a response"
+        this.logging.log(
+            {
+                level: "debug",
+                category: "rest",
+                code: "rest.request",
+                message: `${method} ${route} ${outcome} in ${durationMs} ms`,
+                route,
+                ...(status === null ? {} : { status }),
+                durationMs,
+                attempt: 1,
+                fields: { method },
+            },
+            context,
+        )
+    }
+
+    #exchange<A>(
+        operation: OAuthOperation,
+        api: string,
+        path: string,
+        init: RequestInit,
+        decode: (body: unknown) => A | undefined,
+        progress: { knownResponseFailure: OAuthOperationError | undefined },
+        emptyResponse: boolean,
+        responded: (status: number) => void,
     ): Effect.Effect<A, OAuthOperationError> {
         return Effect.acquireUseRelease(
             Effect.sync(
@@ -733,6 +892,7 @@ export class OAuthOwner {
                                     signal: state.controller.signal,
                                 })
                                 state.response = response
+                                responded(response.status)
                                 if (!response.ok)
                                     state.knownResponseFailure = progress.knownResponseFailure = operationError(
                                         operation,
@@ -752,11 +912,23 @@ export class OAuthOwner {
                                     throw operationError(operation, response, "unknown", { body: decoded })
                                 if (emptyResponse) return true as A
                                 const result = decode(decoded)
-                                if (result === undefined) throw responseError(operation, response.status)
+                                // Name the field the decoder stopped at, as REST does, without keeping any value
+                                if (result === undefined)
+                                    throw responseError(operation, response.status, failingFieldPath(decode, decoded))
                                 return result
                             } catch (error) {
                                 if (error instanceof OAuthError) throw error
-                                if (response?.ok) throw responseError(operation, response.status)
+                                // A lost successful body leaves the outcome unknown. A failed reply keeps its status below
+                                if (response?.ok)
+                                    throw error instanceof TransportError
+                                        ? new OAuthError({
+                                              operation,
+                                              reason: "network",
+                                              outcome: "unknown",
+                                              status: response.status,
+                                              cause: error,
+                                          })
+                                        : responseError(operation, response.status)
                                 throw operationError(
                                     operation,
                                     response,
@@ -859,14 +1031,14 @@ export class OAuthOwner {
                         "Authorization code must contain 1 through 256 UTF-16 code units without leading or trailing whitespace",
                     ),
                 )
-            const redirectUriValue = input.redirectUri
-            if (!redirectUri(redirectUriValue))
+            const redirect = redirectUri(input.redirectUri)
+            if (redirect === undefined)
                 return Effect.fail(
                     inputError(
                         "oauth.exchangeCode",
                         "redirectUri",
                         "format",
-                        "Redirect URI must be HTTPS or loopback HTTP without credentials or a fragment",
+                        "Redirect URI must be HTTPS, or HTTP for a loopback host or an IP address, without credentials or a fragment, and at most 256 UTF-16 code units",
                     ),
                 )
             const codeVerifier = input.codeVerifier
@@ -879,7 +1051,7 @@ export class OAuthOwner {
                         "PKCE code verifier must contain 43 through 128 unreserved characters",
                     ),
                 )
-            const request = { code, redirectUri: redirectUriValue, codeVerifier }
+            const request = { code, redirectUri: redirect.exchange, codeVerifier }
             return this.#run("oauth.exchangeCode", options, (api, _webapp, secret, progress) =>
                 this.#request(
                     "oauth.exchangeCode",
@@ -988,7 +1160,9 @@ export class OAuthOwner {
                         },
                         body: new URLSearchParams({
                             token: request.token,
-                            ...(request.tokenTypeHint === undefined ? {} : { token_type_hint: request.tokenTypeHint }),
+                            // Fluxer looks up refresh tokens only for this hint and then falls back to access tokens,
+                            // so it is the default that finds either kind
+                            token_type_hint: request.tokenTypeHint ?? "refresh_token",
                         }).toString(),
                     },
                     () => true,
@@ -1014,6 +1188,31 @@ export class OAuthOwner {
                 "/oauth2/userinfo",
                 { method: "GET", headers: { authorization: `Bearer ${accessToken}` } },
                 identity,
+                progress,
+            ),
+        )
+    }
+
+    fetchAuthorization(
+        accessToken: string,
+        options?: RequestOptions,
+    ): Effect.Effect<OAuthAuthorization, OAuthOperationError | ClientClosedError> {
+        if (!text(accessToken))
+            return Effect.fail(
+                inputError(
+                    "oauth.fetchAuthorization",
+                    "accessToken",
+                    "required",
+                    "Access token must be a non-empty string",
+                ),
+            )
+        return this.#run("oauth.fetchAuthorization", options, (api, _webapp, _secret, progress) =>
+            this.#request(
+                "oauth.fetchAuthorization",
+                api,
+                "/oauth2/@me",
+                { method: "GET", headers: { authorization: `Bearer ${accessToken}` } },
+                authorization,
                 progress,
             ),
         )

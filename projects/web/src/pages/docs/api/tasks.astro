@@ -38,7 +38,7 @@ const toc: TocItem[] = entries.flatMap((entry) => [
                                             <a href={row.url}><Code text={row.method} /></a>
                                         </dt>
                                         <dd>
-                                            <Md md={row.task} inline />
+                                            <Md md={row.task} entry={entry.key} inline />
                                         </dd>
                                     </div>
                                 ))}

@@ -1,6 +1,7 @@
 import { defineCollection } from "astro:content"
 import { glob } from "astro/loaders"
 import { z } from "astro/zod"
+import { aliasKey, aliasWords } from "./lib/docs-search"
 import { titleCase } from "./lib/title-case"
 
 // The guides. index.md is the docs overview at /docs/. A published version's build reads the guides from its snapshot
@@ -10,6 +11,18 @@ const guides = defineCollection({
         title: z.string().transform((title) => titleCase(title)),
         navTitle: z.string().transform((title) => titleCase(title)).optional(),
         description: z.string().optional(),
+        // Other words readers use for the guide's topic, such as getting started for the quick start. Search reads them as it
+        // reads the title, and a query that holds one whole always gets the guide ranked. Each is a phrase without commas of at
+        // most aliasWords words
+        search: z
+            .array(
+                z
+                    .string()
+                    .refine((term) => !term.includes(",") && aliasKey(term).split(" ").length <= aliasWords, {
+                        message: `A search phrase has no commas and at most ${aliasWords} words`,
+                    }),
+            )
+            .optional(),
     }),
 })
 

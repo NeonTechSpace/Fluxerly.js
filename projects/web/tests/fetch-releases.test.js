@@ -250,3 +250,79 @@ test("A generated archive symlink is rejected without reading GitHub or touching
     assert.equal(f.calls.length, 0)
     assert.equal(await readFile(join(outside, "keep.md"), "utf8"), "Keep authored content")
 })
+
+test("Import errors are whole sentences without semicolons", async (t) => {
+    const failing = await fixture(t, [], { read: () => { throw new Error("Private provider response body") } })
+    await assert.rejects(failing.run(), { message: "Authenticated GitHub release read failed. No automatic retry was attempted" })
+    const existing = await fixture(t, [release()])
+    await mkdir(existing.directory)
+    await writeFile(join(existing.directory, "user-owned.json"), "Keep this file")
+    await assert.rejects(existing.run(), { message: "Release import requires an empty generated archive directory. Existing files are preserved" })
+    const concurrent = await fixture(t, [], {
+        read: async (_args, _count, root) => {
+            await writeFile(join(root, "released", "concurrent.json"), "Keep concurrent file")
+            return encode([[]])
+        },
+    })
+    await assert.rejects(concurrent.run(), { message: "Release archive changed during import. Existing files are preserved" })
+})
+
+const assetReads = (calls) => calls.filter((args) => args.some((arg) => arg.includes("/releases/assets/")))
+const cacheOf = (f) => join(f.root, ".cache", "releases")
+const emptyArchive = async (f) => {
+    await rm(f.directory, { recursive: true, force: true })
+}
+
+test("A kept copy of an asset is used instead of downloading it again, and the import stays the same", async (t) => {
+    const stable = release(),
+        nightly = release("1000.1.0-nightly.1", 2)
+    const f = await fixture(t, [stable, nightly])
+    const first = await f.run()
+    assert.equal(assetReads(f.calls).length, 2)
+    assert.deepEqual((await readdir(cacheOf(f))).sort(), [stable, nightly].map((item) => `${item.metadata.assets[0].digest.slice(7)}.json`).sort())
+    await emptyArchive(f)
+    f.calls.length = 0
+    assert.deepEqual(await f.run(), first)
+    // The release list and source tags are read again, since they can change, but no asset is
+    assert.equal(assetReads(f.calls).length, 0)
+    assert.ok(f.calls.some((args) => args.includes("--paginate")))
+    assert.deepEqual(await readFile(join(f.directory, "1000.0.0.json")), stable.bytes)
+    assert.deepEqual(await readFile(join(f.directory, "1000.1.0-nightly.1.json")), nightly.bytes)
+})
+
+test("A kept copy that no longer matches its digest is downloaded again and replaced", async (t) => {
+    const stable = release()
+    const f = await fixture(t, [stable])
+    await f.run()
+    const copy = join(cacheOf(f), `${stable.metadata.assets[0].digest.slice(7)}.json`)
+    // Same length, other bytes, so only the digest tells them apart
+    await writeFile(copy, Buffer.alloc(stable.bytes.length, 0x20))
+    await emptyArchive(f)
+    f.calls.length = 0
+    await f.run()
+    assert.equal(assetReads(f.calls).length, 1)
+    assert.deepEqual(await readFile(copy), stable.bytes)
+    assert.deepEqual(await readFile(join(f.directory, "1000.0.0.json")), stable.bytes)
+})
+
+test("Filling only the cache writes no archive, leaves other files alone and keeps only retained releases' copies", async (t) => {
+    const old = release("1000.0.0-nightly.1", 1),
+        stable = release("1000.0.0", 2)
+    const f = await fixture(t, [old])
+    await fetchReleases({ root: f.root, gh: f.gh, write: false })
+    await assert.rejects(lstat(f.directory), { code: "ENOENT" })
+    await writeFile(join(cacheOf(f), "notes.txt"), "Not a copy")
+    // A newer nightly replaces the old one, whose copy goes, while a file that isn't a copy stays
+    const newer = release("1000.0.0-nightly.2", 3)
+    const next = await fixture(t, [stable, newer])
+    await mkdir(next.directory)
+    await writeFile(join(next.directory, "user-owned.json"), "Keep this file")
+    await mkdir(cacheOf(next), { recursive: true })
+    for (const name of await readdir(cacheOf(f))) await writeFile(join(cacheOf(next), name), await readFile(join(cacheOf(f), name)))
+    assert.deepEqual((await fetchReleases({ root: next.root, gh: next.gh, write: false })).imported, ["1000.0.0", "1000.0.0-nightly.2"])
+    assert.deepEqual(
+        (await readdir(cacheOf(next))).sort(),
+        ["notes.txt", ...[stable, newer].map((item) => `${item.metadata.assets[0].digest.slice(7)}.json`)].sort(),
+    )
+    assert.deepEqual(await readdir(next.directory), ["user-owned.json"])
+})

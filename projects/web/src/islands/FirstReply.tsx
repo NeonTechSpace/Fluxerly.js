@@ -306,7 +306,7 @@ export default function FirstReply() {
                             spellCheck={false}
                             autoComplete="off"
                         />
-                        <button className="fr-send" type="submit" ref={sendRef} disabled={!draft.trim()} data-busy={busy || undefined} aria-busy={busy}>
+                        <button className="fr-send" type="submit" ref={sendRef} disabled={busy || !draft.trim()} data-busy={busy || undefined} aria-busy={busy}>
                             Send
                             <svg className="fr-send-waves" viewBox="0 0 20 14" aria-hidden="true" focusable="false">
                                 <path d="M1.5 4.2c2.3-2.9 4.6-2.9 6.9 0s4.6 2.9 6.9 0 2.5-2.1 3.2-1.4" />

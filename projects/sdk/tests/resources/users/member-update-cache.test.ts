@@ -38,7 +38,7 @@ const memberUpdate = () => ({
 function rest(handler: (path: string) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(new URL(url).pathname),
     )
 }
@@ -80,7 +80,7 @@ test.each(modes)(
         const server = await startGatewayServer()
         rest(async (path) =>
             Response.json(
-                path.startsWith("/v1/users/") ? user("old identity", path.split("/").at(-1)) : directMessage(),
+                path.startsWith("/api/v1/users/") ? user("old identity", path.split("/").at(-1)) : directMessage(),
             ),
         )
         const client = await cachedClient(mode)
@@ -101,7 +101,7 @@ test.each(modes)(
 
         rest(async (path) =>
             Response.json(
-                path === "/v1/users/30"
+                path === "/api/v1/users/30"
                     ? user("new identity")
                     : { ...directMessage(), recipients: [user("new identity")] },
             ),
@@ -116,7 +116,7 @@ test.each(modes)(
 for (const kind of ["users", "directMessages"] as const)
     test.each(modes)("%s keeps member updates for the " + kind + " cache without a member subscriber", async (mode) => {
         const server = await startGatewayServer()
-        rest(async (path) => Response.json(path === "/v1/users/30" ? user() : directMessage()))
+        rest(async (path) => Response.json(path === "/api/v1/users/30" ? user() : directMessage()))
         const client = await cachedClient(mode, { [kind]: true })
         if (kind === "users") await settle(client.users.fetch("30"))
         else await settle(client.directMessages.fetch("10"))
@@ -141,13 +141,13 @@ for (const collection of [false, true])
             const release = Promise.withResolvers<void>()
             let delayed = false
             rest(async (path) => {
-                const account = path === "/v1/users/30" || path === "/v1/users/@me"
+                const account = path === "/api/v1/users/30" || path === "/api/v1/users/@me"
                 if (delayed) {
                     ;(account ? userStarted : dmStarted).resolve()
                     await release.promise
                 }
                 return Response.json(
-                    account ? user() : path === "/v1/users/@me/channels" ? [directMessage()] : directMessage(),
+                    account ? user() : path === "/api/v1/users/@me/channels" ? [directMessage()] : directMessage(),
                 )
             })
             const client = await cachedClient(mode)
@@ -177,7 +177,7 @@ for (const collection of [false, true])
 
 test.each(modes)("%s invalidates identity caches when a member update is skipped as malformed", async (mode) => {
     const server = await startGatewayServer()
-    rest(async (path) => Response.json(path === "/v1/users/30" ? user() : directMessage()))
+    rest(async (path) => Response.json(path === "/api/v1/users/30" ? user() : directMessage()))
     const client = await cachedClient(mode)
     await settle(client.users.fetch("30"))
     await settle(client.directMessages.fetch("10"))
@@ -187,3 +187,20 @@ test.each(modes)("%s invalidates identity caches when a member update is skipped
     expect(await settle(client.users.get("30"))).toBeUndefined()
     expect(await settle(client.directMessages.get("10"))).toBeUndefined()
 })
+
+test.each(modes)(
+    "%s invalidates direct message recipients when a user update is skipped as malformed",
+    async (mode) => {
+        const server = await startGatewayServer()
+        rest(async (path) => Response.json(path === "/api/v1/users/30" ? user() : directMessage()))
+        const client = await cachedClient(mode)
+        await settle(client.users.fetch("30"))
+        await settle(client.directMessages.fetch("10"))
+        await settle(client.connect())
+
+        // A cached direct message keeps its recipients' identities, which the skipped update could have changed
+        server.deliverNow("USER_UPDATE", { ...user("new identity"), username: 5 })
+        expect(await settle(client.users.get("30"))).toBeUndefined()
+        expect(await settle(client.directMessages.get("10"))).toBeUndefined()
+    },
+)

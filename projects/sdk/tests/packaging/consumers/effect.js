@@ -81,9 +81,9 @@ const client = await Effect.runPromise(
             assert.equal((yield* client.messages.get(edited))?.content, "Updated")
             yield* client.messages.delete(edited)
             assert.deepEqual(requests, [
-                "GET https://api.fluxer.app/v1/channels/20/messages/10",
-                "PATCH https://api.fluxer.app/v1/channels/20/messages/10",
-                "DELETE https://api.fluxer.app/v1/channels/20/messages/10",
+                "GET https://fluxer.com/api/v1/channels/20/messages/10",
+                "PATCH https://fluxer.com/api/v1/channels/20/messages/10",
+                "DELETE https://fluxer.com/api/v1/channels/20/messages/10",
             ])
             return client
         }),

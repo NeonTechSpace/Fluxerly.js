@@ -2,13 +2,15 @@
 // which Fluxerly methods show beside a route, what a route without one falls back to, and how the static analysis reads
 // the method and path an operation sends from TypeScript source
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock, test } from "node:test"
 import ts from "typescript"
 import { endpointView } from "../src/lib/endpoint-view.ts"
-import { botSurface, docsPages, download, docsSections, endpointMap, fallbackOf, pageTitle, referenceResolver, routeCallers, routeKey, specOperations } from "../scripts/docs/endpoints.mjs"
+import { botSurface, docsPage, docsPagePath, endpointMap, fallbackOf, readDocs, referenceResolver, routeCallers, routeKey, sidebarPages, specOperations } from "../scripts/docs/endpoints.mjs"
+import { download, fluxerSource } from "../scripts/docs/fluxer-source.mjs"
 import { RouteAnalyzer, objectMembers, returnedObject, routeTemplate, tableEntries, HOLE_ANY, HOLE_SEGMENT } from "../scripts/docs/sdk-routes.mjs"
 
 const spec = {
@@ -49,18 +51,81 @@ test("route keys match by method and path shape, not by parameter names", () => 
     assert.notEqual(routeKey("GET", "/users/@me"), routeKey("GET", "/users/{user_id}"))
 })
 
-test("reads Fluxer's docs pages by their route lines", () => {
-    const html = `<h1 id="_top">Messages</h1>
-        <h2 id="message-object">Message object</h2><p>No route here</p>
-        <h2 id="get-message">Get message</h2><flx-route-header><flx-route-line><code class="route-method" data-method="GET">GET</code><code class="route-path">/v1/channels/<span data-param>{channel_id}</span>/messages/<span data-param>&#123;message_id&#125;</span></code></flx-route-line></flx-route-header>
-        <h2 id="create-message">Create message</h2><flx-route-line><code class="route-method" data-method="POST">POST</code><code class="route-path">/v1/channels/{channel_id}/messages</code></flx-route-line>`
-    assert.equal(pageTitle(html), "Messages")
-    assert.deepEqual(docsSections(html), [
+// A page of Fluxer's docs source with the cases its anchors depend on
+const messagesPage = `---
+title: Messages
+description: Message routes
+---
+
+import RouteHeader from '@/components/RouteHeader.astro';
+
+<RouteHeader method="GET" path="/v1/before/any/section" />
+
+## Message object
+
+### Example
+
+\`\`\`mdx
+## Not a heading
+<RouteHeader method="GET" path="/v1/in/a/code/block" />
+\`\`\`
+
+## Get message
+
+<RouteHeader method="GET" path="/v1/channels/{channel_id}/messages/{message_id}" bot />
+
+### Example
+
+## Remove another user's reaction
+
+### Response
+
+<RouteHeader method="DELETE" path="/v1/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/{user_id}" bot />
+
+## Example
+
+<RouteHeader method="GET" path="/.well-known/fluxer" unauthenticated />
+`
+
+test("reads Fluxer's docs source with the anchors the docs site gives its headings", () => {
+    const page = docsPage("http-api/messages.mdx", messagesPage)
+    assert.equal(page.title, "Messages")
+    assert.deepEqual(page.sections, [
         { key: "GET /channels/{}/messages/{}", anchor: "get-message" },
-        { key: "POST /channels/{}/messages", anchor: "create-message" },
+        // Slugged as the site does: an apostrophe is dropped, not turned into a hyphen
+        { key: "DELETE /channels/{}/messages/{}/reactions/{}/{}", anchor: "remove-another-users-reaction" },
+        // The third heading named Example on the page, so the site numbers its anchor
+        { key: "GET /.well-known/fluxer", anchor: "example-2" },
     ])
-    const index = `<a href="/http-api/">Overview</a><a href="/http-api/instance/">Instance</a><a href="/topics/x/">X</a><a href="/http-api/messages/#create-message">Send</a><a href="/http-api/instance/">Again</a><a href="/http-api/messages/">Messages</a>`
-    assert.deepEqual(docsPages(index), ["/http-api/instance/", "/http-api/messages/"])
+    assert.equal(docsPagePath("http-api/users/mfa.mdx"), "/http-api/users/mfa/")
+    assert.equal(docsPagePath("http-api/index.md"), "/http-api/")
+    // Markup the anchors would depend on stops the build instead of linking a wrong anchor
+    assert.throws(() => docsPage("http-api/x.mdx", "## Get `code`\n"), /does not read/)
+    assert.throws(() => docsPage("http-api/x.mdx", '<RouteHeader\n  method="GET" path="/v1/x" />\n'), /several lines/)
+    assert.throws(() => docsPage("http-api/x.mdx", "Get message\n---\n"), /underlined heading/)
+})
+
+test("orders the docs pages as the docs site's sidebar does", () => {
+    const config = `starlight({
+        sidebar: [
+            { label: 'Topics', items: ['http-api/errors', 'topics/rate-limits', 'http-api/permissions'] },
+            { label: 'HTTP API', items: [{label: 'Overview', link: '/http-api/'}, 'http-api/instance', 'http-api/messages'] },
+        ],
+        social: [{ href: 'https://github.com/fluxerapp/fluxer' }],
+    })`
+    assert.deepEqual(sidebarPages(config), ["/http-api/errors/", "/http-api/permissions/", "/http-api/instance/", "/http-api/messages/"])
+    const plain = (title: string) => `---\ntitle: ${title}\n---\n`
+    const documents = [
+        { path: "http-api/index.md", text: plain("HTTP API") },
+        { path: "http-api/messages.mdx", text: messagesPage },
+        ...["errors", "permissions", "instance", "zz-unlisted", ...Array.from({ length: 6 }, (_, index) => `extra-${index}`)].map((name) => ({ path: `http-api/${name}.mdx`, text: plain(name) })),
+    ]
+    const docs = readDocs({ config, documents })
+    assert.deepEqual(docs.pages.slice(0, 4), ["/http-api/errors/", "/http-api/permissions/", "/http-api/instance/", "/http-api/messages/"])
+    assert.equal(docs.pages.at(-1), "/http-api/zz-unlisted/")
+    assert.equal(docs.titles.get("/http-api/messages/"), "Messages")
+    assert.deepEqual(docs.sections.get("GET /channels/{}/messages/{}"), { page: "/http-api/messages/", anchor: "get-message" })
+    assert.throws(() => readDocs({ config, documents: documents.filter((document) => !document.path.includes("instance")) }), /no source/)
 })
 
 test("shows a method beside the route it exists for", () => {
@@ -122,7 +187,7 @@ test("builds areas in the docs' order with linked methods and fallbacks", () => 
     assert.deepEqual(messages.map((route: { method: string }) => route.method), ["GET", "POST"])
     assert.equal(messages[0].fallback, "rest")
     assert.deepEqual(messages[1].methods, [{ name: "client.messages.send", url: "/docs/api/js-ts/x/#client.messages.send" }])
-    assert.equal(messages[1].docs, "https://docs.fluxer.app/http-api/messages/#create-message")
+    assert.equal(messages[1].docs, "https://docs.fluxer.com/http-api/messages/#create-message")
     assert.deepEqual(map.areas[1].routes[0].methods.map((method: { name: string }) => method.name), ["OAuthClient.fetchIdentity"])
     assert.deepEqual(map.counts, { routes: 5, withMethod: 2, rest: 1, noToken: 1, oauth2: 0, webhookToken: 1 })
     assert.deepEqual(missingDocs.sort(), ["POST /auth/login", "POST /webhooks/{}/{}/slack"])
@@ -291,11 +356,192 @@ test("Downloads wait out rate limits and server errors, and stop at a real answe
         waits.push(ms)
         return Promise.resolve()
     }
-    assert.equal(String(await download("https://example.test/a", 1, sleep)), "ok")
+    assert.equal(String(await download("https://example.test/a", { sleep })), "ok")
     assert.deepEqual(waits, [7000, 4000])
 
     fetched.mock.mockImplementation(() => Promise.resolve(new Response("", { status: 404 })))
-    await assert.rejects(download("https://example.test/b", 1, sleep), /HTTP 404/)
+    await assert.rejects(download("https://example.test/b", { sleep }), /HTTP 404/)
     assert.equal(waits.length, 2)
     fetched.mock.restore()
+})
+
+// Fluxer's repository at two commits, as raw.githubusercontent.com serves it, which records every file it serves
+function fakeRepository(commits: Record<string, Record<string, string>>) {
+    const reads: string[] = []
+    const fetchFile = async (_repository: string, commit: string, path: string) => {
+        reads.push(`${commit.slice(0, 1)} ${path}`)
+        const text = commits[commit]?.[path]
+        if (text === undefined) throw new Error(`${path} at ${commit} answered HTTP 404`)
+        return Buffer.from(text)
+    }
+    return { fetchFile, reads }
+}
+
+const sha = (text: string) => createHash("sha256").update(text).digest("hex")
+const docsFolder = "fluxer_docs/src/content/docs/http-api"
+const commitA = "a".repeat(40)
+const commitB = "b".repeat(40)
+const repositoryAt: Record<string, Record<string, string>> = {
+    [commitA]: {
+        "fluxer_api/src/api/openapi/openapi.json": '{"paths":{}}',
+        "fluxer_docs/astro.config.ts": "export default {}",
+        [`${docsFolder}/index.md`]: "# HTTP API",
+        [`${docsFolder}/users/mfa.mdx`]: "## MFA",
+    },
+    [commitB]: {
+        "fluxer_api/src/api/openapi/openapi.json": '{"paths":{"/a":{}}}',
+        "fluxer_docs/astro.config.ts": "export default {}",
+        [`${docsFolder}/index.md`]: "# HTTP API",
+        [`${docsFolder}/users/mfa.mdx`]: "## MFA, changed",
+    },
+}
+// A manifest as node release/upstream.js --update writes it for one of those commits
+const pinAt = (commit: string) => {
+    const files = repositoryAt[commit]!
+    const pin = (path: string) => ({ path, sha256: sha(files[path]!) })
+    return {
+        repository: "fluxerapp/fluxer",
+        branch: "main",
+        commit,
+        files: { openapi: pin("fluxer_api/src/api/openapi/openapi.json") },
+        endpointDocs: ["fluxer_docs/astro.config.ts", `${docsFolder}/index.md`, `${docsFolder}/users/mfa.mdx`].map(pin),
+        gatewayDocs: { path: "fluxer_docs/src/content/docs/gateway", sha256: "0".repeat(64) },
+        rateLimits: { path: "fluxer_api/src/api/rate_limit_configs", sha256: "0".repeat(64) },
+    }
+}
+
+test("Fluxer's pinned files download once per pin, and a cached file that doesn't match its pin downloads again", async () => {
+    const cacheDir = mkdtempSync(join(tmpdir(), "fluxer-source-"))
+    try {
+        const log = () => {}
+        const repository = fakeRepository(repositoryAt)
+        const first = await fluxerSource(pinAt(commitA), { cacheDir, fetchFile: repository.fetchFile, log })
+        assert.equal(first.openapi.toString(), '{"paths":{}}')
+        assert.equal(first.config, "export default {}")
+        assert.deepEqual(first.documents, [
+            { path: "http-api/index.md", text: "# HTTP API" },
+            { path: "http-api/users/mfa.mdx", text: "## MFA" },
+        ])
+        // The pinned files, each once, and nothing else such as a directory listing
+        assert.deepEqual(repository.reads, [
+            "a fluxer_api/src/api/openapi/openapi.json",
+            "a fluxer_docs/astro.config.ts",
+            `a ${docsFolder}/index.md`,
+            `a ${docsFolder}/users/mfa.mdx`,
+        ])
+
+        // An unchanged pin downloads nothing
+        repository.reads.length = 0
+        const again = await fluxerSource(pinAt(commitA), { cacheDir, fetchFile: repository.fetchFile, log })
+        assert.deepEqual(repository.reads, [])
+        assert.deepEqual(again.downloaded, [])
+        assert.deepEqual(again.documents, first.documents)
+
+        // A cached file that changed on disk is checked against the pin, discarded and downloaded again, alone
+        writeFileSync(join(cacheDir, commitA, docsFolder, "users/mfa.mdx"), "## Tampered")
+        const repaired = await fluxerSource(pinAt(commitA), { cacheDir, fetchFile: repository.fetchFile, log })
+        assert.deepEqual(repository.reads, [`a ${docsFolder}/users/mfa.mdx`])
+        assert.equal(repaired.documents[1]!.text, "## MFA")
+        assert.equal(readFileSync(join(cacheDir, commitA, docsFolder, "users/mfa.mdx"), "utf8"), "## MFA")
+
+        // A new pin downloads its files once, then reads them from the cache, which keeps only the current pin
+        repository.reads.length = 0
+        await fluxerSource(pinAt(commitB), { cacheDir, fetchFile: repository.fetchFile, log })
+        await fluxerSource(pinAt(commitB), { cacheDir, fetchFile: repository.fetchFile, log })
+        // The assert.deepEqual calls above narrow the type to an empty list
+        const moved = repository.reads as string[]
+        assert.equal(moved.length, 4)
+        assert.ok(moved.every((read) => read.startsWith("b ")))
+        assert.deepEqual(readdirSync(cacheDir), [commitB])
+    } finally {
+        rmSync(cacheDir, { recursive: true, force: true })
+    }
+})
+
+test("a downloaded file must match its pin, and a mismatch is never cached", async () => {
+    const cacheDir = mkdtempSync(join(tmpdir(), "fluxer-source-"))
+    try {
+        // The manifest pins commit A's hashes, but the files served are commit B's
+        const served = fakeRepository({ [commitA]: repositoryAt[commitB]! })
+        await assert.rejects(fluxerSource(pinAt(commitA), { cacheDir, fetchFile: served.fetchFile, log: () => {} }), /not the pinned/)
+        assert.equal(existsSync(join(cacheDir, commitA, "fluxer_api/src/api/openapi/openapi.json")), false)
+        // A manifest written before the endpoint docs were pinned says how to pin them
+        const { endpointDocs, ...older } = pinAt(commitA)
+        assert.ok(endpointDocs.length)
+        await assert.rejects(fluxerSource(older, { cacheDir, fetchFile: served.fetchFile, log: () => {} }), /--update/)
+    } finally {
+        rmSync(cacheDir, { recursive: true, force: true })
+    }
+})
+
+test("a route whose general rule would mislead carries its own fallback and note", () => {
+    const operation = (method: string, path: string, tokens: string[]) => ({ key: routeKey(method, path), method, path, summary: path, tokens })
+    const kept = [
+        operation("GET", "/gateway/bot", []),
+        operation("POST", "/channels/{channel_id}/attachments", ["botToken"]),
+        operation("POST", "/channels/{channel_id}/attachments/complete", ["botToken"]),
+        operation("POST", "/guilds/{guild_id}/delete", ["botToken"]),
+        operation("POST", "/guilds/{guild_id}/transfer-ownership", ["botToken"]),
+        operation("GET", "/guilds/{guild_id}", ["botToken"]),
+    ]
+    const { map } = endpointMap({ kept, docs: { sections: new Map(), pages: [], titles: new Map() }, operations: [], reference: (path: string) => `/docs/api/js-ts/x/#${path}` })
+    const rows = (map.areas as { routes: { path: string; fallback: string; note?: string; methods: unknown[] }[] }[]).flatMap((area) => area.routes)
+    const row = (path: string) => rows.find((route) => route.path === path)!
+
+    // Fluxer lists this route with no security, and it needs a bot token
+    assert.equal(row("/gateway/bot").fallback, "rest")
+    assert.ok(row("/gateway/bot").note)
+    // Sending attachments uses these two without any raw request, so their rows have to say so
+    assert.notEqual(row("/channels/{channel_id}/attachments").note, undefined)
+    assert.notEqual(row("/channels/{channel_id}/attachments/complete").note, undefined)
+    assert.notEqual(row("/channels/{channel_id}/attachments").note, row("/channels/{channel_id}/attachments/complete").note)
+    // An ordinary route keeps the plain fallback
+    assert.deepEqual([row("/guilds/{guild_id}").fallback, row("/guilds/{guild_id}").note], ["rest", undefined])
+
+    // Only a community's owner can send these two, so the page shows them but doesn't count them as reachable
+    assert.equal(row("/guilds/{guild_id}/delete").fallback, "ownerOnly")
+    assert.ok(row("/guilds/{guild_id}/transfer-ownership").note)
+    const view = endpointView(map.areas as { routes: { methods: unknown[]; fallback?: string }[] }[])
+    assert.equal(view.counts.routes, 6)
+    assert.equal(view.counts.rest, 4)
+    assert.equal(map.counts.rest, 4)
+})
+
+test("voice server routes need a voice server credential, not no token", () => {
+    // Fluxer lists these with no security, and they check a voice server's join token or signed request
+    const voice = [
+        ["POST", "/voice/join"],
+        ["POST", "/voice/join/preview"],
+        ["GET", "/voice/node"],
+        ["PATCH", "/voice/node"],
+        ["DELETE", "/voice/node"],
+    ]
+    const open = { summary: "Voice", security: [] }
+    const kept = specOperations({
+        paths: {
+            "/auth/login": { post: { summary: "Login", security: [] } },
+            "/voice/join": { post: open },
+            "/voice/join/preview": { post: open },
+            "/voice/node": { get: open, patch: open, delete: open },
+        },
+    })
+    const { map } = endpointMap({ kept, docs: { sections: new Map(), pages: [], titles: new Map() }, operations: [], reference: (path: string) => `/docs/api/js-ts/x/#${path}` })
+    const rows = (map.areas as { routes: { method: string; path: string; fallback: string; note?: string; methods: unknown[] }[] }[]).flatMap((area) => area.routes)
+    for (const [method, path] of voice) {
+        const row = rows.find((route) => route.method === method && route.path === path)!
+        assert.equal(row.fallback, "voiceServer", `${method} ${path}`)
+        assert.ok(row.note)
+    }
+    // A route that really needs no token keeps that fallback, and the count leaves the voice server routes out
+    assert.equal(rows.find((route) => route.path === "/auth/login")!.fallback, "noToken")
+    assert.equal(map.counts.noToken, 1)
+    assert.equal(endpointView(map.areas as { routes: { methods: unknown[]; fallback?: string }[] }[]).counts.routes, 0)
+})
+
+test("every bot route on the generated map without a method says why a bot doesn't need one", () => {
+    // Read from the map the build generates, so a route Fluxer adds after a pin move fails here until it gets a method or a note
+    const generated = JSON.parse(readFileSync(new URL("../content/reference/endpoints.json", import.meta.url), "utf8"))
+    const rows = (generated.areas as { routes: { method: string; path: string; methods: unknown[]; fallback?: string; note?: string }[] }[]).flatMap((area) => area.routes)
+    const unexplained = rows.filter((route) => !route.methods.length && route.fallback === "rest" && !route.note).map((route) => `${route.method} ${route.path}`)
+    assert.deepEqual(unexplained, [])
 })

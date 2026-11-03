@@ -19,7 +19,7 @@ afterEach(() => {
 
 type AnyClient = Client | NativeClient
 // The hosted discovery fixture's gateway endpoint, which saved snapshots must match
-const hostedGateway = "wss://gateway.fluxer.app/?v=1&encoding=json"
+const hostedGateway = "wss://gateway.fluxer.com/?v=1&encoding=json"
 
 /** A session store holding one fresh snapshot for shard zero, or none */
 function store(snapshot: boolean): SessionStore {
@@ -44,7 +44,7 @@ function api(failSecond = false) {
     const guildIds = [fixtures.nextId(), fixtures.nextId()]
     const requests: string[] = []
     stubFetchWithHostedDiscovery(async (url) => {
-        const path = new URL(url).pathname.replace(/^\/v1/u, "")
+        const path = new URL(url).pathname.replace(/^\/api\/v1/u, "")
         requests.push(path)
         const guildId = path.split("/")[2]!
         if (failSecond && guildId === guildIds[1])
@@ -136,7 +136,7 @@ describeBothApis("cache refill after a restored session", (mode) => {
         const listRequests: string[] = []
         const requests: string[] = []
         stubFetchWithHostedDiscovery(async (url) => {
-            const path = new URL(url).pathname.replace(/^\/v1/u, "")
+            const path = new URL(url).pathname.replace(/^\/api\/v1/u, "")
             requests.push(path)
             if (path !== "/users/@me/guilds")
                 return Response.json({ code: "UNKNOWN", message: "Unknown" }, { status: 404 })

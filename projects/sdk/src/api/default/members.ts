@@ -201,6 +201,7 @@ export interface Members {
      * Omitted fields stay unchanged, and null clears an override.
      * An empty input or unknown key fails locally.
      * Fluxer checks permissions and field-specific rate limits.
+     * Changing the bot's own nickname requires ChangeNickname. Without it, Fluxer can return success with the old nickname, so inspect the returned member.
      * Avatar, banner, bio and accentColor can be silently ignored without the community-profile entitlement.
      * The returned member excludes bio and pronouns, so success does not prove those fields were stored.
      * Writes with unknown outcomes or cancellation remove the affected cache entry.
@@ -217,7 +218,8 @@ export interface Members {
      * Otherwise, validation removes U+000C and U+202E, trims surrounding whitespace, and requires 1–32 UTF-16 code units.
      * The original string is sent unchanged.
      * Other profile fields and roles stay unchanged.
-     * Fluxer checks ManageNicknames, role hierarchy and self-target rules.
+     * Changing another member's nickname requires ManageNicknames and a sufficient role position. Changing the bot's own nickname requires ChangeNickname.
+     * Without ChangeNickname, Fluxer can return success with the old nickname, so inspect the returned member.
      * The frozen result follows HTTP, not a gateway event.
      * Shared guild write deadlines and retries apply.
      * Cancellation waits for request cleanup but cannot undo a dispatched change.
@@ -244,7 +246,7 @@ export interface Members {
      * Omit it to move every active connection for that member.
      * Fluxer requires MoveMembers and checks hierarchy, destination visibility and permission to connect.
      * Fluxer refuses a move into an occupied voice channel whose participants all use peer-to-peer voice, and the member stays in its current channel.
-     * The call then fails with reason rejected, HTTP 400 and details.providerCode USER_NOT_IN_VOICE even though the member is in voice.
+     * The call then fails with reason rejected, HTTP 400 and apiError.code userNotInVoice (Fluxer code USER_NOT_IN_VOICE) even though the member is in voice.
      * A retry fails the same way while the destination stays in peer-to-peer mode.
      * The frozen HTTP member result means Fluxer accepted the move, not that the participant has reconnected.
      * A voiceStateUpdate event can first show channelId null, then a new connection ID in the destination.

@@ -27,16 +27,16 @@
 
 /* An API name links to the reference, so it speaks in the reference's violet wherever it stands */
 :is(.docs-prose, .ref) a.peek-api:not(.peek-quiet) {
-    color: var(--peek-violet);
+    color: color-mix(in srgb, var(--peek-violet) 80%, var(--ink-body));
     text-decoration: underline;
     text-decoration-thickness: 1px;
-    text-decoration-color: rgb(165 124 255 / 0.5);
+    text-decoration-color: rgb(165 124 255 / 0.36);
     text-underline-offset: 4px;
 }
 
 :is(.docs-prose, .ref) a.peek-api:not(.peek-quiet) > code {
     color: inherit;
-    background: rgb(165 124 255 / 0.13);
+    background: rgb(165 124 255 / 0.09);
 }
 
 :is(.docs-prose, .ref) a.peek-api:not(.peek-quiet):hover {
@@ -46,7 +46,7 @@
 
 /* A log record, error, HTTP or close code: a mono span on a faint tint, no underline, brighter under the pointer */
 :is(.docs-prose, .ref) a.peek-code:not(.peek-quiet) {
-    color: var(--ink-high);
+    color: var(--ink-soft);
     text-decoration: none;
 }
 
@@ -68,7 +68,7 @@
 :is(.docs-prose, .ref) a.peek-level {
     --level: var(--level-info);
     display: inline-block;
-    padding: 0 0.45em;
+    padding: 0.08em 0.45em;
     font-size: max(0.84em, 15px);
     line-height: 1.5;
     color: var(--level);
@@ -118,7 +118,7 @@ a.peek-level[data-level="fatal"],
     color: inherit;
     text-decoration: underline dotted;
     text-decoration-thickness: 1.5px;
-    text-decoration-color: rgb(255 255 255 / 0.5);
+    text-decoration-color: rgb(255 255 255 / 0.34);
     text-underline-offset: 5px;
 }
 

@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const voice = process.argv[3] === "--voice"
@@ -154,7 +155,7 @@ function verifyMemberFlags(member, rawMember) {
 setTimeout(() => {
     report("process_timeout", { passed: false, cleanExitVerified: false })
     process.exit(1)
-}, 60_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")

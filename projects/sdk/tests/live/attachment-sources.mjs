@@ -15,6 +15,11 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { verifyAttachmentRefresh } from "./attachment-refresh.js"
+import { controlledClock } from "./support/controlled-clock.js"
+import { pacedDeadlineMs } from "./support/watchdogs.js"
+
+/** One media request, or a URL refresh and the request, with paced slots */
+const mediaTimeoutMs = pacedDeadlineMs(60_000, 2)
 
 const chunkBytes = 65_536
 const fileBytes = 3 * chunkBytes
@@ -125,8 +130,12 @@ function matchingPlan(input, init, url, filename, size, id = 0) {
     }
 }
 
-async function waitFor(check, message) {
-    const deadline = performance.now() + 10_000
+/**
+ * Wait for a local condition. `requests` counts the paced requests that start during the wait, so their slots extend
+ * the 10 s deadline. A wait for local counters alone keeps 10 s
+ */
+async function waitFor(check, message, requests = 0) {
+    const deadline = performance.now() + (requests === 0 ? 10_000 : pacedDeadlineMs(10_000, requests))
     while (!check()) {
         assert.ok(performance.now() < deadline, message)
         await sleep(20)
@@ -135,7 +144,10 @@ async function waitFor(check, message) {
 
 async function digestRaw(rawFetch, attachment, size, digest) {
     assert.equal(typeof attachment.url, "string")
-    const response = await rawFetch(attachment.url, { redirect: "error", signal: AbortSignal.timeout(60_000) })
+    const response = await rawFetch(attachment.url, {
+        redirect: "error",
+        signal: AbortSignal.timeout(pacedDeadlineMs(60_000, 1)),
+    })
     assert.ok(response.ok)
     const hash = createHash("sha256")
     let actual = 0
@@ -149,12 +161,12 @@ async function digestRaw(rawFetch, attachment, size, digest) {
 }
 
 async function verifyDownload(ops, rawFetch, attachment, size, digest) {
-    const bytes = await ops.download(attachment, { maxBytes: size, timeoutMs: 60_000 })
+    const bytes = await ops.download(attachment, { maxBytes: size, timeoutMs: mediaTimeoutMs })
     assert.equal(bytes.byteLength, size)
     assert.equal(createHash("sha256").update(bytes).digest("hex"), digest)
     const hash = createHash("sha256")
     let streamed = 0
-    for await (const chunk of ops.stream(attachment, { maxBytes: size, timeoutMs: 60_000 })) {
+    for await (const chunk of ops.stream(attachment, { maxBytes: size, timeoutMs: mediaTimeoutMs })) {
         streamed += chunk.byteLength
         assert.ok(streamed <= size)
         hash.update(chunk)
@@ -165,12 +177,12 @@ async function verifyDownload(ops, rawFetch, attachment, size, digest) {
 }
 
 async function verifyStreamEarlyReturn(ops, attachment, size) {
-    const iterator = ops.stream(attachment, { maxBytes: size, timeoutMs: 60_000 })[Symbol.asyncIterator]()
+    const iterator = ops.stream(attachment, { maxBytes: size, timeoutMs: mediaTimeoutMs })[Symbol.asyncIterator]()
     const first = await iterator.next()
     assert.equal(first.done, false)
     assert.ok(first.value.byteLength > 0)
     await iterator.return()
-    const reused = await ops.download(attachment, { maxBytes: size, timeoutMs: 60_000 })
+    const reused = await ops.download(attachment, { maxBytes: size, timeoutMs: mediaTimeoutMs })
     assert.equal(reused.byteLength, size)
 }
 
@@ -178,7 +190,8 @@ async function sendAndReadback(ops, rawFetch, setStage, report, source, filename
     setStage(`${label}_upload`)
     const sent = await ops.send(
         { attachments: [{ ...source, filename, contentType: "application/octet-stream" }] },
-        { timeoutMs: 120_000 },
+        // A plan, the stream's parts, a completion and the message request, each with a paced slot
+        { timeoutMs: pacedDeadlineMs(120_000, 8) },
     )
     assert.equal(sent.attachments.length, 1)
     const attachment = sent.attachments[0]
@@ -256,7 +269,7 @@ async function verifyCancellation(ops, attachment, size, getFetch, setFetch, set
         controllers.push(first)
         const firstPending = ops.cancelDownload(attachment, size, first.signal)
         pending.push(firstPending)
-        await waitFor(() => delayedPulls === 1, "Delayed attachment reader did not begin")
+        await waitFor(() => delayedPulls === 1, "Delayed attachment reader did not begin", 1)
         first.abort()
         await firstPending
         await waitFor(
@@ -269,7 +282,8 @@ async function verifyCancellation(ops, attachment, size, getFetch, setFetch, set
         controllers.push(...laterControllers)
         const starts = laterControllers.map((controller) => ops.cancelDownload(attachment, size, controller.signal))
         pending.push(...starts)
-        await waitFor(() => delayedPulls === 5, "Cancelled download retained a client HTTP slot")
+        // The four downloads reach the transport one paced slot apart once the SDK releases the first one's slot
+        await waitFor(() => delayedPulls === 5, "Cancelled download retained a client HTTP slot", 4)
         for (const controller of laterControllers) controller.abort()
         await Promise.all(starts)
         await waitFor(
@@ -328,21 +342,78 @@ function sustainedEmptySource(kind) {
     }
 }
 
-async function verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, channelId, setStage, report, kind) {
+/**
+ * Record the rate-limit state Fluxer reports for the channel's message route, so a stage can wait until the route has
+ * room before it starts a deadline that must not include the SDK's wait for that room
+ */
+export function recordMessageBucket(getFetch, setFetch, channelId) {
+    const url = `https://fluxer.com/api/v1/channels/${channelId}/messages`
+    const previous = getFetch()
+    let state
+    setFetch(async (input, init) => {
+        const response = await previous(input, init)
+        const target = requestTarget(input, init)
+        if (target.method === "POST" && target.url.href === url) {
+            const header = (name) => {
+                const text = response.headers.get(name)
+                return text === null ? Number.NaN : Number(text)
+            }
+            const remaining = header("x-ratelimit-remaining")
+            const resetAfter = header("x-ratelimit-reset-after")
+            state =
+                Number.isFinite(remaining) && Number.isFinite(resetAfter)
+                    ? { remaining, until: performance.now() + resetAfter * 1_000 }
+                    : undefined
+        }
+        return response
+    })
+    return {
+        /** Waits until the last reported window of the message route ends, when it had no room left */
+        async waitForRoom() {
+            if (state?.remaining === 0) await sleep(Math.max(0, Math.ceil(state.until - performance.now())))
+        },
+        stop: () => setFetch(previous),
+    }
+}
+
+/**
+ * Sends a message whose only attachment source yields empty reads without end, after a 403 plan rejection moves it
+ * inline, and requires the SDK deadline to end the dispatched request with an unknown outcome and release the source.
+ * The deadline runs on a controlled clock that ends it only after dispatch and sustained empty reads were observed, so
+ * neither the SDK's rate-limit wait nor network setup can use it up
+ */
+export async function verifySustainedEmptyTimeout({
+    ops,
+    getFetch,
+    setFetch,
+    channelId,
+    messageBucket,
+    setStage,
+    report,
+    kind,
+}) {
     const filename = `attachment-${kind}-empty-${randomUUID()}.bin`
-    const planUrl = `https://api.fluxer.app/v1/channels/${channelId}/attachments`
+    const planUrl = `https://fluxer.com/api/v1/channels/${channelId}/attachments`
+    const messageUrl = `https://fluxer.com/api/v1/channels/${channelId}/messages`
     const source = sustainedEmptySource(kind)
+    const timeoutMs = 1_000
+    setStage(`attachment_sources_${kind}_sustained_empty_timeout`)
+    // A route without room would refuse the send unsent, because its wait exceeds the deadline
+    await messageBucket.waitForRoom()
     const previous = getFetch()
     let injected = 0
+    let dispatched = false
     setFetch(async (input, init) => {
+        const target = requestTarget(input, init)
+        if (target.method === "POST" && target.url.href === messageUrl) dispatched = true
         if (!matchingPlan(input, init, planUrl, filename, 1)) return previous(input, init)
         injected += 1
         assert.equal(injected, 1)
         return Response.json({ code: "FEATURE_TEMPORARILY_DISABLED" }, { status: 403 })
     })
+    const clock = controlledClock()
     try {
-        setStage(`attachment_sources_${kind}_sustained_empty_timeout`)
-        const failure = await ops.sendFailure(
+        const sending = ops.sendFailure(
             {
                 attachments: [
                     {
@@ -352,8 +423,22 @@ async function verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, ch
                     },
                 ],
             },
-            { timeoutMs: 1_000 },
+            { timeoutMs },
         )
+        // Until dispatch, SDK time passes only as far as the SDK waits, and never to the deadline
+        let elapsedMs = 0
+        // The message request waits for its paced slot within this guard
+        const hangGuard = performance.now() + pacedDeadlineMs(60_000, 1)
+        while (!dispatched || source.stats().reads < 256) {
+            assert.ok(performance.now() < hangGuard, "The message request was not dispatched with sustained reads")
+            const wake = dispatched ? undefined : clock.nextWakeMs()
+            if (wake !== undefined && elapsedMs + wake < timeoutMs) {
+                clock.advance(wake)
+                elapsedMs += wake
+            } else await sleep(5)
+        }
+        clock.advance(timeoutMs - elapsedMs)
+        const failure = await sending
         const stats = source.stats()
         assert.equal(failure?._tag, "MessageError")
         assert.equal(failure?.reason, "timeout")
@@ -369,8 +454,22 @@ async function verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, ch
         report(`attachment_sources_${kind}_sustained_empty_timeout`, true)
     } finally {
         setFetch(previous)
+        await clock.restore()
     }
+}
 
+async function verifySustainedEmptyFailure(
+    ops,
+    rawFetch,
+    getFetch,
+    setFetch,
+    channelId,
+    messageBucket,
+    setStage,
+    report,
+    kind,
+) {
+    await verifySustainedEmptyTimeout({ ops, getFetch, setFetch, channelId, messageBucket, setStage, report, kind })
     const salt = kind === "stream" ? 53 : 59
     await sendAndReadback(
         ops,
@@ -390,7 +489,7 @@ async function verifyInlineFallback(ops, rawFetch, getFetch, setFetch, channelId
     const bytes = 2 * chunkBytes
     const source = streamSource(bytes, 43)
     const digest = generatedDigest(bytes, 43)
-    const planUrl = `https://api.fluxer.app/v1/channels/${channelId}/attachments`
+    const planUrl = `https://fluxer.com/api/v1/channels/${channelId}/attachments`
     const previous = getFetch()
     let injected = 0
     let selectedFilename = filename
@@ -414,7 +513,7 @@ async function verifyInlineFallback(ops, rawFetch, getFetch, setFetch, channelId
                     },
                 ],
             },
-            { timeoutMs: 60_000 },
+            { timeoutMs: mediaTimeoutMs },
         )
         assert.equal(injected, 1)
         assert.equal(sent.attachments.length, 1)
@@ -463,6 +562,7 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
     const fileSalt = 17
     const fileDigest = generatedDigest(fileBytes, fileSalt)
     const temporary = createOwnedFile(fileBytes, fileSalt)
+    const messageBucket = recordMessageBucket(getFetch, setFetch, channelId)
     try {
         const blob = await openAsBlob(temporary.file)
         assert.equal(blob.size, fileBytes)
@@ -487,7 +587,10 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
         })
 
         setStage("attachment_sources_download_too_small")
-        const tooSmall = await ops.downloadFailure(fileAttachment, { maxBytes: fileBytes - 1, timeoutMs: 60_000 })
+        const tooSmall = await ops.downloadFailure(fileAttachment, {
+            maxBytes: fileBytes - 1,
+            timeoutMs: mediaTimeoutMs,
+        })
         assert.equal(tooSmall?._tag, "AttachmentDownloadError")
         assert.equal(tooSmall?.reason, "tooLarge")
         report("attachment_sources_download_too_small", true)
@@ -496,8 +599,28 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
         report("attachment_sources_stream_early_return_and_slot_reuse", true)
         await verifyCancellation(ops, fileAttachment, fileBytes, getFetch, setFetch, setStage, report)
 
-        await verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, channelId, setStage, report, "stream")
-        await verifySustainedEmptyFailure(ops, rawFetch, getFetch, setFetch, channelId, setStage, report, "file")
+        await verifySustainedEmptyFailure(
+            ops,
+            rawFetch,
+            getFetch,
+            setFetch,
+            channelId,
+            messageBucket,
+            setStage,
+            report,
+            "stream",
+        )
+        await verifySustainedEmptyFailure(
+            ops,
+            rawFetch,
+            getFetch,
+            setFetch,
+            channelId,
+            messageBucket,
+            setStage,
+            report,
+            "file",
+        )
 
         const streamSalt = 29
         const source = streamSource(streamBytes, streamSalt)
@@ -531,6 +654,7 @@ export async function verifyAttachmentSources({ ops, channelId, rawFetch, getFet
 
         await verifyInlineFallback(ops, rawFetch, getFetch, setFetch, channelId, setStage, report)
     } finally {
+        messageBucket.stop()
         cleanupOwnedFile(temporary)
     }
 }

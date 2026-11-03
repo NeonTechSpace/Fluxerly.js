@@ -20,7 +20,7 @@ import { settle } from "../../support/settle.js"
 /** One REST request received by the command fixture */
 export interface RecordedCall {
     readonly method: string
-    /** Path without origin, such as /v1/channels/20/messages */
+    /** Path without origin, such as /api/v1/channels/20/messages */
     readonly path: string
     readonly body: unknown
 }
@@ -55,7 +55,7 @@ export async function commandFixture(route?: Route) {
         calls.push(call)
         const routed = await route?.(call, init)
         if (routed !== undefined) return routed
-        const channel = /^\/v1\/channels\/(\d+)\/messages$/.exec(call.path)?.[1]
+        const channel = /^\/api\/v1\/channels\/(\d+)\/messages$/.exec(call.path)?.[1]
         if (call.method === "POST" && channel !== undefined)
             return Response.json({
                 id: String(++messageIds),
@@ -71,7 +71,7 @@ export async function commandFixture(route?: Route) {
         /** Content of every reply the SDK sent, in order */
         replies: () =>
             calls
-                .filter((call) => call.method === "POST" && /^\/v1\/channels\/\d+\/messages$/.test(call.path))
+                .filter((call) => call.method === "POST" && /^\/api\/v1\/channels\/\d+\/messages$/.test(call.path))
                 .map((call) => (call.body as { content?: string }).content),
         /** Deliver a MESSAGE_CREATE synchronously on the client socket, so consecutive deliveries keep their order */
         deliver(content: string, from: Delivery = {}) {

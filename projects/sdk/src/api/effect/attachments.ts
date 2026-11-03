@@ -71,7 +71,8 @@ export interface Attachments {
      * The GET sends no Authorization header, follows no redirects, caches nothing and never uses proxyUrl.
      * A Content-Length above maxBytes fails before any chunk, but actual byte counting is still enforced
      *
-     * The result can be consumed only once.
+     * The result can be consumed only once, and a second use fails with reason input.
+     * To retry a failed transfer, call stream again for a new stream and discard any partial output.
      * The timeoutMs option defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured, for the whole download, including pauses between chunks.
      * Ending consumption early, cancellation, failure and client shutdown cancel the body, wait for reader cleanup and release the media slot.
      * Expected failures include safe local busy, network, response, limit and deadline reasons and client closure.

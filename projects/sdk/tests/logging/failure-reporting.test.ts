@@ -1,7 +1,8 @@
 import { setImmediate as turn } from "node:timers/promises"
 import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import type { Client, FailureReport } from "../../src/index.js"
+import type { Client, FailureReport, LogRecord } from "../../src/index.js"
+import { createTestClient } from "../../src/testing.js"
 import type { Client as NativeClient } from "../../src/effect.js"
 import { modes, setup, type Mode } from "../support/both-apis.js"
 import { startGatewayServer } from "../support/gateway-server.js"
@@ -16,6 +17,27 @@ afterEach(() => {
 })
 
 type AnyClient = Client | NativeClient
+
+test.each([
+    ["error", 1],
+    ["fatal", 0],
+] as const)(
+    "a failed handler is an Error record, so a sink at level %s receives %i of them",
+    async (level, expected) => {
+        const sunk: LogRecord[] = []
+        const stub = createTestClient({ logging: { level, sink: (record) => void sunk.push(record) } })
+        onTestFinished(() => stub.shutdown())
+        stub.client.on("typingStart", () => {
+            throw new Error("fixture handler failure")
+        })
+        await stub.ready()
+        stub.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 })
+        await stub.idle()
+        expect(sunk.filter(({ code }) => code === "events.handlerFailed")).toHaveLength(expected)
+        // The level only quiets output. The failure still counts for the test either way
+        expect(stub.failures()).toHaveLength(1)
+    },
+)
 
 async function connected(mode: Mode, options: Parameters<typeof setup>[1] = {}) {
     const server = await startGatewayServer()

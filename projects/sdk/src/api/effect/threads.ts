@@ -4,10 +4,12 @@ import type { GuildThreadChannel, ThreadMember, ChannelOperationFailure } from "
 import type { Message, MessageCore, MessageReference } from "#sdk/messages"
 import type { PaginationError } from "#sdk/pagination"
 import type {
+    ArchivedThreadIterationQuery,
     ArchivedThreadPage,
     ArchivedThreadQuery,
     ForumPost,
     ForumPostCreate,
+    ForumPostData,
     ThreadCreate,
     ThreadEdit,
     ThreadFromMessageCreate,
@@ -33,7 +35,7 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
  * In a community whose mfaLevel is GuildMfaLevels.Elevated, an action that needs it fails with apiError.code twoFactorRequired, unless the bot owns the community or its application owner has two-factor authentication enabled.
  * The create, createFromMessage, createPost and edit methods accept AuditedRequestOptions, and the other methods
  * reject auditReason. The fetchActive list enters the enabled channel cache, while archived pages, search results,
- * forum posts and member reads do not. The edit, join, leave, addMember and removeMember methods remove their thread
+ * forum posts, post data and member reads do not. The edit, join, leave, addMember and removeMember methods remove their thread
  * from the enabled channel cache
  *
  * Operation inputs are copied when the Effect executes. Expected failures use ChannelOperationError, whose operation
@@ -128,6 +130,29 @@ export interface Threads<M extends MessageCore = Message> {
         options?: RequestOptions,
     ): Effect.Effect<ArchivedThreadPage, ChannelOperationFailure>
     /**
+     * Read archived threads of a text, announcement, forum or media channel across pages, as threads.fetchArchived
+     * lists them for the chosen scope, buffering one page and never prefetching.
+     * The maxItems option is required. The pageSize option defaults to 50 and accepts 2–100, maxPages defaults to the
+     * pages maxItems needs at pageSize plus 100, and timeoutMs applies to each page.
+     * The SDK chooses each next cursor from the page's last thread: Its archive time for "public" and "private", with
+     * the handling of threads archived in the same millisecond that ArchivedThreadIterationQuery describes, or its ID for
+     * "joinedPrivate". A page whose hasMore is false, or reaching maxItems, ends the scan.
+     * Each thread the bot joined has membership set, and the threads do not enter the channel cache.
+     * Invalid traversal input, a stalled cursor or reaching the page budget fails with PaginationError, and remote
+     * failures keep threads.fetchArchived's errors, such as a missing Manage Threads permission for scope "private".
+     * Each consumption is independent, and client closure releases the page and fails the next pull
+     *
+     * @remarks
+     * The returned Stream reads pages only while it is consumed.
+     * Failures end the Stream in its error channel.
+     * Interruption waits for request cleanup, and ending consumption releases the buffered page
+     */
+    iterateArchived(
+        channelId: string,
+        query: ArchivedThreadIterationQuery,
+        options?: RequestOptions,
+    ): Stream.Stream<GuildThreadChannel, ChannelOperationFailure | PaginationError>
+    /**
      * Search the threads of a text, announcement, forum or media channel by name, tags and state, and return one frozen
      * page. Fluxer requires Read Message History.
      * While Fluxer builds the community's search index it answers HTTP 202 with code SEARCH_INDEX_NOT_READY, which this
@@ -140,6 +165,21 @@ export interface Threads<M extends MessageCore = Message> {
         query?: ThreadSearchQuery,
         options?: RequestOptions,
     ): Effect.Effect<ThreadSearchPage<M>, ChannelOperationFailure>
+    /**
+     * Read the creator and first message of up to 100 posts in a forum or media channel, as one frozen list in the
+     * order of threadIds. Fluxer requires Read Message History.
+     * An ID that is not a post in the channel gives an entry whose owner and firstMessage are null.
+     * Each owner is decoded with the channel's community, which comes from the channel cache when the channel is cached
+     * there, otherwise from one extra channel read that shares the deadline and whose failure fails this read.
+     * It sends a POST that only reads, so it retries transport failures and HTTP 500, 502, 503 or 504 like a read.
+     * An empty list, more than 100 IDs or an ID that is not a decimal string fails with reason input and outcome
+     * notDispatched, without sending anything
+     */
+    fetchPostData(
+        channelId: string,
+        threadIds: readonly string[],
+        options?: RequestOptions,
+    ): Effect.Effect<readonly ForumPostData<M>[], ChannelOperationFailure>
     /**
      * Add the bot to a thread, succeeding with no value after HTTP 204. Joining a thread the bot already belongs to also
      * succeeds. An archived thread cannot be joined, and a locked one needs Manage Threads

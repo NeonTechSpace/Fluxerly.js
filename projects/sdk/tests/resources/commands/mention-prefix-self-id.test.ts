@@ -79,7 +79,7 @@ describe.each(modes)("%s mentionPrefix bot ID", (mode) => {
         let answer!: () => void
         const answered = new Promise<void>((resolve) => (answer = resolve))
         const remote = await commandFixture((call: RecordedCall) => {
-            if (call.path !== "/v1/users/@me") return undefined
+            if (call.path !== "/api/v1/users/@me") return undefined
             selfReads += 1
             // Hold the read open until every mention has arrived
             return answered.then(() => Response.json(botUser))
@@ -115,7 +115,7 @@ describe.each(modes)("%s mentionPrefix bot ID", (mode) => {
         const advance = monotonicOffset()
         let selfReads = 0
         const remote = await commandFixture((call: RecordedCall) => {
-            if (call.path !== "/v1/users/@me") return undefined
+            if (call.path !== "/api/v1/users/@me") return undefined
             selfReads += 1
             return selfReads === 1
                 ? Response.json({ message: "Missing access", code: 50001 }, { status: 403 })

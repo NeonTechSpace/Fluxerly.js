@@ -902,7 +902,7 @@ test("cancels an unread real-fetch 401 response before aborting its controller",
     const order: string[] = []
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         init.signal?.addEventListener("abort", () => order.push("abort"), { once: true })
-        const response = await realFetch(url.replace("https://api.fluxer.app", server.origin), init)
+        const response = await realFetch(url.replace("https://fluxer.com/api", server.origin), init)
         const body = response.body!
         const cancel = body.cancel.bind(body)
         body.cancel = (reason) => {
@@ -978,7 +978,7 @@ test.each(modes)("%s retains a cleanup defect after a successful presigned uploa
         }
     }
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-        "https://api.fluxer.app/v1/channels/20/attachments",
+        "https://fluxer.com/api/v1/channels/20/attachments",
         "https://uploads.fluxer.app/fixture-upload",
     ])
     expect(cancellations).toBe(1)

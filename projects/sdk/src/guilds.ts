@@ -1,12 +1,15 @@
 import type { RequestOptions, AuditedRequestOptions } from "./client.js"
 import type { ClientClosedError } from "./errors.js"
+import type { User } from "./users.js"
 import { operationErrorFields, operationErrorSettings, operationErrorText, type ApiErrorDetail } from "./api-errors.js"
 import { FluxerlyError, type OperationErrorOptions, type OperationOutcome, type OperationReason } from "./errors.js"
 import { freezeInputValidationDetail, type InputValidationDetail } from "./input-validation.js"
 
 /** Identity and settings of a Fluxer guild, the community that owns channels, members and roles.
  * Reads and gateway events return frozen copies that do not update as the community changes.
- * Optional settings may be missing. A missing value is not necessarily the default used when creating a community
+ * Optional settings may be missing. A missing value is not necessarily the default used when creating a community.
+ * Fluxer's disabled_operations and image sizes are not kept. An operation Fluxer has turned off for the community usually
+ * fails with reason rejected and apiError.code featureTemporarilyDisabled. Some, such as typing, succeed without any effect
  *
  * @category Guilds and members
  */
@@ -33,11 +36,17 @@ export interface Guild {
     readonly splashCardAlignment?: GuildSplashCardAlignment
     /** System-message channel ID. Null disables it, omission means unavailable */
     readonly systemChannelId?: string | null
+    /** Rules channel ID. Null means none is set, omission means unavailable */
+    readonly rulesChannelId?: string | null
+    /** Vanity invite code, without the invite host. Null means none is set, omission means unavailable */
+    readonly vanityUrlCode?: string | null
     /** System-message suppression flags, omission means unavailable */
     readonly systemChannelFlags?: number
     /** AFK voice-channel ID. Null disables it, omission means unavailable */
     readonly afkChannelId?: string | null
-    /** Seconds before Fluxer moves inactive voice participants to the AFK channel, omission means unavailable */
+    /** Seconds before Fluxer moves inactive voice participants to the AFK channel, omission means unavailable.
+     * Fluxer names it afk_timeout
+     */
     readonly afkTimeoutSeconds?: number
     /** Default notification level for new members, omission means unavailable */
     readonly defaultMessageNotifications?: GuildDefaultMessageNotification
@@ -57,6 +66,12 @@ export interface Guild {
     readonly mfaLevel?: GuildMfaLevel
     /** Whether Fluxer marks the community as adult content, omission means unavailable */
     readonly nsfw?: boolean
+    /** Fluxer's older age-restriction level, which Fluxer derives from nsfw, omission means unavailable.
+     * The retired levels 1 and 2 decode as AgeRestricted (3) and Safe (0), matching Fluxer's legacy normalization.
+     * Other values make the response malformed
+     * @see https://github.com/fluxerapp/fluxer/blob/5f3fc0b1c66925ab032aa6bb1ef7ab49c1f71c58/packages/constants/src/GuildConstants.ts
+     */
+    readonly nsfwLevel?: GuildNsfwLevel
     /** Whether Fluxer displays a community-wide content warning, omission means unavailable */
     readonly contentWarningLevel?: GuildContentWarningLevel
     /** Custom community-wide warning text. Null restores Fluxer's localized default, omission means unavailable */
@@ -65,6 +80,10 @@ export interface Guild {
     readonly explicitContentFilter?: GuildExplicitContentFilter
     /** ISO 8601 historical-message cutoff. Null disables history for members without Read Message History */
     readonly messageHistoryCutoff?: string | null
+    /** Decimal IDs of the custom badges assigned to the community, omission means unavailable.
+     * Read their names and images with client.instance.fetchBadges
+     */
+    readonly badgeIds?: readonly string[]
 }
 
 /** Gateway notification that a community is no longer visible to this client
@@ -183,6 +202,28 @@ export const GuildMfaLevels: Readonly<{
  * @category Guilds and members
  */
 export type GuildMfaLevel = (typeof GuildMfaLevels)[keyof typeof GuildMfaLevels]
+
+/** Values of Guild.nsfwLevel, Fluxer's older age-restriction level for a community.
+ * Fluxer derives it from Guild.nsfw, so read nsfw for the current setting
+ *
+ * @category Guilds and members
+ */
+export const GuildNsfwLevels: Readonly<{
+    /** The community is not marked as adult content */
+    Safe: 0
+    /** The community is marked as adult content */
+    AgeRestricted: 3
+}> = Object.freeze({
+    Safe: 0,
+    AgeRestricted: 3,
+})
+
+/**
+ * One Fluxer community age-restriction level
+ *
+ * @category Guilds and members
+ */
+export type GuildNsfwLevel = (typeof GuildNsfwLevels)[keyof typeof GuildNsfwLevels]
 
 /**
  * Choose whose uploaded media Fluxer filters for explicit content through GuildEdit.explicitContentFilter
@@ -468,13 +509,20 @@ export interface GuildMember extends MemberReference {
     readonly communicationDisabledUntil?: string | null
     /** Account username */
     readonly username: string
-    /** Omitted upstream bot flags mean false */
+    /** Omitted upstream bot flags mean false. Fluxer sends it as user.bot */
     readonly isBot: boolean
-    /** Roles assigned to this member. The implicit everyone role is not listed and grants are not expanded here */
+    /** The member's public account, as Fluxer sent it with this membership, including the account display name and avatar.
+     * Omitted when Fluxer sent only part of the account, such as the ID and username. The account display name and
+     * avatar can differ from nickname and avatar, which belong to this community
+     */
+    readonly user?: User
+    /** Roles assigned to this member. The implicit everyone role is not listed and grants are not expanded here.
+     * Fluxer names it roles
+     */
     readonly roleIds: readonly string[]
     /** ISO 8601 community join timestamp */
     readonly joinedAt: string
-    /** Community-specific display name. Null means no nickname, omission means unavailable */
+    /** Community-specific display name. Null means no nickname, omission means unavailable. Fluxer names it nick */
     readonly nickname?: string | null
     /** Community avatar hash, preserving absent versus null */
     readonly avatar?: string | null
@@ -484,11 +532,17 @@ export interface GuildMember extends MemberReference {
     readonly accentColor?: number | null
     /** Community-profile bitfield supplied by Fluxer, preserving absent versus null */
     readonly profileFlags?: number | null
-    /** Community reply-mention preference, preserving absent versus null */
+    /** Community reply-mention preference, preserving absent versus null. Also absent when Fluxer sends a value this
+     * SDK version does not know, so a new preference never fails the read
+     */
     readonly mentionFlags?: MemberMentionPreference | null
-    /** Whether Fluxer reports this member as community-muted, omitted when the returned member data excludes voice flags */
+    /** Whether Fluxer reports this member as community-muted, omitted when the returned member data excludes voice flags.
+     * Fluxer names it mute
+     */
     readonly isMuted?: boolean
-    /** Whether Fluxer reports this member as community-deafened, omitted when the returned member data excludes voice flags */
+    /** Whether Fluxer reports this member as community-deafened, omitted when the returned member data excludes voice flags.
+     * Fluxer names it deaf
+     */
     readonly isDeafened?: boolean
 }
 
@@ -501,7 +555,7 @@ export interface GuildMember extends MemberReference {
  *
  * @category Guilds and members
  */
-export interface DeletedMessageMember extends Omit<GuildMember, "username" | "isBot"> {}
+export interface DeletedMessageMember extends Omit<GuildMember, "username" | "isBot" | "user"> {}
 
 /**
  * Known Fluxer community-profile bit flags. Other nonnegative 32-bit bits can be observed for forward compatibility
@@ -557,7 +611,8 @@ export type MemberMentionPreference = (typeof MemberMentionPreferences)[keyof ty
 export interface MemberProfileEdit {
     /** Community nickname, or null to clear. A raw empty string fails. A nonempty string containing only trim whitespace
      * is accepted as Fluxer's clear value. Otherwise, validation removes U+000C and U+202E, trims surrounding
-     * whitespace, and requires 1–32 UTF-16 code units. The original string is sent unchanged
+     * whitespace, and requires 1–32 UTF-16 code units. The original string is sent unchanged.
+     * Fluxer names it nick
      */
     readonly nickname?: string | null
     /** Image data URI, or null to clear. Fluxer validates the decoded image and may silently ignore it */
@@ -710,6 +765,10 @@ export interface GuildBan extends MemberReference {
     readonly username: string
     /** Omitted upstream bot flag means false */
     readonly isBot: boolean
+    /** Public identity of the banned account, with its discriminator and display name for telling accounts with the same
+     * username apart. Absent when Fluxer's account data is incomplete
+     */
+    readonly user?: User
     /** Stored reason, preserving absent versus null */
     readonly reason?: string | null
     /** Decimal user ID of the moderator. "0" is the Fluxer system user, which records a ban that Fluxer staff placed */
@@ -833,7 +892,9 @@ export interface GuildRoleUpdateBulk {
  * Test a grant with (bits & Permissions.SendMessages) === Permissions.SendMessages.
  * Convert bigint to a decimal string before JSON serialization, which cannot serialize bigint directly.
  * These are raw grants, not effective-permission calculations: Hierarchy, channel overwrites and server rules still apply.
- * Unknown unsigned 64-bit bits can be passed explicitly. Fluxer may mask or reject grants
+ * Raw permission reads and checks accept unsigned 64-bit values. Role and channel-overwrite writes accept values from
+ * 0n through 9_223_372_036_854_775_807n, so a calculated owner or administrator mask cannot be written unchanged.
+ * Fluxer may mask or reject grants within that range
  *
  * @category Roles and permissions
  */
@@ -1006,6 +1067,7 @@ export type GuildOperation =
     | `discovery.${"search" | "fetchStatus" | "fetchCategories" | "apply" | "edit" | "withdraw"}`
     | `invites.${"fetch" | "create" | "fetchForChannel" | "fetchForGuild" | "delete"}`
     | `${"emojis" | "stickers"}.${"get" | "fetchAll" | "fetchMetadata" | "fetchSource" | "create" | "createMany" | "clone" | "edit" | "delete"}`
+    | "instance.fetchBadges"
     | "guilds.get"
     | "guilds.edit"
     | "guilds.fetchVanityUrl"

@@ -13,7 +13,7 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Run a first bot that answers !ping](/docs/quick-start/)
 - [Build a bot with commands, a welcome message and clean shutdown](/docs/small-bot/)
 - [Understand clients, events, Results and caches](/docs/core-concepts/)
-- [Run code when the bot is connected](/docs/core-concepts/#events-and-handlers)
+- [Run code when the bot is connected](/docs/starter-lifetime/#run-code-once-the-bot-is-connected)
 - [Copy a complete example bot](/docs/examples/)
 
 ## Messages
@@ -24,6 +24,10 @@ Find a task below and follow its link to the guide section or reference page tha
 - [Send an embed](/docs/messages/#build-an-embed)
 - [Attach or download a file](/docs/messages/#upload-a-small-generated-file)
 - [Send a direct message](/docs/messages/#send-a-requested-direct-message)
+- [Send a voice note](/docs/messages/#mark-media-as-explicit-or-send-a-voice-note)
+- [Start a thread in a channel](/docs/threads/#create-a-thread)
+- [Start a post in a forum channel](/docs/forum-channels/#start-posts)
+- [Publish a message in an announcement channel](/docs/announcement-channels/#send-a-message-then-publish-it)
 - [Add a reaction to a message](/docs/emoji-and-stickers/#find-an-emoji-and-use-it-twice)
 - [Delete a message](/docs/api/js-ts/messages/#messages-delete)
 - [Clear recent messages in a channel](/docs/examples/#moderation-commands)

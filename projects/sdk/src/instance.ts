@@ -47,7 +47,11 @@ export interface InstanceEndpoints {
  * The selected server's service addresses and matching URL helpers.
  * This frozen result is retained for one client, not refreshed on each later resolve.
  * Use assets and links to build URLs for this instance rather than the hosted default.
- * These helpers make no requests, inspect no credentials and do not refresh discovery or change caches
+ * These helpers make no requests, inspect no credentials and do not refresh discovery or change caches.
+ * Built-in badge images and hidden badge kinds from discovery are not kept, because few bots draw community badges.
+ * For discovery fields not included here, read `/.well-known/fluxer` from the selected instance's root with fetch and no Authorization header.
+ * This address is outside `/v1`, so client.rest.request from the [raw-request guide](https://fluxerly.neontechspace.com/docs/raw-requests-and-events/) cannot read it.
+ * Check the response before using it, keep a copy and honor Retry-After
  *
  * @category Client and lifecycle
  */
@@ -60,7 +64,7 @@ export interface ResolvedInstance {
     readonly presignedAttachmentUploads: boolean
     /** Whether this instance has community directory discovery switched on.
      * True when discovery omits the flag, as Fluxer documents. A present value that is not a boolean makes the discovery document invalid.
-     * When false, the discovery namespace's search, apply, edit and withdraw operations fail with reason rejected, HTTP 400 and details.providerCode DISCOVERY_DISABLED, while fetchStatus and fetchCategories still answer.
+     * When false, the discovery namespace's search, apply, edit and withdraw operations fail with reason rejected, HTTP 400 and apiError.code discoveryDisabled (Fluxer code DISCOVERY_DISABLED), while fetchStatus and fetchCategories still answer.
      * The value is a snapshot from when the client resolved the instance, so an operator's later change appears only in a new client
      */
     readonly discoveryEnabled: boolean
@@ -79,7 +83,8 @@ export interface ResolvedInstance {
 }
 
 /** A web domain migration announced by instance discovery, such as hosted Fluxer moving its web app to a new domain.
- * The SDK records an enabled migration at Info when a client first resolves the instance. It changes no endpoint itself
+ * A bot client records an enabled migration at Info when it first resolves the instance. Webhook and OAuth clients do not
+ * log it. It changes no endpoint itself
  *
  * @category Client and lifecycle
  */
@@ -103,3 +108,65 @@ export type InstanceResolveError =
     | import("./errors.js").RateLimitError
     | import("./errors.js").ClientClosedError
     | import("./errors.js").ConfigurationError
+
+/** Select community badges for client.instance.fetchBadges: Either up to 100 badge IDs, such as a Guild's badgeIds,
+ * or one page of every community badge on the instance. Unknown keys and invalid values fail locally.
+ * The query accepts only ids, after and limit. To send the catalog's version field, use client.rest.request with GET /instance/badges and query.version
+ *
+ * @category Client and lifecycle
+ */
+export type InstanceBadgeQuery = InstanceBadgeLookup | InstanceBadgePageQuery
+
+/** Look up specific community badges by ID
+ *
+ * @category Client and lifecycle
+ */
+export interface InstanceBadgeLookup {
+    /** 1 through 100 decimal badge IDs. Fluxer leaves out unknown and deleted IDs */
+    readonly ids: readonly string[]
+}
+
+/** Read one page of every community badge on the instance, in display order
+ *
+ * @category Client and lifecycle
+ */
+export interface InstanceBadgePageQuery {
+    /** The nextAfter value of the previous page. Omit it for the first page */
+    readonly after?: string
+    /** Maximum badges in the page, an integer from 1 through 200, default 100 */
+    readonly limit?: number
+}
+
+/** One custom badge that communities on the instance can show. The badge is frozen
+ *
+ * @category Client and lifecycle
+ */
+export interface InstanceBadge {
+    /** Decimal badge ID, as listed in Guild.badgeIds */
+    readonly id: string
+    /** Badge name */
+    readonly name: string
+    /** Text shown under the name, null when the badge has none */
+    readonly description: string | null
+    /** URL of the badge image */
+    readonly assetUrl: string
+    /** URL the badge links to, null when it links nowhere */
+    readonly href: string | null
+    /** Display position as a decimal string. Badges are shown in ascending order of this value */
+    readonly position: string
+}
+
+/** One frozen page of community badges from client.instance.fetchBadges
+ *
+ * @category Client and lifecycle
+ */
+export interface InstanceBadgePage {
+    /** Version of the instance's badge list. It changes whenever a badge is created, edited, deleted or moved,
+     * so badges kept under the same version are still current
+     */
+    readonly version: string
+    /** The badges in display order */
+    readonly badges: readonly InstanceBadge[]
+    /** Pass as after to read the next page. Null on the last page and for a lookup by ids */
+    readonly nextAfter: string | null
+}

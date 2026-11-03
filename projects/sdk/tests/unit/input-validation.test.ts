@@ -291,7 +291,7 @@ test.each(modes)("%s attachment download owner attributes an invalid byte bound 
         filename: "fixture.bin",
         size: 1,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/30/fixture.bin",
+        url: "https://fluxerusercontent.com/attachments/20/30/fixture.bin",
     }
     const failure = defaultApi
         ? await expectErr(defaultApi.attachments.download(attachment, { maxBytes: 0 }))

@@ -472,7 +472,7 @@ test("Uploaded identity mismatches and provider terminal failure are never accep
     ]
     for (const value of deployments) {
         const { io, calls } = fixture({ deployment: () => value })
-        await assert.rejects(deploySite(env, io), /identity|failed or was canceled/)
+        await assert.rejects(deploySite(env, io), /identity does not match|failed or was canceled\. Inspect/)
         assert.equal(calls.filter(([kind]) => kind === "upload").length, 1)
         assert.equal(calls.filter(([kind]) => kind === "sleep").length, 0)
     }
@@ -506,7 +506,7 @@ test("Stale source, a page closed to search engines and a nonpublic hostname rem
         { latestLocation: "/docs/latest/" },
     ]) {
         const { io, calls, reads } = fixture(options)
-        await assert.rejects(deploySite(env, io), /did not converge.*reconcile/)
+        await assert.rejects(deploySite(env, io), /did not converge for deployment \S+\. Reconcile/)
         // Readback keeps polling instead of failing on the first unconverged read
         assert.ok(reads() > 1)
         assert.equal(calls.filter(([kind]) => kind === "upload").length, 1)
@@ -521,7 +521,7 @@ test("Stale source, a page closed to search engines and a nonpublic hostname rem
 
 test("Unknown upload acknowledgement does not retry, and excessive read delay exhausts the deadline", async () => {
     const failure = fixture({ uploadId: "unknown" })
-    await assert.rejects(deploySite(env, failure.io), /identity is unknown.*reconcile/)
+    await assert.rejects(deploySite(env, failure.io), /identity is unknown\. Reconcile/)
     assert.equal(failure.calls.filter(([kind]) => kind === "upload").length, 1)
     assert.equal(failure.reads(), 0)
     const providerBody = `provider body ${env.CLOUDFLARE_API_TOKEN}`
@@ -529,7 +529,7 @@ test("Unknown upload acknowledgement does not retry, and excessive read delay ex
     const messages = []
     lost.io.progress = (message) => messages.push(message)
     await assert.rejects(deploySite(env, lost.io), (error) =>
-        /outcome is unknown/.test(error.message) && !error.message.includes(providerBody))
+        /outcome is unknown\. Reconcile/.test(error.message) && !error.message.includes(providerBody))
     assert.ok(messages.every((message) => !message.includes(providerBody)))
     assert.equal(lost.calls.filter(([kind]) => kind === "upload").length, 1)
     assert.equal(lost.reads(), 0)

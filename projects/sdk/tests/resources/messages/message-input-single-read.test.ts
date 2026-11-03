@@ -25,7 +25,7 @@ function recordSends() {
     const fetch = stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const path = new URL(url).pathname
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        if (path === "/v1/users/@me/channels")
+        if (path === "/api/v1/users/@me/channels")
             return Response.json({
                 id: "301",
                 type: 1,
@@ -42,7 +42,7 @@ function recordSends() {
                 ],
             })
         bodies.push({ method: init.method ?? "GET", path, body })
-        return Response.json(messageWire({ channel_id: path.split("/")[3], webhook_id: "100" }))
+        return Response.json(messageWire({ channel_id: path.split("/")[4], webhook_id: "100" }))
     })
     return { bodies, fetch }
 }

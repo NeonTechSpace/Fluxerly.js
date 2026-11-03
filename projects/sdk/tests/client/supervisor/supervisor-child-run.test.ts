@@ -105,6 +105,29 @@ test.each(["default", "native"] as const)(
     },
 )
 
+test.each(["default", "native"] as const)(
+    "%s child.run adds clientOptions.sharding.refillCaches to the assigned shards, with or without sessions",
+    async (mode) => {
+        for (const sharding of [{ sessions, refillCaches: false }, { refillCaches: false }]) {
+            const bridge = controlledBridge()
+            const created: Record<string, unknown>[] = []
+            const options = { token: "fixture-only-not-a-credential", clientOptions: { sharding } }
+            let running: Promise<unknown>
+            if (mode === "default") {
+                const child = await defaultChild(bridge, created)
+                running = Promise.resolve(child.run({ ...options, configure: () => undefined }))
+            } else {
+                const child = await nativeChild(bridge, created)
+                running = Effect.runPromiseExit(child.run({ ...options, configure: () => Effect.void }))
+            }
+            await vi.waitFor(() => expect(created).toHaveLength(1))
+            expect(created[0]!.sharding).toEqual({ totalShards: 1, shardIds: [0], ...sharding })
+            bridge.stop()
+            await running
+        }
+    },
+)
+
 const forwarded = {
     messageFields: ["content"],
     instance: { url: "https://fluxer.example.invalid" },

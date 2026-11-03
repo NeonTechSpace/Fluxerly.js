@@ -21,7 +21,7 @@ const accent = "violet"
         <Fragment slot="title">History Without the Gateway</Fragment>
         <Fragment slot="text">
             <p>Reading earlier messages is a request to Fluxer, so it works without the gateway connection. <code class="inline-code">iterateHistory</code> reads newest first and asks for the next page only when the loop needs it, within the <code class="inline-code">maxItems</code> bound you set</p>
-            <p>When the text is known, <code class="inline-code">search</code> asks Fluxer's search index for a page of results. While Fluxer is still preparing that index, the helper returns <code class="inline-code">undefined</code> instead of an empty answer that looks final</p>
+            <p>When the text is known, <code class="inline-code">search</code> asks Fluxer's search index for a page of results. While Fluxer is still preparing that index, <code class="inline-code">search</code> returns a page with <code class="inline-code">indexing</code> set to true, and this helper returns <code class="inline-code">undefined</code> for it instead of an empty answer that looks final</p>
         </Fragment>
         <CodePanel file="TypeScript" label="Scan recent messages for one that matches" code={iterateHistory} />
         <CodePanel file="TypeScript" label="Search the message index" code={searchIndex} />
@@ -49,7 +49,7 @@ const accent = "violet"
     <Scene id="collect" step={4} side="right" {accent} guide={guide("events-and-collectors", "ask-a-question-without-missing-a-fast-reply")} guideLabel="Events and Collectors">
         <Fragment slot="title">Ask, Then Collect the Answer</Fragment>
         <Fragment slot="text">
-            <p><code class="inline-code">waitFor</code> returns the next matching event, or a failed Result if none arrives within <code class="inline-code">timeoutMs</code>, 30 seconds by default. A collector gathers matching messages or reactions for a limited time, and created before the question is sent, it cannot miss a fast reply</p>
+            <p><code class="inline-code">waitFor</code> returns the next matching event, or a failed Result if none arrives within <code class="inline-code">timeoutMs</code>, 30 seconds by default. A collector gathers matching messages or reactions for a limited time, and created before the question is sent, it cannot miss a fast reply. When the time runs out, a collector succeeds with what it gathered, which may be nothing</p>
             <p><code class="inline-code">await using</code> closes the collector when the helper returns or throws, and waits for its cleanup. A lost connection fails the collection instead of returning answers that may be incomplete</p>
         </Fragment>
         <CodePanel file="TypeScript" label="Ask a question and collect one reply" code={askName} />

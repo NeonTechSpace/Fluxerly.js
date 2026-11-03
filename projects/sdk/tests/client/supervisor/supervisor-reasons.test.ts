@@ -99,6 +99,10 @@ async function managed(mode: Mode, options: Partial<SupervisorOptions>) {
                 const result = await created.waitForClose()
                 return result.isErr() ? result.error : undefined
             },
+            ready: async () => {
+                const result = await created.waitForReady()
+                return result.isErr() ? result.error : undefined
+            },
             status: (): SupervisorStatus => created.status(),
         }
     }
@@ -115,6 +119,7 @@ async function managed(mode: Mode, options: Partial<SupervisorOptions>) {
         start: () => failure(created.start()),
         shutdown: () => Effect.runPromise(created.shutdown()),
         closed: () => failure(created.waitForClose()),
+        ready: () => failure(created.waitForReady()),
         status: (): SupervisorStatus => created.status(),
     }
 }
@@ -274,8 +279,20 @@ test.each(modes)("%s keeps the error of a failed message send to a child in its 
     const logs = captureLogs()
     scriptedChild({ failSend: "assignment" })
     const workers = await managed(mode, { logging: logs.logging })
-    expect(await workers.start()).toMatchObject({ _tag: "SupervisorError", reason: "spawn" })
+    const failure = await workers.start()
+    expect(failure).toMatchObject({ _tag: "SupervisorError", reason: "spawn" })
+    // A send failure is not a bad entry path, so the hint covers it too
+    expect(failure?.hint).toMatch(/message failure/)
     expect(logs.withCode("supervisor.spawnFailed")).toEqual([
         expect.objectContaining({ level: "error", error: expect.objectContaining({ message: "fixture IPC failure" }) }),
     ])
+})
+
+// Waiting before start is a usage mistake that a new supervisor would repeat, so the hint names start
+test.each(modes)("%s waitForReady before start points to start", async (mode) => {
+    const workers = await managed(mode, {})
+    const failure = await workers.ready()
+    expect(failure).toMatchObject({ _tag: "SupervisorError", reason: "closed", childId: null })
+    expect(failure?.hint).toMatch(/call start/i)
+    expect(fork).not.toHaveBeenCalled()
 })

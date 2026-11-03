@@ -15,8 +15,11 @@ import CourseState from "../components/docs/CourseState.astro"
 import DocsSearch from "../islands/DocsSearch"
 import { completeDescription, docsPageTitle, openingParagraphs } from "../lib/docs-meta"
 import { docsIcons, iconSrc } from "../lib/art"
+import { aliasKey } from "../lib/docs-search"
 import { docsCourse, guideGroup, type NavItem, type TocItem } from "../lib/docs-nav"
 import { docsTitleQualifier } from "../lib/docs-titles"
+import { endpoints } from "../lib/endpoints"
+import { fluxerPinOf } from "../lib/fluxer-pin"
 import { breadcrumbs } from "../lib/seo"
 import { seededRandom } from "../lib/stars"
 import { identifierHtml } from "../../scripts/docs/code-breaks.mjs"
@@ -32,9 +35,11 @@ interface Props {
     crumbs?: { title: string; href: string }[]
     // What search shows when it should differ from the visible lead, such as a reference entry's first sentence
     searchDescription?: string
+    // Other words readers use for the page's topic, which search reads as it reads the title
+    searchTerms?: string[]
 }
 
-const { title, description, section, current, toc, crumbs, searchDescription } = Astro.props
+const { title, description, section, current, toc, crumbs, searchDescription, searchTerms } = Astro.props
 
 // Guides in cyan, reference in violet: what you do, then what the SDK knows
 const parts = await docsCourse(current, section)
@@ -53,6 +58,8 @@ const slug = current.replace(/^\/docs\/|\/$/g, "") || "index"
 // The page's icon beside its title. Every page of the API reference shares the book
 const icon = docsIcons[slug] ?? (section === "reference" ? docsIcons.api : undefined)
 const searchGroup = section === "guides" ? (guideGroup(slug) ?? "Guides") : section === "codes" ? "Error and log codes" : "API reference"
+// Search asks the codes page alone for a pasted code, which other pages that use the same words may push out of its results
+const searchFilter = section === "codes" ? "page:codes" : undefined
 
 // Crystal bubbles drifting up through the water, the ones from the sea floor at the end of the main pages, slower and fainter. Each
 // takes a whole number of turns in the hour the night's clock runs on, so it has no seam
@@ -74,6 +81,8 @@ const docsBase = import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"
 const olderVersions: { label: string; version: string; base: string }[] = JSON.parse(process.env.DOCS_OLDER_VERSIONS ?? "[]")
 const allVersions = [...docsVersions, ...olderVersions]
 const currentVersion = allVersions.find((version) => version.base === docsBase)
+// The Fluxer commit this version's docs were checked against, from its own endpoint map
+const fluxerPin = fluxerPinOf(endpoints.source)
 
 // The page renders first, so a short description can go on in the page's own words
 const article = await Astro.slots.render("default")
@@ -107,6 +116,7 @@ const trail = breadcrumbs([
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={[trail]} />
         {markdownUrl && <link rel="alternate" type="text/markdown" href={markdownUrl} title="This page as Markdown" />}
+        <link rel="alternate" type="text/plain" href={`${docsBase}llms.txt`} title="Docs index for AI tools" />
         <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
         <!-- The package manager and code language chosen earlier apply before the first paint -->
         <script is:inline>
@@ -206,6 +216,16 @@ const trail = breadcrumbs([
                         </p>
                     )
                 }
+                {
+                    fluxerPin && (
+                        <p class="fluxer-pin" data-pagefind-ignore>
+                            Checked against Fluxer{" "}
+                            <a href={fluxerPin.url} target="_blank" rel="noopener" data-fluxer-pin={fluxerPin.commit}>
+                                {fluxerPin.short}
+                            </a>
+                        </p>
+                    )
+                }
                 <Course parts={parts} />
                 <span id="docs-side-end" hidden></span>
             </aside>
@@ -268,7 +288,9 @@ const trail = breadcrumbs([
                     )
                 }
 
-                <article class="docs-article" data-pagefind-body data-pagefind-meta={`group:${searchGroup}`}>
+                <article class="docs-article" data-pagefind-body data-pagefind-meta={`group:${searchGroup}`} data-pagefind-filter={searchFilter}>
+                    {searchTerms?.length ? <span hidden data-pagefind-meta="search[data-search]" data-search={searchTerms.join(", ")} /> : null}
+                    {searchTerms?.map((term) => <span hidden data-pagefind-filter="alias[data-alias]" data-alias={aliasKey(term)} />)}
                     {
                         crumbs?.length ? (
                             <nav class="crumbs" aria-label="Breadcrumbs" data-pagefind-ignore>

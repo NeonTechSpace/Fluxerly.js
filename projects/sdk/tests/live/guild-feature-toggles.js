@@ -14,8 +14,9 @@ import {
     openJournal,
     verifySandboxIdentity,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
@@ -104,7 +105,7 @@ async function edit(selected, check, loseResponse = false) {
     if (loseResponse) {
         globalThis.fetch = async (url, init) => {
             const response = await rawFetch(url, init)
-            if (String(url) === `https://api.fluxer.app/v1/guilds/${guildId}` && init?.method === "PATCH") {
+            if (String(url) === `https://fluxer.com/api/v1/guilds/${guildId}` && init?.method === "PATCH") {
                 attempts++
                 await response.arrayBuffer()
                 assert.equal(response.status, 200)
@@ -139,7 +140,7 @@ async function edit(selected, check, loseResponse = false) {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: Boolean(journal) }))
     process.exit(1)
-}, 180_000).unref()
+}, harnessWatchdogMs()).unref()
 try {
     lock = acquireLock()
     const sandbox = loadSandboxEnvironment()
@@ -155,6 +156,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         const options = { token, cache: { guilds: true } }

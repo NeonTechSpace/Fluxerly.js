@@ -8,12 +8,17 @@ import Depth from "./Depth.astro"
 import { iconSrc, type IconName } from "../../lib/art"
 import { links } from "../../lib/links"
 
-// NeonFlux changes on its own schedule, so nothing here quotes it: the channels are examples of what it does, the counts
-// are rounded down and the code is the SDK's own sample, which the site keeps working
+// NeonFlux changes on its own schedule. The channels are examples with made-up members that say what its real replies
+// say, shortened to read at a glance, the counts are rounded down and the code is the SDK's own sample, which the site
+// keeps working
 
 type Card = {
+    // The name above the title, such as the member who posted a showcase
+    author?: string
     title: string
     description?: string
+    // Web addresses the bot puts under the description, which Fluxer shows as links
+    links?: string[]
     fields?: [string, string][]
     note?: string
     // A member's own color on the card
@@ -36,7 +41,7 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
                 from: "page",
                 card: {
                     title: "Pick one colour",
-                    description: "Claim a role here, and drop it any time",
+                    description: "Members can claim and drop roles from the menus while the role picker is available",
                     options: [
                         { label: "Red" },
                         { label: "Blue", mine: true },
@@ -50,7 +55,7 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
     {
         id: "profiles",
         tab: "Profiles",
-        hint: "Every member's page",
+        hint: "Member profiles",
         icon: "star-drop",
         channel: "general",
         messages: [
@@ -60,11 +65,11 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
                 card: {
                     title: "Riley",
                     description: "Draws pixel towns and runs the Friday game night",
+                    links: ["https://riley.art/"],
                     accent: "#ecc46e",
                     fields: [
-                        ["Rank", "Level 6, rank #7"],
+                        ["Level", "Level 6, rank #7"],
                         ["Birthday", "March 3"],
-                        ["Links", "riley.art"],
                     ],
                 },
             },
@@ -80,10 +85,10 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
             {
                 from: "bot",
                 card: {
+                    author: "Riley",
                     title: "Pocket Toolbox",
                     description: "A little painted toolbox, made over one long weekend",
                     picture: "toolbox",
-                    fields: [["By", "Riley"]],
                 },
             },
         ],
@@ -96,7 +101,7 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
         channel: "general",
         messages: [
             { from: "you", text: "!pign" },
-            { from: "bot", text: "That's close to !ping. Send !help to see what I can do" },
+            { from: "bot", text: "Did you mean !ping? Send !help to list the commands you can use" },
             { from: "you", text: "!ping" },
             { from: "bot", text: "Pong!" },
         ],
@@ -104,7 +109,7 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
     {
         id: "moderation",
         tab: "Moderation",
-        hint: "Keeps every case",
+        hint: "Records moderation cases",
         icon: "guard-shield",
         channel: "staff",
         messages: [
@@ -112,11 +117,10 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
             {
                 from: "bot",
                 card: {
-                    title: "Warning for @Sam",
-                    description: "Spamming links",
+                    title: "Case #12: Warning of @Sam",
                     fields: [
-                        ["Case", "#12"],
-                        ["Staff", "@Riley"],
+                        ["Result", "Succeeded"],
+                        ["Member", "Notified by DM"],
                     ],
                 },
             },
@@ -129,9 +133,9 @@ const scenes: { id: string; tab: string; hint: string; icon: IconName; channel: 
         icon: "support-lifebuoy",
         channel: "direct message",
         messages: [
-            { from: "bot", text: "What do you need help with? Only the team will see this" },
+            { from: "bot", text: "Question 1 of 1: What do you need help with?" },
             { from: "you", text: "My role panel stopped working" },
-            { from: "bot", text: "Got it. Reply send and I'll open your ticket" },
+            { from: "bot", text: "1 of 1 answered. Reply send to open a private ticket" },
         ],
     },
 ]
@@ -160,14 +164,14 @@ const proofs = [
     },
     {
         title: "A Failed Job Stays Contained",
-        text: "A job that fails is logged and the worker waits for the next one, so one bad job never takes the bot down",
+        text: "Workers catch failures so later work can continue, with failed work logged or recorded when possible",
     },
     {
         title: "Failures Have Names",
-        text: "Effect keeps failures in the types, so each one gets its own plain reply instead of a crash",
+        text: "Typed failures let command handlers choose clear replies, while background failures are logged or recorded",
     },
     {
-        title: "Every Answer Is Checked",
+        title: "Backend Data Is Checked",
         text: "Answers from its backend are decoded with Effect Schema before the bot uses them",
     },
 ]
@@ -250,8 +254,10 @@ const proofs = [
                                                         <span class="text">{message.text}</span>
                                                     ) : (
                                                         <div class="card" style={message.card.accent ? `--card-accent: ${message.card.accent}` : undefined}>
+                                                            {message.card.author && <span class="card-author">{message.card.author}</span>}
                                                             <strong class="card-title">{message.card.title}</strong>
                                                             {message.card.description && <p>{message.card.description}</p>}
+                                                            {message.card.links?.map((link) => <p class="card-link">{link}</p>)}
                                                             {message.card.picture && <img class="card-picture" src={iconSrc(message.card.picture, 320)} alt="" width="320" height="320" loading="lazy" decoding="async" />}
                                                             {message.card.fields && (
                                                                 <dl>
@@ -331,7 +337,7 @@ const proofs = [
             <li class="dashboard">
                 <img src={iconSrc("data-database", 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                 <h3>A Dashboard That Stays Live</h3>
-                <p>Forms update as the data changes, a change made elsewhere never overwrites your draft, and the audit log records every setting change</p>
+                <p>Forms follow live data, keep unsaved drafts during remote changes, and record configuration changes in the audit log</p>
             </li>
         </ul>
 
@@ -805,6 +811,23 @@ const proofs = [
         margin: 4px 0 0;
         font-size: var(--type-body);
         color: var(--color-muted);
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+    }
+
+    /* A web address in the bot's post, in the link color Fluxer gives it. Only an example, so nothing to follow */
+    .card .card-link {
+        margin-top: 12px;
+        color: var(--color-info);
+    }
+
+    /* The poster's name sits above the title, as on the bot's real post */
+    .card-author {
+        display: block;
+        margin-bottom: 4px;
+        font-size: var(--type-small);
+        font-weight: var(--weight-semibold);
+        color: var(--color-ink);
     }
 
     .card dl {

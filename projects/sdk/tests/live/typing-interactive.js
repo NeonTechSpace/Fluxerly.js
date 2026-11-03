@@ -14,8 +14,9 @@ import {
     openJournal,
     processValue,
 } from "./support/harness.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const journalFile = openJournal("typing")
 const rawFetch = globalThis.fetch
@@ -134,7 +135,7 @@ async function runMode(channel) {
         }
         globalThis.fetch = async (request, options) => {
             const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
-            if (url.pathname !== `/v1/channels/${channel.id}/typing`) return rawFetch(request, options)
+            if (url.pathname !== `/api/v1/channels/${channel.id}/typing`) return rawFetch(request, options)
             assert.equal(options?.method, "POST")
             assert.equal(options.body, undefined)
             const now = performance.now()
@@ -154,7 +155,8 @@ async function runMode(channel) {
                 guildId,
                 confirmCommand: `visible ${mode}`,
             })
-            const deadline = performance.now() + 180_000
+            // The person's three minutes, plus the paced slots of up to 23 refreshes sent meanwhile
+            const deadline = performance.now() + pacedDeadlineMs(180_000, 23)
             while (!(received && confirmedMode === mode && typingRequests >= 2)) {
                 assert.ok(!stopped && !handlerFailed && client.state === "Connected" && performance.now() < deadline)
                 await sleep(25, undefined, { signal })
@@ -197,7 +199,7 @@ async function runMode(channel) {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, check: stage, passed: false, reason: "deadline", cleanupVerified: false }))
     process.exit(1)
-}, 480_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.equal(process.argv.length, 2)
@@ -225,6 +227,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { kind: "interactive-typing", guildId, botId }

@@ -112,8 +112,9 @@ export interface SupervisorIdentifyOptions {
  * Default-API creation runs immediately. Native creation copies settings when its Effect runs.
  *
  * Choose the child processes with exactly one of assignments, processes or shardsPerProcess.
- * With processes or shardsPerProcess the supervisor splits the shards into contiguous blocks of almost equal size, one
- * block per child, and names the children process-0, process-1 and so on.
+ * With processes, the supervisor divides shards into contiguous blocks whose sizes differ by at most one. With
+ * shardsPerProcess, each child owns that many consecutive shards and the last owns the remainder. Children are named
+ * process-0, process-1 and so on.
  * With totalShards set to "auto" the supervisor sizes the plan at start as a client with sharding "auto" does, from the
  * number of communities the bot is in. Communities are what the API calls guilds.
  * Assignments stay fixed across replacements. Without an identify coordinator, this supervisor does not coordinate other parents.
@@ -174,6 +175,7 @@ export interface SupervisorOptions {
     readonly diagnosticsIntervalMs?: number
     /** Time allowed for each child to receive its assignment and finish configure, in milliseconds, including replacement children.
      * This does not wait for the gateway READY event that establishes a connected session.
+     * The parent's Identify queue counts against each child's connection.startupTimeoutMs instead. With many shards, set it in the child's clientOptions to at least 30,000 ms plus the total shard count times identify.minimumSpacingMs.
      * With totalShards "auto" the community count before the first child starts has its own deadline of the same length.
      * A positive safe integer no greater than 2,147,483,647. Timeout fails the supervisor, which stops its children and awaits their exit
      * @defaultValue 30000
@@ -238,12 +240,18 @@ export interface SupervisorOptions {
 export interface SupervisorChildSharding {
     /**
      * Keep this child's resumable sessions across process restarts, as the client option sharding.sessions does.
-     * A deploy that stops the supervisor and starts it again within Fluxer's 60-second resume window then resumes each
-     * shard instead of starting a new session. Resumable snapshots are saved only when the child shuts down normally, so a
+     * A deploy that stops the supervisor and starts it again within Fluxer's 60-second resume window can then resume each
+     * shard instead of starting a new session, as long as the shard count and gateway stay the same. Resumable snapshots are saved only when the child shuts down normally, so a
      * restart after a crash starts new sessions. The child saves while it shuts down, so saves must finish within the
      * supervisor option shutdownTimeoutMs, after which the parent force-terminates the child. See SessionStore
      */
     readonly sessions?: SessionStore
+    /**
+     * Whether a shard that resumes a session loaded from sessions refills the enabled caches through REST, default true.
+     * See the client option sharding.refillCaches
+     * @defaultValue true
+     */
+    readonly refillCaches?: boolean
 }
 
 /**
@@ -359,7 +367,7 @@ export class SupervisorError extends FluxerlyError {
         const child = childId === null ? "A supervisor child" : `Supervisor child ${JSON.stringify(childId)}`
         super(
             childId === null && reason === "closed"
-                ? "The supervisor is closed"
+                ? "The supervisor is not running"
                 : reason === "shardCount"
                   ? `The supervisor ${supervisorFailures.shardCount.text}`
                   : `${child} ${supervisorFailures[reason].text}`,
@@ -367,7 +375,7 @@ export class SupervisorError extends FluxerlyError {
                 code: `supervisor.${reason}`,
                 hint:
                     childId === null && reason === "closed"
-                        ? "Create a new supervisor to start again"
+                        ? "Call start first if this supervisor has not started. A supervisor that already stopped cannot start again, so create a new one"
                         : supervisorFailures[reason].hint,
                 cause: options?.cause,
                 details: operationDetails({ childId, reason }),
@@ -385,7 +393,7 @@ const supervisorFailures: Record<SupervisorError["reason"], { readonly text: str
     },
     spawn: {
         text: "could not be started, or the supervisor could not send it a message",
-        hint: "Check that entry points to a file Node can run. The cause holds the operating-system error",
+        hint: "For a start failure, check that entry points to a file Node can run. For a message failure, read the child's earlier output and log records. The cause holds the operating-system error when there is one",
     },
     protocol: {
         text: "sent invalid coordination messages to the supervisor",

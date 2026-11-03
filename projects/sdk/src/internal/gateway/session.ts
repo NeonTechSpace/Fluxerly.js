@@ -80,17 +80,41 @@ export class AttemptFailure {
         readonly end: AttemptEnd = "network",
         /** WebSocket close code when the attempt ended with a gateway closure */
         readonly closeCode?: number,
+        /** The closure's reason text, cleaned and bounded by closeReasonText, for logs only */
+        readonly closeReason?: string,
     ) {}
+}
+
+/** Most UTF-16 code units of a close reason kept for logs. A close frame carries at most 123 bytes of reason */
+const maxCloseReasonLength = 123
+
+/**
+ * A close frame's reason as one line of log text, or undefined when there is none. Control and format characters
+ * become spaces, so a reason cannot start a new log line or reorder the text around it. Retry policy never reads it
+ */
+export function closeReasonText(reason: unknown): string | undefined {
+    const text =
+        typeof reason === "string"
+            ? reason
+            : reason instanceof Uint8Array
+              ? new TextDecoder().decode(reason)
+              : undefined
+    if (text === undefined) return undefined
+    const clean = text.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim()
+    // oxlint-disable-next-line typescript/no-misused-spread -- keep whole code points when shortening
+    const bounded = clean.length > maxCloseReasonLength ? [...clean].slice(0, maxCloseReasonLength).join("") : clean
+    return bounded === "" ? undefined : bounded
 }
 
 /** Classify a gateway close through the reviewed close-code table. Unlisted codes enter recovery.
  * The resuming flag says whether the closed attempt was still resuming, which is when an identify action discards the session
  */
-export function classifyClose(code: number, resuming: boolean): AttemptFailure {
+export function classifyClose(code: number, resuming: boolean, reason?: string): AttemptFailure {
     if (code === CloseCode.authenticationFailed)
-        return new AttemptFailure(new AuthenticationError(), false, false, "closed", code)
+        return new AttemptFailure(new AuthenticationError(), false, false, "closed", code, reason)
     const { action } = closeCodeInfo(code)
-    if (action === "wait") return new AttemptFailure(new RateLimitError("gateway", null), true, false, "closed", code)
+    if (action === "wait")
+        return new AttemptFailure(new RateLimitError("gateway", null), true, false, "closed", code, reason)
     const permanent = action === "fatal"
     return new AttemptFailure(
         new ConnectionError("gateway", permanent ? "protocol" : "closed", code),
@@ -98,6 +122,7 @@ export function classifyClose(code: number, resuming: boolean): AttemptFailure {
         action === "identify" && resuming,
         "closed",
         code,
+        reason,
     )
 }
 
@@ -141,6 +166,11 @@ export interface GatewaySessionOptions<M extends MessageCore> {
      * decoded-event subscribers
      */
     readonly onRaw?: ((type: string, sequence: number, body: unknown, bytes: number) => void) | undefined
+    /**
+     * Observe an opcode 12 Gateway Error frame with its unvalidated d and received byte length. Called in receive order
+     * with the dispatches around it, and never for a frame that ended the attempt
+     */
+    readonly onGatewayError?: ((body: unknown, bytes: number) => void) | undefined
     /** Optional Identify fields, read each time this session sends Identify */
     readonly identifyFields?: (() => IdentifyFields) | undefined
     /** Lend the paced gateway.send path to the client once ready, and withdraw it when the session ends */
@@ -232,6 +262,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                 shard,
                 identify,
                 onRaw,
+                onGatewayError,
                 identifyFields,
                 application,
                 inviteBase = "https://fluxer.gg",
@@ -256,6 +287,8 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
             }
             const logger = observer?.logger
             const shardId = observer?.shardId
+            // Records go to the Effect logger of the fiber that runs the session, as the shard loop's own records do
+            const context = yield* Effect.context<never>()
             /**
              * End the attempt for invalid data. A server anomaly retries with a new session, which the shard loop bounds.
              * A local policy, such as binary frames or onMalformedDispatch terminate, ends the shard instead
@@ -297,13 +330,14 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                     const send = commandSender({
                         socket,
                         logger,
+                        context,
                         shardId,
                         stopping: () => stopping,
                         failed: ({ error }) => fail(new AttemptFailure(error, true, false, "sendFailed")),
                     })
                     const sentAt = (session.commandSentAt ??= [])
                     if (!resuming) sentAt.length = 0
-                    const pacer = commandPacer({ send, now, logger, shardId, sentAt })
+                    const pacer = commandPacer({ send, now, logger, context, shardId, sentAt })
                     const commands = gatewayCommands(send, pacer.send, {
                         token,
                         session,
@@ -344,6 +378,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                                 shardId,
                                 fields: { dispatch: type, field: field ?? null, sequence },
                             },
+                            context,
                         )
                         observer.invalidate(type, body)
                     }
@@ -381,14 +416,17 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         if (type === "READY") onSessionStart?.()
                         onRaw?.(type, sequence, body, bytes)
                         if (logger?.enabled("debug", "gateway"))
-                            logger.log({
-                                level: "debug",
-                                category: "gateway",
-                                code: "gateway.dispatch",
-                                message: `Received ${type}`,
-                                shardId,
-                                fields: { dispatch: type, sequence, bytes },
-                            })
+                            logger.log(
+                                {
+                                    level: "debug",
+                                    category: "gateway",
+                                    code: "gateway.dispatch",
+                                    message: `Received ${type}`,
+                                    shardId,
+                                    fields: { dispatch: type, sequence, bytes },
+                                },
+                                context,
+                            )
                         if (type === "READY" || type === "RESUMED") {
                             Deferred.doneUnsafe(ready, Effect.void)
                             return
@@ -397,14 +435,18 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         const result = routeDispatch(type, body, dispatchContext, sinks)
                         if (result.kind === "malformed") malformed(type, body, sequence, result.decode)
                         else if (result.kind === "unknown")
-                            logger?.drop("unknownDispatches", {
-                                level: "debug",
-                                category: "gateway",
-                                code: "gateway.unknownDispatch",
-                                message: `Ignored dispatch type ${type}, which this SDK version does not handle`,
-                                shardId,
-                                fields: { dispatch: type },
-                            })
+                            logger?.drop(
+                                "unknownDispatches",
+                                {
+                                    level: "debug",
+                                    category: "gateway",
+                                    code: "gateway.unknownDispatch",
+                                    message: `Ignored dispatch type ${type}, which this SDK version does not handle`,
+                                    shardId,
+                                    fields: { dispatch: type },
+                                },
+                                context,
+                            )
                     }
                     const processMessage = (data: SocketData, binary: boolean) => {
                         if (stopping) return
@@ -413,14 +455,17 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         if (frame.rejected) return protocolFailure(frame, !binary)
                         const { op, body, bytes, payload } = frame
                         if (logger?.enabled("trace", "gateway"))
-                            logger.log({
-                                level: "trace",
-                                category: "gateway",
-                                code: "gateway.receive",
-                                message: `Received opcode ${op} (${opcodeName(op) ?? "UNKNOWN"})`,
-                                shardId,
-                                fields: { opcode: op, bytes },
-                            })
+                            logger.log(
+                                {
+                                    level: "trace",
+                                    category: "gateway",
+                                    code: "gateway.receive",
+                                    message: `Received opcode ${op} (${opcodeName(op) ?? "UNKNOWN"})`,
+                                    shardId,
+                                    fields: { opcode: op, bytes },
+                                },
+                                context,
+                            )
                         logger?.payload(
                             "gateway",
                             "gateway.payloadReceived",
@@ -429,6 +474,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                             {
                                 shardId,
                             },
+                            context,
                         )
                         switch (op) {
                             case Opcode.hello: {
@@ -450,14 +496,17 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                                     onLatency(latency)
                                     pendingHeartbeat = undefined
                                     if (logger?.enabled("trace", "gateway"))
-                                        logger.log({
-                                            level: "trace",
-                                            category: "gateway",
-                                            code: "gateway.heartbeatAck",
-                                            message: "Heartbeat acknowledged",
-                                            shardId,
-                                            durationMs: latency,
-                                        })
+                                        logger.log(
+                                            {
+                                                level: "trace",
+                                                category: "gateway",
+                                                code: "gateway.heartbeatAck",
+                                                message: "Heartbeat acknowledged",
+                                                shardId,
+                                                durationMs: latency,
+                                            },
+                                            context,
+                                        )
                                 }
                                 break
                             case Opcode.reconnect:
@@ -494,16 +543,25 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                                     ),
                                 )
                                 break
+                            case Opcode.gatewayError:
+                                // A refused voice join, sent with no sequence and leaving the connection open
+                                // (opcodes-and-close-codes.md in fluxerapp/fluxer fluxer_docs)
+                                onGatewayError?.(body, bytes)
+                                break
                             default:
                                 // Unknown server opcodes do not force a reconnect
-                                logger?.drop("unknownOpcodes", {
-                                    level: "debug",
-                                    category: "gateway",
-                                    code: "gateway.unknownOpcode",
-                                    message: `Ignored opcode ${op}, which this SDK version does not handle`,
-                                    shardId,
-                                    fields: { opcode: op },
-                                })
+                                logger?.drop(
+                                    "unknownOpcodes",
+                                    {
+                                        level: "debug",
+                                        category: "gateway",
+                                        code: "gateway.unknownOpcode",
+                                        message: `Ignored opcode ${op}, which this SDK version does not handle`,
+                                        shardId,
+                                        fields: { opcode: op },
+                                    },
+                                    context,
+                                )
                         }
                     }
                     const onMessage = (data: SocketData, binary: boolean) => {
@@ -539,8 +597,8 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                             ),
                         )
                     }
-                    const onClose = (code: number) => {
-                        if (!stopping) fail(classifyClose(code, resuming && !receivedReady))
+                    const onClose = (code: number, reason?: Uint8Array | string) => {
+                        if (!stopping) fail(classifyClose(code, resuming && !receivedReady, closeReasonText(reason)))
                     }
                     socket.on("message", onMessage)
                     socket.on("error", onError)

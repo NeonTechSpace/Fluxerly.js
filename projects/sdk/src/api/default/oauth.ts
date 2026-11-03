@@ -7,6 +7,7 @@ import {
     createPkce,
     type OAuthPkce,
     type OAuthAuthorizationInput,
+    type OAuthAuthorization,
     type OAuthConnection,
     type OAuthCodeExchangeInput,
     type OAuthConfig,
@@ -33,6 +34,10 @@ function oauthOwnerOptions(options: RequestOptions | undefined) {
  * It does not open a browser, handle callbacks, compare state, store tokens or run a gateway.
  * The application owns those steps and coordinates refreshes
  *
+ * The fetchGuilds and fetchConnections methods read the user's communities and connections. Reading one delegated
+ * community, its roles or the fuller current-user profile needs a server-side request with the access token.
+ * The client.rest.request method always sends the bot token. The Webhooks & OAuth guide's section Reading with a user token shows the request
+ *
  * @remarks
  * The secret is copied until shutdown.
  * Calls start immediately and return ResultAsync.
@@ -57,6 +62,7 @@ export interface OAuthClient extends AsyncDisposable {
      * The application must retain state correlation and the PKCE verifier.
      * Bot community and permission parameters are consent hints, not proof of installation or authorization.
      * This returns the URL without opening it.
+     * Fluxer's prompt parameter is not supported, so the URL always shows the consent page.
      * Network failures retain only sanitized transport facts in cause
      */
     authorizationUrl(
@@ -89,16 +95,20 @@ export interface OAuthClient extends AsyncDisposable {
         options?: RequestOptions,
     ): ResultAsync<OAuthTokens, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
-     * Revoke an access or refresh token, with an optional token-type hint.
+     * Revoke the supplied token and every access and refresh token for the same user and application.
+     * Other sessions for that user and application stop working too.
      * The token and hint are captured once when execution starts, then validated and transmitted from that snapshot.
-     * A lost response can still mean the token was revoked.
+     * A lost response can still mean the tokens were revoked.
      * Network failures retain only sanitized transport facts in cause
      */
     revoke(
         input: {
             /** Access or refresh token to invalidate. Keep this secret out of logs */
             readonly token: string
-            /** Identify the token as an access token or a refresh token. Omit when the kind is unknown */
+            /** Identify the token as an access token or a refresh token when the kind is known.
+             * When omitted, the request asks Fluxer to check refresh tokens first, then access tokens.
+             * Fluxer does not find a refresh token sent with the access_token hint
+             */
             readonly tokenTypeHint?: "access_token" | "refresh_token"
         },
         options?: RequestOptions,
@@ -114,6 +124,18 @@ export interface OAuthClient extends AsyncDisposable {
         accessToken: string,
         options?: RequestOptions,
     ): ResultAsync<OAuthIdentity, OAuthOperationFailure | CancelledError | ConfigurationError>
+    /**
+     * Fetch what the delegated user authorized with an access token: The application, the granted scopes, when the
+     * token expires and, with the identify scope, the user.
+     * Any valid access token works, so this checks a stored token without the client secret that introspect needs.
+     * Fluxer answers a rejected, expired or revoked token with reason rejected and HTTP 401.
+     * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
+     * and network causes retain only sanitized transport facts
+     */
+    fetchAuthorization(
+        accessToken: string,
+        options?: RequestOptions,
+    ): ResultAsync<OAuthAuthorization, OAuthOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch one bounded page of the delegated user's community memberships.
      * Use an access token with Fluxer's guilds scope.
@@ -184,7 +206,7 @@ export interface OAuthClient extends AsyncDisposable {
  *     const client = oauth.create({ clientId, clientSecret })
  *     try {
  *         const pkce = oauth.createPkce()
- *         return await client.authorizationUrl({
+ *         const authorization = await client.authorizationUrl({
  *             redirectUri,
  *             scopes: [OAuthScopes.Identify, OAuthScopes.Bot],
  *             state,
@@ -192,6 +214,9 @@ export interface OAuthClient extends AsyncDisposable {
  *             guildId: "456",
  *             permissions: 0n,
  *         })
+ *         // Store the verifier with the matching state in a one-use server record before redirecting the browser.
+ *         // Use it to exchange the callback code, and keep it out of browser responses and logs
+ *         return authorization.map((url) => ({ url, codeVerifier: pkce.verifier }))
  *     } finally {
  *         await client.shutdown()
  *     }
@@ -255,6 +280,12 @@ export const oauth: Readonly<{
                 executeOperation(
                     suspendInput(() => owner.fetchIdentity(accessToken, oauthOwnerOptions(options))),
                     "oauth.fetchIdentity",
+                    options,
+                ),
+            fetchAuthorization: (accessToken: string, options?: RequestOptions) =>
+                executeOperation(
+                    suspendInput(() => owner.fetchAuthorization(accessToken, oauthOwnerOptions(options))),
+                    "oauth.fetchAuthorization",
                     options,
                 ),
             fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: RequestOptions) =>

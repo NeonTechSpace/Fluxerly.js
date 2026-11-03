@@ -20,7 +20,7 @@ afterEach(() => {
 
 type AnyClient = Client | NativeClient
 // The hosted discovery fixture's gateway endpoint, which saved snapshots must match
-const hostedGateway = "wss://gateway.fluxer.app/?v=1&encoding=json"
+const hostedGateway = "wss://gateway.fluxer.com/?v=1&encoding=json"
 
 async function start(mode: Mode, sessions: SessionStore, totalShards = 1) {
     // Resume continues from the saved sequence, so RESUMED carries it rather than the fixture's own counter

@@ -6,6 +6,7 @@ import {
     operationErrorMessage,
     operationFailureHint,
     safeProviderCode,
+    safeResponseField,
     type ApiErrorDetail,
     type RequestCredential,
 } from "./api-errors.js"
@@ -53,15 +54,17 @@ export interface OAuthConfig {
     /** Decimal Fluxer application ID */
     readonly clientId: string
     /** Application client secret retained until shutdown.
-     * Shutdown releases the SDK's reference, not caller-held copies or the string's underlying memory
+     * The client's logger keeps a copy to mask it while the client object is reachable. Drop the client object to release it
      */
     readonly clientSecret: string
     /** Omit for hosted Fluxer. A supplied instance requires its root URL and trusts its discovered service origins */
     readonly instance?: InstanceOptions
     /**
      * Log records for this OAuth client, with the same settings as the client option logging. Omit it for the default
-     * console output of Info and above. A rejected client ID or secret logs one rest.rejected Warn record per operation
-     * and Fluxer code, even when the application handles the failure. A rejected user access token is only returned
+     * console output of Info and above. A rejected client ID or secret logs a rest.rejected Warn record even when the
+     * application handles the failure. Repeats follow logging.dedupe, which by default shows one per minute. A rejected
+     * user access token is only returned. At Debug, each OAuth request logs one rest.request record with its method,
+     * route, status and duration, never its query, form, body or Authorization value
      */
     readonly logging?: LoggingOptions
 }
@@ -74,9 +77,11 @@ export interface OAuthConfig {
  * @category OAuth
  */
 export interface OAuthAuthorizationInput {
-    /** Exact registered redirect, using HTTPS or loopback HTTP, without embedded credentials or a fragment.
-     * Must contain 1–256 well-formed UTF-16 units, with no surrounding whitespace, U+000C or U+202E.
-     * Noncanonical values are rejected rather than normalized
+    /** A redirect URI registered for the application, using HTTPS, or HTTP for a loopback host or an IP address such as
+     * a LAN address, without embedded credentials or a fragment. The SDK applies Fluxer's normalization: It removes
+     * U+000C and U+202E and trims surrounding whitespace. The result must contain 1–256 well-formed UTF-16 units and
+     * match a registered redirect URI exactly. Fluxer keeps the URL's standard form with the code, such as
+     * https://example.test/ for https://example.test, so that form must also fit 256 units
      */
     readonly redirectUri: string
     /** Provide 1–256 delegated or bot-installation scopes from OAuthScopes.
@@ -114,7 +119,10 @@ export interface OAuthCodeExchangeInput {
      * A dispatched attempt may consume this one-use code even if its response is lost
      */
     readonly code: string
-    /** The exact redirect URI used in the authorization request, with the same 1–256-unit and canonical-text requirements */
+    /** The redirect URI used in the authorization request, under the same rules. The SDK sends its standard URL form,
+     * such as https://example.test/ for https://example.test, because Fluxer compares the exchange with the form it
+     * stored for the code
+     */
     readonly redirectUri: string
     /** Original secret PKCE verifier, such as the verifier returned by oauth.createPkce.
      * Must contain 43–128 ASCII letters, digits or the characters - . _ ~
@@ -135,9 +143,13 @@ export interface OAuthTokens {
     readonly refreshToken: string
     /** Authentication scheme for the access token */
     readonly tokenType: "Bearer"
-    /** Provider-reported lifetime in seconds, not an absolute expiry or a scheduled refresh */
+    /** Provider-reported lifetime in seconds, not an absolute expiry or a scheduled refresh.
+     * Fluxer names it expires_in
+     */
     readonly expiresInSeconds: number
-    /** Granted scopes as returned by Fluxer. They can differ from requested scopes */
+    /** Granted scopes as returned by Fluxer. They can differ from requested scopes.
+     * Fluxer sends one space-separated scope string
+     */
     readonly scopes: readonly string[]
 }
 
@@ -147,13 +159,16 @@ export interface OAuthTokens {
  * @category OAuth
  */
 export interface OAuthIdentity {
-    /** Decimal account ID */
+    /** Decimal account ID, Fluxer's id field. Fluxer's sub field is not kept, because Fluxer sets it to the same
+     * account ID. A GET of /oauth2/userinfo sent with the access token as Bearer authorization returns both. The raw
+     * client.rest.request method cannot send it, because it uses the bot token
+     */
     readonly id: string
     /** Account username */
     readonly username: string
     /** Provider discriminator string, preserved without numeric conversion */
     readonly discriminator: string
-    /** Account-wide display name, or null when absent. The display.name helper reads it */
+    /** Account-wide display name, or null when absent. The display.name helper reads it. Fluxer names it global_name */
     readonly displayName: string | null
     /** Avatar hash, or null when the account has no avatar */
     readonly avatar: string | null
@@ -161,6 +176,46 @@ export interface OAuthIdentity {
     readonly email?: string | null
     /** Provider verification flag when supplied, null when unspecified, or an omitted field when not returned */
     readonly verified?: boolean | null
+    /** Public account flags, such as badges, absent when Fluxer omits them. Unrecognized 32-bit values are kept */
+    readonly flags?: number
+    /** Dominant avatar color, for a fallback while the avatar loads. Null when unset, absent when Fluxer omits it */
+    readonly avatarColor?: number | null
+    /** Whether Fluxer identifies this account as a bot, absent when Fluxer omits it. Fluxer names it bot */
+    readonly isBot?: boolean
+    /** Whether Fluxer identifies this account as a system user, absent when Fluxer omits it. Fluxer names it system */
+    readonly isSystem?: boolean
+}
+
+/** Frozen description of the authorization behind a delegated access token, returned by fetchAuthorization.
+ * Fluxer reads it from the token alone, so any scope works, and it includes the user only when the token has the
+ * identify scope
+ *
+ * @category OAuth
+ */
+export interface OAuthAuthorization {
+    /** The application the user authorized */
+    readonly application: {
+        /** Decimal application ID */
+        readonly id: string
+        /** Application name */
+        readonly name: string
+        /** Icon hash, or null. Fluxer currently always sends null here */
+        readonly icon: string | null
+        /** Description, or null. Fluxer currently always sends null here */
+        readonly description: string | null
+        /** Whether anyone can add the application's bot to a community */
+        readonly botPublic: boolean
+        /** Whether adding the bot requires the full authorization-code flow */
+        readonly botRequireCodeGrant: boolean
+        /** Application flags as a 32-bit integer. Fluxer currently always sends 0 here */
+        readonly flags: number
+    }
+    /** Scopes granted to the token, as Fluxer lists them */
+    readonly scopes: readonly string[]
+    /** When the access token expires, as an ISO 8601 timestamp. Fluxer names it expires */
+    readonly expiresAt: string
+    /** The authorizing user, present only when the token has the identify scope. Email fields also need the email scope */
+    readonly user?: OAuthIdentity
 }
 
 /**
@@ -203,15 +258,19 @@ export interface OAuthActiveIntrospection {
     readonly active: true
     /** Decimal ID of the application to which the token belongs */
     readonly clientId: string
-    /** Subject account ID when Fluxer includes one. Its absence does not make an otherwise active access token inactive */
+    /** Subject account ID when Fluxer includes one. Its absence does not make an otherwise active access token inactive.
+     * Fluxer names it sub
+     */
     readonly subjectId?: string
     /** Whether the inspected credential is an access token or refresh token */
     readonly tokenType: "Bearer" | "refresh_token"
     /** Granted scopes parsed from Fluxer's space-separated response, with no authorization decision or retention */
     readonly scopes: readonly string[]
-    /** Provider-reported Unix seconds when this token was issued */
+    /** Provider-reported Unix seconds when this token was issued. Fluxer names it iat */
     readonly issuedAtUnixSeconds: number
-    /** Provider-reported Unix seconds for an access token. Refresh-token results omit this field */
+    /** Provider-reported Unix seconds for an access token. Refresh-token results omit this field.
+     * Fluxer names it exp
+     */
     readonly expiresAtUnixSeconds?: number
 }
 
@@ -233,6 +292,7 @@ export type OAuthOperation =
     | "oauth.refresh"
     | "oauth.revoke"
     | "oauth.fetchIdentity"
+    | "oauth.fetchAuthorization"
     | "oauth.fetchGuilds"
     | "oauth.fetchConnections"
     | "oauth.introspect"
@@ -240,6 +300,7 @@ export type OAuthOperation =
 /** Calls that send the user's access token. The others authenticate with the application's client ID and secret */
 const userTokenOperations: ReadonlySet<OAuthOperation> = new Set<OAuthOperation>([
     "oauth.fetchIdentity",
+    "oauth.fetchAuthorization",
     "oauth.fetchGuilds",
     "oauth.fetchConnections",
 ])
@@ -252,7 +313,7 @@ export const oauthCredential = (operation: OAuthOperation, oauthError: string | 
  * A deadline expiry is also reported here.
  * Inspect outcome before deciding whether to retry a code exchange, refresh or revocation.
  * The SDK does not retry these operations automatically.
- * Failures of fetchIdentity, fetchGuilds, fetchConnections and introspect set details.read for errors.isRetryable and do not imply a token change.
+ * Failures of fetchIdentity, fetchAuthorization, fetchGuilds, fetchConnections and introspect set details.read for errors.isRetryable and do not imply a token change.
  * SDK-reported discovery and transport failures retain sanitized causes with safe transport codes when available.
  * Only reviewed error classifications are retained, not bodies, provider descriptions or credentials
  *
@@ -295,6 +356,11 @@ export class OAuthOperationError extends FluxerlyError {
          * message. Ignored when apiError is present or the code does not have the shape of a Fluxer code
          */
         readonly providerCode?: string | null | undefined
+        /**
+         * For reason response, the response field path that failed, such as expires_in. Recorded as
+         * details.responseField and named in the message, never with its value. Defaults to null
+         */
+        readonly responseField?: string | null | undefined
         readonly cause?: unknown
     }) {
         const operation = options.operation
@@ -306,8 +372,10 @@ export class OAuthOperationError extends FluxerlyError {
         const inputValidation = options.inputValidation ?? null
         const apiError = options.apiError ?? null
         const providerCode = safeProviderCode(apiError, options.providerCode ?? null)
+        const responseField = safeResponseField(options.responseField ?? null)
         const read =
             operation === "oauth.fetchIdentity" ||
+            operation === "oauth.fetchAuthorization" ||
             operation === "oauth.fetchGuilds" ||
             operation === "oauth.fetchConnections" ||
             operation === "oauth.introspect"
@@ -324,7 +392,7 @@ export class OAuthOperationError extends FluxerlyError {
                         ? (inputValidation?.explanation ?? null)
                         : `Fluxer returned the OAuth error ${oauthError}`,
                 retryAfterMs,
-                facts: { providerCode, read },
+                facts: { providerCode, responseField, read },
             }),
             {
                 code: `oauth.${reason}`,
@@ -348,6 +416,7 @@ export class OAuthOperationError extends FluxerlyError {
                     retryAfterMs,
                     oauthError,
                     providerCode,
+                    responseField,
                     read,
                 }),
             },

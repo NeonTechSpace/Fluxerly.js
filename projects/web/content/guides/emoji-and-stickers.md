@@ -99,7 +99,7 @@ Received messages list their stickers in `message.stickers`. Image URLs come fro
 
 ## Create a reusable community emoji
 
-Supply image bytes from a trusted source. Community emoji uploads accept at most 512 KiB of image data. Fluxer checks the image format, dimensions, the community's remaining emoji slots and the bot's permission to manage emoji
+Supply image bytes from a trusted source. Community emoji uploads accept at most 512 KiB of image data. Creating emoji or stickers needs `CreateExpressions`. Fluxer also checks the image format, dimensions and the community's remaining slots
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -114,10 +114,12 @@ export function createBuildEmoji(client: Client, guildId: string, image: Uint8Ar
 
 The returned `GuildEmoji` can be formatted into a message or used as a reaction. Stickers are created with `client.stickers.create` and a name, image and optional description and tags. Both namespaces can also fetch, rename, copy and delete. To find which community owns a custom emoji or sticker, use `emojis.fetchSource(id)` or `stickers.fetchSource(id)`, which Fluxer answers when that community is discoverable or the bot is a member of it
 
+Renaming or deleting an emoji or sticker the bot created needs `CreateExpressions`. Changing another account's emoji or sticker needs `ManageExpressions`. Emoji and stickers from `fetchAll` carry the uploader's user ID as `creatorId`, so a bot with only `CreateExpressions` can tell which ones it may change. Creations, edits and the gateway's community snapshots leave it out, so an emoji or sticker from the cache can lack it
+
 <details>
 <summary>Creating several emoji at once</summary>
 
-Batch creation with `createMany` returns separate `success` and `failed` lists, so inspect both. If the whole request fails with an unknown outcome, some emoji may still have been created, so fetch the community's emoji before retrying. The [reliability guide](/docs/reliability/) explains these uncertain writes
+Batch creation with `createMany` returns separate `success` and `failed` lists, so inspect both. Each failure has the `name` it was given and, when Fluxer explains it, a `providerMessage`, such as a full community or an image Fluxer could not read. That text is localized for a person to read, not a code to match. If the whole request fails with an unknown outcome, some emoji may still have been created, so fetch the community's emoji before retrying. The [reliability guide](/docs/reliability/) explains these uncertain writes
 
 </details>
 

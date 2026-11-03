@@ -216,7 +216,7 @@ describeBothApis("automatic resharding", (mode) => {
             [0, 2],
             [1, 2],
         ])
-        expect(requests).toEqual(["/v1/users/@me/guilds"])
+        expect(requests).toEqual(["/api/v1/users/@me/guilds"])
         expect(logs.withCode("lifecycle.resharded")).toEqual([
             expect.objectContaining({
                 level: "warn",

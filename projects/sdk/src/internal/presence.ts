@@ -15,7 +15,7 @@ import type { CustomStatusEmoji, PresenceInput, PresenceStatus } from "#sdk/pres
 import { gatewayIdentifier, identifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller } from "./defects.js"
 import { nullableTimestamp, validCalendarTimestamp } from "./decode/timestamp.js"
-import { Opcode } from "./protocol/gateway.js"
+import { maxClientPayloadBytes, Opcode } from "./protocol/gateway.js"
 import type { InternalSubmission, QueuedCommand } from "./gateway/commands.js"
 
 type PresenceSend = (update: GatewayPresenceUpdate, settled?: (sent: boolean) => void) => InternalSubmission
@@ -30,7 +30,6 @@ const memberSelectionIntervalMs = 125
 const maxSelectedGuilds = 100
 const maxSelectedMemberIds = 10_000
 const maxMembersPerGuild = 1_000
-const maxGatewayPayloadBytes = 4_096
 
 interface FrozenCustomStatus {
     readonly text?: string
@@ -348,7 +347,7 @@ function fitsGatewayMemberPayload(guildId: string, members: readonly string[]) {
     return (
         Buffer.byteLength(
             JSON.stringify({ op: Opcode.memberSubscriptions, d: memberSubscriptions(guildId, members) }),
-        ) <= maxGatewayPayloadBytes
+        ) <= maxClientPayloadBytes
     )
 }
 

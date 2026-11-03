@@ -81,7 +81,7 @@ async function fixture(mode: Mode, caching = false) {
     }
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const parsed = new URL(url)
-        expect(parsed.origin).toBe("https://api.fluxer.app")
+        expect(url.startsWith("https://fluxer.com/api/")).toBe(true)
         expect(init.method).toBe("GET")
         requests.push(parsed)
         return control.respond(parsed, init)
@@ -500,8 +500,8 @@ test.each(modes)("%s copies selected reaction identity and uses the explicit sta
     await iterator.next()
     await iterator.return?.()
     expect(api.requests.map((url) => url.pathname)).toEqual([
-        "/v1/channels/20/messages/30/reactions/custom%3A60/users",
-        "/v1/channels/20/messages/30/reactions/custom%3A60/users",
+        "/api/v1/channels/20/messages/30/reactions/custom%3A60/users",
+        "/api/v1/channels/20/messages/30/reactions/custom%3A60/users",
     ])
     expect(api.requests.map((url) => url.searchParams.get("after"))).toEqual(["10", "11"])
 })

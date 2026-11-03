@@ -1,5 +1,6 @@
 // Bot membership pages and bounded traversal through both APIs, compared with raw membership reads. The `--leave`
-// mode makes the bot leave the process-supplied FLUXER_TEST_LEAVE_GUILD_ID server, which requires a re-add afterward.
+// mode makes the bot leave the sandbox server named by the process-supplied FLUXER_TEST_LEAVE_GUILD_ID, which requires
+// a re-add afterward. Any other ID fails before live requests.
 // Creates no journal and no remote resources
 import assert from "node:assert/strict"
 import { Effect, Exit, Scope, Stream } from "effect"
@@ -7,20 +8,20 @@ import {
     acquireLock,
     finalizeOwned,
     loadSandboxEnvironment,
-    processValue,
+    sandboxLeaveTarget,
     verifySandboxIdentity,
 } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const leave = process.argv.includes("--leave")
 const loseResponse = process.argv.includes("--lose-response")
 assert.ok(mode === "default" || mode === "effect")
 assert.ok(!loseResponse || leave)
-// A stored target is not current leave authorization; this value must be supplied for this invocation
-const targetId = leave ? processValue("FLUXER_TEST_LEAVE_GUILD_ID") : undefined
+let targetId
 const rawFetch = globalThis.fetch
 let lock
 let client
@@ -65,11 +66,13 @@ async function waitForObservation(read) {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", readdMayBeRequired: leave }))
     process.exit(1)
-}, 90_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     lock = acquireLock()
     const sandboxEnvironment = loadSandboxEnvironment({ processOverrides: true })
+    // A stored target is not current leave authorization, so this value must be supplied for this invocation
+    if (leave) targetId = sandboxLeaveTarget(sandboxEnvironment.guildId)
     token = sandboxEnvironment.token
     stage = "sandbox_identity"
     const { user: self, guild: sandbox } = await verifySandboxIdentity(api, {
@@ -131,7 +134,7 @@ try {
         let dispatched = 0
         globalThis.fetch = async (url, init) => {
             const parsed = new URL(url)
-            if (init?.method === "DELETE" && parsed.pathname === `/v1/users/@me/guilds/${targetId}`) {
+            if (init?.method === "DELETE" && parsed.pathname === `/api/v1/users/@me/guilds/${targetId}`) {
                 dispatched++
                 assert.equal(parsed.searchParams.get("delete_messages"), "false")
                 assert.equal(init.body, undefined)
@@ -166,7 +169,6 @@ try {
             expected.filter((id) => id !== targetId),
         )
         assert.notEqual(client.state, "Closed")
-        if (targetId !== sandbox.id) assert.equal((await value(client.guilds.fetch(sandbox.id))).id, sandbox.id)
         report(stage, { targetId, uncertainResponseReconciled: loseResponse, readdRequired: true })
     }
 } catch (error) {

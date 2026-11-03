@@ -126,7 +126,7 @@ const place = (b: ArtBox) =>
         <div class="copy">
             <h1 id="hero-title" class="wordmark" data-hero-text>Fluxerly<span class="js">.js</span></h1>
             <p class="tagline" data-hero-text>From your first reply to <a class="dream" href="#neonflux">the bot of your dreams</a></p>
-            <p class="subline" data-hero-text>A Fluxer-native bot SDK for JavaScript, TypeScript and Effect that starts in one file and gives you full control when you need it</p>
+            <p class="subline" data-hero-text>A Fluxer-native bot SDK for JavaScript, TypeScript and Effect<span class="subline-rest"> that starts in one file and gives you full control when you need it</span></p>
             <HeroControls />
         </div>
 
@@ -278,6 +278,16 @@ const place = (b: ArtBox) =>
             radial-gradient(36cqw 38cqh at 74% 30%, rgb(150 118 255 / 0.17), rgb(110 105 235 / 0.06) 45%, transparent 76%),
             radial-gradient(22cqw 20cqh at 86% 14%, rgb(132 98 240 / 0.1), transparent 70%),
             linear-gradient(to bottom, #02040c 0%, #02040e 34%, #04051a 62%, #04051a 100%);
+    }
+
+    /* An upright phone keeps the same wide glow behind the conductor as the scene, see src/scene/world.ts, whose query this is */
+    @media (max-width: 599px) and (orientation: portrait) {
+        .sky {
+            background:
+                radial-gradient(64cqh 38cqh at 50% 30%, rgb(150 118 255 / 0.17), rgb(110 105 235 / 0.06) 45%, transparent 76%),
+                radial-gradient(39cqh 20cqh at calc(50% + 21cqh) 14%, rgb(132 98 240 / 0.1), transparent 70%),
+                linear-gradient(to bottom, #02040c 0%, #02040e 34%, #04051a 62%, #04051a 100%);
+        }
     }
 
     /* A soft stand-in for the ribbon that rises from the lower left */
@@ -567,8 +577,74 @@ const place = (b: ArtBox) =>
         }
     }
 
-    /* A short stacked screen, such as a folded phone's cover: the sentence under the promise gives way to the buttons */
-    @media (max-width: 899px) and (max-height: 740px), (max-width: 360px), (max-height: 480px) {
+    /* A short stacked screen, such as a folded phone's cover: the sentence under the promise keeps only what the SDK is,
+       in a smaller size, so the buttons keep their room */
+    @media (max-width: 899px) and (max-height: 740px), (max-width: 360px) {
+        .subline {
+            margin-top: 6px;
+            font-size: var(--type-small);
+            line-height: 1.4;
+        }
+
+        .subline-rest {
+            display: none;
+        }
+    }
+
+    /* The parts sit closer on these screens, so that line fits and the water under the install row keeps room for its
+       menu on the first screen. The menu then opens under the box without scrolling the page */
+    @media (max-width: 899px) and (max-height: 740px) and (min-height: 481px) {
+        .stage {
+            gap: min(28px, 2svh);
+        }
+
+        .tagline {
+            margin-top: 10px;
+        }
+    }
+
+    /* A narrow phone up to 800 px tall, such as a 384x800 one or a narrow foldable's cover, keeps the whole sentence under
+       the promise, so its parts sit closer too and start nearer the header. The menu then opens under the box on the first screen */
+    @media (max-width: 399px) and (min-height: 741px) and (max-height: 800px) {
+        .stage {
+            gap: min(28px, 2svh);
+            padding-top: 84px;
+        }
+
+        .tagline {
+            margin-top: 10px;
+        }
+    }
+
+    /* Under 700px of height the conductor gives a little too, and the water under the install row is only the menu's room */
+    @media (max-width: 899px) and (max-height: 700px) and (min-height: 481px) {
+        .stage {
+            padding-bottom: 48px;
+        }
+
+        .conductor-slot {
+            width: min(52vw, 22svh);
+        }
+    }
+
+    /* A phone on its side has no room for it at all */
+    @media (max-height: 480px) {
+        .subline {
+            display: none;
+        }
+    }
+
+    /* The smallest phone has the least room: the install box's lines and the menu under them fit on the first screen with
+       the parts closer together, and the line under the promise gives way */
+    @media (max-width: 340px) and (max-height: 600px) {
+        .stage {
+            gap: 12px;
+        }
+
+        .tagline {
+            margin-top: 18px;
+        }
+
         .subline {
             display: none;
         }

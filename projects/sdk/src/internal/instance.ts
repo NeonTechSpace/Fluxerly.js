@@ -2,7 +2,7 @@
  * Instance resolver: Selection validation, unauthenticated discovery and one immutable endpoint map per owner, including
  * webhook-only clients. Invariant: Discovery runs when first needed and shares one request among concurrent REST, gateway and
  * explicit callers, each with its own deadline and cancellation, and the last departing caller waits for the shared request to
- * clean up. An explicitly selected instance is trusted to advertise service origins that receive its credential: HTTPS and WSS
+ * clean up. After a rate-limited discovery, no discovery request is sent until its wait ends. An explicitly selected instance is trusted to advertise service origins that receive its credential: HTTPS and WSS
  * are required unless it permits plaintext, bootstrap redirects are validated and credentialed service redirects are rejected.
  * Instance-bound URLs use the advertised bases without refreshing discovery. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
@@ -29,7 +29,7 @@ import { createInstanceLinks } from "#sdk/helpers"
 import type { InstanceDomainMigration, InstanceResolveError, ResolvedInstance } from "#sdk/instance"
 import type { RequestOptions } from "#sdk/client"
 
-const hostedBootstrap = "https://fluxer.app"
+const hostedBootstrap = "https://fluxer.com"
 const discoveryPath = "/.well-known/fluxer"
 const maximumBootstrapRedirects = 3
 const maximumDocumentBytes = 1_048_576
@@ -293,7 +293,11 @@ function readDocumentBody(
                     const chunks: Uint8Array[] = []
                     let length = 0
                     for (;;) {
-                        const part = await state.reader.read()
+                        const part = await state.reader.read().catch((error: unknown) => {
+                            // A failed read leaves the stream errored, so release must not cancel it again
+                            state.done = true
+                            throw error
+                        })
                         if (part.done) {
                             state.done = true
                             break
@@ -446,9 +450,12 @@ export class InstanceResolver {
     #cached: ResolvedContext | undefined
     #active: ResolveTask | undefined
     #closed = false
+    /** Time before which discovery sends no request, after Fluxer rate-limited the last one */
+    #coolUntil = 0
 
     private readonly onDiscovered: ((value: ResolvedInstance) => void) | undefined
     private readonly http: HttpTransport
+    private readonly now: () => number
 
     constructor(
         private readonly configuration: InstanceConfiguration,
@@ -458,10 +465,13 @@ export class InstanceResolver {
             readonly onDiscovered?: (value: ResolvedInstance) => void
             /** HTTP transport for discovery, defaulting to the platform fetch */
             readonly http?: HttpTransport
+            /** Current time in milliseconds for the rate-limit cooldown, defaulting to the host clock */
+            readonly now?: () => number
         } = {},
     ) {
         this.onDiscovered = options.onDiscovered
         this.http = options.http ?? defaultHttpTransport
+        this.now = options.now ?? Date.now
     }
 
     #start(): Effect.Effect<ResolveTask> {
@@ -492,6 +502,16 @@ export class InstanceResolver {
                     ),
                     Effect.onExit((exit) =>
                         Effect.sync(() => {
+                            // A rate-limited discovery holds every later discovery request until its wait ends
+                            const limited = Exit.isFailure(exit)
+                                ? exit.cause.reasons.find((reason) => reason._tag === "Fail")
+                                : undefined
+                            if (
+                                limited?._tag === "Fail" &&
+                                limited.error instanceof RateLimitError &&
+                                limited.error.retryAfterMs !== null
+                            )
+                                owner.#coolUntil = Math.max(owner.#coolUntil, owner.now() + limited.error.retryAfterMs)
                             task.done = true
                             task.exit = exit
                             // Completing the deferred can resume a zero-delay retry synchronously
@@ -545,6 +565,9 @@ export class InstanceResolver {
                 if (owner.#closed) return yield* Effect.fail(new ClientClosedError())
                 if (owner.#cached) return owner.#cached.context
                 const active = owner.#active
+                // During a discovery rate limit, a new request would only be refused again
+                const cooling = Math.ceil(owner.#coolUntil - owner.now())
+                if (!active && cooling > 0) return yield* Effect.fail(new RateLimitError("http", cooling))
                 if (active?.stopping) {
                     yield* restore(Deferred.await(active.finished))
                     return yield* owner.resolve()

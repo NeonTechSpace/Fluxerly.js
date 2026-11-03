@@ -1,6 +1,7 @@
 import type { ResultAsync } from "neverthrow"
-import type { InstanceResolveError, ResolvedInstance } from "#sdk/instance"
+import type { InstanceBadgePage, InstanceBadgeQuery, InstanceResolveError, ResolvedInstance } from "#sdk/instance"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
+import type { GuildOperationFailure } from "#sdk/guilds"
 import type { RequestOptions } from "./options.js"
 
 /**
@@ -38,4 +39,15 @@ export interface Instance {
     resolve(
         options?: RequestOptions,
     ): ResultAsync<ResolvedInstance, InstanceResolveError | CancelledError | ConfigurationError>
+    /**
+     * Read the custom badges that communities on this instance can show, by ID or one page at a time, such as the
+     * names and images for a Guild's badgeIds.
+     * It uses the client's REST slots and queue limits, and read failures retry like other reads.
+     * Nothing is cached, so keep the page and reuse it while its version is unchanged.
+     * Expected failures are GuildOperationError with operation instance.fetchBadges, or ClientClosedError
+     */
+    fetchBadges(
+        query?: InstanceBadgeQuery,
+        options?: RequestOptions,
+    ): ResultAsync<InstanceBadgePage, GuildOperationFailure | CancelledError | ConfigurationError>
 }

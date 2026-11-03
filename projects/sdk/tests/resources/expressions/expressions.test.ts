@@ -35,7 +35,7 @@ test.each(modes)("%s manages expressions, projects allowlisted metadata and pres
         const item = wire(path.includes("stickers"))
         if (path.endsWith("metadata")) return Response.json({ ...item, guild_id: "200", allow_cloning: true })
         if (path.endsWith("bulk"))
-            return Response.json({ success: [item], failed: [{ name: "Failed", error: "private response excluded" }] })
+            return Response.json({ success: [item], failed: [{ name: "Failed", error: "Maximum emojis reached" }] })
         if (init.method === "GET") return Response.json([item])
         return Response.json({
             ...item,
@@ -46,7 +46,10 @@ test.each(modes)("%s manages expressions, projects allowlisted metadata and pres
     for (const kind of ["emojis", "stickers"] as const) {
         const api = client[kind]
         const listed = await settle(api.fetchAll("200"))
+        // List reads keep only the uploader's ID from the partial user
         expect(listed[0]).not.toHaveProperty("user")
+        expect(listed[0]?.creatorId).toBe("999")
+        expect(JSON.stringify(listed)).not.toContain("excluded")
         const local = api.get(target)
         expect(await settle(local)).toEqual(listed[0])
         const metadata = await settle(api.fetchMetadata("100"))
@@ -61,11 +64,12 @@ test.each(modes)("%s manages expressions, projects allowlisted metadata and pres
                 { name: "Failed", image },
             ]),
         )
-        expect(batch.failed).toEqual([{ name: "Failed" }])
-        expect(JSON.stringify(batch)).not.toContain("private")
+        // The provider's explanation is display text for a person, kept apart from the reviewed SDK fields
+        expect(batch.failed).toEqual([{ name: "Failed", providerMessage: "Maximum emojis reached" }])
+        expect(Object.isFrozen(batch.failed[0])).toBe(true)
         expect(Object.isFrozen(batch.success[0])).toBe(true)
         await settle(api.delete(target))
-        expect(requests.at(-1)?.path).toBe(`/v1/guilds/200/${kind}/100?purge=false`)
+        expect(requests.at(-1)?.path).toBe(`/api/v1/guilds/200/${kind}/100?purge=false`)
         const gone = api.get(target)
         expect(await settle(gone)).toBeUndefined()
         await settle(api.delete(target, { purge: true, auditReason: "Explicit purge" }))
@@ -98,7 +102,7 @@ test.each(modes)("%s validates expressions before HTTP, without leaking rejected
         () => client.stickers.create("200", { name: "Fixture", image, tags: Array(11).fill("x") }),
         () => client.stickers.edit(target, { name: "Fixture" } as never),
         () => client.stickers.edit(target, { name: "Fixture", description: "", tags: [], id: "999" } as never),
-        () => client.emojis.create("200", { name: "Fixture", image }, { auditReason: "not ASCII é" }),
+        () => client.emojis.create("200", { name: "Fixture", image }, { auditReason: "lone \ud800" }),
         () => client.emojis.delete(target, { purge: "true" } as never),
     ]) {
         await expect(settle<unknown, unknown>(op())).rejects.toMatchObject({
@@ -311,7 +315,7 @@ test.each(modes)("%s reads expression source guilds strictly without caching or 
             owner_id: "private",
         }
         const source = await settle(client[kind].fetchSource(sourceId))
-        expect(requests.at(-1)).toBe(`GET /v1/${kind}/${sourceId}/source`)
+        expect(requests.at(-1)).toBe(`GET /api/v1/${kind}/${sourceId}/source`)
         // Unrecognized badges are retained, and undocumented response fields are not copied
         expect(source).toEqual({
             id: "300",

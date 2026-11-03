@@ -142,10 +142,10 @@ test.each(modes)(
             expect(await api.get({ guildId: "20", userId: "30" })).toEqual(result)
             expect(await api.get({ guildId: "20", userId: "31" })).toBeUndefined()
             expect(calls).toEqual([
-                { path: "/v1/guilds/20/members/@me", method: "GET", body: {}, auditReason: null },
-                { path: "/v1/guilds/20/members/31", method: "GET", body: {}, auditReason: null },
+                { path: "/api/v1/guilds/20/members/@me", method: "GET", body: {}, auditReason: null },
+                { path: "/api/v1/guilds/20/members/31", method: "GET", body: {}, auditReason: null },
                 {
-                    path: "/v1/guilds/20/members/@me",
+                    path: "/api/v1/guilds/20/members/@me",
                     method: "PATCH",
                     body: {
                         nick: "After edit",
@@ -297,6 +297,27 @@ test("rejects malformed member-profile requests and profile response fields", ()
 
     expect(memberEditSelf("invalid", {})).toBeInstanceOf(InputValidationFailure)
     expect(JSON.parse(validRequest(memberEditSelf("20", { profileFlags: 4 })).json!)).toEqual({ profile_flags: 4 })
-    for (const extra of [{ banner: 1 }, { accent_color: -1 }, { profile_flags: -1 }, { mention_flags: 3 }])
+    for (const extra of [{ banner: 1 }, { accent_color: -1 }, { profile_flags: -1 }])
         expect(decodeMember(wireMember(extra), "20")).toBeUndefined()
+})
+
+// Catches: A mention preference Fluxer adds later rejected the whole member instead of leaving out the field
+test.each(modes)("%s an unknown member mention preference is left out instead of failing the read", async (mode) => {
+    stubFetchWithHostedDiscovery(async (url: string) =>
+        Response.json(
+            new URL(url).pathname.endsWith("/members/31")
+                ? wireMember({ user: { id: "31", username: "cleared" }, mention_flags: null })
+                : wireMember({ mention_flags: 3 }),
+        ),
+    )
+    const api = await setup(mode)
+    try {
+        const member = await api.fetch("30")
+        expect(member).toMatchObject({ guildId: "20", userId: "30", nickname: "Existing nickname" })
+        expect(member).not.toHaveProperty("mentionFlags")
+        // A cleared override stays null, which is a known value
+        expect(await api.fetch("31")).toMatchObject({ userId: "31", mentionFlags: null })
+    } finally {
+        await api.close()
+    }
 })

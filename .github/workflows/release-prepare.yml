@@ -53,16 +53,46 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node web/scripts/checked-source.js --allow-missing
+      - name: Restore Fluxer's pinned OpenAPI document and docs source
+        id: fluxer_source_cache
+        # Restore only, so this workflow still never saves a cache. A cache entry can't change what gets built: the
+        # endpoint map checks every file, cached or downloaded, against the sha256 that this checkout's
+        # projects/release/upstream/manifest.json pins, and downloads again any file that differs. A tampered or stale
+        # entry costs one download, never different content. CI's Check workflow saves this cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: projects/web/.cache/fluxer
+          key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
       - name: Run the aggregate workspace check
         id: workspace
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
         run: pnpm check
+      - name: Read the locked Playwright version
+        id: playwright
+        if: steps.ci.outputs.reused == 'false'
+        working-directory: projects
+        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/playwright/package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browsers
+        id: browser_cache
+        if: steps.ci.outputs.reused == 'false'
+        # Restore only, so this workflow still never saves a cache. Check saves the browser under the same key
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
       - name: Install the test browser
         id: browser_install
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
-        run: pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+        env:
+          BROWSER_CACHED: ${{ steps.browser_cache.outputs.cache-hit }}
+        run: |
+          if [ "$BROWSER_CACHED" = true ]; then
+            pnpm --filter fluxerly-docs exec playwright install-deps chromium
+          else
+            pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+          fi
       - name: Check the documentation in a browser
         id: browser
         if: steps.ci.outputs.reused == 'false'

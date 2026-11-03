@@ -45,6 +45,10 @@ const memberHierarchy =
 // applying channel overwrites (fluxer_gateway/src/guild/guild_permissions.erl:79-80, 85-88 and 169-170 at 597116a)
 const ownPermissions = "it can allow, or stop denying, only permissions it has in the channel"
 const refusedGrantsHint = "The permissionBits.refusedGrants helper shows which bits Fluxer would refuse"
+// Threads take their permissions from the parent channel, where Send Messages is replaced by Send Messages in Threads
+// (packages/constants/src/ThreadPermissionUtils.ts:83-88 at 5f3fc0b1)
+/** @internal The thread replacement for Send Messages, shared by operation errors and the rest.rejected hint */
+export const threadSend = `In a thread, ${label("SendMessagesInThreads")} in the parent channel replaces ${label("SendMessages")}`
 
 /** A permission label followed by the different title that a channel's permission screen shows for it, if any */
 const withChannelTitle = (name: PermissionName): string => {
@@ -68,14 +72,22 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
         `Setting permission overwrites also needs ${withChannelTitle("ManageRoles")}. Unless the bot has Administrator, it can allow only permissions it has in the parent category, or in the community when there is no parent. ${refusedGrantsHint}`,
     ),
     // channel/services/channel_data/ChannelOperationsService.ts:164, 189, 217-261 at 597116a, where every target of the old
-    // or new overwrite list is compared and the community owner skips the comparison
+    // or new overwrite list is compared and the community owner skips the comparison. A thread goes to the thread rules in
+    // channel/services/ChannelDataService.ts:168-174 and packages/constants/src/ThreadPermissionUtils.ts:117-158
+    // at 5f3fc0b1
     "channels.edit": requires(
         "channel",
         ["ViewChannel", "ManageChannels"],
-        `Changing permission overwrites also needs ${withChannelTitle("ManageRoles")}. Unless the bot has Administrator, ${ownPermissions}. ${refusedGrantsHint}. Changing a voice region also needs ${label("UpdateRtcRegion")}`,
+        `Changing permission overwrites also needs ${withChannelTitle("ManageRoles")}. Unless the bot has Administrator, ${ownPermissions}. ${refusedGrantsHint}. Changing a voice region also needs ${label("UpdateRtcRegion")}. For a thread, Fluxer applies thread rules instead: Renaming or archiving another member's thread, changing its slowmode or flags, unlocking it or changing anything in a locked thread needs ${label("ManageThreads")} in its parent channel, and threads.edit covers these changes`,
     ),
     // channel/services/channel_data/ChannelOperationsService.ts:418
-    "channels.delete": requires("channel", ["ViewChannel", "ManageChannels"]),
+    // Deleting a thread goes to the thread rules in channel/services/ChannelRequestService.ts:206-213 and
+    // channel/services/ThreadModifyService.ts:251-252 at 5f3fc0b1
+    "channels.delete": requires(
+        "channel",
+        ["ViewChannel", "ManageChannels"],
+        `Deleting a thread needs ${label("ManageThreads")} in its parent channel instead of ${label("ManageChannels")}`,
+    ),
     // guild/services/GuildChannelService.ts:115, guild/services/channel/ChannelOperationsService.ts:371-406 at 597116a,
     // where only a move into another category syncs, Manage Roles is checked in the moved channel and every target of the
     // channel's or the category's overwrites is compared with the bot's permissions in that channel. The move happens
@@ -248,10 +260,10 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     send: requires(
         "channel",
         ["ViewChannel", "SendMessages"],
-        `Embeds also need ${label("EmbedLinks")}, files need ${label("AttachFiles")}, and a forward needs ${label("ViewChannel")} in its source channel`,
+        `Embeds also need ${label("EmbedLinks")}, files need ${label("AttachFiles")}, and a forward needs ${label("ViewChannel")} in its source channel. ${threadSend}`,
     ),
     // channel/services/MessageInteractionService.ts:75-76
-    typing: requires("channel", ["ViewChannel", "SendMessages"]),
+    typing: requires("channel", ["ViewChannel", "SendMessages"], threadSend),
     // channel/services/message/MessageRetrievalService.ts:76
     fetch: requires("channel", ["ViewChannel"]),
     fetchHistory: requires("channel", ["ViewChannel"]),

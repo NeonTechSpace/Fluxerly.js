@@ -9,6 +9,7 @@ import botOptions from "../components/features/snippets/bot-options.ts.txt?raw"
 import firstTest from "../components/features/snippets/first-test.ts.txt?raw"
 import throwingTest from "../components/features/snippets/throwing-test.ts.txt?raw"
 import restRespond from "../components/features/snippets/rest-respond.ts.txt?raw"
+import clockTest from "../components/features/snippets/clock-test.ts.txt?raw"
 import effectTest from "../components/features/snippets/effect-test.ts.txt?raw"
 
 const accent = "violet"
@@ -33,14 +34,14 @@ const accent = "violet"
             <p>The message goes through the SDK's own decoding and handlers, as a real one would. <code class="inline-code">node:test</code> is the runner built into Node.js, so there is nothing else to install</p>
         </Fragment>
         <CodePanel file="bot.test.ts" label="A first test" code={firstTest} />
-        <CommandChip command="node --test" />
+        <CommandChip command="node --test --test-timeout=30000 --test-force-exit" />
     </Scene>
 
     <Scene id="failures" icon="errors-beacon" iconAlt="A beacon that lights on failure" step={3} side="left" {accent} guide={guide("testing", "what-the-test-does")} guideLabel="What the Test Does">
         <Fragment slot="title">A Broken Handler Fails the Test</Fragment>
         <Fragment slot="text">
-            <p>A command that throws is recorded as <code class="inline-code">commands.failed</code>, and <code class="inline-code">failures()</code> returns it so the test can expect it</p>
-            <p>A failure that no test reads makes the shutdown reject. A broken handler fails the test even when no assertion looks at it</p>
+            <p>Without an <code class="inline-code">onError</code> hook, a command that throws is recorded as <code class="inline-code">commands.failed</code>, and <code class="inline-code">failures()</code> returns it so the test can expect it</p>
+            <p>A failure that no test reads makes the shutdown reject, so a broken handler fails the test even when no assertion looks at it. With an <code class="inline-code">onError</code> hook, the hook receives the failure instead, so the test must check what the hook received</p>
         </Fragment>
         <CodePanel file="bot.test.ts" label="A test for a command that throws" code={throwingTest} />
     </Scene>
@@ -54,12 +55,21 @@ const accent = "violet"
         <CodePanel file="TypeScript" label="A test with a fake API answer" code={restRespond} />
     </Scene>
 
-    <Scene id="effect" step={5} side="left" {accent} guide={guide("effect-application-testing", "test-a-runbot-bot-against-an-in-memory-fluxer")} guideLabel="The Effect Application Testing Guide">
+    <Scene id="clock" step={5} side="left" {accent} guide={guide("testing", "test-work-that-waits")} guideLabel="Test Work That Waits">
+        <Fragment slot="title">Skip the Wait with a Test Clock</Fragment>
+        <Fragment slot="text">
+            <p>With <code class="inline-code">clock: "manual"</code>, the SDK's own timers follow a test clock that moves only when the test calls <code class="inline-code">advance</code>. Scheduled tasks, <code class="inline-code">waitFor</code> and collector timeouts and cache expiry then take no real time, so a ten-minute reminder is tested at once</p>
+            <p><code class="inline-code">advance</code> stops at each deadline on the way and waits for the work due there. Timers in the bot's own code and <code class="inline-code">Date.now()</code> keep real time</p>
+        </Fragment>
+        <CodePanel file="bot.test.ts" label="A test that moves the clock ten minutes" code={clockTest} />
+    </Scene>
+
+    <Scene id="effect" step={6} side="right" {accent} guide={guide("effect-application-testing", "test-a-runbot-bot-against-an-in-memory-fluxer")} guideLabel="The Effect Application Testing Guide">
         <Fragment slot="title">The Same for Effect</Fragment>
         <Fragment slot="text">
             <p>Applications built with Effect, a TypeScript library for typed failures and scoped cleanup, test with <Code class="inline-code" text="@neontechspace/fluxerly/effect/testing" /></p>
             <p>It has the same <code class="inline-code">createTestBot</code>. Its controls are Effects, and the test bot shuts down when the surrounding <code class="inline-code">Effect.scoped</code> ends</p>
         </Fragment>
-        <CodePanel file="TypeScript" label="An Effect test" code={effectTest} />
+        <CodePanel file="bot.test.ts" label="An Effect test" code={effectTest} />
     </Scene>
 </FeaturePage>

@@ -1,13 +1,15 @@
+import { setTimeout as wait } from "node:timers/promises"
 import { errors, runBot } from "@neontechspace/fluxerly"
 
 await runBot({
     token: process.env.FLUXER_BOT_TOKEN,
     events: {
-        messageCreate: async ({ message, reply }) => {
+        messageCreate: async ({ message, reply, signal }) => {
             if (message.content !== "!ping") return undefined
             const first = await reply("Pong!")
             if (first.isOk() || !errors.isRetryable(first.error)) return first
-            await new Promise((resolve) => setTimeout(resolve, errors.retryAfterMs(first.error) ?? 1_000))
+            // The signal ends the wait when the bot stops
+            await wait(errors.retryAfterMs(first.error) ?? 1_000, undefined, { signal })
             return reply("Pong!")
         },
     },

@@ -2,6 +2,11 @@
 title: Start a bot
 navTitle: Quick start
 description: Send !ping and receive Pong! from a bot
+search:
+    - getting started
+    - hello world bot
+    - first bot
+    - my first bot
 ---
 
 Before starting, [create a Fluxer bot](/docs/create-a-bot/), copy its token when Fluxer shows it and add the bot to a community. Fluxer shows a token only once, and the project below has a file for it. Fluxerly is tested against Node.js 24.15 or newer
@@ -21,7 +26,7 @@ Adding `--template js`, `--template ts` or `--template effect` skips the questio
 
 The folder may already hold the `.env` and `.gitignore` that the [manual setup](/docs/quick-start/#2-save-the-token) describes. The command keeps the `.env` and its token, adds `node_modules` and `.env` to the `.gitignore` when they are missing and leaves the rest of that file as it is. When any other file that the command writes already exists, such as `package.json` or `bot.js`, it stops without writing anything
 
-Then set `FLUXER_BOT_TOKEN` in `.env` to the token. Check the bot with `npm test`, `pnpm test` or `bun run test`, which runs it against an in-memory Fluxer without the token or a network. Start it with `npm start`, `pnpm start` or `bun run start` and continue with [Try it](/docs/quick-start/#try-it)
+Then set `FLUXER_BOT_TOKEN` in `.env` to the token. Check the bot with `npm test`, `pnpm test` or `bun run test`, which runs it against an in-memory Fluxer without the token or a network. Start it with `npm start`, `pnpm start` or `bun run start` and continue with [Try it](/docs/quick-start/#try-it). While changing the bot, start it with `npm run dev`, `pnpm dev` or `bun run dev` instead, which restarts it after each saved change
 
 ## Set up the project by hand
 
@@ -123,8 +128,8 @@ The [client's message methods](/docs/api/js-ts/client/#messages) link to the ful
 <details>
 <summary>If the bot does not reply</summary>
 
-Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages. Without a token, the bot stops at once with an error whose hint points to an unset environment variable. When Node.js prints `.env: not found`, the terminal is not in the bot's folder or the file is saved as `.env.txt`.
-Keep the terminal running when trying `!ping`.
+Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages. Without a token, the bot stops at once with an error whose hint points to an unset environment variable. When Node.js prints `.env: not found`, the terminal is not in the bot's folder or the file is saved as `.env.txt`. Keep the terminal running when trying `!ping`
+
 When a reply fails, the terminal shows a log line with the reason and a hint, such as a missing permission. Outside a terminal, such as in an editor's run panel, log lines are JSON. Add `FLUXERLY_LOG_FORMAT=pretty` to `.env` for readable lines there. A reply can fail after Fluxer has already posted it, for example when the response is lost, so do not send it again blindly
 
 The [troubleshooting guide](/docs/troubleshooting/) helps tell command, connection and request failures apart. Never share a bot token or private message contents

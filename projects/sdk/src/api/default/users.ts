@@ -49,7 +49,7 @@ export interface Users {
     ): ResultAsync<User, UserOperationFailure | CancelledError | ConfigurationError>
     /**
      * Fetch a user's privacy-filtered profile, optionally for the community specified in query.guildId.
-     * The frozen result includes only documented identity and profile fields.
+     * The frozen result includes only documented identity, profile and public badge fields.
      * The isLimited field reports Fluxer's privacy restriction, not missing community membership.
      * A guildProfile of null means no contextual profile was supplied, not proof the user is outside the community.
      * No gateway connection, hidden member fetch or account or profile cache use is performed, and each call issues a separate read.

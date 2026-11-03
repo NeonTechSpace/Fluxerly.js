@@ -10,7 +10,8 @@ import type { MessageReaction } from "./reactions.js"
  * A string is the page's text. An object supplies text, embeds or both, and must not be empty.
  * Showing a page replaces the message's text and embeds, so text from one page never stays on an embed-only page.
  * Files, stickers and mentions are not supported on pages, and mention notifications stay off.
- * Fluxer validates each page when it is sent or shown, so an invalid later page fails only when someone turns to it
+ * The SDK checks that every page is a nonempty string or page object before sending the first page. Each page's full
+ * contents are checked when it is sent or shown, so an invalid later page can still fail when someone turns to it
  *
  * @category Messages
  */

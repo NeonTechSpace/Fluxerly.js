@@ -42,8 +42,9 @@ export interface Presence {
      * The community must belong to a shard assigned to this client, or the call fails with PresenceError reason input
      *
      * Inputs are copied and retained when the call runs.
-     * Up to 1,000 distinct decimal IDs are accepted, but the full UTF-8 gateway frame must fit 4,096 bytes.
-     * Long IDs therefore reduce the effective per-community maximum.
+     * Up to 1,000 distinct decimal IDs are accepted, but the full UTF-8 gateway frame must fit 16,384 bytes.
+     * Long IDs therefore reduce the effective per-community maximum: A frame holds about 740 members with 19-digit IDs.
+     * Fluxer instances older than October 2026 allow 4,096 bytes, about 180 such members, and stop the shard for a larger frame.
      * The client retains selections for at most 100 communities and 10,000 IDs.
      * Clearing an unsent selection withdraws its queued command and releases its slot immediately.
      * Changes to a selection that has not reached the socket replace that unsent request.

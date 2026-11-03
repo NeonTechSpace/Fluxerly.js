@@ -5,7 +5,7 @@
     "scripts": {
         "typecheck": "tsc -p tsconfig.json",
         "lint": "oxlint -c ../.oxlintrc.json .",
-        "test": "tsc -p tsconfig.json && pnpm run lint && node --test tests/*.test.js"
+        "test": "tsc -p tsconfig.json && pnpm run lint && node --import ../scripts/no-fluxer-network.mjs --test tests/*.test.js"
     },
     "dependencies": {
         "@changesets/apply-release-plan": "8.1.1",

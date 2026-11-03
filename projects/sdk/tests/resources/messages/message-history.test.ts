@@ -47,10 +47,10 @@ async function fixture(now = () => performance.now()) {
         },
     })
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
-        expect(url.startsWith("https://api.fluxer.app/v1/channels/")).toBe(true)
+        expect(url.startsWith("https://fluxer.com/api/v1/channels/")).toBe(true)
         expect(init.redirect).toBe("error")
         expect(init.body).toBeUndefined()
-        return realFetch(url.replace("https://api.fluxer.app", rest.origin), init)
+        return realFetch(url.replace("https://fluxer.com/api", rest.origin), init)
     })
     return { requests, control }
 }
@@ -178,7 +178,7 @@ test("history shares its channel bucket across pages, separately from single fet
     const client = defaultApi({ token })
     server.control.respond = (response, url) => {
         if (server.requests.length === 1) {
-            response.writeHead(429).end(JSON.stringify({ retry_after: 0.3 }))
+            response.writeHead(429).end(JSON.stringify({ retry_after: 0.3, global: false }))
         } else
             response.end(
                 JSON.stringify(url.pathname.endsWith("/10") ? wire("10") : [wire("10", url.pathname.split("/")[3])]),

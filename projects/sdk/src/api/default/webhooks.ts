@@ -1,7 +1,7 @@
 import type { Webhook, CreatedWebhook, WebhookCreate, WebhookEdit, WebhookOperationFailure } from "#sdk/webhooks"
 import type { ResultAsync } from "neverthrow"
 import type { CancelledError, ConfigurationError } from "#sdk/errors"
-import type { AuditedRequestOptions } from "./options.js"
+import type { AuditedRequestOptions, RequestOptions } from "./options.js"
 
 /**
  * Manage webhooks with this bot's credentials, without connecting the gateway.
@@ -23,7 +23,7 @@ import type { AuditedRequestOptions } from "./options.js"
  */
 export interface Webhooks {
     /**
-     * Create an incoming webhook in a text, voice or announcement channel using the bot's permissions.
+     * Create an incoming webhook in a text, voice, announcement, forum or media channel using the bot's permissions.
      * The result separates metadata from redacted credentials, which expose the token only through revealToken.
      * Credentials passed to createWebhookClient must remain private.
      * An unknown outcome may have left the webhook created
@@ -40,7 +40,7 @@ export interface Webhooks {
      */
     fetch(
         id: string,
-        options?: AuditedRequestOptions,
+        options?: RequestOptions,
     ): ResultAsync<Webhook, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * List the channel's accessible incoming, follower and unknown-kind webhook metadata without pagination.
@@ -48,7 +48,7 @@ export interface Webhooks {
      */
     fetchForChannel(
         channelId: string,
-        options?: AuditedRequestOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * List the community's accessible incoming, follower and unknown-kind webhook metadata.
@@ -57,12 +57,12 @@ export interface Webhooks {
      */
     fetchForGuild(
         guildId: string,
-        options?: AuditedRequestOptions,
+        options?: RequestOptions,
     ): ResultAsync<readonly Webhook[], WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change the supplied incoming or follower webhook settings, including its destination channel.
      * Followers can be renamed or moved to a text channel in the same community, but an avatar change fails
-     * with field avatar and Fluxer code INVALID_FORMAT. Incoming webhooks allow text, voice or announcement destinations.
+     * with field avatar and Fluxer code INVALID_FORMAT. Incoming webhooks allow text, voice, announcement, forum or media destinations in the same community.
      * Moving emits Webhooks Update for the old and new channel. The SDK does not synthesize those events.
      * Returned metadata excludes credentials. A failed response does not guarantee the changes were rolled back
      */

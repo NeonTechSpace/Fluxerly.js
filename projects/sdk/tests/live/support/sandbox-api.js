@@ -1,16 +1,20 @@
 // Direct sandbox API requests shared by the live harnesses. They bypass the SDK, so setup, readback and cleanup stay
 // independent of the code under test. Harnesses pass the fetch they captured before any SDK observation, and a token
-// getter because the token is loaded after the request function is created. Failures name only the HTTP status
+// getter because the token is loaded after the request function is created. Failures name only the HTTP status.
+// Each request is marked as a raw sender for the shared live pacer in live-pacing.js, which spaces and logs it
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
+import { LiveThrottledError, rawSender, retryAfterHeaderMs, unknownRetryAfterMs } from "./live-pacing.js"
+import { pacedDeadlineMs } from "./watchdogs.js"
 
-const origin = "https://api.fluxer.app/v1"
+const origin = "https://fluxer.com/api/v1"
 
 function request(method, token, body, signal) {
     return {
         method,
         redirect: "error",
         signal,
+        [rawSender]: true,
         headers: {
             Authorization: `Bot ${token}`,
             ...(body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -19,15 +23,27 @@ function request(method, token, body, signal) {
     }
 }
 
+/** Most raw requests one harness process sends at the same time */
+const concurrentRawRequests = 5
+
+/** Longest 429 wait the helper waits out before sending the same request again */
+const maximumRateLimitWaitMs = 10_000
+
 /**
- * The wait in milliseconds that a 429 asks for through `Retry-After` or `retry_after`, or undefined for any other
- * status or a wait that is missing or longer than ten seconds. The provider did not process a 429 request, so
- * repeating it after the wait cannot duplicate a write
+ * The wait in milliseconds that a 429 asks for through `Retry-After`, in seconds or as an HTTP date, or `retry_after`,
+ * taking the longer, or undefined for any other status. A 429 whose wait is missing or longer than ten seconds throws
+ * LiveThrottledError, so the caller stops rather than receiving the 429 as an ordinary status. The provider did not
+ * process a 429 request, so repeating it after the wait cannot duplicate a write
  */
 function rateLimitWait(response, data) {
     if (response.status !== 429) return undefined
-    const waitMs = Math.max(Number(response.headers.get("retry-after")) || 0, Number(data?.retry_after) || 0) * 1_000
-    return Number.isFinite(waitMs) && waitMs > 0 && waitMs <= 10_000 ? waitMs : undefined
+    const header = retryAfterHeaderMs(response.headers, Date.now())
+    const body = typeof data?.retry_after === "number" && data.retry_after >= 0 ? data.retry_after * 1_000 : undefined
+    const waitMs = header === undefined && body === undefined ? undefined : Math.max(header ?? 0, body ?? 0)
+    if (waitMs === undefined || !Number.isFinite(waitMs) || waitMs <= 0)
+        throw new LiveThrottledError(unknownRetryAfterMs)
+    if (waitMs > maximumRateLimitWaitMs) throw new LiveThrottledError(waitMs)
+    return Math.ceil(waitMs)
 }
 
 /** A refused status as an assertion failure that reports only the HTTP status, including in harness failure lines */
@@ -37,16 +53,21 @@ function statusFailure(status) {
 
 /**
  * The request core behind every export. It resolves `{ status, ok, data }`, where `data` is the parsed JSON body or
- * null. Each attempt has its own `timeoutMs`, and the optional `deadline` signal also aborts attempts and 429 waits.
+ * null. Each attempt has its own `timeoutMs`, extended by the paced slots of the raw requests sent with it, and the optional `deadline`
+ * signal also aborts attempts and 429 waits.
  * Confirmed 429s with a wait of at most ten seconds retry until the whole-run deadline. Without a whole-run signal,
- * the request is bounded by the provider's one-minute edge window plus one attempt timeout. A longer or missing wait
- * resolves like any other status, so the caller's status check decides the outcome
+ * the request is bounded by one minute plus one attempt timeout. A longer or missing wait throws LiveThrottledError
+ * with status 429, whatever the caller accepts. The shared pacer has already paused every sender and marked the run
+ * throttled, so run-all.js starts no further checks
  */
 async function send(fetch, token, method, path, body, { deadline, timeoutMs = 15_000, wait = sleep } = {}) {
-    const limit = deadline ?? AbortSignal.timeout(60_000 + timeoutMs)
+    // An attempt starts its timeout before the shared pacer admits it, so it also covers the paced slots of the raw
+    // requests its process sends together with it, at most five as in member-search.js's identity reads
+    const attemptMs = pacedDeadlineMs(timeoutMs, concurrentRawRequests)
+    const limit = deadline ?? AbortSignal.timeout(60_000 + attemptMs)
     for (;;) {
         limit.throwIfAborted()
-        const timeout = AbortSignal.timeout(timeoutMs)
+        const timeout = AbortSignal.timeout(attemptMs)
         const signal = AbortSignal.any([limit, timeout])
         const response = await fetch(`${origin}${path}`, request(method, token, body, signal))
         // Reading the body also releases it when a status such as 204 carries none

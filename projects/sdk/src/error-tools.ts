@@ -19,13 +19,15 @@ export interface DescribeErrorOptions {
 }
 
 /**
- * Describe any error as readable multi-line text: Its name, SDK code, message, suggested fix, safe details and cause chain.
+ * Describe any error as readable multi-line text: Its name, SDK code, message, suggested fix, safe details and cause chain,
+ * with the members of an AggregateError under it.
  * Works for SDK errors, application errors, thrown non-Error values and Effect Causes, and never throws.
  * A Cause is described reason by reason, as Failure, Defect or Interrupted, so pass exit.cause directly rather than
  * squashing it first.
- * Credential patterns, such as Authorization values, bare bot tokens, values assigned to keys ending in token or secret,
- * token-shaped Bot or Bearer values, webhook URL tokens and the user information of a URL, such as user:password in
- * https://user:password@host/path, are masked in names, application error codes, messages and stacks.
+ * Credential patterns, such as Authorization, Cookie and X-API-Key values, bare bot tokens, a value after a name ending in
+ * token, secret, password, passwd or API key, written as api_key, apiKey or X-API-Key, token-shaped Bot or Bearer values,
+ * values under credential keys of a thrown object, webhook URL tokens and the user information of a URL, such as
+ * user:password in https://user:password@host/path, are masked in names, application error codes, messages and stacks.
  * A client's own configured token is masked only in that client's log records and failure reports.
  * Use it to print a failed Result, an SdkDefect or a FailureReport's error
  *
@@ -97,18 +99,26 @@ function isRetryableError(error: unknown): boolean {
             return retryableConnection(error as ConnectionError)
         case "ShardConnectionError":
             return isRetryableError(error.cause)
+        case "MessageCleanupError":
+            // A failed cleanup is never retryable, because its plan works only once
+            if ((error as unknown as { phase?: unknown }).phase === "cleanup") return false
     }
     const fields = error as unknown as { reason?: unknown; outcome?: unknown }
     if (typeof fields.reason !== "string" || !retryableReasons.has(fields.reason)) return false
+    // A rate-limited upload already read its caller's stream, so the same call would send it again empty
+    if (error.details.streamUsed === true) return false
     const outcome = fields.outcome
     // A read cannot have changed remote state, so an unknown outcome only matters for writes
     return outcome !== "unknown" || fields.reason === "rateLimit" || error.details.read === true
 }
 
-/** Whether repeating the same call is safe and may succeed. True for rate limits, full local capacity, and network
+/** Whether repeating the same call is safe and may succeed. True for rate limits, except an upload that read a stream,
+ * marked by details.streamUsed, for full local capacity, and for network
  * failures and timeouts of reads or of writes that were not sent. False for rejections, invalid input, writes with an
  * unknown outcome, cancellation and closed clients. An Effect Cause is retryable when it has a reason and every reason
- * is a retryable failure, so a defect or an interruption in it makes it false
+ * is a retryable failure, so a defect or an interruption in it makes it false. A failed cleanup is never retryable,
+ * because its plan works only once. A retryable failure from run needs a new client, because run always closes the
+ * client when it ends. Create a new client and call run on it instead of repeating run on the same client
  */
 function isRetryable(error: unknown): boolean {
     const cause = causeOf(error)
@@ -291,6 +301,11 @@ export interface ErrorTools {
      * A write whose outcome is unknown is not retryable, because Fluxer may already have applied it.
      * Rejections, invalid input, cancellation and closed clients are never retryable, because a closed client
      * cannot send again and a new client is needed.
+     * A failed cleanup is never retryable, because its plan works only once.
+     * A rate-limited upload that read an attachment from a ReadableStream, marked by details.streamUsed, is not
+     * retryable, because the stream is used up. Send it again with a new stream or with the file as bytes.
+     * A retryable failure from run needs a new client, because run always closes the client when it ends. Create a new
+     * client and call run on it instead of repeating run on the same client.
      * An Effect Cause, such as that of a failed Exit, is retryable only when it has at least one reason and every reason
      * is a retryable failure. A defect, an interruption or an empty Cause gives false, because the work may have stopped
      * part-way.

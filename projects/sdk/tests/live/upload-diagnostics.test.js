@@ -77,7 +77,7 @@ test("upload phase records separate planning, completion and message requests an
         (value) => records.push(value),
     )
     for (const path of ["attachments", "attachments/complete", "messages", "messages/10"])
-        await observed(`https://api.fluxer.app/v1/channels/20/${path}`, { method: "POST" })
+        await observed(`https://fluxer.com/api/v1/channels/20/${path}`, { method: "POST" })
     expect(records.filter((item) => item.event === "start").map((item) => item.phase)).toEqual([
         "plan",
         "complete",

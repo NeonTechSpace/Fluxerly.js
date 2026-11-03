@@ -12,6 +12,7 @@ const shared = {
     ],
     "local builders": ["builders", "EmbedBuilder", "MessageBuilder"],
     "local type guards": ["isThreadChannel"],
+    "local audio helper": ["voiceWaveform"],
     "local constants": [
         "AssetFormats",
         "AuditLogActions",
@@ -26,6 +27,7 @@ const shared = {
         "GuildFeatureToggles",
         "GuildMemberJoinSourceTypes",
         "GuildMfaLevels",
+        "GuildNsfwLevels",
         "GuildMemberProfileFlags",
         "GuildSplashCardAlignments",
         "GuildSystemChannelFlags",

@@ -2,7 +2,7 @@ import { typedResult } from "../../support/settle.js"
 import { setImmediate as turn } from "node:timers/promises"
 import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { MessageCleanupError, SdkDefect, createClient, type FailureReport } from "../../../src/index.js"
+import { MessageCleanupError, SdkDefect, createClient, errors, type FailureReport } from "../../../src/index.js"
 import { apiErrorDetail } from "../../../src/api-errors.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes } from "../../support/both-apis.js"
@@ -340,6 +340,62 @@ test("cleanup rejects a different client's in-memory plan before dispatch", asyn
         await first.shutdown()
         await second.shutdown()
     }
+})
+
+test.each(modes)("%s a failed preview only read, so it warns of no change and can be repeated", async (mode) => {
+    const calls: RequestInit[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        calls.push(init)
+        throw new TypeError("fixture network failure")
+    })
+    const api = await cleanupApi(mode)
+    onTestFinished(() => api.close())
+    const failure = await api.preview("20", { authorId: "30", maxScanned: 1, maxSelected: 1 }).then(
+        () => expect.fail("Expected the preview to fail"),
+        (error: unknown) => error as MessageCleanupError,
+    )
+    expect(failure).toMatchObject({ phase: "preview", reason: "network", outcome: "unknown" })
+    expect(failure.message).not.toContain("may still have been applied")
+    expect(errors.isRetryable(failure)).toBe(true)
+    expect(calls.every((call) => call.method === "GET")).toBe(true)
+})
+
+test.each(modes)("%s a failed batch with an unknown outcome keeps its warning and is not retryable", async (mode) => {
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        if (init.method === "GET") return Response.json([wire("30")])
+        throw new TypeError("fixture network failure")
+    })
+    const api = await cleanupApi(mode)
+    onTestFinished(() => api.close())
+    const plan = await api.preview("20", { authorId: "30", maxScanned: 1, maxSelected: 1 })
+    const failure = await api.cleanup(plan).then(
+        () => expect.fail("Expected the cleanup to fail"),
+        (error: unknown) => error as MessageCleanupError,
+    )
+    expect(failure).toMatchObject({ phase: "cleanup", reason: "network", outcome: "unknown" })
+    expect(failure.message).toContain("may still have been applied")
+    expect(errors.isRetryable(failure)).toBe(false)
+})
+
+// The plan is used up when cleanup starts, so retry advice would only lead to an input failure
+test.each([
+    { reason: "busy", outcome: "notDispatched" },
+    { reason: "rateLimit", outcome: "rejected" },
+    { reason: "timeout", outcome: "notDispatched" },
+    { reason: "network", outcome: "notDispatched" },
+] as const)("a cleanup that failed with $reason is not retryable and points to a new preview", (input) => {
+    const failure = new MessageCleanupError({
+        phase: "cleanup",
+        ...input,
+        status: input.reason === "rateLimit" ? 429 : null,
+        retryAfterMs: input.reason === "rateLimit" ? 1_000 : null,
+        scannedCount: 2,
+        selectedMessageIds: ["30", "31"],
+        submittedBatches: [],
+        terminalBatchIds: ["30", "31"],
+    })
+    expect(errors.isRetryable(failure)).toBe(false)
+    expect(failure.hint).toMatch(/preview again/)
 })
 
 test.each(modes)("%s cleanup reports a closed client as known non-dispatch", async (mode) => {

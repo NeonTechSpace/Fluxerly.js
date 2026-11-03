@@ -10,13 +10,17 @@ Each answer is short and links to the page that covers the topic in full
 
 The SDK ships only ECMAScript modules, so `require("@neontechspace/fluxerly")` fails with an error saying that Fluxerly is ESM-only. Use `import`, and add `"type": "module"` to the project's `package.json` or name the file with `.mjs`. See [troubleshooting](/docs/troubleshooting/#the-process-fails-with-a-require-error)
 
+## Does Fluxerly support voice?
+
+Not yet. Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it. Until then, voice states, member voice controls such as move, mute, deafen and disconnect, voice notes, and audio or video attachments work
+
 ## Which Node.js version is required?
 
 Fluxerly is tested against Node.js 24.15 or newer. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/support-and-compatibility/)
 
 ## Does TypeScript need extra setup?
 
-Install `@types/node` as a development dependency and include the Node.js types, for example with `"types": ["node"]` in `tsconfig.json`. The SDK's types use Node.js `AbortSignal` and `AsyncDisposable`. The SDK supports TypeScript 7. JavaScript projects need no TypeScript installation. See [create a bot](/docs/create-a-bot/)
+Install `@types/node` as a development dependency and include the Node.js types, for example with `"types": ["node"]` in `tsconfig.json`. The SDK's types use Node.js `AbortSignal` and `AsyncDisposable`. The SDK supports TypeScript 7. JavaScript projects need no TypeScript installation. See the [quick start](/docs/quick-start/), under **Using TypeScript or Effect?**
 
 ## Where should the bot token be stored?
 
@@ -28,7 +32,7 @@ The bot must be a member of the community and have permission to view the channe
 
 ## Why do methods return Results instead of throwing?
 
-Failures such as a missing permission, a network error or a rate limit are expected in a running bot. A [Result](/docs/glossary/#result) makes them visible in the return type, so they are handled where they happen instead of stopping the bot. Programming mistakes, such as invalid options, still throw `ConfigurationError` at once. The `orThrow` function returns a Result's value or throws its error when throwing suits the code better. See [reliability](/docs/reliability/)
+Failures such as a missing permission, a network error or a rate limit are expected in a running bot. A [Result](/docs/glossary/#result) makes them visible in the return type, so they are handled where they happen instead of stopping the bot. Invalid options still throw `ConfigurationError` at once, while invalid request input comes back as a failed Result. The `orThrow` function returns a Result's value or throws its error when throwing suits the code better. See [reliability](/docs/reliability/)
 
 ## What is Effect?
 
@@ -40,7 +44,9 @@ No. The default `@neontechspace/fluxerly` entry point works with plain JavaScrip
 
 ## Does the bot need to handle rate limits?
 
-Usually not. For Fluxer API requests, an HTTP 429 with a usable retry delay is retried when the request body can be reused and the wait fits within the request's deadline. An inline attachment or webhook request carrying a `file` or `stream` attachment fails instead, because that body cannot be sent again. A response without a usable retry delay also fails. Waits of a second or longer are logged as `ratelimit.wait`. For a request whose body can be reused, a known wait that would reach or pass its deadline fails with a `ratelimit.deadline` record instead. See [rate limit](/docs/glossary/#rate-limit) and [troubleshooting](/docs/troubleshooting/)
+Usually not. For Fluxer API requests, an HTTP 429 with a usable retry delay is retried when the request body can be reused and the wait fits within the request's deadline. An inline attachment or webhook request carrying a `file` or `stream` attachment fails instead, because that body cannot be sent again
+
+A response without a usable retry delay also fails. Waits of a second or longer are logged as `ratelimit.wait`. For a request whose body can be reused, a known wait that would reach or pass its deadline fails with a `ratelimit.deadline` record instead. See [rate limit](/docs/glossary/#rate-limit) and [troubleshooting](/docs/troubleshooting/)
 
 ## How can a bot be tested without Fluxer?
 
@@ -48,4 +54,6 @@ The `@neontechspace/fluxerly/testing` entry point creates a real client connecte
 
 ## Does the bot need sharding?
 
-Most bots do not. One [shard](/docs/glossary/#shard) carries up to 2,500 communities, Fluxer's limit. For a larger bot in one process, `sharding: "auto"` counts its communities when it first connects and opens one shard per 2,000 communities, which leaves room to grow. A bot without `sharding` settings that passes the limit moves to that automatic count when Fluxer refuses its one shard, so it keeps running. Running shards in several processes without a supervisor needs an explicit shard total. A [supervisor](/docs/sharding/#run-shards-in-several-processes) can choose the total itself with `totalShards: "auto"`. See [sharding](/docs/sharding/)
+Most bots do not. One [shard](/docs/glossary/#shard) carries up to 2,500 communities, Fluxer's limit. For a larger bot in one process, `sharding: "auto"` counts its communities when it first connects and opens one shard per 2,000 communities, which leaves room to grow
+
+A bot without `sharding` settings that passes the limit moves to that automatic count when Fluxer refuses its one shard, so it keeps running. Running shards in several processes without a supervisor needs an explicit shard total. A [supervisor](/docs/sharding/#run-shards-in-several-processes) can choose the total itself with `totalShards: "auto"`. See [sharding](/docs/sharding/)

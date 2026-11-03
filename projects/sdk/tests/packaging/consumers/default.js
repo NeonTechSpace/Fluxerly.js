@@ -64,9 +64,9 @@ assert.equal(edited.content, "Updated")
 assert.equal(client.messages.get(edited)?.content, "Updated")
 assert.ok((await client.messages.delete(edited)).isOk())
 assert.deepEqual(requests, [
-    "GET https://api.fluxer.app/v1/channels/20/messages/10",
-    "PATCH https://api.fluxer.app/v1/channels/20/messages/10",
-    "DELETE https://api.fluxer.app/v1/channels/20/messages/10",
+    "GET https://fluxer.com/api/v1/channels/20/messages/10",
+    "PATCH https://fluxer.com/api/v1/channels/20/messages/10",
+    "DELETE https://fluxer.com/api/v1/channels/20/messages/10",
 ])
 
 assert.ok((await client.shutdown()).isOk())

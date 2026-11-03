@@ -3,6 +3,8 @@ dist/
 .astro/
 .wrangler/
 test-results/
+# Fluxer's OpenAPI document and docs source at the pinned commit, kept by scripts/docs/fluxer-source.mjs
+.cache/
 # Generated from the SDK by scripts/docs/generate.mjs
 content/reference/
 content/examples/

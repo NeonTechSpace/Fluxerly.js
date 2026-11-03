@@ -82,11 +82,11 @@ test.each(modes)("%s replaces roles with one PATCH and returns Fluxer's frozen a
     expect(await api.get()).toEqual(cleared)
     expect(calls).toEqual([
         {
-            path: "/v1/guilds/20/members/31",
+            path: "/api/v1/guilds/20/members/31",
             method: "PATCH",
             body: { roles: ["40", "9223372036854775807"] },
         },
-        { path: "/v1/guilds/20/members/31", method: "PATCH", body: { roles: [] } },
+        { path: "/api/v1/guilds/20/members/31", method: "PATCH", body: { roles: [] } },
     ])
 })
 

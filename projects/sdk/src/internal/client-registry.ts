@@ -13,10 +13,16 @@ import type { EventBus } from "./events.js"
 export interface ClientServices {
     readonly logging: ClientLogger
     readonly failures: FailureReporter
-    /** Scheduled tasks, whose runs in progress the test kit's idle waits for */
-    readonly tasks: Pick<ScheduledTasks, "running">
-    /** Event delivery, whose admitted and queued handler invocations the test kit's idle waits for */
-    readonly events: Pick<EventBus, "drainState">
+    /**
+     * Scheduled tasks, whose runs in progress the test kit's idle waits for, and whose default-API runs its manual clock
+     * checks for SDK calls
+     */
+    readonly tasks: Pick<ScheduledTasks, "running" | "callbackRuns">
+    /**
+     * Event delivery, whose admitted and queued handler invocations the test kit's idle waits for, and whose invocations
+     * its manual clock checks for SDK calls
+     */
+    readonly events: Pick<EventBus, "drainState" | "callbackRuns">
     /** The bot account ID for command mention prefixes, or undefined when it cannot be read yet */
     selfUserId(): Effect.Effect<string | undefined>
 }

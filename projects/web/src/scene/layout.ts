@@ -29,9 +29,13 @@ export interface HeroLayout {
     title: Box
     // The narrow layout stacks the conductor over the words, so nothing may float beside them
     stacked: boolean
+    // A phone held upright, where the sky's art keeps its own shape instead of the screen's, see world.ts
+    uprightPhone: boolean
 }
 
 export const stackedQuery = "(max-width: 899px), (max-height: 480px), (max-aspect-ratio: 4/5)"
+// Hero.astro's CSS sky has the same media query
+export const uprightPhoneQuery = "(max-width: 599px) and (orientation: portrait)"
 
 export function findHeroParts(hero: HTMLElement): HeroParts | null {
     const horizon = hero.querySelector<HTMLElement>("[data-horizon]")
@@ -90,5 +94,6 @@ export function measureHero(hero: HTMLElement, parts: HeroParts): HeroLayout {
         text,
         title,
         stacked: window.matchMedia(stackedQuery).matches,
+        uprightPhone: window.matchMedia(uprightPhoneQuery).matches,
     }
 }

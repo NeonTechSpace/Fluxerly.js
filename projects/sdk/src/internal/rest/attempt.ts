@@ -10,11 +10,13 @@ import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import type * as Fiber from "effect/Fiber"
+import * as Random from "effect/Random"
 import * as Redacted from "effect/Redacted"
 import { ClientClosedError } from "#sdk/errors"
-import { apiErrorHint, routeAction, type ApiErrorDetail } from "#sdk/api-errors"
+import { apiErrorHint, rejectedWebhookToken, routeAction, type ApiErrorDetail } from "#sdk/api-errors"
 import type { MessageCore } from "#sdk/messages"
 import type { EncodedBody } from "../attachments.js"
+import { auditHeader } from "../audit.js"
 import type { CacheRequest } from "../cache.js"
 import type { ChannelCacheGuard, ChannelCacheRequest } from "../channel-cache.js"
 import { TransportError } from "../effect-failures.js"
@@ -33,12 +35,22 @@ import {
     AttachmentTransferVerificationCleanupError,
     completeCleanup,
 } from "../transfer-source.js"
-import { classifyResponse, RestFailure, type Outcome, type RateLimitDetails } from "./classify.js"
+import type { AdmissionRelease } from "./admission.js"
+import { classifyResponse, RestFailure, type Outcome, type RateLimitDetails, type RateLimitPause } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 
 /** Whether the request only reads remote state, which makes its failures retryable and its closure a read */
 export function isReadRequest(request: { readonly method: string; readonly read?: true }): boolean {
     return request.method === "GET" || request.read === true
+}
+
+/**
+ * Whether transport failures and HTTP 500, 502, 503 and 504 answers may send the request again: A GET, or a POST that
+ * only reads and is safe to repeat. A read POST without retryRead, such as a member search that may queue indexing,
+ * retries only a confirmed rate limit, as writes do
+ */
+export function retriesAsRead(request: { readonly method: string; readonly retryRead?: true }): boolean {
+    return request.method === "GET" || request.retryRead === true
 }
 
 /**
@@ -65,6 +77,8 @@ export type Request<A> = {
     cache?: false
     /** A POST that only reads, such as a search, so its failures count as reads like those of a GET */
     read?: true
+    /** A read POST that is safe to send again, so its transient failures retry as a GET's do */
+    retryRead?: true
     /** Explicit message mutation for methods such as POST that do not otherwise imply one to the cache guard */
     messageMutation?: true
     /** Message ID the request reads or changes, used by the message-cache guard and deletion */
@@ -133,6 +147,8 @@ export interface AttemptContext<A, M extends MessageCore = MessageCore> {
     readonly fiber: Fiber.Fiber<unknown, unknown>
     /** Zero-based attempt number, reported in logs and spans */
     readonly retryCount: number
+    /** Release function of this attempt's admission, which identifies it to the client's rate-limit recovery */
+    readonly admission?: AdmissionRelease
 }
 
 /** A decoded value, or a confirmed rate limit that the operation waits out before sending again */
@@ -142,6 +158,7 @@ export type AttemptResult<A> =
           readonly kind: "retry"
           readonly retry: number
           readonly global: boolean
+          readonly pause: RateLimitPause
           readonly bucket: string
           readonly apiError: ApiErrorDetail | null
           readonly providerCode: string | undefined
@@ -222,7 +239,7 @@ function requestHeaders(
         }
     return {
         ...(request.webhookId ? {} : { Authorization: `Bot ${Redacted.value(token)}` }),
-        ...(request.auditReason === undefined ? {} : { "X-Audit-Log-Reason": request.auditReason }),
+        ...(request.auditReason === undefined ? {} : { "X-Audit-Log-Reason": auditHeader(request.auditReason) }),
         ...(request.features === undefined ? {} : { "X-Fluxer-Features": request.features.join(",") }),
         ...(state.multipartHeaders
             ? state.multipartHeaders
@@ -345,55 +362,93 @@ export function runAttempt<A, M extends MessageCore>(
             )
         })
     /** The guild or channel a request targets, for rejection records. IDs are safe to log, unlike other path segments */
-    const targetText = (path: string) => {
-        const target = /^\/(channels|guilds)\/(\d{1,20})(?:[/?]|$)/.exec(path)
-        return target === null ? "" : ` for ${target[1] === "channels" ? "channel" : "community"} ${target[2]}`
+    const rejectionTarget = () => {
+        const match = /^\/(channels|guilds)\/(\d{1,20})(?:[/?]|$)/.exec(request.path)
+        if (match === null) return { text: "", fields: {} }
+        const channel = match[1] === "channels"
+        return {
+            text: ` for ${channel ? "channel" : "community"} ${match[2]}`,
+            // A handler failure that claims the record copies this ID, so the failure still names its target
+            fields: channel ? { channelId: match[2] } : { guildId: match[2] },
+        }
     }
     /** The record of a rejected token or permission */
-    const rejectedRecord = (rejection: RestFailure, status: number, apiError: string | undefined): LogInput => ({
-        level: "warn",
-        category: "rest",
-        code: "rest.rejected",
-        message: `${request.method} ${template} was rejected${targetText(request.path)}: ${
-            rejection.apiError?.explanation ??
-            (apiError === undefined
-                ? "Fluxer refused the request"
-                : `Fluxer returned ${apiError}, a code this SDK version does not describe yet`)
-        } (${rejection.apiError === null || apiError === undefined ? "" : `${apiError}, `}HTTP ${status})`,
-        route: template,
-        status,
-        fields: {
-            method: request.method,
-            apiError,
-            // Token-authenticated webhook routes send the webhook token, not the bot token
-            hint: apiErrorHint(
-                rejection.apiError,
-                status,
-                request.webhookId === undefined ? "bot" : "webhook",
-                routeAction(template, request.method),
-            ),
-        },
-    })
+    const rejectedRecord = (rejection: RestFailure, status: number, apiError: string | undefined): LogInput => {
+        const target = rejectionTarget()
+        return {
+            level: "warn",
+            category: "rest",
+            code: "rest.rejected",
+            message: `${request.method} ${template} was rejected${target.text}: ${
+                rejection.apiError?.explanation ??
+                (apiError === undefined
+                    ? "Fluxer refused the request"
+                    : `Fluxer returned ${apiError}, a code this SDK version does not describe yet`)
+            } (${rejection.apiError === null || apiError === undefined ? "" : `${apiError}, `}HTTP ${status})`,
+            route: template,
+            status,
+            fields: {
+                method: request.method,
+                apiError,
+                ...target.fields,
+                // Token-authenticated webhook routes send the webhook token, not the bot token
+                hint: apiErrorHint(
+                    rejection.apiError,
+                    status,
+                    request.webhookId === undefined ? "bot" : "webhook",
+                    routeAction(template, request.method),
+                ),
+            },
+        }
+    }
+    /** The REST failure an attempt ended with, if it ended with one */
+    const restFailureOf = (exit: Exit.Exit<unknown, unknown>) => {
+        const failed = Exit.isFailure(exit) ? exit.cause.reasons.find((reason) => reason._tag === "Fail") : undefined
+        return failed?._tag === "Fail" && failed.error instanceof RestFailure ? failed.error : undefined
+    }
+    /**
+     * The sanitized Fluxer code, recognized or not, so even Debug output names the rejection. A 429 that is
+     * waited out succeeds with a retry result, which carries the code of the limit Fluxer applied
+     */
+    const apiErrorOf = (rejection: RestFailure | undefined, exit: Exit.Exit<unknown, unknown>) => {
+        const retry =
+            Exit.isSuccess(exit) && (exit.value as { kind?: unknown } | undefined)?.kind === "retry"
+                ? (exit.value as { apiError?: { providerCode?: string }; providerCode?: string })
+                : undefined
+        const retried = retry?.apiError?.providerCode ?? retry?.providerCode
+        return rejection?.apiError?.providerCode ?? rejection?.providerCode ?? retried ?? undefined
+    }
+    /**
+     * Whether a failure is a rejected token or permission. A webhook token request refused with UNKNOWN_WEBHOOK has a
+     * rejected token too. Signed upload destinations are external storage and never report Fluxer permissions
+     */
+    const isRejection = (rejection: RestFailure, status: number) =>
+        (status === 401 ||
+            status === 403 ||
+            (status === 404 && request.webhookId !== undefined && rejectedWebhookToken(rejection.apiError))) &&
+        request.put === undefined
+    /** What became of a request, for its Debug record */
+    const outcomeText = (status: number | null, exit: Exit.Exit<unknown, unknown>) =>
+        status !== null
+            ? `returned ${status}`
+            : Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+              ? "was cancelled"
+              : "failed before a response"
     /** Log one attempt after its response was classified. The duration covers the request until response headers */
     const logRequest = (state: AttemptState, exit: Exit.Exit<unknown, unknown>) =>
         Effect.sync(() => {
             const durationMs = state.requestMs ?? 0
             const status = state.response?.status ?? null
-            const failed = Exit.isFailure(exit)
-                ? exit.cause.reasons.find((reason) => reason._tag === "Fail")
-                : undefined
-            const rejection = failed?._tag === "Fail" && failed.error instanceof RestFailure ? failed.error : undefined
-            // The sanitized Fluxer code, recognized or not, so even Debug output names the rejection
-            const apiError = rejection?.apiError?.providerCode ?? rejection?.providerCode ?? undefined
-            // A rejected token or permission persists until someone changes the configuration, so it is
-            // logged once per route and code even when the application handles the Result. Signed upload
-            // destinations are external storage and never report Fluxer permissions. Inside a handler the record
-            // waits in the invocation's rejection scope, so a handler failure that reports it is logged only once
+            const rejection = restFailureOf(exit)
+            const apiError = apiErrorOf(rejection, exit)
+            // A rejected token or permission persists until someone changes the configuration, so it is logged
+            // even when the application handles the Result, and logging.dedupe limits repeats. Inside a handler the
+            // record waits in the invocation's rejection scope, so a handler failure that reports it is logged only once
             if (
                 runtime.logging !== undefined &&
                 rejection !== undefined &&
-                (status === 401 || status === 403) &&
-                request.put === undefined
+                status !== null &&
+                isRejection(rejection, status)
             ) {
                 const rejected = rejectedRecord(rejection, status, apiError)
                 if (!fiberRejectionScope(fiber.context)?.hold(runtime.logging, rejected, fiber.context, rejection))
@@ -405,13 +460,7 @@ export function runAttempt<A, M extends MessageCore>(
                     level: "debug",
                     category: "rest",
                     code: "rest.request",
-                    message: `${request.method} ${template} ${
-                        status !== null
-                            ? `returned ${status}`
-                            : Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
-                              ? "was cancelled"
-                              : "failed before a response"
-                    } in ${durationMs} ms`,
+                    message: `${request.method} ${template} ${outcomeText(status, exit)} in ${durationMs} ms`,
                     route: template,
                     ...(status === null ? {} : { status }),
                     durationMs,
@@ -421,67 +470,79 @@ export function runAttempt<A, M extends MessageCore>(
                 fiber.context,
             )
         })
-    const receive = (state: AttemptState, response: Response) => {
-        const bucket = request.put
-            ? route.key
-            : runtime.admission.rates.observe(rateAttempt, response, runtime.logical.now())
-        return Effect.tryPromise({
-            try: () => {
-                const work = (async (): Promise<AttemptResult<A>> => {
-                    const classified = await classifyResponse(response, {
-                        method: request.method,
-                        upload: request.put !== undefined,
-                        preparation: request.preparation === true,
-                        hasFeatureFallback: request.featureDisabled !== undefined,
-                        progress,
-                        signal: state.controller.signal,
-                        cleanupDefects: state.cleanupDefects,
-                        now: () => runtime.logical.now(),
-                        pauseGlobal: (until) => runtime.admission.pauseGlobal(until),
-                        pauseBucket: (until) =>
-                            runtime.admission.rates.pause(bucket, until, runtime.logical.now(), rateAttempt.sequence),
-                        notFound: () => {
-                            if (request.resourceGuard) runtime.resources!.missing(request.resourceGuard)
-                            if (request.channelGuard) runtime.channels!.missing(request.channelGuard)
-                        },
-                    })
-                    if (classified.kind === "retry") return { ...classified, bucket }
-                    if (classified.kind === "featureDisabled")
-                        return { kind: "success", value: request.featureDisabled!() }
-                    if (request.status !== undefined && response.status !== request.status)
-                        throw new RestFailure({
-                            reason: "response",
-                            outcome: progress.outcome,
-                            status: response.status,
-                        })
-                    if (runtime.logging?.unsafePayloads("rest")) {
-                        // Unsafe debugging reads a copy, so decoding keeps its own bounded stream
-                        void payloadText(response).then(
-                            ({ text, truncated }) =>
-                                runtime.logging?.payload(
-                                    "rest",
-                                    "rest.payloadReceived",
-                                    `${request.method} ${template} response body${truncated ? `, first ${payloadReadLimit} bytes` : ""}`,
-                                    truncated ? text : parsedPayload(text),
-                                    { route: template, status: response.status, fields: { truncated } },
+    // The jitter of a grown client pause comes from the Effect Random service, so test services can fix it. Only a 429
+    // draws a value
+    const receive = (state: AttemptState, response: Response) =>
+        Effect.flatMap(response.status === 429 ? Random.next : Effect.succeed(0), (jitter) => {
+            const bucket = request.put
+                ? route.key
+                : runtime.admission.rates.observe(rateAttempt, response, runtime.logical.now())
+            return Effect.tryPromise({
+                try: () => {
+                    const work = (async (): Promise<AttemptResult<A>> => {
+                        const classified = await classifyResponse(response, {
+                            method: request.method,
+                            retriesAsRead: retriesAsRead(request),
+                            upload: request.put !== undefined,
+                            preparation: request.preparation === true,
+                            hasFeatureFallback: request.featureDisabled !== undefined,
+                            progress,
+                            signal: state.controller.signal,
+                            cleanupDefects: state.cleanupDefects,
+                            now: () => runtime.logical.now(),
+                            pauseGlobal: (until) => runtime.admission.pauseGlobal(until),
+                            pauseClient: (until) => runtime.admission.pauseClient(until, jitter, context.admission),
+                            responded: () => runtime.admission.responded(context.admission),
+                            pauseBucket: (until) =>
+                                runtime.admission.rates.pause(
+                                    bucket,
+                                    until,
+                                    runtime.logical.now(),
+                                    rateAttempt.sequence,
                                 ),
-                            // allow-silent: A failed read of the logging copy leaves decoding to report the body
-                            () => undefined,
-                        )
-                    }
-                    const value = await request.decode(response, request.instance!, state.controller.signal)
-                    return { kind: "success", value }
-                })()
-                // allow-silent: The work promise itself is returned and its rejection observed by the caller, so this only records settlement
-                state.settled = work.then(
-                    () => undefined,
-                    () => undefined,
-                )
-                return work
-            },
-            catch: (error) => failure(error, state),
+                            notFound: () => {
+                                if (request.resourceGuard) runtime.resources!.missing(request.resourceGuard)
+                                if (request.channelGuard) runtime.channels!.missing(request.channelGuard)
+                            },
+                        })
+                        if (classified.kind === "retry") return { ...classified, bucket }
+                        if (classified.kind === "featureDisabled")
+                            return { kind: "success", value: request.featureDisabled!() }
+                        if (request.status !== undefined && response.status !== request.status)
+                            throw new RestFailure({
+                                reason: "response",
+                                outcome: progress.outcome,
+                                status: response.status,
+                                responseField: "status",
+                            })
+                        if (runtime.logging?.unsafePayloads("rest")) {
+                            // Unsafe debugging reads a copy, so decoding keeps its own bounded stream
+                            void payloadText(response).then(
+                                ({ text, truncated }) =>
+                                    runtime.logging?.payload(
+                                        "rest",
+                                        "rest.payloadReceived",
+                                        `${request.method} ${template} response body${truncated ? `, first ${payloadReadLimit} bytes` : ""}`,
+                                        truncated ? text : parsedPayload(text),
+                                        { route: template, status: response.status, fields: { truncated } },
+                                    ),
+                                // allow-silent: A failed read of the logging copy leaves decoding to report the body
+                                () => undefined,
+                            )
+                        }
+                        const value = await request.decode(response, request.instance!, state.controller.signal)
+                        return { kind: "success", value }
+                    })()
+                    // allow-silent: The work promise itself is returned and its rejection observed by the caller, so this only records settlement
+                    state.settled = work.then(
+                        () => undefined,
+                        () => undefined,
+                    )
+                    return work
+                },
+                catch: (error) => failure(error, state),
+            })
         })
-    }
     return Effect.acquireUseRelease(
         Effect.sync((): AttemptState => {
             // Opening a caller-owned source can throw before it is consumed. Do that

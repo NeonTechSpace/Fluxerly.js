@@ -3,6 +3,7 @@ import { Cause, Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
     createClient,
+    errors,
     type ClientOptions,
     type EventMap,
     type EventName,
@@ -80,12 +81,12 @@ test.each(modes)("%s projects frozen public users and private conversations with
     rest(async (url) => {
         const path = new URL(url).pathname
         calls.push(path)
-        if (path === "/v1/users/@me")
+        if (path === "/api/v1/users/@me")
             return Response.json(user("99", { global_name: null, avatar: null, avatar_color: null }))
-        if (path === "/v1/users/30") return Response.json(user())
-        if (path === "/v1/channels/10") return Response.json(directMessage())
-        if (path === "/v1/channels/11") return Response.json(group())
-        if (path === "/v1/users/@me/channels")
+        if (path === "/api/v1/users/30") return Response.json(user())
+        if (path === "/api/v1/channels/10") return Response.json(directMessage())
+        if (path === "/api/v1/channels/11") return Response.json(group())
+        if (path === "/api/v1/users/@me/channels")
             return Response.json([directMessage(), group(), callerOnlyGroup(), { id: "13", type: 999 }])
         throw Error(`Unexpected request ${path}`)
     })
@@ -137,7 +138,12 @@ test.each(modes)("%s projects frozen public users and private conversations with
             Object.isFrozen(channels),
     ).toBe(true)
     expect(() => Object.assign(fetched, { username: "changed" })).toThrow()
-    expect(calls).toEqual(["/v1/users/30", "/v1/users/@me", "/v1/channels/10", "/v1/users/@me/channels"])
+    expect(calls).toEqual([
+        "/api/v1/users/30",
+        "/api/v1/users/@me",
+        "/api/v1/channels/10",
+        "/api/v1/users/@me/channels",
+    ])
 })
 
 test.each(modes)("%s checks fetched IDs and complete private-channel payloads", async (mode) => {
@@ -176,8 +182,9 @@ test.each(modes)("%s opens conversations and opens the returned channel before s
         const path = new URL(url).pathname
         const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
         calls.push({ method: init.method!, path, body })
-        if (path === "/v1/users/@me/channels" && body?.recipient_id === "30") return Response.json(directMessage("77"))
-        if (path === "/v1/channels/77/messages") return Response.json(message("80", "77"))
+        if (path === "/api/v1/users/@me/channels" && body?.recipient_id === "30")
+            return Response.json(directMessage("77"))
+        if (path === "/api/v1/channels/77/messages") return Response.json(message("80", "77"))
         throw Error(`Unexpected request ${init.method} ${path}`)
     })
     const api = await setup(mode)
@@ -185,9 +192,9 @@ test.each(modes)("%s opens conversations and opens the returned channel before s
     expect((await api.open("30")).id).toBe("77")
     expect((await api.send("30", { content: "@everyone fixture" })).channelId).toBe("77")
     expect(calls.map(({ method, path }) => [method, path])).toEqual([
-        ["POST", "/v1/users/@me/channels"],
-        ["POST", "/v1/users/@me/channels"],
-        ["POST", "/v1/channels/77/messages"],
+        ["POST", "/api/v1/users/@me/channels"],
+        ["POST", "/api/v1/users/@me/channels"],
+        ["POST", "/api/v1/channels/77/messages"],
     ])
     expect(calls[0]?.body).toEqual({ recipient_id: "30" })
     expect(calls[1]?.body).toEqual({ recipient_id: "30" })
@@ -213,7 +220,11 @@ test.each(modes)(
         const api = await setup(mode, { directMessages: true })
         const result = await api.fetchLatestMessages(["10", "11", "12"])
         expect(calls).toEqual([
-            { method: "POST", path: "/v1/users/@me/channels/messages/preload", body: { channels: ["10", "11", "12"] } },
+            {
+                method: "POST",
+                path: "/api/v1/users/@me/channels/messages/preload",
+                body: { channels: ["10", "11", "12"] },
+            },
         ])
         expect(result.messages["10"]?.id).toBe("80")
         expect(result.messages["11"]).toBeNull()
@@ -224,6 +235,27 @@ test.each(modes)(
         expect(await api.getDirectMessage("10")).toBeUndefined()
     },
 )
+
+test.each(modes)("%s reports a failed latest-message batch as a read that changed nothing", async (mode) => {
+    let calls = 0
+    rest(async () => {
+        calls++
+        throw new TypeError("fetch failed")
+    })
+    const api = await setup(mode)
+    let failure: unknown
+    try {
+        await api.fetchLatestMessages(["10"])
+    } catch (error) {
+        failure = error
+    }
+    expect(failure).toMatchObject({ operation: "directMessages.fetchLatestMessages", reason: "network" })
+    expect((failure as { details: { read?: boolean } }).details.read).toBe(true)
+    expect(errors.isRetryable(failure)).toBe(true)
+    expect(String((failure as Error).message)).not.toContain("may still have been applied")
+    // The batch is not sent again automatically
+    expect(calls).toBe(1)
+})
 
 test.each(modes)(
     "%s rejects invalid, extra and malformed latest-message batch responses before leaking private bodies",
@@ -387,13 +419,13 @@ test.each(modes)(
         await api.closeDirectMessage("10")
         await api.removeRecipient("10", "31")
         expect(calls.map(({ method, path }) => [method, path])).toEqual([
-            ["GET", "/v1/channels/10"],
-            ["GET", "/v1/channels/10"],
-            ["PATCH", "/v1/channels/10"],
-            ["GET", "/v1/channels/10"],
-            ["DELETE", "/v1/channels/10"],
-            ["GET", "/v1/channels/10"],
-            ["DELETE", "/v1/channels/10/recipients/31"],
+            ["GET", "/api/v1/channels/10"],
+            ["GET", "/api/v1/channels/10"],
+            ["PATCH", "/api/v1/channels/10"],
+            ["GET", "/api/v1/channels/10"],
+            ["DELETE", "/api/v1/channels/10"],
+            ["GET", "/api/v1/channels/10"],
+            ["DELETE", "/api/v1/channels/10/recipients/31"],
         ])
         expect(calls[2]?.body).toEqual({ name: "edited", owner_id: "31", nicks: { "31": null } })
         expect(await api.getDirectMessage()).toBeUndefined()
@@ -405,7 +437,7 @@ test.each(modes)(
             reason: "response",
             outcome: "unknown",
         })
-        expect(calls).toEqual([{ method: "GET", path: "/v1/channels/10", body: undefined }])
+        expect(calls).toEqual([{ method: "GET", path: "/api/v1/channels/10", body: undefined }])
         channel = directMessage()
         await expect(api.editGroup("10", { name: "edited" })).rejects.toMatchObject({
             operation: "directMessages.editGroup",
@@ -417,9 +449,9 @@ test.each(modes)(
             outcome: "notDispatched",
         })
         expect(calls.map(({ method, path }) => [method, path])).toEqual([
-            ["GET", "/v1/channels/10"],
-            ["GET", "/v1/channels/10"],
-            ["GET", "/v1/channels/10"],
+            ["GET", "/api/v1/channels/10"],
+            ["GET", "/api/v1/channels/10"],
+            ["GET", "/api/v1/channels/10"],
         ])
     },
 )
@@ -471,13 +503,13 @@ test.each(modes)("%s uses one deadline across mutation preflight and write", asy
     await clock.waiting(500)
     await clock.advance(500)
     await timedOut
-    expect(calls).toEqual(["GET /v1/channels/10"])
+    expect(calls).toEqual(["GET /api/v1/channels/10"])
 })
 
 test.each(modes)("%s keeps user and direct-message caches opt-in, bounded and expiring", async (mode) => {
     rest(async (url) => {
         const path = new URL(url).pathname
-        if (path.startsWith("/v1/users/")) return Response.json(user(path.split("/").at(-1)!))
+        if (path.startsWith("/api/v1/users/")) return Response.json(user(path.split("/").at(-1)!))
         return Response.json(directMessage(path.split("/").at(-1)!))
     })
     const disabled = await setup(mode)
@@ -517,7 +549,7 @@ test.each(modes)("%s caches overlapping unrelated user and direct-message fetche
         const path = new URL(url).pathname
         await new Promise<void>((resolve) => releases.set(path, resolve))
         const id = path.split("/").at(-1)!
-        return Response.json(path.startsWith("/v1/users/") ? user(id) : directMessage(id))
+        return Response.json(path.startsWith("/api/v1/users/") ? user(id) : directMessage(id))
     })
     const api = await setup(mode, { users: true, directMessages: true })
     const pending = [
@@ -527,7 +559,8 @@ test.each(modes)("%s caches overlapping unrelated user and direct-message fetche
         api.fetchDirectMessage("11"),
     ]
     await vi.waitFor(() => expect(releases.size).toBe(4))
-    for (const path of ["/v1/channels/11", "/v1/users/31", "/v1/channels/10", "/v1/users/30"]) releases.get(path)!()
+    for (const path of ["/api/v1/channels/11", "/api/v1/users/31", "/api/v1/channels/10", "/api/v1/users/30"])
+        releases.get(path)!()
     await Promise.all(pending)
 
     expect((await api.getUser("30"))?.id).toBe("30")
@@ -541,7 +574,7 @@ test.each(modes)(
     async (mode) => {
         rest(async (url) => {
             const path = new URL(url).pathname
-            if (path.startsWith("/v1/users/")) return Response.json(user(path.split("/").at(-1)!))
+            if (path.startsWith("/api/v1/users/")) return Response.json(user(path.split("/").at(-1)!))
             return Response.json(directMessage(path.split("/").at(-1)!))
         })
         const settings = { maxEntries: 2, maxBytes: 4_194_304 }
@@ -632,7 +665,7 @@ test.each(modes)("%s prevents group-edit cache races from retaining stale reads"
             let releaseRead: (() => void) | undefined
             rest(async (url, init) => {
                 const path = new URL(url).pathname
-                if (path !== "/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
+                if (path !== "/api/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
                 if (init.method === "PATCH") {
                     patchStarted = true
                     await new Promise<void>((resolve) => {
@@ -696,11 +729,11 @@ test.each(modes)("%s keeps successful close and recipient removal from retaining
         rest(async (url, init) => {
             const path = new URL(url).pathname
             if (++requests === 1) {
-                if (path !== "/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
+                if (path !== "/api/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
                 return Response.json(snapshot)
             }
             if (requests === 2) {
-                const expected = mutation === "close" ? "/v1/channels/10" : "/v1/channels/10/recipients/31"
+                const expected = mutation === "close" ? "/api/v1/channels/10" : "/api/v1/channels/10/recipients/31"
                 if (path !== expected) throw Error(`Unexpected request ${init.method} ${path}`)
                 deleteStarted = true
                 await new Promise<void>((resolve) => {
@@ -708,7 +741,8 @@ test.each(modes)("%s keeps successful close and recipient removal from retaining
                 })
                 return new Response(null, { status: 204 })
             }
-            if (requests !== 3 || path !== "/v1/channels/10") throw Error(`Unexpected request ${init.method} ${path}`)
+            if (requests !== 3 || path !== "/api/v1/channels/10")
+                throw Error(`Unexpected request ${init.method} ${path}`)
             readStarted = true
             await new Promise<void>((resolve) => {
                 releaseRead = resolve
@@ -743,12 +777,12 @@ test.each(modes)("%s keeps other cached private channels when a conversation ope
     rest(async (url, init) => {
         const path = new URL(url).pathname
         const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
-        if (path === "/v1/channels/10") return Response.json(directMessage("10"))
-        if (path === "/v1/users/@me/channels") {
+        if (path === "/api/v1/channels/10") return Response.json(directMessage("10"))
+        if (path === "/api/v1/users/@me/channels") {
             if (opening === "failure") throw Error("fixture opening failure")
             return Response.json(directMessage("12", { recipients: [user("31")] }))
         }
-        if (path === "/v1/channels/12/messages") return Response.json(message("80", "12"))
+        if (path === "/api/v1/channels/12/messages") return Response.json(message("80", "12"))
         throw Error(`Unexpected request ${init.method} ${path} ${JSON.stringify(body)}`)
     })
     const api = await setup(mode, { directMessages: true })
@@ -776,7 +810,7 @@ test.each(modes)("%s invalidates direct-message cache races around nested send o
     let releaseRead: (() => void) | undefined
     rest(async (url, init) => {
         const path = new URL(url).pathname
-        if (path === "/v1/users/@me/channels") {
+        if (path === "/api/v1/users/@me/channels") {
             if (opening === "failure") throw Error("fixture opening failure")
             openStarted = true
             await new Promise<void>((resolve) => {
@@ -784,7 +818,7 @@ test.each(modes)("%s invalidates direct-message cache races around nested send o
             })
             return Response.json(directMessage("10", { last_message_id: "71" }))
         }
-        if (path === "/v1/channels/10") {
+        if (path === "/api/v1/channels/10") {
             if (!completedConflictingRead) {
                 completedConflictingRead = true
                 readStarted = true
@@ -795,7 +829,7 @@ test.each(modes)("%s invalidates direct-message cache races around nested send o
             }
             return Response.json(directMessage("10", { last_message_id: "71" }))
         }
-        if (path === "/v1/channels/10/messages") return Response.json(message("80", "10"))
+        if (path === "/api/v1/channels/10/messages") return Response.json(message("80", "10"))
         throw Error(`Unexpected request ${init.method} ${path}`)
     })
     const api = await setup(mode, { directMessages: true })
@@ -847,7 +881,7 @@ test.each(modes)("%s reports the DM-opening rejection when send cannot reach mes
         apiError: { code: "captchaRequired", providerCode: "CAPTCHA_REQUIRED" },
     })
     expect(JSON.stringify(error) + error.message).not.toContain("private")
-    expect(calls).toEqual(["/v1/users/@me/channels"])
+    expect(calls).toEqual(["/api/v1/users/@me/channels"])
 })
 
 test.each(modes)("%s retries reads but never repeats uncertain conversation writes or sends", async (mode) => {
@@ -883,7 +917,7 @@ test.each(modes)("%s retries reads but never repeats uncertain conversation writ
     const error = await api.send("30", { content: "fixture" }).catch((failure) => failure)
     expect(error).toMatchObject({ _tag: "MessageError", reason: "network", outcome: "unknown" })
     expect(JSON.stringify(error)).not.toContain("private send failure")
-    expect(paths).toEqual(["/v1/users/@me/channels", "/v1/channels/77/messages"])
+    expect(paths).toEqual(["/api/v1/users/@me/channels", "/api/v1/channels/77/messages"])
 })
 
 test.each(modes)(
@@ -897,7 +931,7 @@ test.each(modes)(
         rest(
             (url, init) =>
                 new Promise<Response>((resolve, reject) => {
-                    if (new URL(url).pathname === "/v1/users/@me/channels") {
+                    if (new URL(url).pathname === "/api/v1/users/@me/channels") {
                         resolve(Response.json(directMessage("77")))
                         return
                     }
@@ -971,7 +1005,7 @@ test.each(modes)(
             outcome: "notDispatched",
             details: { outcome: "notDispatched" },
         })
-        expect(paths).toEqual(["/v1/users/@me/channels"])
+        expect(paths).toEqual(["/api/v1/users/@me/channels"])
     },
 )
 
@@ -979,8 +1013,8 @@ test.each(modes)("%s delivers complete private events and resolves cache conflic
     const dispatch = await gateway()
     rest(async (url) => {
         const path = new URL(url).pathname
-        if (path === "/v1/users/30") return Response.json(user())
-        if (path === "/v1/channels/10") return Response.json(directMessage())
+        if (path === "/api/v1/users/30") return Response.json(user())
+        if (path === "/api/v1/channels/10") return Response.json(directMessage())
         throw Error(`Unexpected request ${path}`)
     })
     const api = await setup(mode, { users: true, directMessages: true })
@@ -1031,10 +1065,90 @@ test.each(modes)("%s delivers complete private events and resolves cache conflic
     expect(await api.getUser()).toMatchObject({ username: "event user" })
 })
 
+test.each(modes)("%s keeps the account-wide reply mention preference on users and recipients", async (mode) => {
+    rest(async (url) => {
+        const path = new URL(url).pathname
+        if (path === "/api/v1/users/30") return Response.json(user("30", { mention_flags: 2 }))
+        if (path === "/api/v1/users/31") return Response.json(user("31"))
+        // A preference Fluxer adds later is left out instead of failing the read
+        if (path === "/api/v1/users/32") return Response.json(user("32", { mention_flags: 3 }))
+        if (path === "/api/v1/channels/11")
+            return Response.json(
+                group("11", {
+                    recipients: [user("30", { mention_flags: 1 }), user("31"), user("32", { mention_flags: 7 })],
+                }),
+            )
+        throw Error(`Unexpected request ${path}`)
+    })
+    const api = await setup(mode)
+    expect(await api.fetchUser("30")).toMatchObject({ id: "30", mentionFlags: 2 })
+    expect(await api.fetchUser("31")).not.toHaveProperty("mentionFlags")
+    const fetched = await api.fetchDirectMessage("11")
+    expect(fetched.recipients[0]).toMatchObject({ id: "30", mentionFlags: 1 })
+    expect(fetched.recipients[1]).not.toHaveProperty("mentionFlags")
+    const unknown = await api.fetchUser("32")
+    expect(unknown).toMatchObject({ id: "32" })
+    expect(unknown).not.toHaveProperty("mentionFlags")
+    expect(fetched.recipients[2]).toMatchObject({ id: "32" })
+    expect(fetched.recipients[2]).not.toHaveProperty("mentionFlags")
+})
+
+test.each(modes)("%s keeps the group adult flag and last pin time from reads and channel updates", async (mode) => {
+    const dispatch = await gateway()
+    rest(async (url) => {
+        const path = new URL(url).pathname
+        if (path === "/api/v1/channels/11")
+            return Response.json(group("11", { nsfw: true, last_pin_timestamp: "2026-09-09T12:00:00.000Z" }))
+        if (path === "/api/v1/channels/10") return Response.json(directMessage("10", { last_pin_timestamp: null }))
+        throw Error(`Unexpected request ${path}`)
+    })
+    const api = await setup(mode)
+    expect(await api.fetchDirectMessage("11")).toMatchObject({
+        type: "group",
+        nsfw: true,
+        lastPinTimestamp: "2026-09-09T12:00:00.000Z",
+    })
+    const direct = await api.fetchDirectMessage("10")
+    expect(direct).toMatchObject({ type: "dm", lastPinTimestamp: null })
+    expect(direct).not.toHaveProperty("nsfw")
+    await api.connect()
+    const updates: unknown[] = []
+    await api.on("directMessageUpdate", (value) => {
+        updates.push(value)
+    })
+    dispatch("CHANNEL_UPDATE", group("11", { nsfw: true, last_pin_timestamp: "2026-09-10T08:30:00.000Z" }))
+    await vi.waitFor(() => expect(updates).toHaveLength(1))
+    expect(updates[0]).toMatchObject({ id: "11", nsfw: true, lastPinTimestamp: "2026-09-10T08:30:00.000Z" })
+})
+
+test.each(modes)("%s carries the added account's identity on a recipient change", async (mode) => {
+    const dispatch = await gateway()
+    rest(async (url) => {
+        throw Error(`Unexpected request ${new URL(url).pathname}`)
+    })
+    const api = await setup(mode)
+    await api.connect()
+    const added: EventMap["directMessageRecipientAdd"][] = []
+    await api.on("directMessageRecipientAdd", (value) => {
+        added.push(value)
+    })
+    // Fluxer sends the account's public user, without private fields
+    const { email: _email, mfa_enabled: _mfa, ...publicUser } = user("31", { username: "newcomer", global_name: "New" })
+    dispatch("CHANNEL_RECIPIENT_ADD", { channel_id: "40", user: publicUser })
+    dispatch("CHANNEL_RECIPIENT_ADD", { channel_id: "40", user: { id: "32" } })
+    await vi.waitFor(() => expect(added).toHaveLength(2))
+    expect(added[0]).toMatchObject({
+        channelId: "40",
+        userId: "31",
+        user: { id: "31", username: "newcomer", displayName: "New", discriminator: "0001" },
+    })
+    expect(added[1]).toEqual({ channelId: "40", userId: "32" })
+})
+
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(url, init),
     )
 }

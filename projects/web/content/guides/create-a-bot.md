@@ -23,7 +23,7 @@ Fluxer creates the bot account together with the application and opens the appli
 
 The page shows the **Application ID** with a **Copy ID** button. Note it for the invite link below. It is not secret, and the bot account's user ID is the same number
 
-Fluxer's API reference describes [what creating an application returns](https://docs.fluxer.app/http-api/applications/#create-application)
+Fluxer's API reference describes [what creating an application returns](https://docs.fluxer.com/http-api/applications/#create-application)
 
 ## 2. Copy the token
 
@@ -34,7 +34,7 @@ On the application's page, the **Secrets & tokens** section shows the **Bot toke
 
 Choose **Regenerate** next to the bot token. The old token stops working at once, and every running copy of the bot is disconnected. Put the new token in `.env` and start the bot again
 
-A token has the form `<application_id>.<secret>`, so the part before the dot is the application ID. Fluxer's [token formats](https://docs.fluxer.app/authentication/#token-formats) and [credential handling](https://docs.fluxer.app/authentication/#credential-handling) notes cover the details
+A token has the form `<application_id>.<secret>`, so the part before the dot is the application ID. Fluxer's [token formats](https://docs.fluxer.com/authentication/#token-formats) and [credential handling](https://docs.fluxer.com/authentication/#credential-handling) notes cover the details
 
 </details>
 
@@ -49,7 +49,7 @@ An invite link opens Fluxer's page for adding the bot to a community. The quick 
 Together these make the permission value 68608. Replace `APPLICATION_ID` in this link with the application ID, then open it in a browser:
 
 ```text
-https://api.fluxer.app/v1/oauth2/authorize?client_id=APPLICATION_ID&scope=bot&permissions=68608
+https://fluxer.com/oauth2/authorize?client_id=APPLICATION_ID&scope=bot&permissions=68608
 ```
 
 Fluxer asks which account to use, then which community to add the bot to, and shows the requested permissions. Choose **Authorise** on the last step. Fluxer creates a role named after the application with exactly these permissions and gives it to the bot
@@ -64,7 +64,7 @@ The application's page also has an **OAuth2 URL builder** section that builds su
 - A private bot can be added only by the account that owns the application
 - A bot that is already in the community cannot be added again
 
-The role Fluxer creates for the bot stays in the community if the bot leaves. The [consent step](https://docs.fluxer.app/http-api/oauth2/#grant-oauth2-consent) in Fluxer's API reference lists every outcome
+The role Fluxer creates for the bot stays in the community if the bot leaves. The [consent step](https://docs.fluxer.com/http-api/oauth2/#grant-oauth2-consent) in Fluxer's API reference lists every outcome
 
 </details>
 

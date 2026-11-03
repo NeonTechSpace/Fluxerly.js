@@ -23,12 +23,21 @@ export class AgentsSectionError extends Error {
     override readonly name = "AgentsSectionError"
 }
 
-// The recorded command must run the installed copy and never download one, since the unscoped fluxerly package on npm is not this SDK
-function refreshCommand(project: string) {
+/** A package manager that can install and run the SDK */
+export type AgentsPackageManager = "npm" | "pnpm" | "bun"
+
+// The recorded command must run the installed copy and never download one, since the unscoped fluxerly package on npm is
+// not this SDK. A lockfile names the project's manager. Without one, as in a new starter, the manager that ran the
+// command is used
+function refreshCommand(project: string, manager: AgentsPackageManager = "npm") {
     if (existsSync(join(project, "pnpm-lock.yaml"))) return "pnpm exec fluxerly agents"
     if (existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb")))
         return "bunx --no-install fluxerly agents"
-    return "npx --no fluxerly agents"
+    return {
+        npm: "npx --no fluxerly agents",
+        pnpm: "pnpm exec fluxerly agents",
+        bun: "bunx --no-install fluxerly agents",
+    }[manager]
 }
 
 function between(text: string, open: string, close: string, where: string) {
@@ -58,15 +67,18 @@ function agentsSection(guide: string, version: string, command: string) {
 }
 
 /** The section for `project` built from the installed package at `packageRoot` */
-function packagedSection(project: string, packageRoot: string) {
+function packagedSection(project: string, packageRoot: string, manager?: AgentsPackageManager) {
     const guide = readFileSync(join(packageRoot, "agents/AGENTS.md"), "utf8").replaceAll("\r\n", "\n")
     const { version } = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { version: string }
-    return agentsSection(guide, version, refreshCommand(project))
+    return agentsSection(guide, version, refreshCommand(project, manager))
 }
 
-/** The AGENTS.md text that writeAgentsSection creates when `project` has none */
-export function newAgentsFile(project: string, packageRoot: string): string {
-    return `# Agent instructions\n\n${packagedSection(project, packageRoot)}\n`
+/**
+ * The AGENTS.md text that writeAgentsSection creates when `project` has none. `manager` picks the refresh command when
+ * the project has no lockfile yet
+ */
+export function newAgentsFile(project: string, packageRoot: string, manager?: AgentsPackageManager): string {
+    return `# Agent instructions\n\n${packagedSection(project, packageRoot, manager)}\n`
 }
 
 /**

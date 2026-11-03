@@ -16,7 +16,8 @@ export interface ReactionUsersQuery {
 }
 
 /** Account identity returned in a reaction-user page.
- * This frozen snapshot has no account methods, community membership details or automatically refreshed data
+ * This frozen snapshot has no account methods, community membership details or automatically refreshed data.
+ * Optional fields are absent when Fluxer omits them
  *
  * @category Messages
  */
@@ -25,8 +26,25 @@ export interface ReactionUser {
     readonly id: string
     /** Username at the time Fluxer returned this page */
     readonly username: string
-    /** True if Fluxer marked the account as a bot, otherwise false */
+    /** True if Fluxer marked the account as a bot, otherwise false. Fluxer names it bot */
     readonly isBot: boolean
+    /** Discriminator that tells accounts with the same username apart */
+    readonly discriminator?: string
+    /** Account-wide display name, null when unset. Fluxer names it global_name */
+    readonly displayName?: string | null
+    /** Avatar asset hash, not an image URL, null when the account has no avatar */
+    readonly avatar?: string | null
+    /** Dominant avatar color, or null */
+    readonly avatarColor?: number | null
+    /** Whether Fluxer marked this as an official system account. Fluxer names it system */
+    readonly isSystem?: boolean
+    /** Public account flags. Unrecognized 32-bit values are kept */
+    readonly flags?: number
+    /** Account-wide reply mention preference: 0 for none, 1 to prefer a mention, or 2 to prefer no mention.
+     * Absent when Fluxer omits it or sends a value this SDK version does not know, so a new preference never fails the
+     * read. This is descriptive only, and sending and replying keep using explicit AllowedMentions
+     */
+    readonly mentionFlags?: 0 | 1 | 2
 }
 
 /** One frozen page of users who reacted with the requested emoji.
@@ -77,8 +95,9 @@ export interface ReactionEmoji {
 /** Message address carried by a reaction event, with optional community context.
  * The `id` field is the message ID.
  * Gateway reconnection can miss events. An event does not show current counts or everyone who reacted.
- * Additional provider data, such as session identifiers, is not retained. The acting member of an addition or removal
- * is available only as MessageReaction.member
+ * Fluxer's session_id field, which names the client session that made a change in a private channel, is not kept,
+ * because it identifies a connection, not an account or message. The raw event carries it as d.session_id. The acting
+ * member of an addition or removal is available only as MessageReaction.member
  *
  * @category Messages
  */

@@ -60,7 +60,11 @@ const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | un
     const filename = value.slice("attachment://".length)
     const extension = filename.split(".").pop()?.toLowerCase()
     const matches = uploadedFilenames?.filter((uploaded) => uploaded === filename).length ?? 0
+    // Fluxer renames an upload with two dots in a row or a Windows device name before its first dot, so the reference
+    // would no longer match (packages/schema/src/primitives/FileValidators.ts:50-66 at 5f3fc0b1)
     return /^[\p{L}\p{N}\p{M}_.-]+$/u.test(filename) &&
+        !filename.includes("..") &&
+        !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(filename) &&
         matches === 1 &&
         extension !== undefined &&
         attachmentMediaExtensions.has(extension)

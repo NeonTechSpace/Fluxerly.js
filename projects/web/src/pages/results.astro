@@ -38,7 +38,7 @@ const accent = "violet"
     <Scene id="on-error" step={3} side="left" {accent} guide={guide("logging", "handle-failures-in-one-place")} guideLabel="Handle Failures in One Place">
         <Fragment slot="title">Failures with No Caller Go to onError</Fragment>
         <Fragment slot="text">
-            <p>A handler that throws or a command that fails has no caller to return to. The SDK sends each one to <code class="inline-code">onError</code>, a hook you pass to <code class="inline-code">runBot</code>, with the original error and the IDs of the message involved, never its content</p>
+            <p>A handler or command that throws, or that returns a failed Result, has no caller to hand the failure to. The SDK sends it to <code class="inline-code">onError</code>, a hook you pass to <code class="inline-code">runBot</code>, with the original error and the IDs of the message involved. The SDK adds no message content itself, but your own error can contain some</p>
             <p>Without a hook, the SDK logs the failure in full. Reports wait their turn while the hook is busy, and any that cannot wait are logged instead and counted, so none disappear</p>
         </Fragment>
         <CodePanel file="TypeScript" label="Send every failure to one hook" code={onError} />
@@ -48,7 +48,7 @@ const accent = "violet"
         <Fragment slot="title">Errors with a Code and a Hint</Fragment>
         <Fragment slot="text">
             <p>Every SDK error has a fixed <code class="inline-code">code</code>, a <code class="inline-code">hint</code> with the next step when there is one, and <code class="inline-code">details</code> that are safe to log. <code class="inline-code">errors.apiCode</code> names Fluxer's own reason, such as <code class="inline-code">missingPermissions</code></p>
-            <p><code class="inline-code">describeError</code> prints all of it with the chain of causes, and masks credentials on the way</p>
+            <p><code class="inline-code">describeError</code> prints all of it with the chain of causes, and masks recognized credentials on the way</p>
         </Fragment>
         <CodePanel file="TypeScript" label="Read the code, hint and details of a failed reply" code={readError} />
     </Scene>
@@ -56,7 +56,7 @@ const accent = "violet"
     <Scene id="log" step={5} side="left" {accent} guide={guide("logging", "read-the-default-output")} guideLabel="Read the Default Output">
         <Fragment slot="title">What the Log Says</Fragment>
         <Fragment slot="text">
-            <p>When a handler fails, the log prints one Error record with the event, the IDs of the message and the error. An expected SDK error shows its code, hint and details instead of stack frames</p>
+            <p>Without an <code class="inline-code">onError</code> hook, a failed handler prints one Error record with the event, the IDs of the message and the error. An expected SDK error shows its code, hint and details instead of stack frames</p>
             <p>This one is a reply the bot was not allowed to send. The hint names the permissions to grant and where, and no record ever contains the token</p>
         </Fragment>
         <LogPanel log={failedReply} label="The log record of a reply without permission" />

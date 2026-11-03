@@ -393,7 +393,7 @@ test("error text, JSON and descriptions stay total and masked for unusual or cre
         expect(sdk).toMatchObject({ code: "sdk.defect", message: expect.stringMatching(/\S/) })
         expect(() => JSON.stringify(sdk)).not.toThrow()
     }
-    const webhook = "https://api.fluxer.app/v1/webhooks/123/webhook-canary-secret"
+    const webhook = "https://fluxer.com/api/v1/webhooks/123/webhook-canary-secret"
     const inner = new Error(`request to ${webhook} failed with Authorization: Bot other-canary`)
     const wrapped = new ApplicationError("runBot install", inner)
     const json = JSON.stringify(wrapped.toJSON())
@@ -404,6 +404,35 @@ test("error text, JSON and descriptions stay total and masked for unusual or cre
     // The cause keeps the original value unchanged for the application
     expect(wrapped.cause).toBe(inner)
     expect(inner.message).toContain("webhook-canary-secret")
+})
+
+test("error JSON follows ordinary Error causes with masking, a nesting limit and guarded getters", () => {
+    const lookup = Object.assign(new Error("getaddrinfo ENOTFOUND api.example with Authorization: Bot nested-canary"), {
+        code: "ENOTFOUND",
+    })
+    const wrapped = new ApplicationError("runBot setup", new TypeError("fetch failed", { cause: lookup }))
+    expect(wrapped.toJSON().cause).toEqual({
+        name: "TypeError",
+        message: "fetch failed",
+        cause: { name: "Error", message: expect.stringContaining("ENOTFOUND") },
+    })
+    expect(JSON.stringify(wrapped.toJSON())).not.toContain("nested-canary")
+
+    // A cycle stops at the same limit as nested SDK causes
+    const cyclic = new Error("cycle")
+    Object.assign(cyclic, { cause: cyclic })
+    let depth = 0
+    for (let level: unknown = new ApplicationError("task", cyclic).toJSON().cause; level !== undefined; depth++)
+        level = (level as { cause?: unknown }).cause
+    expect(depth).toBeLessThanOrEqual(6)
+
+    const hostile = new Error("outer")
+    Object.defineProperty(hostile, "cause", {
+        get() {
+            throw new Error("cause getter")
+        },
+    })
+    expect(new ApplicationError("task", hostile).toJSON().cause).toEqual({ name: "Error", message: "outer" })
 })
 
 test("a read failure records details.read and drops the write-reconciliation hint", () => {

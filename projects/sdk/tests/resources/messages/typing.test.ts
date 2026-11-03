@@ -1,4 +1,5 @@
-import { Context, Deferred, Effect, Exit, Fiber } from "effect"
+import { Clock, Context, Deferred, Effect, Exit, Fiber } from "effect"
+import { TestClock } from "effect/testing"
 import { afterEach, describe, expect, test, vi } from "vitest"
 import {
     ClientClosedError,
@@ -8,6 +9,7 @@ import {
     type TypingStart,
 } from "../../../src/index.js"
 import { createClient as createNative, type Client as NativeClient } from "../../../src/effect.js"
+import { createTestClient } from "../../../src/effect-testing.js"
 import { defaultApi, modes, setup, type Mode } from "../../support/both-apis.js"
 import { captureLogs } from "../../support/log-capture.js"
 import { startGatewayServer } from "../../support/gateway-server.js"
@@ -48,7 +50,7 @@ test("default typing uses Fluxer's one-shot channel route without a body or loca
         reason: "input",
         outcome: "notDispatched",
     })
-    expect(requests).toEqual([{ url: "https://api.fluxer.app/v1/channels/20/typing", method: "POST", body: undefined }])
+    expect(requests).toEqual([{ url: "https://fluxer.com/api/v1/channels/20/typing", method: "POST", body: undefined }])
 
     await client.shutdown()
     const closed = await client.messages.typing("20")
@@ -66,8 +68,8 @@ test("native typing is lazy and repeatable with the same one-shot request", asyn
                 yield* typing
                 yield* typing
                 expect(requests).toEqual([
-                    { url: "https://api.fluxer.app/v1/channels/20/typing", method: "POST", body: undefined },
-                    { url: "https://api.fluxer.app/v1/channels/20/typing", method: "POST", body: undefined },
+                    { url: "https://fluxer.com/api/v1/channels/20/typing", method: "POST", body: undefined },
+                    { url: "https://fluxer.com/api/v1/channels/20/typing", method: "POST", body: undefined },
                 ])
             }),
         ),
@@ -93,7 +95,7 @@ test("native keepTyping preserves its caller context", async () => {
     )
 
     expect(value).toBe("caller context")
-    expect(requests).toEqual([{ url: "https://api.fluxer.app/v1/channels/20/typing", method: "POST", body: undefined }])
+    expect(requests).toEqual([{ url: "https://fluxer.com/api/v1/channels/20/typing", method: "POST", body: undefined }])
 })
 
 test("default keepTyping refreshes at a bounded rate, never overlaps a held refresh, and stops after work", async () => {
@@ -426,7 +428,7 @@ async function gatewayFixture() {
     const discoveryRequests: Request[] = []
     stubFetchWithHostedDiscovery(async (url: string | URL, init?: RequestInit) => {
         discoveryRequests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body })
-        return new Response(JSON.stringify({ url: "wss://gateway.fluxer.app" }), { status: 200 })
+        return new Response(JSON.stringify({ url: "wss://gateway.fluxer.com" }), { status: 200 })
     })
     return {
         discoveryRequests,
@@ -485,4 +487,37 @@ test("typingStart is frozen delivery-only gateway data, including valid partial 
     await Effect.runPromise(Deferred.await(nativeReady))
     gateway.dispatch({ channel_id: "20", user_id: "32", timestamp: 1_700_000_002 })
     expect(await nativeDelivery).toEqual({ channelId: "20", userId: "32", timestamp: 1_700_000_002 })
+})
+
+// Its refresh delay follows the caller's Clock, as the Effect keepTyping documentation says
+test("Effect keepTyping waits for its refresh on the caller's Clock, not the creation Clock", async () => {
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                // The layer below makes the creation Clock a TestClock
+                const creationClock = (yield* Clock.Clock) as TestClock.TestClock
+                const callerClock = yield* TestClock.make({ warningDelay: "10 seconds" })
+                const bot = yield* createTestClient()
+                const route = bot.rest.respond("POST /channels/:id/typing", { status: 204 })
+                yield* bot.ready()
+                const started = yield* Deferred.make<void>()
+                const end = yield* Deferred.make<void>()
+                const run = yield* Effect.forkChild(
+                    bot.client.messages
+                        .keepTyping(
+                            bot.fixtures.ids.channel,
+                            Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(end))),
+                        )
+                        .pipe(Effect.provideService(Clock.Clock, callerClock)),
+                )
+                yield* Deferred.await(started)
+                yield* creationClock.adjust(8_000)
+                expect(route.requests()).toHaveLength(1)
+                yield* callerClock.adjust(8_000)
+                expect(route.requests()).toHaveLength(2)
+                yield* Deferred.succeed(end, undefined)
+                yield* Fiber.join(run)
+            }),
+        ).pipe(Effect.provide(TestClock.layer({ warningDelay: "10 seconds" }))),
+    )
 })

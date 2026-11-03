@@ -1,7 +1,7 @@
 import type { ApiErrorDetail } from "./api-errors.js"
 import type { InputValidationDetail } from "./input-validation.js"
 import { CloseCode, closeCodeInfo } from "#sdk/internal/protocol/gateway"
-import { describeValue, errorSummary, maskText } from "#sdk/internal/masking"
+import { maskedSummary, maskText, maskValue } from "#sdk/internal/masking"
 
 /**
  * Settings shared by SDK error constructors
@@ -46,21 +46,37 @@ export interface FluxerlyErrorJson {
               readonly name: string
               /** Message of a non-SDK cause, or its text form when it is not an Error */
               readonly message: string
+              /** Summary of an Error cause's own cause, when it has one, up to the same nesting limit as SDK causes */
+              readonly cause?: FluxerlyErrorJson["cause"]
           }
 }
 
 function causeJson(cause: unknown, depth: number): NonNullable<FluxerlyErrorJson["cause"]> {
     try {
         if (cause instanceof FluxerlyError && depth < 5) return errorJson(cause, depth + 1)
-        if (cause instanceof Error)
-            return { name: maskText(String(cause.name)), message: maskText(String(cause.message)) }
+        if (cause instanceof Error) {
+            const summary = { name: maskText(String(cause.name)), message: maskText(String(cause.message)) }
+            return depth < 5 ? { ...summary, ...nestedCauseJson(cause, depth) } : summary
+        }
     } catch {
         // allow-silent: an Error whose name or message getters throw is summarized by the guarded fallback below
     }
     return {
         name: `Non-Error value (${cause === null ? "null" : typeof cause})`,
-        message: maskText(describeValue(cause)),
+        message: maskValue(cause),
     }
+}
+
+/** The summary of an ordinary Error's own cause, or nothing when it has none or reading it throws */
+function nestedCauseJson(error: Error, depth: number): { readonly cause?: FluxerlyErrorJson["cause"] } {
+    let nested: unknown
+    try {
+        nested = error.cause
+    } catch {
+        // allow-silent: a throwing cause getter leaves the outer Error's own summary intact
+        return {}
+    }
+    return nested === undefined ? {} : { cause: causeJson(nested, depth + 1) }
 }
 
 function errorJson(error: FluxerlyError, depth: number): FluxerlyErrorJson {
@@ -127,8 +143,9 @@ export type OperationOutcome = "notDispatched" | "rejected" | "unknown"
  * Why a remote operation failed.
  * The reason input means local validation failed, busy means local request capacity was full, and notFound means HTTP 404.
  * A 404 does not prove that an earlier deletion succeeded.
- * The reason rejected is another API rejection, network is a transport failure, response means unusable success data,
- * timeout means the deadline expired, and rateLimit means the wait Fluxer required could not be completed.
+ * The reason rejected means Fluxer refused the request, or with outcome notDispatched that the SDK refused it before
+ * sending because a permission is missing. The reason network is a transport failure, response means unusable success data,
+ * timeout means the deadline expired, and rateLimit means the wait the server required could not be completed.
  * A connection lost while a response body arrives is a network failure.
  * HTTP failures keep their status, never their response bodies
  *
@@ -171,6 +188,11 @@ export interface OperationErrorOptions<Operation extends string, Reason extends 
      * A read is recorded as details.read and keeps network and timeout failures retryable. Defaults to false
      */
     readonly read?: boolean | undefined
+    /** Whether a rate-limited upload read an attachment from a ReadableStream, which cannot be read again.
+     * Recorded as details.streamUsed. It makes errors.isRetryable false, because repeating the same call would send the
+     * used stream. Send again with a new stream or with the file as bytes. Defaults to false
+     */
+    readonly streamUsed?: boolean | undefined
     /** Underlying failure retained as the error's cause */
     readonly cause?: unknown
 }
@@ -183,12 +205,14 @@ export function operationHint(
     reason: string,
     outcome: string,
     retryAfterMs: number | null,
-    read = false,
+    { read = false, streamUsed = false }: { readonly read?: boolean; readonly streamUsed?: boolean } = {},
 ): string | undefined {
+    if (reason === "rateLimit" && streamUsed)
+        return `The upload was rate-limited. Wait at least ${retryAfterMs ?? 0} ms, then send it again with a new stream or with the file as bytes`
     if (reason === "rateLimit")
         return retryAfterMs === null
-            ? "Fluxer rate-limited this request. Wait before retrying"
-            : `Fluxer rate-limited this request. Wait at least ${retryAfterMs} ms before retrying`
+            ? "The request was rate-limited. Wait before retrying"
+            : `The request was rate-limited. Wait at least ${retryAfterMs} ms before retrying`
     if (outcome === "unknown" && !read) return "Check whether Fluxer applied the change before repeating it"
     return reasonHints[reason]
 }
@@ -202,7 +226,7 @@ const reasonHints: Readonly<Record<string, string | undefined>> = {
     notConnected: "Connect the client and wait until it is ready before calling this",
     connectionLost: "Retry after the shard reconnects",
     response:
-        "Fluxer's answer changed shape, or a test fixture is wrong. Check the fixture, or report the field named in details.responseField",
+        "Fluxer's answer changed shape, or a test fixture is wrong. Check the fixture, or report this error with details.responseField when it is present",
     tooLarge: "Raise maxBytes if the attachment is expected to be this large",
     untrustedUrl: "Pass an attachment URL received from this client's Fluxer instance",
     overflow: "Read the batches faster, or raise maxPendingBytes",
@@ -343,6 +367,7 @@ export class ConfigurationError extends FluxerlyError {
             | "task"
             | "delayMs"
             | "intervalMs"
+            | "name"
             | "embedField",
         /** Explanation of the accepted setting, without its rejected value */
         message: string,
@@ -470,8 +495,9 @@ export class AuthenticationError extends FluxerlyError {
  * An explanation does not establish whether the session can resume or whether the SDK will retry.
  * Local gateway receive-limit and UTF-8 failures use reason protocol and status 1009 and 1007 respectively.
  * These failures and binary frames do not retry automatically. No rejected payload is retained.
- * Other invalid gateway data, such as a frame that is not JSON or a sequence that goes backwards, is retried with a new
- * session. Three such failures in a row without a healthy connection between them end the shard with reason protocol.
+ * Other invalid frame or session data, such as a frame that is not JSON or a sequence that goes backwards, is retried with a
+ * new session. Three such failures in a row without a healthy connection between them end the shard with reason protocol.
+ * A malformed event body follows gateway.onMalformedDispatch instead.
  * Protocol failures name the violated opcode, dispatch type or field path in details when the SDK identified one
  *
  * @category Errors
@@ -720,16 +746,20 @@ export class CancelledError extends FluxerlyError {
 
 /** Short masked text for an application-thrown value. Never throws, including for null, symbols and hostile proxies */
 function thrownText(value: unknown): string {
-    if (typeof value === "string")
-        return maskText(JSON.stringify(value.length > 200 ? `${value.slice(0, 200)}…` : value))
+    // Masked before it is cut, so the cut cannot shorten a credential below the length a rule recognizes, and before
+    // it is quoted, because quoting escapes the quotes that the text rules read
+    if (typeof value === "string") {
+        const masked = maskText(value)
+        return JSON.stringify(masked.length > 200 ? `${masked.slice(0, 200)}…` : masked)
+    }
     let error = false
     try {
         error = value instanceof Error
     } catch {
         // allow-silent: a proxy that rejects prototype inspection is described as a non-Error object below
     }
-    if (error) return maskText(errorSummary(value))
-    return typeof value === "object" && value !== null ? "a non-Error object" : describeValue(value)
+    if (error) return maskedSummary(value)
+    return typeof value === "object" && value !== null ? "a non-Error object" : maskValue(value)
 }
 
 /** The masked message of an application fault, usually an ApplicationError, or a guarded description of another value */

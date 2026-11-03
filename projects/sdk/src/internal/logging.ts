@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Cause from "effect/Cause"
+import * as Clock from "effect/Clock"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Logger from "effect/Logger"
@@ -18,7 +19,7 @@ import { ConfigurationError, FluxerlyError } from "#sdk/errors"
 import { record } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 import { metrics } from "./metrics.js"
-import { describeValue, errorSummary, maskPayload, maskText } from "./masking.js"
+import { maskedErrorCode, maskedSummary, maskPayload, maskText, maskValue } from "./masking.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { errorCodes, type LogCode } from "./code-catalogue.js"
 
@@ -104,11 +105,15 @@ const sdkCodePatterns = Object.keys(errorCodes).map(
 /** Treat each error in a parsed record's cause chain with a catalogued SDK code as an SDK error, so its stack stays
  * hidden as it is in the process that built it. A supervisor parent calls this for the records its children print
  */
-export function markSdkErrors(info: ErrorInfo | undefined): void {
-    for (let depth = 0; info && depth < 8; info = info.cause, depth++)
-        if (typeof info.code === "string" && sdkCodePatterns.some((pattern) => pattern.test(info!.code!)))
-            sdkInfos.add(info)
+export function markSdkErrors(info: ErrorInfo | undefined, depth = 0): void {
+    if (!info || depth >= 8) return
+    if (typeof info.code === "string" && sdkCodePatterns.some((pattern) => pattern.test(info.code!))) sdkInfos.add(info)
+    markSdkErrors(info.cause, depth + 1)
+    if (Array.isArray(info.errors)) for (const member of info.errors) markSdkErrors(member, depth + 1)
 }
+
+/** Most member errors of an AggregateError kept in ErrorInfo */
+const maximumMembers = 10
 
 /** Convert any thrown or failed value to masked ErrorInfo, following the cause chain a few levels.
  * Never throws: Getters, proxies and null-prototype objects that reject inspection get a guarded description
@@ -129,15 +134,26 @@ export function errorInfo(
                   : undefined
             const apiError = sdk && (value as { apiError?: unknown }).apiError
             const cause = (value as { cause?: unknown }).cause
+            // An AggregateError, such as the rejection of Promise.any, holds the reason of each attempt in errors
+            const members: unknown = Object.hasOwn(value, "errors") ? (value as { errors?: unknown }).errors : undefined
             const stack: unknown = value.stack
             const info: ErrorInfo = Object.freeze({
                 origin: sdk ? (apiError ? "provider" : origin === "application" ? "application" : "sdk") : origin,
                 name: maskText(String(value.name), secrets),
                 message: maskText(String(value.message), secrets),
-                ...(code === undefined ? {} : { code: sdk ? code : maskText(code, secrets) }),
+                ...(code === undefined ? {} : { code: sdk ? code : maskedErrorCode(value, code, secrets) }),
                 ...(sdk && value.hint !== undefined ? { hint: value.hint } : {}),
                 ...(typeof stack === "string" ? { stack: maskText(stack, secrets) } : {}),
                 ...(cause === undefined || depth >= 4 ? {} : { cause: errorInfo(cause, origin, secrets, depth + 1) }),
+                ...(!Array.isArray(members) || members.length === 0 || depth >= 4
+                    ? {}
+                    : {
+                          errors: Object.freeze(
+                              members
+                                  .slice(0, maximumMembers)
+                                  .map((member) => errorInfo(member, origin, secrets, depth + 1)),
+                          ),
+                      }),
                 ...(sdk && Object.keys(value.details).length ? { details: value.details } : {}),
             })
             if (sdk) sdkInfos.add(info)
@@ -156,19 +172,45 @@ export function errorInfo(
     return Object.freeze({
         origin,
         name: `Non-Error value (${kind})`,
-        message: maskText(describeValue(value), secrets),
+        message: maskValue(value, secrets),
     })
+}
+
+/** The other failures and defects of a Cause after error, the one a record or report names, at most maximumMembers.
+ * A Cause that does not hold error, such as one whose error was replaced, adds nothing, so no failure is shown twice
+ */
+export function otherFailures(cause: Cause.Cause<unknown> | undefined, error: unknown): unknown[] {
+    if (cause === undefined) return []
+    const values = cause.reasons.flatMap((reason) =>
+        reason._tag === "Fail" ? [reason.error] : reason._tag === "Die" ? [reason.defect] : [],
+    )
+    if (!values.includes(error)) return []
+    return [...new Set(values.filter((value) => value !== error))].slice(0, maximumMembers)
 }
 
 /** A copy of an error with its masked name, message, stack and cause chain, and only its code as another own property.
  * Effect's cause printer shows own enumerable properties, so native log records never receive the original value, and
- * the code appears next to the error name
+ * the code appears next to the error name. An AggregateError copy keeps its members, and because Effect's printer shows
+ * only the stack and cause, its stack also lists each member with its cause chain and nested members right after its
+ * first line
  */
 function maskedError(info: ErrorInfo): Error {
-    const error = new Error(info.message, info.cause ? { cause: maskedError(info.cause) } : undefined)
+    const options = info.cause ? { cause: maskedError(info.cause) } : undefined
+    const error = info.errors
+        ? new AggregateError(info.errors.map(maskedError), info.message, options)
+        : new Error(info.message, options)
     Object.defineProperty(error, "name", { value: info.name, configurable: true, writable: true, enumerable: false })
     if (info.code !== undefined) Object.defineProperty(error, "code", { value: info.code, enumerable: true })
-    error.stack = info.stack ?? `${info.name}: ${info.message}`
+    const first = `${info.name}: ${info.message}`
+    const stack = info.stack ?? first
+    // Each member prints with its code, hint, cause chain and nested members, as the readable description shows them
+    const members = info.errors?.map(
+        (member, index) => `    [errors][${index}]: ${errorText(member, "", false).replaceAll("\n", "\n      ")}`,
+    )
+    // Effect's printer keeps the lines after the first one up to the first Effect frame, so the members come first
+    error.stack = members?.length
+        ? `${first}\n${members.join("\n")}${stack.startsWith(first) ? stack.slice(first.length) : `\n${stack}`}`
+        : stack
     return error
 }
 
@@ -233,51 +275,51 @@ function internalStack(info: ErrorInfo): boolean {
     return sdkInfos.has(info) && info.name !== "SdkDefect" && info.name !== "ConfigurationError"
 }
 
+/** Details are SDK facts without credentials, and they are masked like any other value on their way to text */
 function detailText(value: unknown): string {
-    if (typeof value === "string") return value
-    try {
-        return JSON.stringify(value) ?? String(value)
-    } catch {
-        // allow-silent: Details are frozen SDK facts, but a guarded description keeps the text total
-        return describeValue(value)
-    }
+    return typeof value === "string" ? maskText(value) : maskPayload(value)
 }
 
 /** Readable multi-line text for an ErrorInfo, indented for console output: Title, hint, safe details and stack frames
  * for each error in the cause chain. Consecutive frames inside the SDK and Effect collapse into one line, and SDK
  * errors other than SdkDefect and ConfigurationError print no frames. JSON output keeps the full stack
  */
-export function errorText(info: ErrorInfo, indent = "    ", stack = true): string {
+export function errorText(info: ErrorInfo, indent = "    ", stack = true, label = ""): string {
     const lines: string[] = []
-    let current: ErrorInfo | undefined = info
-    let first = true
-    while (current) {
-        const title = `${current.name}${current.code === undefined ? "" : ` [${current.code}]`}: ${current.message}`
-        lines.push(`${indent}${first ? "" : "Caused by: "}${title}`)
-        if (current.hint) lines.push(`${indent}  Hint: ${current.hint}`)
-        const details = Object.entries(current.details ?? {})
-        if (details.length)
-            lines.push(`${indent}  Details: ${details.map(([key, value]) => `${key}=${detailText(value)}`).join(" ")}`)
-        if (stack && current.stack && !internalStack(current)) {
-            let hidden = 0
-            const flush = () => {
-                if (hidden > 0)
-                    lines.push(`${indent}  ... ${hidden} SDK and Effect frame${hidden === 1 ? "" : "s"} hidden`)
-                hidden = 0
-            }
-            for (const frame of current.stack.split("\n").filter((line) => /^\s+at /.test(line))) {
-                if (internalFrame(frame)) {
-                    hidden++
-                    continue
+    const add = (start: ErrorInfo, at: string, label: string) => {
+        let current: ErrorInfo | undefined = start
+        let prefix = label
+        while (current) {
+            const title = `${current.name}${current.code === undefined ? "" : ` [${current.code}]`}: ${current.message}`
+            lines.push(`${at}${prefix}${title}`)
+            if (current.hint) lines.push(`${at}  Hint: ${current.hint}`)
+            const details = Object.entries(current.details ?? {})
+            if (details.length)
+                lines.push(`${at}  Details: ${details.map(([key, value]) => `${key}=${detailText(value)}`).join(" ")}`)
+            if (stack && current.stack && !internalStack(current)) {
+                let hidden = 0
+                const flush = () => {
+                    if (hidden > 0)
+                        lines.push(`${at}  ... ${hidden} SDK and Effect frame${hidden === 1 ? "" : "s"} hidden`)
+                    hidden = 0
+                }
+                for (const frame of current.stack.split("\n").filter((line) => /^\s+at /.test(line))) {
+                    if (internalFrame(frame)) {
+                        hidden++
+                        continue
+                    }
+                    flush()
+                    lines.push(`${at}  ${frame.trim()}`)
                 }
                 flush()
-                lines.push(`${indent}  ${frame.trim()}`)
             }
-            flush()
+            // The members of an AggregateError print under it, one level deeper
+            for (const member of current.errors ?? []) add(member, `${at}  `, "Contains: ")
+            prefix = "Caused by: "
+            current = current.cause
         }
-        first = false
-        current = current.cause
     }
+    add(info, indent, label)
     return lines.join("\n")
 }
 
@@ -324,14 +366,16 @@ export function prettyLine(entry: LogRecord, color: boolean): string {
     const line = facts.length
         ? `${head} ${color ? "\u001b[90m" : ""}${facts.join(" ")}${color ? "\u001b[0m" : ""}`
         : head
-    return entry.error ? `${line}\n${errorText(entry.error)}` : line
+    if (!entry.error) return line
+    const others = (entry.otherErrors ?? []).map((other) => `\n${errorText(other, "    ", true, "Also failed: ")}`)
+    return `${line}\n${errorText(entry.error)}${others.join("")}`
 }
 
 function jsonLine(entry: LogRecord): string {
     return JSON.stringify(entry, (_, value) => (typeof value === "bigint" ? value.toString() : value))
 }
 
-function isThenable(value: unknown): value is PromiseLike<unknown> {
+export function isThenable(value: unknown): value is PromiseLike<unknown> {
     return (
         (typeof value === "object" || typeof value === "function") &&
         value !== null &&
@@ -397,6 +441,10 @@ export class ClientLogger {
      * failure checks see unhandled failures however quiet the test client's logging is
      */
     errorTap: ((record: LogRecord) => void) | undefined
+    /** The Clock that default-API work runs with, set only when the default test client attaches its manual clock, so
+     * waits that read the caller's Clock, such as waitFor, follow the same time as the client's own timers
+     */
+    clock: Clock.Clock | undefined
 
     constructor(
         settings: Settings,
@@ -548,7 +596,7 @@ export class ClientLogger {
                 category: "sdk",
                 code: "sdk.unsafePayloads",
                 message:
-                    "Unsafe payload logging is enabled. Trace records include gateway and REST payloads, which can contain private message content. Bot tokens and other secrets stay masked",
+                    "Unsafe payload logging is enabled. Trace records include gateway and REST payloads, which can contain private message content. Bot tokens and recognized credentials stay masked",
                 fields: { categories: [...this.#settings.unsafe!].join(",") },
             },
             context,
@@ -558,9 +606,16 @@ export class ClientLogger {
     /** Print a masked payload body at Trace when unsafe payload logging covers this category.
      * A silent category prints nothing. Otherwise the unsafe banner precedes the first payload record
      */
-    payload(category: LogCategory, code: LogCode, message: string, value: unknown, extra?: Partial<LogInput>) {
+    payload(
+        category: LogCategory,
+        code: LogCode,
+        message: string,
+        value: unknown,
+        extra?: Partial<LogInput>,
+        context?: Context.Context<never>,
+    ) {
         if (!this.unsafePayloads(category) || this.#thresholds[category] >= rank.silent) return
-        this.#unsafeBanner(undefined)
+        this.#unsafeBanner(context)
         this.#emit(
             {
                 ...extra,
@@ -568,9 +623,9 @@ export class ClientLogger {
                 category,
                 code,
                 message,
-                fields: { ...extra?.fields, payload: maskPayload(value, this.#secrets) },
+                fields: { ...extra?.fields, payload: maskPayload(value, this.#secrets, undefined, extra?.route) },
             },
-            undefined,
+            context,
         )
     }
 
@@ -586,8 +641,9 @@ export class ClientLogger {
         if (rank[input.level] >= rank.error && typeof input.error === "object" && input.error !== null)
             this.#loggedErrors.add(input.error)
         if (rank[input.level] >= rank.warn && this.#settings.dedupeMs !== undefined) {
-            // The shard and subscription keep the same fault on different shards or subscriptions apart
-            const key = `${input.level}|${input.code}|${input.shardId ?? ""}|${input.subscriptionId ?? ""}|${input.message}|${this.#errorKey(input.error)}`
+            // The shard and subscription keep the same fault on different shards or subscriptions apart. The message is
+            // compared as printed, so messages that differ only in a hidden credential are repeats
+            const key = `${input.level}|${input.code}|${input.shardId ?? ""}|${input.subscriptionId ?? ""}|${maskText(input.message, this.#secrets)}|${this.#errorKey(input.error, input.cause)}`
             const now = Date.now()
             const entry = this.#dedupe.get(key)
             if (entry && now - entry.shownAt < this.#settings.dedupeMs) {
@@ -641,8 +697,23 @@ export class ClientLogger {
         }
     }
 
-    #errorKey(error: unknown) {
-        return error === undefined ? "" : errorSummary(error)
+    /** The error part of a dedupe key: Name, code and message of each error in the cause chain and of each member of an
+     * AggregateError, so the same outer error with a different cause or member is a new record rather than a repeat
+     */
+    #errorKey(error: unknown, cause?: Cause.Cause<unknown>) {
+        if (error === undefined) return ""
+        const parts: string[] = []
+        const add = (info: ErrorInfo | undefined) => {
+            for (; info; info = info.cause) {
+                parts.push(`${info.name}|${info.code ?? ""}|${info.message}`)
+                // Two aggregates with different members are different failures
+                for (const member of info.errors ?? []) add(member)
+            }
+        }
+        add(errorInfo(error, "sdk", this.#secrets))
+        // The same failure with a different cleanup failure is a different record
+        for (const other of otherFailures(cause, error)) add(errorInfo(other, "sdk", this.#secrets))
+        return parts.join("|")
     }
 
     #record(input: LogInput): LogRecord {
@@ -656,9 +727,19 @@ export class ClientLogger {
             code: input.code,
             message: maskText(input.message, this.#secrets),
         }
-        for (const key of recordKeys) if (input[key] !== undefined) entry[key] = input[key]
+        for (const key of recordKeys) {
+            const value = input[key]
+            if (value !== undefined) entry[key] = typeof value === "string" ? maskText(value, this.#secrets) : value
+        }
         if (Object.keys(fields).length) entry.fields = Object.freeze(fields)
-        if (input.error !== undefined) entry.error = errorInfo(input.error, input.origin ?? "sdk", this.#secrets)
+        if (input.error !== undefined) {
+            entry.error = errorInfo(input.error, input.origin ?? "sdk", this.#secrets)
+            const others = otherFailures(input.cause, input.error)
+            if (others.length)
+                entry.otherErrors = Object.freeze(
+                    others.map((other) => errorInfo(other, input.origin ?? "sdk", this.#secrets)),
+                )
+        }
         return Object.freeze(entry) as unknown as LogRecord
     }
 
@@ -769,7 +850,7 @@ export class ClientLogger {
         this.#sinkFailureReported = true
         try {
             process.stderr.write(
-                `Fluxerly log output failed: ${maskText(errorSummary(error), this.#secrets)}. Later failures are counted in diagnostics().counters.sinkFailures\n`,
+                `Fluxerly diagnostics output failed: ${maskedSummary(error, this.#secrets)}. Check logging.sink, the observe callback, metrics exporters and the configured Effect logger. Later failures are counted in diagnostics().counters.sinkFailures\n`,
             )
         } catch {
             // allow-silent: Standard error itself failed, and the counter still records the sink failure
@@ -782,8 +863,8 @@ export class ClientLogger {
             const level = (Object.entries(effectLevels).find(([, value]) => value === options.logLevel)?.[0] ??
                 "info") as LogLevel
             const message = Array.isArray(options.message)
-                ? options.message.map((part) => describeValue(part)).join(" ")
-                : describeValue(options.message)
+                ? options.message.map((part) => maskValue(part, this.#secrets)).join(" ")
+                : maskValue(options.message, this.#secrets)
             const failure =
                 Cause.isCause(options.cause) && options.cause.reasons.length ? Cause.squash(options.cause) : undefined
             this.log({
@@ -796,14 +877,16 @@ export class ClientLogger {
         })
     }
 
-    /** Run default-API work with SDK-internal Effect logs routed into this client's records */
+    /** Run default-API work with SDK-internal Effect logs routed into this client's records, and with the attached
+     * Clock when there is one
+     */
     provide<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
-        return this.native
-            ? effect
-            : effect.pipe(
-                  Effect.provideService(Logger.CurrentLoggers, new Set([this.bridge()])),
-                  Effect.provideService(References.MinimumLogLevel, "Trace"),
-              )
+        if (this.native) return effect
+        const provided = effect.pipe(
+            Effect.provideService(Logger.CurrentLoggers, new Set([this.bridge()])),
+            Effect.provideService(References.MinimumLogLevel, "Trace"),
+        )
+        return this.clock === undefined ? provided : provided.pipe(Effect.provideService(Clock.Clock, this.clock))
     }
 }
 

@@ -1,3 +1,5 @@
+import { installCommandFor } from "../../scripts/docs/install-command.mjs"
+
 export const docsBase = "/docs/"
 
 // Guide pages of the documentation website, by slug
@@ -26,6 +28,8 @@ export type GuideSlug =
     | "deploying"
     | "events-and-collectors"
     | "history-and-cache"
+    | "production-checklist"
+    | "raw-requests-and-events"
 
 export function guide(slug: GuideSlug, section?: string): string {
     return `${docsBase}${slug}/${section ? `#${section}` : ""}`
@@ -47,13 +51,13 @@ export const links = {
 // Until a Stable is out, npm's plain install isn't what the site describes, so the public build names the channel here
 const packageSpec: string = import.meta.env.PUBLIC_PACKAGE_SPEC ?? "@neontechspace/fluxerly"
 
-export const installCommand = `npm install ${packageSpec}`
+export const installCommand = installCommandFor("npm", packageSpec)
 export const initCommand = `npx ${packageSpec} init`
 
 export const packageManagers = [
-    { id: "npm", label: "npm", install: `npm install ${packageSpec}`, init: initCommand },
-    { id: "pnpm", label: "pnpm", install: `pnpm add ${packageSpec}`, init: `pnpm dlx ${packageSpec} init` },
-    { id: "bun", label: "Bun", install: `bun add ${packageSpec}`, init: `bunx ${packageSpec} init` },
+    { id: "npm", label: "npm", install: installCommand, init: initCommand },
+    { id: "pnpm", label: "pnpm", install: installCommandFor("pnpm", packageSpec), init: `pnpm dlx ${packageSpec} init` },
+    { id: "bun", label: "Bun", install: installCommandFor("bun", packageSpec), init: `bunx ${packageSpec} init` },
 ] as const
 
 export type PackageManager = (typeof packageManagers)[number]["id"]
@@ -108,6 +112,12 @@ export const featurePages = [
         title: "Reading and Caching Data",
         summary: "History reads, opt-in caches and collectors, with cached copies kept apart from fresh fetches",
         accent: "violet",
+    },
+    {
+        slug: "raw",
+        title: "Raw Access, Still Typed",
+        summary: "Typed calls to the routes that accept a bot token and typed raw gateway events, under Fluxer's own field names",
+        accent: "cyan",
     },
 ] as const
 

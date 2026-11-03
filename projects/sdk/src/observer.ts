@@ -41,10 +41,18 @@ export interface RateLimitObservation {
     /** Milliseconds the request waits before its retry */
     readonly waitMs: number
     /**
-     * Whether the limit pauses every API route of this client rather than one rate-limit group. It is true when the
-     * body's global member is true, the X-RateLimit-Global header is true or the X-RateLimit-Scope header is global
+     * Whether Fluxer declared the limit global, which pauses every API route of this client and is shared with the
+     * other children of a supervisor. It is true when the body's global member is true, the X-RateLimit-Global header
+     * is true or the X-RateLimit-Scope header is global
      */
     readonly global: boolean
+    /**
+     * What the SDK paused for the wait. client pauses every API request of this client, for a global limit or for a
+     * 429 that did not identify its limiter, such as one from a proxy in front of the API: No X-RateLimit-Bucket
+     * header, no X-RateLimit-Scope header and no JSON body with a boolean global member. bucket pauses only the
+     * request's rate-limit bucket, for a limit Fluxer identified as a route limit
+     */
+    readonly pause: "client" | "bucket"
     /** The X-RateLimit-Scope header, such as user, shared or global */
     readonly scope?: string
     /** The X-RateLimit-Bucket header, an opaque identifier of the route's rate-limit bucket */
@@ -76,7 +84,7 @@ export interface ReconnectObservation {
 }
 
 /**
- * A shard resumed its session, so Fluxer replays the events it missed
+ * A shard resumed its session, and Fluxer replayed the missed dispatches it keeps for replay
  *
  * @category Logging and diagnostics
  */

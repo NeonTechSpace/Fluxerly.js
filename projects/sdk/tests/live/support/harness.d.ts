@@ -32,6 +32,7 @@ export function loadSandboxEnvironment(options?: {
 }): SandboxEnvironment
 
 export function processValue(name: string, pattern?: RegExp): string
+export function sandboxLeaveTarget(sandboxGuildId: string): string
 export function processAuthorized(name: string): boolean
 
 export interface SandboxJournal {
@@ -59,6 +60,26 @@ export function verifySandboxIdentity(
         readonly concurrent?: boolean
     },
 ): Promise<Readonly<{ application: unknown; user: unknown; guild: unknown; botId: string }>>
+
+interface IdentitySandbox {
+    readonly token: string
+    readonly applicationId: string
+    readonly guildId: string
+}
+
+export const runIdentityVariable: string
+
+export function runIdentityValue(botId: string, sandbox: IdentitySandbox, runner?: number): string
+
+export function runVerifiedBotId(
+    sandbox: IdentitySandbox,
+    options?: { readonly value?: string | undefined; readonly parent?: number },
+): string | undefined
+
+export function sandboxBotId(
+    read: (path: string) => Promise<unknown>,
+    sandbox: IdentitySandbox & { readonly applicationPath?: string; readonly concurrent?: boolean },
+): Promise<string>
 
 export function shutdownDefaultClient(
     client: { shutdown(): PromiseLike<{ isOk(): boolean }> },

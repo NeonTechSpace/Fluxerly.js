@@ -24,7 +24,7 @@ import type { RequestOptions } from "./options.js"
  * Client closure returns ClientClosedError.
  * Abort waits for cleanup and returns CancelledError.
  * Unexpected failures reject with SdkDefect.
- * When the resolved instance reports discoveryEnabled false, search and the application writes fail with reason rejected, HTTP 400 and details.providerCode DISCOVERY_DISABLED.
+ * When the resolved instance reports discoveryEnabled false, search and the application writes fail with reason rejected, HTTP 400 and apiError.code discoveryDisabled (Fluxer code DISCOVERY_DISABLED).
  * Application writes may publish or remove a listing and invalidate cached guild data.
  * No eligibility check, approval, resubmission or joining is performed automatically.
  * A failed write does not guarantee rollback
@@ -66,7 +66,8 @@ export interface Discovery {
     /**
      * Submit a community's application to the public directory.
      * ManageGuild, enabled discovery and current Fluxer eligibility are required.
-     * An existing pending or approved application fails remotely.
+     * An approved application fails remotely.
+     * A pending application fails unless the community qualifies for automatic approval because it is verified or partnered.
      * Eligible verified or partnered communities may be approved immediately.
      * The returned stored application does not guarantee approval or search visibility.
      * An unknown outcome may already have submitted or published the listing.

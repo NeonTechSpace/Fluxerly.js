@@ -8,7 +8,7 @@ const input: Attachment = {
     filename: "fixture.bin",
     size: 2,
     flags: 0,
-    url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+    url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin",
 }
 
 test("stream input access stays lazy and rejects accessor defects without requests", async () => {
@@ -81,12 +81,12 @@ test.each([false, true])(
                     ? Response.json({
                           api_code_version: 1,
                           endpoints: {
-                              api_public: "https://api.fluxer.app",
-                              gateway: "wss://gateway.fluxer.app",
-                              media: "https://media.fluxer.app",
-                              static_cdn: "https://cdn.fluxer.app",
-                              webapp: "https://web.fluxer.app",
-                              invite: "https://fluxer.app",
+                              api_public: "https://fluxer.com/api",
+                              gateway: "wss://gateway.fluxer.com",
+                              media: "https://fluxerusercontent.com",
+                              static_cdn: "https://fluxerstatic.com",
+                              webapp: "https://fluxer.com",
+                              invite: "https://fluxer.gg",
                           },
                           features: { presigned_attachment_uploads: true },
                       })
@@ -135,12 +135,12 @@ test("stream reports a throwing caller signal removal at end of stream as an app
                 ? Response.json({
                       api_code_version: 1,
                       endpoints: {
-                          api_public: "https://api.fluxer.app",
-                          gateway: "wss://gateway.fluxer.app",
-                          media: "https://media.fluxer.app",
-                          static_cdn: "https://cdn.fluxer.app",
-                          webapp: "https://web.fluxer.app",
-                          invite: "https://fluxer.app",
+                          api_public: "https://fluxer.com/api",
+                          gateway: "wss://gateway.fluxer.com",
+                          media: "https://fluxerusercontent.com",
+                          static_cdn: "https://fluxerstatic.com",
+                          webapp: "https://fluxer.com",
+                          invite: "https://fluxer.gg",
                       },
                       features: { presigned_attachment_uploads: true },
                   })

@@ -23,7 +23,7 @@ import { decodeMember } from "./guilds.js"
 import { fieldsOnce, gatewayIdentifier, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked, thrownCause } from "./defects.js"
 import { decodePresenceUpdate } from "./presence.js"
-import { Opcode } from "./protocol/gateway.js"
+import { maxClientPayloadBytes, Opcode } from "./protocol/gateway.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 import type { ClientLogger } from "./logging.js"
 
@@ -190,9 +190,9 @@ function settings(guildId: unknown, query: unknown, options: unknown): Settings 
     if (
         Buffer.byteLength(
             JSON.stringify({ op: Opcode.requestGuildMembers, d: { ...payload, nonce: "0".repeat(32) } }),
-        ) > 4_096
+        ) > maxClientPayloadBytes
     )
-        return inputValidationFailure("query", "size", "The encoded gateway request must not exceed 4096 bytes")
+        return inputValidationFailure("query", "size", "The encoded gateway request must not exceed 16,384 bytes")
     return { guildId, presences, ...(userIds ? { userIds } : {}), maximumMembers, timeoutMs, maxPendingBytes, payload }
 }
 

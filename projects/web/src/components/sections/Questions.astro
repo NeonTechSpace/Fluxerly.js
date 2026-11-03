@@ -16,11 +16,11 @@ interface Question {
 
 const code = (text: string) => `<code class="inline-code">${text}</code>`
 
-// Fourteen questions read better as three short lists. The order of the list below decides nothing else
+// Fifteen questions read better as three short lists. The order of the list below decides nothing else
 const groups = [
     { title: "Using Fluxerly", ids: ["slash-commands", "effect", "intents", "node", "voice", "rate-limits"] },
-    { title: "How It Behaves", ids: ["stable", "results", "testing", "message-methods"] },
-    { title: "Fluxerly and AI", ids: ["built-with-ai", "trust-ai-code", "avoid-ai", "hand-written"] },
+    { title: "How It Behaves", ids: ["stable", "results", "testing", "message-methods", "missing-method"] },
+    { title: "Fluxerly and AI", ids: ["built-with-ai", "trust-ai-code", "avoid-ai", "ai-slop"] },
 ]
 
 const questions: Question[] = [
@@ -41,35 +41,35 @@ const questions: Question[] = [
     {
         id: "stable",
         question: "Is It Stable?",
-        answer: "Yes. Releases follow Epoch Semantic Versioning, so only a new major version or epoch can break existing code. Minor and patch releases are safe to take",
+        answer: "Yes. Stable releases follow Epoch Semantic Versioning, so only a new major version or epoch can break existing code, and minor and patch releases are safe to take. Nightly builds can include breaking changes at any time",
         href: guide("support-and-compatibility"),
         link: "Support and Compatibility",
     },
     {
         id: "intents",
         question: "Do I Have to Enable Intents or Events?",
-        answer: `No. Nothing needs to be switched on to receive events. A ${code("messageCreate")} handler gets messages as soon as the bot can read the channel`,
-        href: guide("core-concepts", "events-and-handlers"),
-        link: "Events and Handlers",
+        answer: `No. Fluxer has no gateway intents. Messages arrive when the bot can read the channel. Presence updates for chosen community members also need ${code("client.presence.setMembers")} with their IDs`,
+        href: guide("configuration", "events-and-the-gateway"),
+        link: "Events and the Gateway",
     },
     {
         id: "node",
         question: "Which Node.js and Module System?",
-        answer: `Node.js with ES modules only. JavaScript needs no compiler, and TypeScript projects add TypeScript with ${code("@types/node")}. The supported Node.js and TypeScript versions are listed in the support guide`,
+        answer: `Node.js with ES modules only. JavaScript needs no compiler, and TypeScript projects add TypeScript 7 and ${code("@types/node")}. The supported Node.js and TypeScript versions are listed in the support guide`,
         href: guide("support-and-compatibility"),
         link: "Support and Compatibility",
     },
     {
         id: "results",
         question: "Why Do Calls Return a Result Instead of Throwing?",
-        answer: `Expected failures such as a missing permission, a network error or a rate limit stay visible in the return type, so they are handled where they happen. Programming mistakes still throw at once, and ${code("orThrow")} is there for code that prefers exceptions`,
+        answer: `Expected failures such as a missing permission, a network error or a rate limit stay visible in the return type, so they are handled where they happen. Invalid options still throw at once, and ${code("orThrow")} is there for code that prefers exceptions`,
         href: guide("reliability"),
         link: "Reliability Guide",
     },
     {
         id: "voice",
         question: "Can It Join Voice?",
-        answer: "Not yet. Voice connections and audio are deferred until after Fluxer's voice update. Voice state updates and member controls such as move, mute, deafen and disconnect work today",
+        answer: "Not yet. Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it. Until then, voice states, member voice controls such as move, mute, deafen and disconnect, voice notes, and audio or video attachments work",
         href: guide("guilds-and-permissions", "voice-controls-versus-a-voice-connection"),
         link: "Voice Controls",
     },
@@ -95,16 +95,16 @@ const questions: Question[] = [
         link: "Quick Start",
     },
     {
-        id: "hand-written",
-        question: "Is Code Written by Hand Safer?",
-        answer: "Not when the person using AI knows what good code looks like. With that knowledge, AI-assisted code is more secure than code written by hand, because the time AI saves goes into more tests",
+        id: "ai-slop",
+        question: "Isn't Code Written by AI Slop?",
+        answer: "That depends on the person using it: What they know about their field and about AI, which models and workflows they pick, and how fast they keep learning. AI does not create carelessness, it exposes it, and it multiplies whatever skill and judgment it is given. Like clay, it shapes ideas faster, while judgment still decides what is worth keeping",
         href: "#quality",
         link: "How Security Is Checked",
     },
     {
         id: "rate-limits",
         question: "What About Rate Limits?",
-        answer: `The SDK handles them. When Fluxer answers with HTTP 429, it waits the required delay and sends again within the request's deadline. Waits of a second or more are logged as warnings with the code ${code("ratelimit.wait")}`,
+        answer: `Usually. When Fluxer answers with HTTP 429 and names a delay, the SDK waits and sends again if the wait fits the request's deadline. A webhook message, or a message on an instance without direct uploads, that carries a Blob, File or stream attachment fails instead, because its body cannot be sent twice. Waits of a second or more are logged as warnings with the code ${code("ratelimit.wait")}`,
         href: guide("reliability", "limits-and-retry-rules"),
         link: "Limits and Retry Rules",
     },
@@ -121,6 +121,13 @@ const questions: Question[] = [
         answer: `Messages are plain, read-only data, so no network call hides behind a property. A handler receives a ${code("reply")} function, and ${code("client.messages.send")} sends to any channel`,
         href: guide("messages"),
         link: "Messages Guide",
+    },
+    {
+        id: "missing-method",
+        question: "What if a Fluxer Route Has No Method?",
+        answer: `The ${code("client.rest.call")} method reaches every route that accepts a bot token, typed with Fluxer's own field names, so a misspelled field fails to compile. For a route newer than the SDK, ${code("client.rest.request")} sends it untyped. Each gateway event the bot receives also arrives as the ${code("raw")} event, typed when Fluxer's documentation describes it`,
+        href: "/raw/",
+        link: "Raw Access, Still Typed",
     },
 ]
 

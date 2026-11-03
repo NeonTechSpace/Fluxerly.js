@@ -153,9 +153,10 @@ test.each(modes)(
 )
 
 test.each(modes)(
-    "%s resolves hosted defaults through the provider bootstrap redirect without credentials",
+    "%s resolves an instance saved under Fluxer's former fluxer.app name through its bootstrap redirect without credentials",
     async (mode) => {
         const requests: { readonly url: string; readonly init: RequestInit }[] = []
+        // Fluxer answers the former name's discovery with a 308 to api.fluxer.app, which serves the document
         vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
             requests.push({ url, init })
             return url === "https://fluxer.app/.well-known/fluxer"
@@ -165,7 +166,7 @@ test.each(modes)(
                   })
                 : Response.json(document())
         })
-        const value = await client(mode, null)
+        const value = await client(mode, { url: "https://fluxer.app" })
         expect((await settle(value.instance.resolve())).apiCodeVersion).toBe(7)
         expect(requests.map((request) => request.url)).toEqual([
             "https://fluxer.app/.well-known/fluxer",
@@ -276,6 +277,35 @@ for (const status of [200, 429])
             expect(reader.releaseLock).toHaveBeenCalledTimes(1)
         },
     )
+
+// A connection reset errors the body stream, so release must not cancel it again and report that as a cleanup defect.
+// A rate-limited discovery whose body is lost still holds later discovery for its Retry-After
+for (const status of [200, 429])
+    test.each(modes)(`%s classifies a discovery body reset after HTTP ${status} as a typed failure`, async (mode) => {
+        let requests = 0
+        vi.stubGlobal("fetch", async () => {
+            requests += 1
+            let sent = false
+            const body = new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    if (sent) return controller.error(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))
+                    sent = true
+                    controller.enqueue(new TextEncoder().encode("{"))
+                },
+            })
+            return new Response(body, { status, headers: { "retry-after": "5" } })
+        })
+        const value = await client(mode)
+        const expected =
+            status === 200
+                ? { _tag: "ConnectionError", reason: "network", details: { transportCode: "ECONNRESET" } }
+                : { _tag: "RateLimitError", retryAfterMs: 5000 }
+        await expect(settle(value.instance.resolve())).rejects.toMatchObject(expected)
+        await expect(settle(value.instance.resolve())).rejects.toMatchObject(
+            status === 200 ? expected : { _tag: "RateLimitError" },
+        )
+        expect(requests).toBe(status === 200 ? 2 : 1)
+    })
 
 test.each(modes)("%s keeps cancellation and response-cleanup defects together", async (mode) => {
     let entered!: () => void
@@ -761,6 +791,31 @@ test.each(modes)("%s rejects a discovery document whose discovery_enabled is not
         })
         vi.unstubAllGlobals()
     }
+})
+
+test.each(modes)("%s resolves discovery with Fluxer's age policy and desktop transport endpoint", async (mode) => {
+    // Fluxer requires age_policy and adds api_transport for its own desktop app only, so bots keep using api_public
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+            Response.json(
+                document({
+                    endpoints: { ...document().endpoints, api_transport: "https://transport.community.example/api" },
+                    age_policy: { geos: [{ country_code: "GB", region_code: null, action: "restrict" }] },
+                }),
+            ),
+        ),
+    )
+    const value = await client(mode)
+    const resolved = await settle(value.instance.resolve())
+    expect(resolved.endpoints).toEqual({
+        apiPublic: "https://api.community.example/root",
+        gateway: "wss://gateway.community.example/socket",
+        media: "https://media.community.example",
+        staticCdn: "https://static.community.example",
+        webapp: "https://app.community.example",
+        invite: "https://join.community.example",
+    })
 })
 
 test.each([undefined, null, { enabled: "yes" }, []])(

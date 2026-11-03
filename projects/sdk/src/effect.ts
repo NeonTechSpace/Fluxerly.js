@@ -49,7 +49,7 @@
  * This example sends through HTTP without connecting the gateway.
  * The returned Promise settles after the scoped client finishes cleanup
  *
- * Coding agents: read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package
+ * Coding agents: Read node_modules/@neontechspace/fluxerly/agents/AGENTS.md before writing code with this package
  *
  * @packageDocumentation
  */
@@ -68,6 +68,8 @@ export type {
 } from "./counts.js"
 export type { ColorInput, RgbColor } from "./colors.js"
 export type { TextSplitOptions, TextTruncateOptions } from "./text.js"
+export { voiceWaveform } from "./voice-notes.js"
+export type { VoiceWaveform, VoiceWaveformOptions } from "./voice-notes.js"
 export { AssetFormats, AssetUrlError } from "./assets.js"
 export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
 export { HelperError, TimestampStyles } from "./helpers.js"
@@ -145,6 +147,7 @@ export {
     GuildDefaultMessageNotifications,
     GuildVerificationLevels,
     GuildMfaLevels,
+    GuildNsfwLevels,
     GuildExplicitContentFilters,
     GuildContentWarningLevels,
     GuildSplashCardAlignments,
@@ -155,6 +158,7 @@ export type {
     GuildDefaultMessageNotification,
     GuildVerificationLevel,
     GuildMfaLevel,
+    GuildNsfwLevel,
     GuildExplicitContentFilter,
     GuildContentWarningLevel,
     GuildSplashCardAlignment,
@@ -187,6 +191,7 @@ export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
 export { UserOperationError } from "./users.js"
 export type {
     User,
+    ProfileBadge,
     UserProfile,
     UserProfileFields,
     UserProfileQuery,
@@ -226,6 +231,7 @@ export { OAuthOperationError, OAuthScopes } from "./oauth.js"
 export type {
     OAuthAuthorizationInput,
     OAuthActiveIntrospection,
+    OAuthAuthorization,
     OAuthConnection,
     OAuthCodeExchangeInput,
     OAuthConfig,
@@ -450,11 +456,13 @@ export type {
     ThreadEdit,
     ArchivedThreadScope,
     ArchivedThreadQuery,
+    ArchivedThreadIterationQuery,
     ArchivedThreadPage,
     ThreadSearchQuery,
     ThreadSearchIndexingPage,
     ThreadSearchResultsPage,
     ThreadSearchPage,
+    ForumPostData,
     ThreadMemberQuery,
     ThreadMemberPageQuery,
     ThreadMemberIterationQuery,
@@ -497,7 +505,17 @@ export type {
 export type { BanInput, GuildBan, MemberTimeoutState, TimeoutOptions, TimeoutStateOptions } from "./guilds.js"
 export type { MessageCacheOptions, MessageCacheSettings } from "./cache.js"
 export type { ResourceCacheSettings } from "./cache.js"
-export type { InstanceDomainMigration, InstanceEndpoints, InstanceOptions, InstanceResolveError } from "./instance.js"
+export type {
+    InstanceBadge,
+    InstanceBadgeLookup,
+    InstanceBadgePage,
+    InstanceBadgePageQuery,
+    InstanceBadgeQuery,
+    InstanceDomainMigration,
+    InstanceEndpoints,
+    InstanceOptions,
+    InstanceResolveError,
+} from "./instance.js"
 export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
 export type { ReactionCollectorResult } from "./collectors.js"
 export { CollectorError } from "./collectors.js"
@@ -574,6 +592,10 @@ export type {
     EventMap,
     EventName,
     RawDispatch,
+    RawDispatchEvent,
+    DocumentedRawDispatch,
+    UndocumentedRawDispatch,
+    GatewayErrorEvent,
     TypingStart,
     PresenceUpdate,
     ObservedPresenceStatus,
@@ -583,12 +605,14 @@ export type {
     VoiceState,
     VoiceStateSnapshot,
 } from "./events.js"
+export type { GatewayDispatchPayloads, GatewayErrorData, GatewayPayloadObjects } from "./gateway-payloads.js"
 export type {
     CacheDiagnostic,
     CacheEntriesOptions,
     CachedResources,
     CacheKind,
     ClientDiagnostics,
+    RestRateLimitHold,
     ConnectionRecoveryOptions,
     ConnectionState,
     OperationSignal,
@@ -678,12 +702,19 @@ export type { RestRequests } from "./api/effect/rest.js"
 export type { GatewayCommands } from "./api/effect/gateway.js"
 export type { ClientLogging } from "./api/effect/logging.js"
 export { RestRequestError } from "./rest.js"
+export type { RestRoutes } from "./rest-routes.js"
 export type {
+    RestCallArguments,
+    RestCallInput,
     RestOperation,
     RestOptions,
     RestRequest,
     RestRequestFailure,
     RestResponse,
+    RestRoute,
+    RestRouteInput,
+    RestRouteOptions,
+    RestRouteResponse,
     TransportOptions,
     WebSocketLike,
     WebSocketOptions,
@@ -728,5 +759,5 @@ export type {
     EffectRequirements,
     PrefixCommandBatch,
 } from "./native-commands.js"
-export type { BotEventServices, HandlerServices } from "./api/effect/bot.js"
+export type { BotCommandCallbackServices, BotEventServices, HandlerServices } from "./api/effect/bot.js"
 export type { Operation } from "./errors.js"

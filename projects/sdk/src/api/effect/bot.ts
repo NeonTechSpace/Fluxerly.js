@@ -89,9 +89,11 @@ export interface BotEventOptions<
 }
 
 /** One optional handler per event, as a function or an object with a handler and delivery settings.
- * The runBot function delivers with overflow dropOldest, so a full queue drops the oldest waiting event with a Warn record and a
- * counter instead of stopping the bot. Handlers for messageCreate run up to eight at a time by default, and other events
- * run one at a time. A failed handler is reported with its original Cause without stopping the bot
+ * By default, a full queue drops the oldest waiting events, logs a Warn record and counts the drop, and the bot keeps
+ * running. With a partition, the overflow option's rule decides which event is dropped. Set overflow to "dropNewest" to
+ * drop the arriving event instead, or to "stop" to stop the bot with CriticalWorkerStoppedError.
+ * By default, messageCreate and partitioned handlers run up to eight callbacks at a time, and other handlers run one at
+ * a time. A failed handler is reported with its original Cause without stopping the bot
  *
  * @category Client and lifecycle
  */
@@ -117,13 +119,38 @@ export type BotCommandEntries<S> = Readonly<
 >
 
 /**
+ * The services required by the router-level callbacks of a runBot commands option O: A prefix resolver, onReject,
+ * each use middleware, onUnmatched and onError. runBot, defineBot and createTestBot add them to their own requirements.
+ * A text prefix, a reply setting such as onReject "reply", and a callback that returns no Effect require nothing
+ *
+ * @category Commands
+ */
+export type BotCommandCallbackServices<O> =
+    // Each member of a union of options is read on its own, so a callback that only some members have still counts
+    O extends unknown
+        ?
+              | O[keyof O & ("prefix" | "onReject" | "onUnmatched" | "onError")]
+              | (O[keyof O & "use"] & readonly unknown[])[number] extends infer Callback
+            ? Callback extends (...args: never[]) => infer Returned
+                ? Returned extends Effect.Effect<unknown, unknown, infer R>
+                    ? unknown extends R
+                        ? never
+                        : R
+                    : never
+                : never
+            : never
+        : never
+
+/**
  * Prefix commands for the native runBot: The router options of commands.create, the commands themselves, an optional
- * failure hook and the delivery settings of the router's attach. Router-level callbacks, such as onUnmatched and middleware, run without extra services, while each
- * command's services are added to the bot's requirements. The router is attached before the gateway starts and closed when the bot stops.
+ * failure hook and the delivery settings of the router's attach. The services that router-level callbacks, such as a
+ * prefix resolver, onUnmatched and middleware, require and those of each command are added to the bot's requirements,
+ * so they must be provided when the bot runs. The router is attached before the gateway starts and closed when the bot stops.
  * The delivery settings concurrency, partition, partitionReady, overflow, maxPendingMessages and maxPendingBytes are passed to attach
  * unchanged and checked before any client exists. Omitted settings keep the attach defaults: Eight commands at a time
- * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With overflow "stop", a full
- * queue fails the bot with CriticalWorkerStoppedError.
+ * and overflow dropOldest, so a burst drops the oldest waiting message with a Warn record. With a partition, the overflow
+ * option's rule decides which message is dropped. With overflow "stop", a full queue fails the bot with
+ * CriticalWorkerStoppedError.
  * Unlike commands.create, runBot replies to a rejected command by default, such as one with a missing argument, as
  * `onReject: "reply"` does. Set `onReject: "silent"` to send no reply, or a function to give custom feedback.
  * An unset ignoreBots follows the runBot ignoreBots setting
@@ -136,8 +163,9 @@ export interface BotCommandsOptions<
     C extends BotCommandEntries<S> = BotCommandEntries<S>,
     RouterServices = never,
     ReadyServices = never,
+    CallbackServices = never,
 >
-    extends PrefixCommandsOptions<unknown, never, M>, HandlerOptions<M> {
+    extends PrefixCommandsOptions<unknown, CallbackServices, M>, HandlerOptions<M> {
     /**
      * Commands keyed by name, such as `{ ping: { execute: ({ reply }) => reply("Pong") } }`, or a callback that
      * receives the empty router and returns it with registrations, for groups or commands built elsewhere.
@@ -153,7 +181,7 @@ export interface BotCommandsOptions<
      * overflow that stops the router (overflow "stop"). With overflow dropOldest, a full queue only writes a Warn record
      * and produces no report
      */
-    readonly onError?: (report: FailureReport) => Effect.Effect<unknown, unknown, never>
+    readonly onError?: (report: FailureReport) => Effect.Effect<unknown, unknown, CallbackServices>
     /** Hold the commands of a partition key until its own setup is done, as the client.on option partitionReady does for
      * event handlers. Valid only together with partition, otherwise runBot dies with ConfigurationError before any client exists.
      * Before the first waiting message of a key starts, the SDK calls the hook with the key and runs its Effect with the
@@ -188,8 +216,9 @@ export type BotOptions<
     RunBotOptions & {
         /** Event handlers registered before the gateway starts and closed when the bot stops.
          * Pass a function, or an object with a handler and its own delivery settings.
-         * By default messageCreate runs up to 8 callbacks at a time and other events 1, and a full queue drops the oldest
-         * waiting event with a Warn record instead of stopping the bot.
+         * By default messageCreate and partitioned handlers run up to 8 callbacks at a time and other events 1, and a full
+         * queue drops the oldest waiting event with a Warn record instead of stopping the bot. With a partition, the
+         * overflow option's rule decides which event is dropped.
          * Bot-authored messageCreate and messageUpdate events skip these handlers unless ignoreBots is false
          */
         readonly events?: BotEvents<EventError, EventServices, SelectedMessage<F>>
@@ -425,8 +454,8 @@ export function installNativeTestBot(
  * Returns the same object unchanged, without copying, reading or validating it. runBot and createTestBot check the
  * options when their Effects run, as they do for an inline object.
  * The function exists for type inference: Command arguments keep their declared types, such as a text argument's value
- * as a string, and handlers keep their own error and service types, which runBot and createTestBot add to their
- * requirements. An object annotated with BotOptions loses both. TypeScript rejects a token here, so the program passes
+ * as a string, and handlers, router callbacks and prefix resolvers keep their own error and service types, which runBot
+ * and createTestBot add to their requirements. An object annotated with BotOptions loses both. TypeScript rejects a token here, so the program passes
  * it to runBot, usually from an environment variable
  *
  * @example
@@ -468,6 +497,7 @@ export function defineBot<
     OptionsServices = never,
     SetupServices = never,
     ReadyServices = never,
+    Callbacks = unknown,
 >(
     options: Omit<
         BotOptions<unknown, unknown, OptionsError, OptionsServices, F>,
@@ -476,12 +506,26 @@ export function defineBot<
         /** Event handlers, as in runBot */
         readonly events?: Events & Record<Exclude<keyof Events, EventName>, never>
         /** Prefix commands, as in runBot */
-        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices>
+        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices, unknown>
         /** Startup work before the gateway connects, as in runBot */
         readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, SetupServices>
+    } & {
+        /**
+         * The same prefix commands, read on their own so that a union-typed option keeps every member's callback services.
+         * Inferred from this separate member, because without exactOptionalPropertyTypes the optional property adds
+         * undefined, and inference into an intersection inside that union kept only the first member
+         */
+        readonly commands?: Callbacks
     },
-): typeof options {
-    return options
+    // The commands keep their own inferred type rather than an intersection, so runBot infers the same commands and
+    // callback services from the defined options as from inline ones
+): unknown extends Callbacks
+    ? typeof options
+    : Omit<typeof options, "commands"> & {
+          /** The prefix commands passed in, with their own inferred type, as in runBot */
+          readonly commands?: Callbacks
+      } {
+    return options as never
 }
 
 /**
@@ -555,11 +599,19 @@ export function runBot<
     OptionsServices = never,
     SetupServices = never,
     ReadyServices = never,
+    Callbacks = unknown,
 >(
     options: Omit<BotOptions<unknown, unknown, OptionsError, OptionsServices, F>, "events" | "commands" | "setup"> & {
         readonly events?: Events & Record<Exclude<keyof Events, EventName>, never>
-        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices>
+        readonly commands?: BotCommandsOptions<SelectedMessage<F>, S, C, RouterServices, ReadyServices, unknown>
         readonly setup?: (client: Client<SelectedMessage<F>>) => Effect.Effect<unknown, unknown, SetupServices>
+    } & {
+        /**
+         * The same prefix commands, read on their own so that a union-typed option keeps every member's callback services.
+         * Inferred from this separate member, because without exactOptionalPropertyTypes the optional property adds
+         * undefined, and inference into an intersection inside that union kept only the first member
+         */
+        readonly commands?: Callbacks
     },
 ): Effect.Effect<
     void,
@@ -570,7 +622,8 @@ export function runBot<
         | RouterServices
         | OptionsServices
         | SetupServices
-        | ReadyServices,
+        | ReadyServices
+        | BotCommandCallbackServices<Callbacks>,
         Scope.Scope
     >
 > {

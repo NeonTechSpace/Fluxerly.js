@@ -9,11 +9,17 @@ import WebSocket from "ws"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createFailureClassifier, createOutcomeReporter } from "./support/reporting.js"
 import { fromExit, settle as value } from "./support/results.js"
+import { createMemberRequestPacing } from "./support/member-request-pacing.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { waitForPartialStartup } from "./support/startup.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const totalShards = 2
 const report = createOutcomeReporter({ mode })
+// Keeps this check and others that request members within Fluxer's member request limit, which drops an extra request
+// without a reply
+const reserveMemberRequest = createMemberRequestPacing()
 let stage = "configuration"
 let lock
 let client
@@ -77,7 +83,7 @@ function observeGateway() {
 
         const url = new URL(socket.url)
         assert.equal(url.protocol, "wss:")
-        assert.equal(url.host, "gateway.fluxer.app")
+        assert.equal(url.host, "gateway.fluxer.com")
         assert.deepEqual(Object.keys(frame).sort(), ["d", "op"])
 
         if (frame.op === 2) {
@@ -157,6 +163,7 @@ function observeGateway() {
 }
 
 async function selectedMemberStream() {
+    await reserveMemberRequest()
     const batches = []
     const accept = (chunk) => {
         assert.equal(chunk.guildId, guildId)
@@ -224,7 +231,7 @@ async function createDriver(sdk, options) {
 const watchdog = setTimeout(() => {
     report(stage, false, { category: "process_timeout", lockRetained: lock !== undefined })
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 
 let driver
 try {
@@ -253,7 +260,8 @@ try {
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
     driver = await createDriver(sdk, {
         token,
-        connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 },
+        // Startup includes the client's discovery and its paced slot
+        connection: { startupTimeoutMs: pacedDeadlineMs(45_000, 1, { clients: 1 }), maxStartupAttempts: 3 },
         sharding: { totalShards },
     })
     assert.equal(client.state, "Disconnected")
@@ -332,51 +340,73 @@ try {
 
     stage = "partial_startup_cancellation"
     probe = observeGateway()
+    // The shard that asks first may Identify, and the other shard's permit stays pending until cancellation, so the
+    // partial state does not depend on how fast Fluxer answers the first Identify
+    let firstShard, heldPermit
+    const identify = {
+        permit(shardId, _total, signal) {
+            firstShard ??= shardId
+            if (shardId === firstShard) return Promise.resolve()
+            heldPermit = signal
+            return new Promise((_resolve, reject) =>
+                signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+            )
+        },
+    }
+    // Startup includes the second client's discovery and its paced slot
+    const startupTimeoutMs = pacedDeadlineMs(45_000, 1, { clients: 1 })
     driver = await createDriver(sdk, {
         token,
         cache: { guilds: true },
-        connection: { startupTimeoutMs: 45_000, maxStartupAttempts: 3 },
-        sharding: { totalShards, shardIds: [targetShard, otherShard] },
+        connection: { startupTimeoutMs, maxStartupAttempts: 3 },
+        sharding: { totalShards, shardIds: [targetShard, otherShard], identify },
     })
     const controller = new AbortController()
     const pending =
         mode === "default"
             ? driver.connect(controller.signal)
             : Effect.runPromiseExit(driver.connect(), { signal: controller.signal })
-    await waitFor(
-        () => {
-            const partialReady = client.shards.some((shard) => shard.state === "Connected")
-            const stillStarting =
-                client.state === "Connecting" && client.shards.some((shard) => shard.state === "Connecting")
-            return probe.identifyCount() === 1 && partialReady && stillStarting
-        },
-        10_000,
-        5,
-    )
-    const cachedBeforeCancellation = await cachedGuild()
-    controller.abort()
-    if (mode === "default") {
-        const result = await pending
-        assert.ok(result.isErr())
-        assert.equal(result.error._tag, "CancelledError")
-    } else {
-        const exit = await pending
-        assert.ok(Exit.isFailure(exit))
-        assert.ok(Cause.hasInterruptsOnly(exit.cause))
+    try {
+        await waitForPartialStartup(
+            pending.then((outcome) => (mode === "default" ? value(outcome) : fromExit(outcome))),
+            () => {
+                const partialReady = client.shards.some((shard) => shard.state === "Connected")
+                const stillStarting =
+                    client.state === "Connecting" && client.shards.some((shard) => shard.state === "Connecting")
+                return heldPermit !== undefined && probe.identifyCount() === 1 && partialReady && stillStarting
+            },
+        )
+        const cachedBeforeCancellation = await cachedGuild()
+        controller.abort()
+        if (mode === "default") {
+            const result = await pending
+            assert.ok(result.isErr())
+            assert.equal(result.error._tag, "CancelledError")
+        } else {
+            const exit = await pending
+            assert.ok(Exit.isFailure(exit))
+            assert.ok(Cause.hasInterruptsOnly(exit.cause))
+        }
+        await waitFor(() => client.state === "Disconnected", 5_000)
+        assert.ok(client.shards.every((shard) => shard.state === "Disconnected"))
+        const cachedAfterCancellation = await cachedGuild()
+        assert.equal(cachedAfterCancellation, undefined)
+        probe.verifyClosed()
+        // The coordinator contract promises that cancellation aborts the permit the second shard still waits for
+        assert.equal(heldPermit.aborted, true)
+        report(stage, true, {
+            partialReadyObserved: true,
+            aggregateConnectingObserved: true,
+            heldPermitAborted: true,
+            reusableDisconnected: true,
+            socketsClosed: true,
+            cacheSnapshotObserved: cachedBeforeCancellation !== undefined,
+            preGapSnapshotCleared: cachedBeforeCancellation === undefined ? null : true,
+        })
+    } finally {
+        controller.abort()
+        await pending
     }
-    await waitFor(() => client.state === "Disconnected", 5_000)
-    assert.ok(client.shards.every((shard) => shard.state === "Disconnected"))
-    const cachedAfterCancellation = await cachedGuild()
-    assert.equal(cachedAfterCancellation, undefined)
-    probe.verifyClosed()
-    report(stage, true, {
-        partialReadyObserved: true,
-        aggregateConnectingObserved: true,
-        reusableDisconnected: true,
-        socketsClosed: true,
-        cacheSnapshotObserved: cachedBeforeCancellation !== undefined,
-        preGapSnapshotCleared: cachedBeforeCancellation === undefined ? null : true,
-    })
 } catch (error) {
     report(stage, false, safeFailure(error))
     process.exitCode = 1

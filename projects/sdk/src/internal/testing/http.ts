@@ -24,6 +24,11 @@ import type {
 } from "./types.js"
 import { timedWait, waitTimeout } from "./wait.js"
 
+/** A test transport record before the harness stamps its time. The error is the thrown value, which the harness turns
+ * into masked ErrorInfo with its cause chain and AggregateError members, as SDK records keep them
+ */
+export type TestRecordInput = Omit<LogRecord, "time" | "error"> & { readonly error?: unknown }
+
 interface Route {
     readonly matches: (request: TestRequest) => boolean
     readonly response: TestResponse | TestResponder
@@ -243,7 +248,7 @@ export class TestHttp implements TestRest {
     #closed = false
 
     constructor(
-        private readonly record: (record: Omit<LogRecord, "time">) => void,
+        private readonly record: (record: TestRecordInput) => void,
         private readonly replies: TestReplies,
     ) {}
 
@@ -336,9 +341,15 @@ export class TestHttp implements TestRest {
             body,
             files: Object.freeze(files),
         }
-        const route = this.#routes.findLast(
-            (candidate) => candidate.active && candidate.matches({ ...base, matched: true }),
-        )
+        let route: Route | undefined
+        try {
+            route = this.#routes.findLast(
+                (candidate) => candidate.active && candidate.matches({ ...base, matched: true }),
+            )
+        } catch (error) {
+            this.#recordFailure(error, base, `A test request matcher failed on ${base.method} ${base.path}`)
+            throw error
+        }
         const recorded: TestRequest = Object.freeze({ ...base, matched: route !== undefined })
         this.#requests.push(recorded)
         if (!route && isMessageSend(recorded)) return Response.json(this.#sentMessage(recorded))
@@ -371,21 +382,25 @@ export class TestHttp implements TestRest {
             return toResponse(await settle(Promise.resolve(response(recorded))))
         } catch (error) {
             if (init.signal?.aborted && error === init.signal.reason) throw error
-            this.record({
-                level: "error",
-                category: "rest",
-                code: "testing.responderFailed",
-                message: `The test response handler for ${recorded.method} ${recorded.path} failed, so the request failed as a network error`,
-                fields: { method: recorded.method, path: recorded.path },
-                error: {
-                    origin: "application",
-                    name: error instanceof Error ? error.name : "Error",
-                    message: error instanceof Error ? error.message : String(error),
-                    ...(error instanceof Error && error.stack !== undefined ? { stack: error.stack } : {}),
-                },
-            })
+            this.#recordFailure(
+                error,
+                recorded,
+                `The test response handler for ${recorded.method} ${recorded.path} failed`,
+            )
             throw error
         }
+    }
+
+    /** Log a throwing matcher or response handler. The caller rethrows it, so the request fails as a network error */
+    #recordFailure(error: unknown, request: { readonly method: string; readonly path: string }, what: string) {
+        this.record({
+            level: "error",
+            category: "rest",
+            code: "testing.responderFailed",
+            message: `${what}, so the request failed as a network error`,
+            fields: { method: request.method, path: request.path },
+            error,
+        })
     }
 
     /** Refuse later requests and fail pending next calls with ClientClosedError */

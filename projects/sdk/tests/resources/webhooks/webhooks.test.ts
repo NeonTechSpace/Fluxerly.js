@@ -8,13 +8,20 @@ import {
     ConfigurationError,
     createClient,
     createWebhookClient,
+    errors,
     MessageFlags,
+    voiceWaveform,
     type WebhookClientOptions,
 } from "../../../src/index.js"
-import { createClient as createNative, createWebhookClient as createNativeWebhook } from "../../../src/effect.js"
+import {
+    createClient as createNative,
+    createWebhookClient as createNativeWebhook,
+    voiceWaveform as nativeVoiceWaveform,
+} from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
 import { hostedOperationCalls, stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
+import { captureLogs } from "../../support/log-capture.js"
 import { expectErr, settle } from "../../support/settle.js"
 import { fixtureHost } from "../../support/loopback.js"
 import { expectThrown } from "../defects.js"
@@ -102,6 +109,47 @@ test.each(modes)("%s sends sticker-only webhook messages without bot authenticat
     ])
 })
 
+// messages.send reads getters and non-enumerable fields, so a webhook send of the same object must keep them too
+test.each(modes)("%s keeps getter-backed and non-enumerable webhook message fields", async (mode) => {
+    const { webhook } = await setup(mode)
+    const bodies: Record<string, unknown>[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(message())
+    })
+    class Announcement {
+        get content() {
+            return "Deploying"
+        }
+        get username() {
+            return "Release bot"
+        }
+        get allowedMentions() {
+            return { users: ["101"] }
+        }
+    }
+    const input = new Announcement()
+    Object.defineProperty(input, "flags", { value: MessageFlags.SuppressEmbeds, enumerable: false })
+    await settle(webhook.send(input as never))
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({ content: "Deploying", username: "Release bot", flags: 4 })
+    expect(bodies[0]!.allowed_mentions).toMatchObject({ users: ["101"] })
+})
+
+// The shared image check accepts media type parameters, as Fluxer and the community and user image fields do
+test.each(modes)("%s accepts a webhook avatar data URI with media type parameters", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(metadata())
+    })
+    const { bot, webhook } = await setup(mode)
+    const avatar = "data:image/png;charset=utf-8;base64,iVBORw0K"
+    await settle(bot.webhooks.create("300", { name: "Deployments", avatar }))
+    await settle(webhook.edit({ avatar }))
+    expect(bodies).toEqual([{ name: "Deployments", avatar }, { avatar }])
+})
+
 test.each(modes)("%s manages webhooks with token-free snapshots and explicit credential access", async (mode) => {
     const requests: { path: string; method: string; body: unknown }[] = []
     stubFetchWithHostedDiscovery(
@@ -138,14 +186,38 @@ test.each(modes)("%s manages webhooks with token-free snapshots and explicit cre
     await settle(bot.webhooks.edit("100", { name: "Renamed", avatar: null, channelId: "301" }))
     await settle(bot.webhooks.delete("100"))
     expect(requests.map((x) => [x.path, x.method])).toEqual([
-        ["/v1/channels/300/webhooks", "POST"],
-        ["/v1/webhooks/100", "GET"],
-        ["/v1/channels/300/webhooks", "GET"],
-        ["/v1/guilds/200/webhooks", "GET"],
-        ["/v1/webhooks/100", "PATCH"],
-        ["/v1/webhooks/100", "DELETE"],
+        ["/api/v1/channels/300/webhooks", "POST"],
+        ["/api/v1/webhooks/100", "GET"],
+        ["/api/v1/channels/300/webhooks", "GET"],
+        ["/api/v1/guilds/200/webhooks", "GET"],
+        ["/api/v1/webhooks/100", "PATCH"],
+        ["/api/v1/webhooks/100", "DELETE"],
     ])
     expect(requests[4]!.body).toEqual({ name: "Renamed", avatar: null, channel_id: "301" })
+})
+
+test.each(modes)("%s keeps the creator on bot reads and leaves it out of token reads", async (mode) => {
+    // Bot-authenticated reads carry the creator's public user, and token reads leave it out
+    const creator = {
+        id: "500",
+        username: "creator",
+        discriminator: "0042",
+        global_name: null,
+        avatar: null,
+        avatar_color: null,
+        flags: 0,
+    }
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) =>
+        new Headers(init.headers).has("authorization")
+            ? Response.json(metadata({ user: creator }))
+            : Response.json(metadata()),
+    )
+    const { bot, webhook } = await setup(mode)
+    expect(await settle(bot.webhooks.fetch("100"))).toMatchObject({
+        id: "100",
+        creator: { id: "500", username: "creator" },
+    })
+    expect(await settle(webhook.fetch())).not.toHaveProperty("creator")
 })
 
 test.each(modes)("%s sends and manages owned messages without bot authentication", async (mode) => {
@@ -169,7 +241,7 @@ test.each(modes)("%s sends and manages owned messages without bot authentication
     await settle(webhook.fetchMessage("400"))
     await settle(webhook.editMessage("400", { content: "Deployed", embeds: [] }))
     await settle(webhook.deleteMessage("400"))
-    expect(calls[0]!.url).toBe(`https://api.fluxer.app/v1/webhooks/100/${secret}?wait=true`)
+    expect(calls[0]!.url).toBe(`https://fluxer.com/api/v1/webhooks/100/${secret}?wait=true`)
     expect(calls[0]!.body).toMatchObject({
         username: "Build",
         avatar_url: "https://example.com/avatar.png",
@@ -211,10 +283,10 @@ test.each(modes)("%s manages its webhook through token routes without closing lo
     await settle(webhook.delete())
     await expect(settle(webhook.fetch())).rejects.toMatchObject({ reason: "notFound", outcome: "rejected" })
     expect(calls.map((call) => [call.url, call.method, call.body, call.authorization])).toEqual([
-        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "GET", undefined, null],
-        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "PATCH", { name: "Rotated", avatar: null }, null],
-        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "DELETE", undefined, null],
-        [`https://api.fluxer.app/v1/webhooks/100/${secret}`, "GET", undefined, null],
+        [`https://fluxer.com/api/v1/webhooks/100/${secret}`, "GET", undefined, null],
+        [`https://fluxer.com/api/v1/webhooks/100/${secret}`, "PATCH", { name: "Rotated", avatar: null }, null],
+        [`https://fluxer.com/api/v1/webhooks/100/${secret}`, "DELETE", undefined, null],
+        [`https://fluxer.com/api/v1/webhooks/100/${secret}`, "GET", undefined, null],
     ])
 })
 
@@ -476,6 +548,53 @@ test.each(modes)("%s does not replay unknown sends, but retries confirmed rate l
     expect(attempts).toBe(2)
 })
 
+// Catches: A Blob upload failed on a 429 without any log record, unlike ratelimit.wait and ratelimit.deadline
+test.each(modes)("%s logs a rate-limited Blob upload that cannot be sent twice", async (mode) => {
+    let attempts = 0
+    stubFetchWithHostedDiscovery(
+        vi.fn(async () => {
+            attempts++
+            return Response.json({ retry_after: 0.005, global: false }, { status: 429 })
+        }),
+    )
+    const logs = captureLogs()
+    const { webhook } = await setup(mode, { id: "100", token: secret, logging: logs.logging })
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" })
+    const error = await expectErr(webhook.send({ attachments: [{ file: blob, filename: "chart.png" }] }))
+    expect(error).toMatchObject({ reason: "rateLimit", retryAfterMs: 5 })
+    expect(attempts).toBe(1)
+    expect(logs.withCode("ratelimit.notResent")).toEqual([
+        expect.objectContaining({ level: "warn", status: 429, delayMs: 5, route: "/webhooks/:id/:token" }),
+    ])
+})
+
+// Catches: A rate-limited stream upload was called retryable with the generic wait hint, although the same call would
+// send the used stream again. A Blob can be read again by a new call, so it stays retryable
+test.each(modes)("%s marks a rate-limited stream upload as not retryable and names a new stream", async (mode) => {
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            // The upload reads the stream before the rate limit arrives
+            await new Response(init.body).arrayBuffer()
+            return Response.json({ retry_after: 0.005, global: false }, { status: 429 })
+        }),
+    )
+    const { webhook } = await setup(mode, { id: "100", token: secret })
+    const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+            controller.close()
+        },
+    })
+    const streamed = await expectErr(webhook.send({ attachments: [{ stream, size: 1, filename: "chart.png" }] }))
+    expect(streamed).toMatchObject({ reason: "rateLimit", details: expect.objectContaining({ streamUsed: true }) })
+    expect(streamed.hint).toContain("new stream")
+    expect(errors.isRetryable(streamed)).toBe(false)
+    const blob = new Blob([new Uint8Array([1])], { type: "image/png" })
+    const blobbed = await expectErr(webhook.send({ attachments: [{ file: blob, filename: "chart.png" }] }))
+    expect(blobbed.details).not.toHaveProperty("streamUsed")
+    expect(errors.isRetryable(blobbed)).toBe(true)
+})
+
 test.each(modes)(
     "%s accepts only writable webhook flags and rejects unsupported flags without dispatch",
     async (mode) => {
@@ -515,7 +634,10 @@ test.each(modes)(
                 await expect(settle(webhook.send(input))).rejects.toMatchObject({
                     reason: "input",
                     outcome: "notDispatched",
-                    inputValidation: { path: "flags" },
+                    // A webhook send may be a voice note, which cannot have content, while a forward never is one
+                    inputValidation: {
+                        path: flags === MessageFlags.VoiceMessage && "content" in input ? "content" : "flags",
+                    },
                 })
             await expect(settle(webhook.editMessage("400", { flags }))).rejects.toMatchObject({
                 reason: "input",
@@ -526,6 +648,111 @@ test.each(modes)(
         expect(hostedOperationCalls(hostedFetch)).toHaveLength(3)
     },
 )
+
+// Webhook files always go as multipart, and Fluxer's multipart webhook schema reads waveforms of at most 256 characters
+// (packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:79 at 5f3fc0b1), while it accepts the voice note itself
+test.each(modes)("%s sends a voice note whose waveform fits the webhook multipart limit", async (mode) => {
+    const payloads: Record<string, any>[] = []
+    const hostedFetch = stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            const headers = new Headers(init.headers)
+            const form = await new Response(await new Response(init.body).arrayBuffer(), { headers }).formData()
+            payloads.push(JSON.parse(String(form.get("payload_json"))))
+            expect(new Uint8Array(await (form.get("files[0]") as File).arrayBuffer())).toEqual(new Uint8Array([1]))
+            return Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    const fits = "A".repeat(256)
+    const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+            controller.close()
+        },
+    })
+    const voice = { filename: "note.ogg", contentType: "audio/ogg", duration: 25 }
+    await settle(
+        webhook.send({
+            attachments: [{ ...voice, data: new Uint8Array([1]), waveform: fits }],
+            flags: MessageFlags.VoiceMessage,
+        }),
+    )
+    await settle(
+        webhook.send({
+            attachments: [{ ...voice, stream, size: 1, waveform: fits }],
+            flags: MessageFlags.VoiceMessage | MessageFlags.SuppressNotifications,
+            messageReference: { type: "reply", target: { id: "401", channelId: "300" } },
+        }),
+    )
+    expect(payloads).toEqual([
+        expect.objectContaining({
+            flags: MessageFlags.VoiceMessage,
+            attachments: [expect.objectContaining({ duration: 25, waveform: fits })],
+        }),
+        expect.objectContaining({
+            flags: MessageFlags.VoiceMessage | MessageFlags.SuppressNotifications,
+            attachments: [expect.objectContaining({ duration: 25, waveform: fits })],
+            message_reference: expect.objectContaining({ message_id: "401" }),
+        }),
+    ])
+    for (const messageReference of [undefined, { type: "reply", target: { id: "401", channelId: "300" } }] as const) {
+        const failure = await expectErr(
+            webhook.send({
+                attachments: [{ ...voice, data: new Uint8Array([1]), waveform: `${fits}A` }],
+                flags: MessageFlags.VoiceMessage,
+                ...(messageReference === undefined ? {} : { messageReference }),
+            }),
+        )
+        expect(failure).toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+            inputValidation: { path: "attachments[].waveform", constraint: "length" },
+        })
+        expect(failure.message).toContain("256")
+    }
+    // Fluxer still checks the voice note itself, so the SDK keeps refusing content beside it
+    expect(
+        await expectErr(
+            webhook.send({
+                content: "hello",
+                attachments: [{ ...voice, data: new Uint8Array([1]), waveform: "AAEC" }],
+                flags: MessageFlags.VoiceMessage,
+            }),
+        ),
+    ).toMatchObject({ reason: "input", inputValidation: { path: "content" } })
+    expect(hostedOperationCalls(hostedFetch)).toHaveLength(2)
+})
+
+// Catches: The SDK's own waveform helper had no result that a webhook send accepts for audio over 19.2 seconds
+test.each(modes)("%s sends a long voice note whose helper waveform uses 192 points", async (mode) => {
+    const payloads: Record<string, any>[] = []
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            const headers = new Headers(init.headers)
+            const form = await new Response(await new Response(init.body).arrayBuffer(), { headers }).formData()
+            payloads.push(JSON.parse(String(form.get("payload_json"))))
+            return Response.json(message())
+        }),
+    )
+    const { webhook } = await setup(mode)
+    // 25 seconds of audio at 1,000 samples a second
+    const samples = Float32Array.from({ length: 25_000 }, (_, index) => Math.sin(index / 40))
+    const helper = mode === "default" ? voiceWaveform : nativeVoiceWaveform
+    const voice = { filename: "note.ogg", contentType: "audio/ogg", data: new Uint8Array([1]) }
+    const fitted = helper(samples, 1_000, { maxPoints: 192 })
+    await settle(webhook.send({ attachments: [{ ...voice, ...fitted }], flags: MessageFlags.VoiceMessage }))
+    expect(payloads).toEqual([
+        expect.objectContaining({
+            attachments: [expect.objectContaining({ duration: 25, waveform: fitted.waveform })],
+        }),
+    ])
+    // The default result keeps Fluxer's 256 points, which is too long for a webhook and fails before sending
+    const failure = await expectErr(
+        webhook.send({ attachments: [{ ...voice, ...helper(samples, 1_000) }], flags: MessageFlags.VoiceMessage }),
+    )
+    expect(failure).toMatchObject({ reason: "input", inputValidation: { path: "attachments[].waveform" } })
+    expect(payloads).toHaveLength(1)
+})
 
 test.each(modes)("%s snapshots binary uploads and replays identical multipart after 429", async (mode) => {
     const clock = sdkClock()
@@ -622,9 +849,16 @@ test.each(modes)("%s shutdown awaits active body cleanup and rejects new request
 test.each(modes)("%s bounds retained upload bytes and releases reservations after failure", async (mode) => {
     const hostedFetch = stubFetchWithHostedDiscovery(vi.fn(async () => Response.json(message())))
     const { webhook } = await setup(mode, { id: "100", token: secret, uploadMaxBytes: 2 })
-    await expect(
-        settle(webhook.send({ attachments: [{ data: new Uint8Array(3), filename: "a" }] })),
-    ).rejects.toMatchObject({ reason: "busy", outcome: "notDispatched" })
+    const oversized = settle(webhook.send({ attachments: [{ data: new Uint8Array(3), filename: "a" }] }))
+    await expect(oversized).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+        inputValidation: { path: "files" },
+    })
+    // Catches: The failure told a webhook caller to raise uploads.maxBytes, which only the bot client has
+    const text = await oversized.catch((error: unknown) => String((error as Error).message))
+    expect(text).toContain("uploadMaxBytes")
+    expect(text).not.toContain("uploads.maxBytes")
     await settle(webhook.send({ content: "x" }))
     expect(hostedOperationCalls(hostedFetch)).toHaveLength(1)
 })

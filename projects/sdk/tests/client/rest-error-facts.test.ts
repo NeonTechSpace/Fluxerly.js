@@ -6,7 +6,7 @@ import { modes, setup } from "../support/both-apis.js"
 import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
 import { expectErr, settle } from "../support/settle.js"
 
-const discoveryUrl = "https://fluxer.app/.well-known/fluxer"
+const discoveryUrl = "https://fluxer.com/.well-known/fluxer"
 const source = () => Object.assign(new Error("Private transport URL and credential"), { code: "ECONNRESET" })
 afterEach(() => vi.unstubAllGlobals())
 

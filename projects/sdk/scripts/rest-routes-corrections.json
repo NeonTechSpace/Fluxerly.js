@@ -1,0 +1,240 @@
+{
+    "routes": [
+        {
+            "route": "GET /gateway/bot",
+            "reason": "The document lists no security for this route, but the server answers it only for a valid bot token",
+            "evidence": [
+                "fluxer_api/src/api/gateway/GatewayController.ts:11",
+                "fluxer_api/src/api/gateway/GatewayRequestService.ts:32-41"
+            ]
+        }
+    ],
+    "query": [
+        {
+            "route": "DELETE /channels/{channel_id}",
+            "name": "silent",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ChannelController.ts:214",
+                "packages/schema/src/domains/channel/ChannelRequestSchemas.ts:418"
+            ]
+        },
+        {
+            "route": "DELETE /channels/{channel_id}",
+            "name": "delete_messages",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ChannelController.ts:214",
+                "packages/schema/src/domains/channel/ChannelRequestSchemas.ts:419"
+            ]
+        },
+        {
+            "route": "DELETE /channels/{channel_id}/recipients/{user_id}",
+            "name": "silent",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ChannelController.ts:293",
+                "packages/schema/src/domains/channel/ChannelRequestSchemas.ts:418"
+            ]
+        },
+        {
+            "route": "DELETE /channels/{channel_id}/recipients/{user_id}",
+            "name": "delete_messages",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ChannelController.ts:293",
+                "packages/schema/src/domains/channel/ChannelRequestSchemas.ts:419"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/messages",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/MessageController.ts:55",
+                "packages/schema/src/domains/message/MessageRequestSchemas.ts:394"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/thread-members",
+            "name": "with_member",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:357",
+                "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:72"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/thread-members",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:357",
+                "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:74"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/thread-members/{user_id}",
+            "name": "with_member",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:442",
+                "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:84"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/threads/archived/private",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:294",
+                "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:87-95"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/threads/archived/public",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:263",
+                "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:87-95"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/threads/search",
+            "name": "slop",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ForumController.ts:45",
+                "packages/schema/src/domains/channel/ForumRequestSchemas.ts:230"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/threads/search",
+            "name": "archived",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ForumController.ts:45",
+                "packages/schema/src/domains/channel/ForumRequestSchemas.ts:215",
+                "packages/schema/src/domains/channel/ForumRequestSchemas.ts:235-239"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/threads/search",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ForumController.ts:45",
+                "packages/schema/src/domains/channel/ForumRequestSchemas.ts:243"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/threads/search",
+            "name": "offset",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ForumController.ts:45",
+                "packages/schema/src/domains/channel/ForumRequestSchemas.ts:248"
+            ]
+        },
+        {
+            "route": "GET /channels/{channel_id}/users/@me/threads/archived/private",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:325",
+                "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:100-102"
+            ]
+        },
+        {
+            "route": "DELETE /guilds/{guild_id}/emojis/{emoji_id}",
+            "name": "purge",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/guild/controllers/GuildEmojiController.ts:169",
+                "packages/schema/src/domains/common/CommonQuerySchemas.ts:7"
+            ]
+        },
+        {
+            "route": "DELETE /guilds/{guild_id}/stickers/{sticker_id}",
+            "name": "purge",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/guild/controllers/GuildStickerController.ts:174",
+                "packages/schema/src/domains/common/CommonQuerySchemas.ts:7"
+            ]
+        },
+        {
+            "route": "GET /users/@me/guilds",
+            "name": "with_counts",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/guild/controllers/GuildBaseController.ts:93",
+                "packages/schema/src/domains/guild/GuildRequestSchemas.ts:338"
+            ]
+        },
+        {
+            "route": "DELETE /users/@me/guilds/{guild_id}",
+            "name": "delete_messages",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/guild/controllers/GuildBaseController.ts:121",
+                "packages/schema/src/domains/guild/GuildRequestSchemas.ts:344"
+            ]
+        },
+        {
+            "route": "GET /users/{target_id}/profile",
+            "name": "with_mutual_friends",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/user/controllers/UserAccountController.ts:659",
+                "packages/schema/src/domains/user/UserRequestSchemas.ts:511"
+            ]
+        },
+        {
+            "route": "GET /users/{target_id}/profile",
+            "name": "with_mutual_guilds",
+            "type": "boolean",
+            "evidence": [
+                "fluxer_api/src/api/user/controllers/UserAccountController.ts:659",
+                "packages/schema/src/domains/user/UserRequestSchemas.ts:512"
+            ]
+        }
+    ],
+    "schemas": [
+        {
+            "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+            "property": "type",
+            "values": [10, 11, 12],
+            "reason": "The document allows every channel type, but only thread channels are serialized as threads",
+            "evidence": [
+                "fluxer_api/src/api/channel/services/thread/ThreadMappers.ts:58-63",
+                "packages/constants/src/ThreadConstants.ts:6-10",
+                "fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts:292"
+            ]
+        },
+        {
+            "schema": ["ThreadChannelResponse", "StartForumThreadResponse"],
+            "required": [
+                "guild_id",
+                "parent_id",
+                "owner_id",
+                "name",
+                "last_message_id",
+                "last_pin_timestamp",
+                "rate_limit_per_user",
+                "flags",
+                "thread_metadata",
+                "message_count",
+                "total_message_sent",
+                "member_count"
+            ],
+            "reason": "The document requires only id and type, but the thread serializer always writes these fields, some of them as null",
+            "evidence": [
+                "fluxer_api/src/api/channel/services/thread/ThreadMappers.ts:61-82",
+                "fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts:463-464",
+                "fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts:292"
+            ]
+        }
+    ]
+}

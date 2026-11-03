@@ -92,7 +92,7 @@
         },
         {
             // The node:test runner awaits the promise that each test() call returns
-            "files": ["web/tests/**"],
+            "files": ["web/tests/**", "sdk/examples/**/*.test.*"],
             "rules": { "typescript/no-floating-promises": "off" }
         }
     ]

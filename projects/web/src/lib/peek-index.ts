@@ -298,6 +298,15 @@ function createdOf(build: Build, type: Type | undefined): ApiNode[] {
     return type.k === "union" ? type.t.flatMap((inner) => createdOf(build, inner)) : []
 }
 
+// The options objects a parameter takes, named like BotOptions, with what such a type is made of. A parameter such as a
+// channel is not an options object, so a guildId in a sentence is not that channel's property
+function optionsOf(build: Build, type: Type | undefined): ApiNode[] {
+    const named = (key: string) => /Options$/.test(build.items.get(key)?.name ?? "")
+    const top = type && typeof type === "object" && "r" in type && type.h
+    const nodes = nodesOf(build, type)
+    return top && named(top) ? nodes : nodes.filter((node) => named(node.key))
+}
+
 // An option is a member of the options an entry point's functions take, such as runBot's BotOptions with the
 // ClientOptions it inherits. A name counts only when one member owns it across all of them, so token, which both the
 // client and a webhook client take, names neither. The objects the functions create, such as the Client, are where
@@ -310,7 +319,7 @@ function addFunctions(build: Build, entry: Entry, items: Declaration[]) {
         const signature = item.kind === "function" ? item.signatures?.[0] : undefined
         if (!signature) continue
         for (const parameter of signature.p)
-            for (const node of nodesOf(build, parameter.t))
+            for (const node of optionsOf(build, parameter.t))
                 for (const [name, member] of node.members) owners.set(name, (owners.get(name) ?? new Map()).set(member.key, member))
         for (const node of createdOf(build, signature.r)) if (!created.includes(node)) created.push(node)
     }

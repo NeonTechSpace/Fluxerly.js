@@ -175,7 +175,8 @@ export class HelperError extends FluxerlyError {
             | "links.message"
             | "links.installation"
             | "embed.color"
-            | "embed.timestamp",
+            | "embed.timestamp"
+            | "voiceWaveform",
         /** Invalid input category, without retaining the rejected value */
         readonly reason:
             | "id"
@@ -187,7 +188,8 @@ export class HelperError extends FluxerlyError {
             | "text"
             | "limit"
             | "shardCount"
-            | "resource",
+            | "resource"
+            | "audio",
         /** Optional underlying failure retained as the error's cause */
         options?: { readonly cause?: unknown },
     ) {
@@ -251,6 +253,8 @@ function helperExplanation(operation: HelperError["operation"], reason: HelperEr
         case "text":
             return "Text must be a string"
         case "limit":
+            if (operation === "voiceWaveform")
+                return "Waveform options must be an object with only maxPoints, an integer from 1 through 256"
             if (operation === "text.truncate")
                 return "Truncate options must be an object with only maxLength, a positive safe integer, and an optional suffix, a well-formed string of at most maxLength units"
             return "Split options must be an object with only maxLength, a positive safe integer of at least 2 when the text contains surrogate pairs"
@@ -258,6 +262,8 @@ function helperExplanation(operation: HelperError["operation"], reason: HelperEr
             return "The total shard count must be an integer from 1 through 16,384"
         case "resource":
             return 'The resource must be one of the NotFoundResource names, such as "channel" or "message"'
+        case "audio":
+            return "Samples must be an array, typed array or other array-like object of finite numbers, and the sample rate a positive finite number of hertz"
     }
 }
 
@@ -1021,38 +1027,37 @@ export type LinkHelpers = Readonly<{
     message(message: MessageReference, channel: ChannelLinkTarget): string
     /**
      * Build a URL for Fluxer's bot-installation flow from an application ID, with the fixed `bot` scope and optional unsigned 64-bit permissions.
-     * For the hosted `links` export, the URL starts at Fluxer's API authorization route, which redirects to the web app's installation page wherever Fluxer currently serves it.
-     * Instance links open the instance web app's installation page directly.
+     * The hosted `links` export and instance links both open the web app's installation page directly.
      * Throws HelperError for invalid IDs or options, and an alternate origin or scope is not accepted.
      * This does not open the page, install the bot, authorize permissions or check whether the application exists
      */
     installation(applicationId: string, options?: InstallationLinkOptions): string
 }>
 
-/** Make URLs for opening channels, messages or bot installation in the hosted Fluxer app.
+// Hosted Fluxer's web app. Instance links swap this base for the instance's own web app
+const hostedWebapp = "https://fluxer.com"
+
+/** Make URLs for opening channels, messages or bot installation in the hosted Fluxer app at fluxer.com.
  * Each method returns the URL directly and throws HelperError for invalid input. No browser is opened and no access or existence check is made
  */
 export const links: LinkHelpers = Object.freeze({
     channel(target: ChannelLinkTarget): string {
         const { id, guildId } = valueOrThrow(channelLink(target, "links.channel"))
-        return guildId === null
-            ? `https://fluxer.app/channels/@me/${id}`
-            : `https://fluxer.app/channels/${guildId}/${id}`
+        return guildId === null ? `${hostedWebapp}/channels/@me/${id}` : `${hostedWebapp}/channels/${guildId}/${id}`
     },
     message(message: MessageReference, channel: ChannelLinkTarget): string {
         const resolvedChannel = valueOrThrow(channelLink(channel, "links.message"))
         const id = markupId(message?.id, "links.message")
         if (id.isErr() || message?.channelId !== resolvedChannel.id) throw helperError("links.message", "link")
         return resolvedChannel.guildId === null
-            ? `https://fluxer.app/channels/@me/${resolvedChannel.id}/${id.value}`
-            : `https://fluxer.app/channels/${resolvedChannel.guildId}/${resolvedChannel.id}/${id.value}`
+            ? `${hostedWebapp}/channels/@me/${resolvedChannel.id}/${id.value}`
+            : `${hostedWebapp}/channels/${resolvedChannel.guildId}/${resolvedChannel.id}/${id.value}`
     },
     installation(applicationId: string, options?: InstallationLinkOptions): string {
-        return `https://api.fluxer.app/v1/oauth2/authorize?${installationQuery(applicationId, options)}`
+        return `${hostedWebapp}/oauth2/authorize?${installationQuery(applicationId, options)}`
     },
 })
 
-// The hosted marketing site has no installation page, so hosted links start at the API route that redirects to the web app
 function installationQuery(applicationId: string, options: InstallationLinkOptions | undefined): URLSearchParams {
     const id = valueOrThrow(markupId(applicationId, "links.installation"))
     const permissions = valueOrThrow(installationPermissions(options))
@@ -1070,7 +1075,7 @@ function installationQuery(applicationId: string, options: InstallationLinkOptio
  * No network request occurs
  */
 export function createInstanceLinks(webapp: string): LinkHelpers {
-    const project = (url: string): string => `${webapp}${url.slice("https://fluxer.app".length)}`
+    const project = (url: string): string => `${webapp}${url.slice(hostedWebapp.length)}`
     return Object.freeze({
         channel: (...input: Parameters<typeof links.channel>) => project(links.channel(...input)),
         message: (...input: Parameters<typeof links.message>) => project(links.message(...input)),

@@ -14,6 +14,9 @@ interface Props {
 const { item } = Astro.props
 // A function prints its signatures instead, so every other kind has a declaration
 const kind = item.kind === "function" ? "variable" : item.kind
+// RestRoutes lists every typed route with Fluxer's summary, which the endpoint map already makes searchable beside its
+// Fluxer docs link. Indexed here as well, one generated list would outrank the guides and methods a search is after
+const unindexed = item.name === "RestRoutes"
 ---
 
 <article class="ref-symbol">
@@ -27,7 +30,7 @@ const kind = item.kind === "function" ? "variable" : item.kind
                 <pre class="ref-sig"><code set:html={fitted((width) => declarationHtml(kind, item.name, { type: item.type, tp: item.tp, extends: item.extends, implements: item.implements, const: item.const }, width))} /></pre>
                 <DocText doc={item.doc} part="body" self={item.url} />
                 <DocText doc={item.doc} part="rest" self={item.url} />
-                {(!!item.members?.length || !!item.inherited?.length) && <Members members={item.members ?? []} inherited={item.inherited} level={4} />}
+                {(!!item.members?.length || !!item.inherited?.length) && <Members members={item.members ?? []} inherited={item.inherited} level={4} unindexed={unindexed} />}
             </>
         )
     }

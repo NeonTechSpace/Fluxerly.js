@@ -8,6 +8,7 @@ import {
     errors,
     GuildOperationError,
     Permissions,
+    permissionBits,
     type ClientOptions,
     type RequestOptions,
     type PermissionFetchOptions,
@@ -16,7 +17,7 @@ import {
     type PermissionTarget,
     type MemberReference,
 } from "../../../src/index.js"
-import { fixtures } from "../../../src/testing.js"
+import { createTestClient, fixtures } from "../../../src/testing.js"
 import { createClient as createNative, type ClientOptions as NativeClientOptions } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../../support/hosted-discovery.js"
@@ -247,14 +248,14 @@ test.each(modes)("%s fetches every permission snapshot remotely without cache su
     expect(await api.fetch(target)).toBe(unknownPermission | 2n | 16n)
     expect(await api.fetch(target)).toBe(unknownPermission | 2n | 16n)
     expect(calls).toEqual([
-        "/v1/guilds/20",
-        "/v1/guilds/20/members/30",
-        "/v1/guilds/20/roles",
-        "/v1/channels/50",
-        "/v1/guilds/20",
-        "/v1/guilds/20/members/30",
-        "/v1/guilds/20/roles",
-        "/v1/channels/50",
+        "/api/v1/guilds/20",
+        "/api/v1/guilds/20/members/30",
+        "/api/v1/guilds/20/roles",
+        "/api/v1/channels/50",
+        "/api/v1/guilds/20",
+        "/api/v1/guilds/20/members/30",
+        "/api/v1/guilds/20/roles",
+        "/api/v1/channels/50",
     ])
 })
 
@@ -290,7 +291,12 @@ test.each(modes)("%s copies the target before remote reads can observe a caller 
     mutableTarget.channelId = "51"
     release()
     expect(await pending).toBe(6n)
-    expect(calls).toEqual(["/v1/guilds/20", "/v1/guilds/20/members/30", "/v1/guilds/20/roles", "/v1/channels/50"])
+    expect(calls).toEqual([
+        "/api/v1/guilds/20",
+        "/api/v1/guilds/20/members/30",
+        "/api/v1/guilds/20/roles",
+        "/api/v1/channels/50",
+    ])
 })
 
 test.each(modes)("%s preserves resource failures and rejects cross-guild remote snapshots", async (mode) => {
@@ -311,11 +317,11 @@ test.each(modes)("%s preserves resource failures and rejects cross-guild remote 
         status: 403,
     })
     // The guild and member were read once and the channel never. The REST layer owns how often roles are retried
-    expect(calls.filter((path) => path !== "/v1/guilds/20/roles")).toEqual([
-        "/v1/guilds/20",
-        "/v1/guilds/20/members/30",
+    expect(calls.filter((path) => path !== "/api/v1/guilds/20/roles")).toEqual([
+        "/api/v1/guilds/20",
+        "/api/v1/guilds/20/members/30",
     ])
-    expect(calls).toContain("/v1/guilds/20/roles")
+    expect(calls).toContain("/api/v1/guilds/20/roles")
 
     rest(async (url) => {
         const path = new URL(url).pathname
@@ -551,11 +557,11 @@ test.each(modes)(
         const api = await setup(mode)
         expect(await api.fetch({ ...target, channelId: "60" })).toBe(ViewChannel)
         expect(calls).toEqual([
-            "/v1/guilds/20",
-            "/v1/guilds/20/members/30",
-            "/v1/guilds/20/roles",
-            "/v1/channels/60",
-            "/v1/channels/50",
+            "/api/v1/guilds/20",
+            "/api/v1/guilds/20/members/30",
+            "/api/v1/guilds/20/roles",
+            "/api/v1/channels/60",
+            "/api/v1/channels/50",
         ])
     },
 )
@@ -614,7 +620,7 @@ function cacheRest(options: { channelOverwrites?: readonly unknown[] | undefined
     const calls: string[] = []
     let roleReads = 0
     rest(async (url) => {
-        const path = new URL(url).pathname.replace("/v1", "")
+        const path = new URL(url).pathname.replace("/api/v1", "")
         calls.push(path)
         if (path === "/guilds/20") return Response.json(wireGuild())
         if (path === "/guilds/20/members/30") return Response.json(wireMember())
@@ -833,10 +839,10 @@ test.each(modes)(
         const api = await setup(mode)
         const result = await api.fetchChannels(channelTarget)
         expect(calls).toEqual([
-            "/v1/guilds/20",
-            "/v1/guilds/20/members/30",
-            "/v1/guilds/20/roles",
-            "/v1/guilds/20/channels",
+            "/api/v1/guilds/20",
+            "/api/v1/guilds/20/members/30",
+            "/api/v1/guilds/20/roles",
+            "/api/v1/guilds/20/channels",
         ])
         expect(result.map(({ channel }) => channel.id)).toEqual(["52", "50", "51"])
         expect(result.map(({ permissions }) => permissions)).toEqual([
@@ -987,4 +993,38 @@ test.each(modes)("%s fetchChannels gives the channel list only the shared deadli
     await vi.advanceTimersByTimeAsync(11)
     expect(listAborted).toBe(true)
     expect(await pending).toMatchObject({ operation: "channels.fetchAll", reason: "timeout" })
+})
+
+// The sendableChannels examples on fetchChannels use this filter: Administrator grants every bit, so only the type check
+// keeps a category, forum or link out of a list of places that accept messages
+test("the sendable-channels filter of the fetchChannels examples keeps only channels that accept messages", async () => {
+    await using bot = createTestClient()
+    const { guild, bot: botId } = bot.fixtures.ids
+    const channels = [
+        { id: "1", type: ChannelType.Text },
+        { id: "2", type: ChannelType.Voice },
+        { id: "3", type: ChannelType.Category },
+        { id: "4", type: ChannelType.Forum },
+        { id: "5", type: ChannelType.Link },
+    ].map((channel) => bot.fixtures.channel({ ...channel, guild_id: guild, permission_overwrites: [] }))
+    bot.rest.respond(`GET /guilds/${guild}`, { body: bot.fixtures.guild({ owner_id: "999" }) })
+    bot.rest.respond(`GET /guilds/${guild}/members/${botId}`, {
+        body: bot.fixtures.member({ user: bot.fixtures.botUser() }),
+    })
+    bot.rest.respond(`GET /guilds/${guild}/roles`, {
+        body: [bot.fixtures.role({ id: guild, permissions: String(Permissions.Administrator) })],
+    })
+    bot.rest.respond(`GET /guilds/${guild}/channels`, { body: channels })
+    const result = await bot.client.permissions.fetchChannels({ guildId: guild, userId: botId })
+    if (result.isErr()) throw result.error
+    const sendable = result.value
+        .filter(
+            ({ channel, permissions }) =>
+                (channel.type === ChannelType.Text ||
+                    channel.type === ChannelType.Voice ||
+                    channel.type === ChannelType.Announcement) &&
+                permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]),
+        )
+        .map(({ channel }) => channel.id)
+    expect(sendable).toEqual(["1", "2"])
 })

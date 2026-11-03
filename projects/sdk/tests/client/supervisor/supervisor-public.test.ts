@@ -592,10 +592,17 @@ test("default clears a current-generation connection observation as soon as owne
     })
     await owner.start().then((result) => result._unsafeUnwrap())
     await state.entered
+    await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics).not.toBeNull(), { interval: 5 })
     state.release()
     await owner.waitForReady().then((result) => result._unsafeUnwrap())
+    // The child stays alive without IPC, so its last diagnostics snapshot is cleared with its connection state
     await vi.waitFor(
-        () => expect(owner.status().children[0]).toMatchObject({ pid: expect.any(Number), connectionState: null }),
+        () =>
+            expect(owner.status().children[0]).toMatchObject({
+                pid: expect.any(Number),
+                connectionState: null,
+                diagnostics: null,
+            }),
         { interval: 5 },
     )
 }, 12_000)

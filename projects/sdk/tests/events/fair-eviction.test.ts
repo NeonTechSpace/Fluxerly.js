@@ -16,7 +16,9 @@ function logger() {
 function queue(options: { readonly maxPendingMessages: number; readonly maxPendingBytes?: number }) {
     const { records, logger: log } = logger()
     const bus = new EventBus(() => log)
-    const source = Effect.runSync(bus.open("typingStart", { partition: "channel", overflow: "dropOldest", ...options }))
+    const source = Effect.runSync(
+        bus.open("typingStart", { partition: "channel", overflow: "dropOldest", ...options }, { handler: true }),
+    )
     return {
         records,
         log,
@@ -145,14 +147,18 @@ test("events whose partition function failed share one backlog of their own", ()
     const { logger: log } = logger()
     const bus = new EventBus(() => log)
     const source = Effect.runSync(
-        bus.open("typingStart", {
-            partition: (event: { readonly userId: string }) => {
-                if (event.userId.startsWith("bad")) throw new Error("no key")
-                return event.userId.slice(0, 1)
-            },
-            overflow: "dropOldest",
-            maxPendingMessages: 3,
-        } as never),
+        bus.open(
+            "typingStart",
+            {
+                partition: (event: { readonly userId: string }) => {
+                    if (event.userId.startsWith("bad")) throw new Error("no key")
+                    return event.userId.slice(0, 1)
+                },
+                overflow: "dropOldest",
+                maxPendingMessages: 3,
+            } as never,
+            { handler: true },
+        ),
     )
     for (const userId of ["bad1", "bad2", "a1", "a2"])
         bus.offer("typingStart", { channelId: "1", userId, timestamp: 1 } as never, 10)
@@ -165,8 +171,12 @@ test("events whose partition function failed share one backlog of their own", ()
 test("dropped events are counted per event name for overflow and closed drops, with the metric attribute", async () => {
     const { logger: log } = logger()
     const bus = new EventBus(() => log)
-    const oldest = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 1, overflow: "dropOldest" }))
-    const newest = Effect.runSync(bus.open("messageDelete", { maxPendingMessages: 1, overflow: "dropNewest" }))
+    const oldest = Effect.runSync(
+        bus.open("typingStart", { maxPendingMessages: 1, overflow: "dropOldest" }, { handler: true }),
+    )
+    const newest = Effect.runSync(
+        bus.open("messageDelete", { maxPendingMessages: 1, overflow: "dropNewest" }, { handler: true }),
+    )
     const stopping = Effect.runSync(bus.open("typingStart", { maxPendingMessages: 1 }))
     const typing = { channelId: "1", userId: "2", timestamp: 1 } as never
     const deletion = { id: "10", channelId: "20" } as never

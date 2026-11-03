@@ -36,7 +36,7 @@ test.each(modes)("%s creates separate one-day invites and supports explicit prov
     const created = await settle(client.invites.create("100", undefined, { auditReason: "One day" }))
     expect(requests.at(-1)).toMatchObject({
         method: "POST",
-        path: "/v1/channels/100/invites",
+        path: "/api/v1/channels/100/invites",
         body: { max_age: 86400, max_uses: 0, unique: true, temporary: false },
         audit: "One day",
     })
@@ -56,14 +56,55 @@ test.each(modes)("%s creates separate one-day invites and supports explicit prov
     expect(await settle(client.invites.fetchForChannel("100"))).toEqual([created])
     expect(await settle(client.invites.fetchForGuild("200"))).toEqual([created])
     await settle(client.invites.delete("FixtureCode"))
-    expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: "/v1/invites/FixtureCode" })
-    expect(requests.some((item) => item.method === "POST" && item.path.startsWith("/v1/invites/"))).toBe(false)
+    expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: "/api/v1/invites/FixtureCode" })
+    expect(requests.some((item) => item.method === "POST" && item.path.startsWith("/api/v1/invites/"))).toBe(false)
+})
+
+test.each(modes)("%s keeps the community's icon, features and badges and the inviter's account", async (mode) => {
+    const client = await setup(mode)
+    // Fluxer sends a partial guild and the inviter's public user with an invite read
+    const inviter = {
+        id: "300",
+        username: "inviter",
+        discriminator: "0042",
+        global_name: "Inviter",
+        avatar: null,
+        avatar_color: null,
+        flags: 0,
+    }
+    stubFetchWithHostedDiscovery(async () =>
+        Response.json({
+            ...wire(),
+            guild: {
+                id: "200",
+                name: "Guild",
+                icon: "icon-hash",
+                banner: null,
+                features: ["VERIFIED"],
+                badge_ids: ["900"],
+            },
+            inviter,
+        }),
+    )
+    const read = await settle(client.invites.fetch("FixtureCode"))
+    expect(read.guild).toEqual({
+        id: "200",
+        name: "Guild",
+        icon: "icon-hash",
+        features: ["VERIFIED"],
+        badgeIds: ["900"],
+    })
+    expect(Object.isFrozen(read.guild!.features)).toBe(true)
+    expect(read).toMatchObject({
+        inviterId: "300",
+        inviter: { id: "300", username: "inviter", displayName: "Inviter" },
+    })
 })
 
 test.each(modes)("%s handles existing-group metadata and safely encodes plain codes", async (mode) => {
     const client = await setup(mode)
     const fetch = vi.fn(async (url: string) => {
-        expect(new URL(url).pathname).toBe("/v1/invites/%252e%252e")
+        expect(new URL(url).pathname).toBe("/api/v1/invites/%252e%252e")
         return Response.json({ ...wire(true), code: "%2e%2e" })
     })
     stubFetchWithHostedDiscovery(fetch)
@@ -106,7 +147,7 @@ test.each(modes)("%s rejects malformed invite input without requests or private 
         })
     }
     await expect(settle(client.invites.create("../private"))).rejects.toMatchObject({ reason: "input" })
-    await expect(settle(client.invites.delete("FixtureCode", { auditReason: "é" }))).rejects.toMatchObject({
+    await expect(settle(client.invites.delete("FixtureCode", { auditReason: "lone \ud800" }))).rejects.toMatchObject({
         reason: "input",
     })
     expect(fetch).not.toHaveBeenCalled()
@@ -116,7 +157,7 @@ test.each(modes)("%s accepts plain invite codes beyond 128 characters without an
     const client = await setup(mode)
     const code = "x".repeat(129)
     const fetch = vi.fn(async (url: string) => {
-        expect(new URL(url).pathname).toBe(`/v1/invites/${code}`)
+        expect(new URL(url).pathname).toBe(`/api/v1/invites/${code}`)
         return Response.json({ ...wire(), code })
     })
     stubFetchWithHostedDiscovery(fetch)

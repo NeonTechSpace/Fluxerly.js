@@ -28,6 +28,8 @@ export async function readGuildMember(client: Client, guildId: string, userId: s
 
 The helper returns the community and the member, or the first failed [Result](/docs/glossary/#result) if either request fails. The returned objects are [frozen snapshots](/docs/glossary/#frozen-snapshot) that do not change afterward
 
+A member's [`user`](/docs/api/js-ts/guilds-and-members/#guildmember-user) holds the account's display name and avatar, which can differ from its nickname and avatar in this community. A community's [`badgeIds`](/docs/api/js-ts/guilds-and-members/#guild-badgeids) name its custom badges, and [`instance.fetchBadges`](/docs/api/js-ts/client-and-lifecycle/#instance-fetchbadges) reads their names and images. The community also has `rulesChannelId`, `vanityUrlCode` and `nsfwLevel`
+
 The bot must be a member of the community for [`Guilds.fetch`](/docs/api/js-ts/guilds-and-members/#guilds-fetch) to succeed, and the result does not include the member list. The two reads are separate observations, so neither proves that a later role action will still be allowed
 
 The `guildHealthUpdate` event reports lag and recovery of a community's server through `guildId` and `degraded`. A degraded server is lagging, not disconnected or unavailable. The notice does not reconnect the client or invalidate community caches
@@ -148,7 +150,7 @@ To reuse cached data, call `client.permissions.fetch(target, { preferCache: true
 To see what the bot can do in every channel, call [`permissions.fetchChannels`](/docs/api/js-ts/roles-and-permissions/#permissionhelpers-fetchchannels) with the bot's own ID. It reads the community once and calculates each channel locally, instead of reading again for every channel
 
 ```ts
-import { permissionBits, type Client } from "@neontechspace/fluxerly"
+import { ChannelType, permissionBits, type Client } from "@neontechspace/fluxerly"
 
 export async function channelsWhereBotCanSend(client: Client, guildId: string) {
     const botId = client.users.getSelf()?.id
@@ -156,19 +158,29 @@ export async function channelsWhereBotCanSend(client: Client, guildId: string) {
     const result = await client.permissions.fetchChannels({ guildId, userId: botId })
     if (result.isErr()) throw result.error
     return result.value
-        .filter(({ permissions }) => permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]))
+        .filter(
+            ({ channel, permissions }) =>
+                (channel.type === ChannelType.Text ||
+                    channel.type === ChannelType.Voice ||
+                    channel.type === ChannelType.Announcement) &&
+                permissionBits.hasAll(permissions, ["ViewChannel", "SendMessages"]),
+        )
         .map(({ channel }) => channel.id)
 }
 ```
 
-A timed-out member keeps their permission bits, while Fluxer blocks sending messages, editing and publishing their own messages, reacting, uploading, typing, changing their own nickname, writing in threads and joining voice. The `client.members.timeoutState(member)` method returns `"active"`, `"none"` or `"unknown"`. A member without the `communicationDisabledUntil` field is `"unknown"`, and `members.fetch` always includes it. To show a permission to people, `permissionBits.label("ManageGuild")` gives Fluxer's own name for it, "Manage community". These are community-scope titles, and a channel's permission screen calls `ManageChannels` "Manage channel" and `ManageRoles` "Manage permissions"
+These channel types accept ordinary messages, and their current permission bits allow sending. Forum and media channels need a new post instead. Fluxer still checks the final request
+
+A timeout is how a bot mutes a member for a set time. A timed-out member keeps their permission bits, while Fluxer blocks sending messages, editing and publishing their own messages, reacting, uploading, typing, changing their own nickname, writing in threads and joining voice. The `client.members.timeoutState(member)` method returns `"active"`, `"none"` or `"unknown"`
+
+A member without the `communicationDisabledUntil` field is `"unknown"`, and `members.fetch` always includes it. To show a permission to people, `permissionBits.label("ManageGuild")` gives Fluxer's own name for it, "Manage community". These are community-scope titles, and a channel's permission screen calls `ManageChannels` "Manage channel" and `ManageRoles` "Manage permissions"
 
 <details>
 <summary>What does a calculated permission not cover?</summary>
 
-The [`permissions.calculate`](/docs/api/js-ts/roles-and-permissions/#permissionhelpers-calculate) method makes no request and reads no cache. Its result does not establish channel visibility, role hierarchy, multi-factor authentication requirements, application authorization or Fluxer's final decision.
-In a thread, the result also does not show whether the member can see a private thread, which Fluxer allows only to its members and to members who can manage threads, or whether the thread is archived or locked.
-For prefix commands, the `guards.requirePermissions` guard in the [commands guide](/docs/commands/) performs this check from cached or fetched data
+The [`permissions.calculate`](/docs/api/js-ts/roles-and-permissions/#permissionhelpers-calculate) method makes no request and reads no cache. Its result does not establish channel visibility, role hierarchy, multi-factor authentication requirements, application authorization or Fluxer's final decision
+
+In a thread, the result also does not show whether the member can see a private thread, which Fluxer allows only to its members and to members who can manage threads, or whether the thread is archived or locked. For prefix commands, the `guards.requirePermissions` guard in the [commands guide](/docs/commands/) checks the same permission bits from cached or fetched data. Private-thread membership and archived or locked state need separate checks
 
 </details>
 
@@ -299,14 +311,18 @@ The helper returns `undefined` when the bot or the moderator does not rank above
 
 The SDK checks ban options before sending anything. An invalid option fails with a `GuildOperationError` whose `reason` is `input`, and its `inputValidation.path` names the field, such as `input.durationMs`. A [`duration` command argument](/docs/commands/#convert-arguments-before-execution) can be passed to `durationMs` unchanged when it sets `wholeSeconds: true`, `min: 60_000` and `max: 63_072_000_000`
 
-The [`members.kick`](/docs/api/js-ts/guilds-and-members/#members-kick) and `members.timeout` methods take the same member reference. Use `members.unban` and `members.fetchBans` to review and lift bans. In a prefix command, `guards.requirePermissions(["BanMembers"])` makes sure the person who typed the command also has that permission
+The [`members.kick`](/docs/api/js-ts/guilds-and-members/#members-kick) and `members.timeout` methods take the same member reference. A timeout mutes a member in chat for a set time, while `members.setMute` only mutes a member who is connected to voice. Use `members.unban` and `members.fetchBans` to review and lift bans. In a prefix command, `guards.requirePermissions(["BanMembers"])` makes sure the person who typed the command also has that permission
 
 <details>
 <summary>Compare ranks from data already held</summary>
 
-The `fetchCanManage` method fetches fresh community, member and role data for each check. When the application already holds that data, the `hierarchy` helpers compare it without a request: `hierarchy.canManage({ guild, actor, target, roles })` checks one member against another, and `hierarchy.compare` and `hierarchy.isAbove` order two roles. Like `fetchCanManage`, they check rank only, not permissions. For roles, `hierarchy.highestRole(member, roles)` returns a member's highest explicit role, and `hierarchy.canManageRole({ guild, actor, role, roles })` checks whether the actor outranks a role. Administrator does not bypass rank, so also check the `ManageRoles` permission for the permission half
+The `fetchCanManage` method fetches fresh community, member and role data for each check. When the application already holds that data, the `hierarchy` helpers compare it without a request: `hierarchy.canManage({ guild, actor, target, roles })` checks one member against another, and `hierarchy.compare` and `hierarchy.isAbove` order two roles. Like `fetchCanManage`, they check rank only, not permissions
 
-The caches can supply that data. With `cache.roles` enabled, `roles.getAll(guildId)` returns a community's roles once the cache knows the list is complete, such as after its `guildCreate` or a `roles.fetchAll` while connected, and `undefined` otherwise. With `cache.members` enabled, `members.getSelf(guildId)` returns the bot's own member, which each `guildCreate` and `members.fetchSelf` stores. The member that Fluxer attaches to message, reaction and typing events refreshes the cache for any member who speaks, reacts or types, whichever `messageFields` the client selects, while a voice state's member is never stored because it can lag behind role edits
+For roles, `hierarchy.highestRole(member, roles)` returns a member's highest explicit role, and `hierarchy.canManageRole({ guild, actor, role, roles })` checks whether the actor outranks a role. Administrator does not bypass rank, so also check the `ManageRoles` permission for the permission half
+
+The caches can supply that data. With `cache.roles` enabled, `roles.getAll(guildId)` returns a community's roles once the cache knows the list is complete, such as after its `guildCreate` or a `roles.fetchAll` while connected, and `undefined` otherwise. With `cache.members` enabled, `members.getSelf(guildId)` returns the bot's own member, which each `guildCreate` and `members.fetchSelf` stores
+
+The member that Fluxer attaches to message, reaction and typing events refreshes the cache for any member who speaks, reacts or types, whichever `messageFields` the client selects, while a voice state's member is never stored because it can lag behind role edits
 
 </details>
 
@@ -316,21 +332,25 @@ A community owner can require two-factor authentication ([MFA](/docs/glossary/#m
 
 A bot cannot enable two-factor authentication itself. Its account follows the account that owns its application, so the bot can act in these communities only when that owner account has two-factor authentication enabled, or when the bot owns the community
 
-Otherwise Fluxer refuses the request with HTTP 400 after confirming that the bot holds the permission. To tell this failure apart from other rejections, check `errors.apiCode(result.error) === "twoFactorRequired"`. The `errors.apiCode` function, imported with `errors` from the SDK, returns the name of Fluxer's error code, or `undefined` when the error carries no code that the SDK recognizes. Repeating the request fails the same way until the application owner enables two-factor authentication. A calculated permission from `permissions.calculate` or a passing `guards.requirePermissions` guard does not rule this out, because both read role permissions and not the community's requirement
+Otherwise Fluxer refuses the request with HTTP 400 after confirming that the bot holds the permission. To tell this failure apart from other rejections, check `errors.apiCode(result.error) === "twoFactorRequired"`. The `errors.apiCode` function, imported with `errors` from the SDK, returns the name of Fluxer's error code, or `undefined` when the error carries no code that the SDK recognizes
 
-To check a community in advance, read the [`mfaLevel`](/docs/api/js-ts/guilds-and-members/#guild-mfalevel) of the community from `guilds.fetch` or a `guildCreate` event. The value `GuildMfaLevels.Elevated` means the community has this requirement, and `GuildMfaLevels.None` means it does not. The SDK cannot see whether the application owner has two-factor authentication enabled, so an elevated level means a moderation request can fail, not that it will. Fluxer's API reference describes [MFA levels](https://docs.fluxer.app/http-api/guilds/#mfa-levels) and [elevated permissions](https://docs.fluxer.app/http-api/permissions/#elevated-permissions)
+Repeating the request fails the same way until the application owner enables two-factor authentication. A calculated permission from `permissions.calculate` or a passing `guards.requirePermissions` guard does not rule this out, because both read role permissions and not the community's requirement
+
+To check a community in advance, read the [`mfaLevel`](/docs/api/js-ts/guilds-and-members/#guild-mfalevel) of the community from `guilds.fetch` or a `guildCreate` event. The value `GuildMfaLevels.Elevated` means the community has this requirement, and `GuildMfaLevels.None` means it does not. The SDK cannot see whether the application owner has two-factor authentication enabled, so an elevated level means a moderation request can fail, not that it will. Fluxer's API reference describes [MFA levels](https://docs.fluxer.com/http-api/guilds/#mfa-levels) and [elevated permissions](https://docs.fluxer.com/http-api/permissions/#elevated-permissions)
 
 ## Read audit records
 
-Use `auditLogs.fetchPage` or the bounded `auditLogs.iterate` scan with `ViewAuditLog` permission. Recorded message-deletion durations are exposed in `options.deleteMessagesMs`, rounded to whole milliseconds. A duration that would overflow the safe integer range fails the REST page rather than returning partial entries. The same invalid duration in a gateway audit event follows the configured malformed-dispatch policy
+Use `auditLogs.fetchPage` or the bounded `auditLogs.iterate` scan with `ViewAuditLog` permission. Recorded message-deletion durations are exposed in `options.deleteMessagesMs`, rounded to whole milliseconds. A duration that would overflow the safe integer range fails the REST page rather than returning partial entries. The same invalid duration in a gateway audit event follows the configured malformed-dispatch policy. Pass `userId`, `actionType` or both. An unfiltered Fluxer read can merge message-deletion records, so the SDK requires a filter
 
 ## Voice controls versus a voice connection
 
 Fluxerly supports observing voice states in communities and moving, disconnecting, community muting and community deafening members who are already in a voice channel. These controls remain subject to Fluxer's permissions
 
-A voice state, whether from `voiceStateUpdate`, a `voiceStateSnapshot` or a private call, also reports `isE2eeCapable` for end-to-end encrypted voice, `isPeerToPeer` for a connection that does not pass through LiveKit, and `version`, Fluxer's counter for that participant's state. An omitted flag reads as `false`
+A voice state, whether from `voiceStateUpdate`, a `voiceStateSnapshot` or a private call, also reports `isE2eeCapable` for a client that supports encrypted call media, `isPeerToPeer` for a connection that does not pass through LiveKit, and `version`, Fluxer's counter for that participant's state. An omitted flag reads as `false`. Fluxer's server issues the key for that encryption, so it is not end-to-end encryption
 
-Bots cannot join voice channels or send and receive audio or video yet. That feature waits for Fluxer's voice update and an SDK implementation after it. A `Connect` or `Speak` permission describes what Fluxer allows, not an SDK feature, and the bot's gateway `connect()` receives events rather than opening a voice connection. See [member voice controls](/docs/api/js-ts/guilds-and-members/#members-move) for the current operations
+Fluxerly does not implement voice connections or audio and video transport. Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it. A `Connect` or `Speak` permission describes what Fluxer allows, not an SDK feature, and the bot's gateway `connect()` receives events rather than opening a voice connection. See [member voice controls](/docs/api/js-ts/guilds-and-members/#members-move) for the current operations
+
+A bot can still ask to join a voice channel with a raw Voice State Update through `client.gateway.send`. The SDK opens no voice connection for it, but the answer is visible. A grant arrives as the `VOICE_SERVER_UPDATE` [raw event](/docs/raw-requests-and-events/#read-an-event-without-a-type), and a join that Fluxer refuses, for example because the channel is full, arrives as the [`gatewayError` event](/docs/raw-requests-and-events/#read-a-refused-voice-join) with a code such as `VOICE_CHANNEL_FULL`
 
 ## Wire it up
 

@@ -86,6 +86,7 @@ describe.each(modes)("%s observer", (mode) => {
             route: "/channels/:id/messages",
             waitMs: 20,
             global: false,
+            pause: "bucket",
             retryAfterSeconds: 0.02,
             bodyGlobal: false,
         })
@@ -139,7 +140,13 @@ describe.each(modes)("%s observer", (mode) => {
         driver.test.rest.respond("POST /channels/:id/messages", { body: driver.test.fixtures.message() })
         await driver.send(driver.test.fixtures.ids.channel)
         expect(driver.test.client.diagnostics().counters.sinkFailures).toBeGreaterThan(0)
-        expect(stderr).toHaveBeenCalledWith(expect.stringContaining("observer failed"))
+        const reports = stderr.mock.calls
+            .map(([text]) => String(text))
+            .filter((text) => text.includes("observer failed"))
+        expect(reports).toHaveLength(1)
+        // A throwing observer is no fault of the log output, so the report must not blame it alone
+        expect(reports[0]).toContain("diagnostics output failed")
+        expect(reports[0]).toContain("the observe callback")
     })
 })
 

@@ -27,6 +27,7 @@ const writers = {
     "release-prepare.yml/publish": { actions: "write" },
     "release-version.yml/pull_request": { contents: "write", "pull-requests": "write", actions: "write" },
     "release-publish.yml/publish": { "id-token": "write" },
+    "upstream-drift.yml/report": { issues: "write" },
 }
 
 // A static group queues every run behind the previous one, and a queued run is never cancelled
@@ -282,6 +283,159 @@ test("Release and website work is serialized with read-only caches and never can
     assert.match(workflows["ci.yml"].concurrency["cancel-in-progress"], /github\.event_name\s*!=\s*'workflow_dispatch'/)
 })
 
+test("Release and website workflows only restore Fluxer's pinned files that CI saves, under the same key", () => {
+    const fluxerCache = (/** @type {any} */ step) => step.with?.path === "projects/web/.cache/fluxer"
+    const saved = [...steps()].filter(({ where, step }) => where.startsWith("ci.yml/") && fluxerCache(step))
+    assert.ok(saved.length >= 1)
+    const key = saved[0].step.with.key
+    assert.equal(key, "fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}")
+    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml"])
+        for (const { where, step } of steps())
+            if (where.startsWith(`${file}/`) && String(step.uses).startsWith("actions/cache"))
+                assert.match(step.uses, /^actions\/cache\/restore@/, `${where} may restore a cache but never save one`)
+    for (const file of ["release-prepare.yml", "website.yml"]) {
+        const restored = [...steps()].filter(({ where, step }) => where.startsWith(`${file}/`) && fluxerCache(step))
+        assert.equal(restored.length, 1, file)
+        assert.equal(restored[0].step.with.key, key, `${file} restores what CI saves`)
+    }
+})
+
+test("GitHub downloads that repeat are kept: release snapshots by CI for the website, upstream files by the drift job", () => {
+    const releases = (/** @type {any} */ step) => step.with?.path === "projects/web/.cache/releases"
+    const website = workflows["website.yml"].jobs.deploy.steps
+    const restore = website.find(releases)
+    assert.match(restore.uses, /^actions\/cache\/restore@/, "The website workflow only restores")
+    assert.equal(restore.with["restore-keys"], "release-snapshots-")
+    assert.ok(website.indexOf(restore) < website.findIndex((step) => step.id === "snapshots"), "Restored before the import")
+    const browser = workflows["ci.yml"].jobs.browser.steps
+    const kept = browser.filter(releases)
+    assert.deepEqual(kept.map((step) => step.uses.split("@")[0]), ["actions/cache/restore", "actions/cache/save"])
+    const fill = browser.find((step) => step.id === "release_snapshots")
+    assert.equal(fill.run, "node web/scripts/fetch-releases.js --cache-only")
+    assert.equal(fill["continue-on-error"], true, "A failed read costs a deploy downloads, not the Check")
+    assert.ok(browser.indexOf(kept[0]) < browser.indexOf(fill) && browser.indexOf(fill) < browser.indexOf(kept[1]))
+    assert.match(kept[1].with.key, /^release-snapshots-\$\{\{ hashFiles\('projects\/web\/\.cache\/releases\/\*\.json'\) \}\}$/)
+
+    const drift = workflows["upstream-drift.yml"].jobs.drift.steps
+    const upstream = drift.filter((/** @type {any} */ step) => step.with?.path === "projects/release/.cache/upstream" && String(step.uses).startsWith("actions/cache"))
+    assert.deepEqual(upstream.map((step) => step.uses.split("@")[0]), ["actions/cache/restore", "actions/cache/save"])
+    const compare = drift.findIndex((step) => step.id === "drift")
+    assert.ok(drift.indexOf(upstream[0]) < compare && compare < drift.indexOf(upstream[1]))
+    // The cache drops an entry unused for seven days, which a weekly run can miss. The trusted run that set the baseline
+    // retained the same files for 90 days, and only a cache miss reads them
+    const fallback = drift.find((step) => step.id === "upstream_artifact")
+    assert.equal(fallback.if, "steps.upstream_cache.outputs.cache-matched-key == '' && steps.baseline.outputs.run_id != ''")
+    assert.equal(fallback.env.RUN_ID, "${{ steps.baseline.outputs.run_id }}")
+    assert.ok(drift.indexOf(upstream[0]) < drift.indexOf(fallback) && drift.indexOf(fallback) < compare)
+    const retained = drift.find((step) => step.with?.name === "upstream-source")
+    assert.match(retained.uses, /^actions\/upload-artifact@/)
+    assert.equal(retained.with.path, "projects/release/.cache/upstream")
+    assert.equal(retained.with["retention-days"], 90)
+    assert.ok(compare < drift.indexOf(retained))
+    assert.equal(workflows["upstream-drift.yml"].jobs.report.steps.some((step) => step.with?.name === "upstream-source"), false, "The posting job never handles source files")
+
+    // Workflow lint tools: actionlint's release archive, checked against its checksum on every use, and zizmor's wheel,
+    // which pip checks against the action's pinned hashes
+    const lint = workflows["ci.yml"].jobs.workflows.steps
+    const actionlintCache = lint.find((step) => step.id === "actionlint_cache")
+    const actionlint = lint.find((step) => step.id === "actionlint")
+    assert.match(actionlintCache.uses, /^actions\/cache@/)
+    assert.equal(actionlintCache.with.path, "${{ runner.temp }}/actionlint")
+    const [, version, checksum] = actionlintCache.with.key.match(/^actionlint-([\d.]+)-linux-amd64-([a-f0-9]{64})$/)
+    assert.ok(actionlint.run.includes(`releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz`))
+    assert.equal(actionlint.run.match(new RegExp(checksum, "g"))?.length, 1)
+    assert.ok(lint.indexOf(actionlintCache) < lint.indexOf(actionlint))
+    const zizmorCache = lint.find((step) => step.id === "zizmor_cache")
+    const zizmor = lint.find((step) => step.id === "zizmor")
+    assert.equal(zizmorCache.with.path, "~/.cache/pip")
+    assert.equal(zizmorCache.with.key, `zizmor-pip-\${{ runner.os }}-${zizmor.with.version}`)
+    assert.ok(lint.indexOf(zizmorCache) < lint.indexOf(zizmor))
+
+    // Release preparation restores Check's browser download under the same key, and installs Chromium only on a miss
+    const browserKey = (/** @type {any[]} */ list) => list.find((step) => step.id === "browser_cache")
+    const prepare = workflows["release-prepare.yml"].jobs.prepare.steps
+    assert.match(browserKey(prepare).uses, /^actions\/cache\/restore@/)
+    assert.equal(browserKey(prepare).with.key, browserKey(browser).with.key)
+    assert.equal(browserKey(prepare).with.path, browserKey(browser).with.path)
+    assert.equal(prepare.find((step) => step.id === "playwright").run, browser.find((step) => step.id === "playwright").run)
+    assert.equal(prepare.find((step) => step.id === "browser_install").run, browser.find((step) => step.id === "browser_install").run)
+    assert.ok(prepare.findIndex((step) => step.id === "browser_cache") < prepare.findIndex((step) => step.id === "browser_install"))
+    for (const id of ["playwright", "browser_cache", "browser_install"]) assert.equal(prepare.find((step) => step.id === id).if, "steps.ci.outputs.reused == 'false'", id)
+})
+
+test("A lint run uses a kept actionlint archive only when it matches the pinned checksum, and downloads and checks it otherwise", () => {
+    const actionlint = workflows["ci.yml"].jobs.workflows.steps.find((step) => step.id === "actionlint")
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-actionlint-"))
+    const [, checksum] = actionlint.run.match(/checksum="([a-f0-9]{64}) /)
+    // A fake curl that writes the bytes in FAKE_BYTES, and a sha256sum that accepts only those named in GOOD_BYTES
+    const fakes = `
+      curl() { printf 'curl\n' >> "$CALLS"; while [[ "$1" != "--output" ]]; do shift; done; printf '%s' "$FAKE_BYTES" > "$2"; }
+      sha256sum() { local line; read -r line; local file="\${line#*  }"; [[ -f "$file" && "$(cat "$file")" == "$GOOD_BYTES" && "\${line%%  *}" == "${checksum}" ]]; }
+      tar() { printf 'tar %s\n' "$4" >> "$CALLS"; }
+      ./actionlint() { printf 'lint\n' >> "$CALLS"; }
+    `
+    const run = ({ kept, fetched }) => {
+        const temporary = join(directory, `${kept ?? "none"}-${fetched}`)
+        const calls = join(temporary, "calls")
+        mkdirSync(join(temporary, "actionlint"), { recursive: true })
+        const archive = join(temporary, "actionlint/actionlint_1.7.12_linux_amd64.tar.gz")
+        if (kept) writeFileSync(archive, kept)
+        const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakes + actionlint.run.replace("./actionlint -color", "./actionlint")], {
+            cwd: temporary,
+            encoding: "utf8",
+            timeout: 10_000,
+            windowsHide: true,
+            env: { ...process.env, RUNNER_TEMP: temporary, CALLS: calls, FAKE_BYTES: fetched, GOOD_BYTES: "release" },
+        })
+        assert.ifError(result.error)
+        return { status: result.status, calls: existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : [], archive: readFileSync(archive, "utf8") }
+    }
+    try {
+        assert.deepEqual(run({ kept: "release", fetched: "unused" }), { status: 0, calls: [`tar ${join(directory, "release-unused/actionlint/actionlint_1.7.12_linux_amd64.tar.gz")}`, "lint"], archive: "release" })
+        const damaged = run({ kept: "damaged", fetched: "release" })
+        assert.equal(damaged.status, 0)
+        assert.deepEqual(damaged.calls.map((call) => call.split(" ")[0]), ["curl", "tar", "lint"])
+        assert.equal(damaged.archive, "release")
+        assert.deepEqual(run({ fetched: "release" }).calls.map((call) => call.split(" ")[0]), ["curl", "tar", "lint"])
+        const tampered = run({ fetched: "tampered" })
+        assert.notEqual(tampered.status, 0, "A download that fails its checksum never runs")
+        assert.deepEqual(tampered.calls, ["curl"])
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
+test("A cache miss in the drift job reads the trusted run's kept files, and a failed read is reported and downloads instead", () => {
+    const fallback = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => step.id === "upstream_artifact")
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-drift source-"))
+    const fakeGh = `gh() {
+      [[ "$1 $2 $3 $4 $5 $6 $7 $8" == "run download 10 --repo owner/repo --name upstream-source --dir" ]] || return 1
+      [[ "$GH_FAIL" != 1 ]] || return 1
+      printf 'kept' > "$9/${"a".repeat(40)}"
+    }\n`
+    try {
+        for (const fail of ["", "1"]) {
+            const temporary = join(directory, fail ? "failed" : "read")
+            mkdirSync(temporary)
+            const summary = join(temporary, "summary.md")
+            const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakeGh + fallback.run], {
+                cwd: temporary,
+                encoding: "utf8",
+                timeout: 10_000,
+                windowsHide: true,
+                env: { ...process.env, RUN_ID: "10", GITHUB_REPOSITORY: "owner/repo", GITHUB_STEP_SUMMARY: summary, GH_FAIL: fail },
+            })
+            assert.ifError(result.error)
+            assert.equal(result.status, 0, result.stderr)
+            assert.equal(existsSync(join(temporary, "projects/release/.cache/upstream", "a".repeat(40))), !fail)
+            assert.equal(existsSync(summary), Boolean(fail), "Only a failed read is reported")
+            if (fail) assert.match(readFileSync(summary, "utf8"), /downloaded again/)
+        }
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
 test("The required CI gate needs every job and rejects failed, cancelled, skipped and missing results", () => {
     const check = workflows["ci.yml"].jobs.check
     const gated = Object.keys(workflows["ci.yml"].jobs).filter((id) => !["check", "release-trigger"].includes(id))
@@ -331,39 +485,127 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
     }
 })
 
-test("Upstream drift runs daily with serialized read-only observations and retains failed comparisons", () => {
+test("Upstream drift runs weekly, compares read-only and retains the observation only after a small job posts it", () => {
     const workflow = workflows["upstream-drift.yml"]
     const [schedule] = workflow.on.schedule
-    assert.equal(schedule.cron, "0 0 * * *")
+    assert.equal(schedule.cron, "0 0 * * 1")
     // Midnight in Berlin all year, as the nightly schedule keeps its Berlin times
     assert.equal(schedule.timezone, "Europe/Berlin")
     assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"))
     assert.deepEqual(workflow.permissions, { contents: "read", actions: "read" })
     assertSerialized(workflow.concurrency, "upstream-drift.yml")
+    assert.deepEqual(Object.keys(workflow.jobs), ["drift", "report"])
     const job = workflow.jobs.drift
+    assert.equal(job.permissions, undefined, "The comparison runs package tooling, so it stays read-only")
     const restore = job.steps.find((step) => step.id === "baseline")
     const compare = job.steps.find((step) => step.id === "drift")
-    const upload = job.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    const handoff = job.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
     assert.equal(restore.shell, "bash")
     assert.equal(restore.env.GH_TOKEN, "${{ github.token }}")
     assert.equal(compare.shell, "bash")
     assert.equal(compare["working-directory"], "projects")
     assert.equal(compare.env.GITHUB_TOKEN, "${{ github.token }}")
-    assert.equal(upload.if, "always()", "A drift failure must not prevent the observation upload")
-    assert.equal(upload.with.name, "upstream-baseline")
-    assert.equal(upload.with["retention-days"], 90)
-    assert.equal(upload.with["if-no-files-found"], "error")
-    assert.equal(upload.with.overwrite, true, "A rerun renews its observation instead of leaving stale bytes")
-    const existingUpload = workflows["release-prepare.yml"].jobs.prepare.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
-    assert.equal(upload.uses, existingUpload.uses)
+    assert.equal(handoff.if, undefined, "A broken check must not reach the posting job")
+    assert.notEqual(handoff.with.name, "upstream-baseline", "A report that was not posted must not become the next baseline")
     assert.ok(job.steps.indexOf(restore) < job.steps.indexOf(compare))
-    assert.ok(job.steps.indexOf(compare) < job.steps.indexOf(upload))
+    assert.ok(job.steps.indexOf(compare) < job.steps.indexOf(handoff))
+
+    const report = workflow.jobs.report
+    assert.equal(report.needs, "drift")
+    assert.deepEqual(report.permissions, { issues: "write" })
+    // Nothing from the repository or a package manager runs beside the write token
+    assert.ok(report.steps.filter((step) => step.uses).every((step) => /^actions\/(download|upload)-artifact@/.test(step.uses)))
+    const download = report.steps.find((step) => String(step.uses).startsWith("actions/download-artifact@"))
+    const post = report.steps.find((step) => step.id === "post")
+    const retain = report.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    assert.equal(download.with.name, handoff.with.name)
+    assert.equal(download.with.path, handoff.with.path)
+    assert.ok(report.steps.indexOf(download) < report.steps.indexOf(post))
+    assert.ok(report.steps.indexOf(post) < report.steps.indexOf(retain))
+    assert.equal(post.if, undefined)
+    assert.equal(retain.if, undefined, "A failed post must keep the old baseline, so the next run repeats its changes")
+    assert.equal(retain.with.name, "upstream-baseline")
+    assert.equal(retain.with.path, `${download.with.path}/baseline.json`)
+    assert.equal(retain.with["retention-days"], 90)
+    assert.equal(retain.with["if-no-files-found"], "error")
+    assert.equal(retain.with.overwrite, true, "A rerun renews its observation instead of leaving stale bytes")
+    const existingUpload = workflows["release-prepare.yml"].jobs.prepare.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    assert.equal(retain.uses, existingUpload.uses)
+    assert.equal(handoff.uses, existingUpload.uses)
 })
 
-test("Upstream artifact restoration selects this workflow's newest earlier run and reports every retrieval fallback", () => {
+test("Upstream posting comments on the open bot issue, opens an explained one when none is open, skips an empty week and fails on a failed post", () => {
+    const post = workflows["upstream-drift.yml"].jobs.report.steps.find((step) => step.id === "post")
+    assert.equal(post.shell, "bash")
+    assert.equal(post.env.GH_TOKEN, "${{ github.token }}")
+    assert.equal(post.env.TITLE, "Fluxer upstream changes to review")
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-drift post-"))
+    const comment = join(directory, "upstream-current/comment.md")
+    const body = join(directory, "upstream-current/issue.md")
+    const calls = join(directory, "calls")
+    // The lookup prints the open issue's number, or nothing. GH_FAIL names the call kind that fails
+    const fakeGh = `gh() {
+      printf '%s\\n' "$@" >> "$GH_CALLS"
+      if [[ "$2" != "--method" ]]; then [[ "$GH_FAIL" != lookup ]] || return 1; printf '%s' "$GH_FOUND"; return 0; fi
+      [[ "$GH_FAIL" != post ]]
+    }\n`
+    const run = ({ found = "", fail = "" } = {}) => {
+        rmSync(calls, { force: true })
+        const output = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakeGh + post.run], {
+            cwd: directory,
+            encoding: "utf8",
+            timeout: 10_000,
+            windowsHide: true,
+            env: {
+                ...process.env,
+                TITLE: post.env.TITLE,
+                RUNNER_TEMP: directory,
+                GITHUB_REPOSITORY: "owner/repo",
+                GITHUB_SERVER_URL: "https://github.com",
+                GH_CALLS: calls,
+                GH_FOUND: found,
+                GH_FAIL: fail,
+            },
+        })
+        assert.ifError(output.error)
+        return output
+    }
+    const lookup = [
+        "api", "repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100",
+        "--jq", "[.[] | select(.pull_request == null and .title == $ENV.TITLE)][0].number // empty",
+    ]
+    try {
+        mkdirSync(join(directory, "upstream-current"))
+        assert.equal(run().status, 0)
+        assert.equal(existsSync(calls), false, "A week with nothing new posts nothing")
+        writeFileSync(comment, "## Upstream Fluxer drift\n\nReport\n")
+        assert.equal(run({ found: "7" }).status, 0)
+        assert.deepEqual(readFileSync(calls, "utf8").trim().split(/\r?\n/), [
+            ...lookup, "api", "--method", "POST", "repos/owner/repo/issues/7/comments", "--silent", "-F", `body=@${comment}`,
+        ])
+        assert.equal(run().status, 0)
+        assert.deepEqual(readFileSync(calls, "utf8").trim().split(/\r?\n/), [
+            ...lookup, "api", "--method", "POST", "repos/owner/repo/issues", "--silent", "-f", "title=Fluxer upstream changes to review", "-F", `body=@${body}`,
+        ])
+        const opened = readFileSync(body, "utf8")
+        assert.match(opened, /^This issue collects the reports of the weekly \[upstream drift check\]\(https:\/\/github\.com\/owner\/repo\/actions\/workflows\/upstream-drift\.yml\)/)
+        assert.match(opened, /then close this issue\. The next report opens a new one\n\n## Upstream Fluxer drift\n\nReport\n$/)
+        assert.notEqual(run({ fail: "lookup" }).status, 0, "A failed lookup stops the job before the observation is retained")
+        assert.notEqual(run({ found: "7", fail: "post" }).status, 0, "A failed comment stops the job before the observation is retained")
+        assert.notEqual(run({ fail: "post" }).status, 0, "A failed new issue stops the job before the observation is retained")
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
+test("Upstream artifact restoration selects the newest earlier trusted run of this workflow and reports every retrieval fallback", () => {
     const restore = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => step.id === "baseline")
     const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-artifacts-"))
+    // Run fields are path, event, branch, source repository and conclusion, joined by unit separators as the step reads
+    // them. Runs 21 to 25 have newer artifacts from this workflow file, but none may set the baseline
     const fakeGh = `
+      run() { local IFS=$'\\x1f'; printf '%s\\n' "$*"; }
+      drift=.github/workflows/upstream-drift.yml
       gh() {
         if [[ "$1" == "api" && "$2" == "--paginate" ]]; then
           [[ "$3" == "repos/owner/repo/actions/artifacts?name=upstream-baseline&per_page=100" && "$4" == "--jq" ]] || return 1
@@ -371,16 +613,25 @@ test("Upstream artifact restoration selects this workflow's newest earlier run a
             lookup-failure) return 1 ;;
             no-artifact) return 0 ;;
             invalid-run) printf '2026-10-03T00:00:00Z\\t100\\tnull\\n' ;;
-            *) printf '2026-10-01T00:00:00Z\\t90\\t9\\n2026-10-03T00:00:00Z\\t300\\t30\\n2026-10-02T00:00:00Z\\t200\\t10\\n2026-10-03T00:00:00Z\\t250\\t20\\n' ;;
+            *)
+              printf '2026-10-01T00:00:00Z\\t90\\t9\\n2026-10-03T00:00:00Z\\t300\\t30\\n2026-10-02T00:00:00Z\\t200\\t10\\n2026-10-03T00:00:00Z\\t250\\t20\\n'
+              for run in 21 22 23 24 25; do printf '2026-10-02T12:00:00Z\\t2%s\\t%s\\n' "$run" "$run"; done ;;
           esac
+        elif [[ "$1" == "api" && "$2" == "repos/owner/repo" ]]; then
+          [[ "$SCENARIO" != "branch-failure" ]] && printf 'main\\n'
         elif [[ "$1" == "api" ]]; then
           case "\${2##*/}" in
-            20) printf '.github/workflows/other.yml\\n' ;;
+            20) run .github/workflows/other.yml schedule main owner/repo success ;;
+            21) run "$drift" pull_request main owner/repo success ;;
+            22) run "$drift" workflow_dispatch feature owner/repo success ;;
+            23) run "$drift" schedule main fork/repo success ;;
+            24) run "$drift" schedule main owner/repo failure ;;
+            25) run "$drift" schedule main "" success ;;
             10)
               case "$SCENARIO" in
                 verification-failure) return 1 ;;
-                missing-path) printf 'null\\n' ;;
-                *) printf '.github/workflows/upstream-drift.yml\\n' ;;
+                missing-path) run "" schedule main owner/repo success ;;
+                *) run "$drift" schedule main owner/repo success ;;
               esac ;;
             *) return 1 ;;
           esac
@@ -393,9 +644,10 @@ test("Upstream artifact restoration selects this workflow's newest earlier run a
       }
     `
     try {
-        for (const scenario of ["available", "lookup-failure", "no-artifact", "invalid-run", "verification-failure", "missing-path", "download-failure", "missing-file"]) {
+        for (const scenario of ["available", "lookup-failure", "branch-failure", "no-artifact", "invalid-run", "verification-failure", "missing-path", "download-failure", "missing-file"]) {
             const temporary = join(directory, scenario)
             const summary = join(directory, `${scenario}.md`)
+            const output = join(directory, `${scenario}.output`)
             const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakeGh + restore.run], {
                 cwd: directory,
                 encoding: "utf8",
@@ -408,10 +660,14 @@ test("Upstream artifact restoration selects this workflow's newest earlier run a
                     GITHUB_REPOSITORY: "owner/repo",
                     GITHUB_RUN_ID: "30",
                     GITHUB_STEP_SUMMARY: summary,
+                    GITHUB_OUTPUT: output,
                 },
             })
             assert.ifError(result.error)
             assert.equal(result.status, 0, `${scenario}: ${result.stderr}`)
+            // The trusted run also names the kept upstream files a cache miss restores
+            const trusted = ["available", "download-failure", "missing-file"].includes(scenario)
+            assert.equal(existsSync(output) ? readFileSync(output, "utf8") : "", trusted ? "run_id=10\n" : "", scenario)
             assert.equal(existsSync(join(temporary, "upstream-previous/baseline.json")), scenario === "available", scenario)
             assert.equal(existsSync(join(temporary, "upstream-current")), true, "The record directory exists before comparison")
             if (scenario !== "available") {
@@ -424,11 +680,11 @@ test("Upstream artifact restoration selects this workflow's newest earlier run a
     }
 })
 
-test("Upstream comparison passes distinct baseline and record paths to the CLI without shell splitting", () => {
+test("Upstream comparison passes distinct baseline, record and comment paths to the CLI without shell splitting", () => {
     const compare = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => step.id === "drift")
-    const upload = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
+    const handoff = workflows["upstream-drift.yml"].jobs.drift.steps.find((step) => String(step.uses).startsWith("actions/upload-artifact@"))
     const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-drift args-"))
-    const record = upload.with.path.replace("${{ runner.temp }}", directory)
+    const output = handoff.with.path.replace("${{ runner.temp }}", directory)
     try {
         const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'node() { printf "%s\\n" "$@"; }\n' + compare.run], {
             cwd: directory,
@@ -440,7 +696,10 @@ test("Upstream comparison passes distinct baseline and record paths to the CLI w
         assert.ifError(result.error)
         assert.equal(result.status, 0, result.stderr)
         assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
-            "release/upstream.js", "--baseline", `${directory}/upstream-previous/baseline.json`, "--record", record,
+            "release/upstream.js",
+            "--baseline", `${directory}/upstream-previous/baseline.json`,
+            "--record", `${output}/baseline.json`,
+            "--comment", `${output}/comment.md`,
         ])
     } finally {
         rmSync(directory, { recursive: true, force: true })

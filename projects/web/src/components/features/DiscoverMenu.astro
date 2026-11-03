@@ -11,7 +11,7 @@ import { featurePages, type FeatureSlug } from "../../lib/links"
 const current = Astro.url.pathname.replace(/\/$/, "")
 
 // Each page's icon and its line for the menu, shorter than the page's own lead so the names stay the content.
-// No two lines share their key word, so the eight stay apart at a glance
+// No two lines share their key word, so the pages stay apart at a glance
 const marks = {
     "first-reply": { icon: "first-reply-radio", line: "From an empty folder to a real bot" },
     effect: { icon: "effect-plug", line: "The same SDK, for Effect code" },
@@ -21,6 +21,7 @@ const marks = {
     testing: { icon: "testing-flask", line: "A real client on an in-memory Fluxer" },
     production: { icon: "production-server", line: "Sharding and recovery, built in" },
     data: { icon: "data-database", line: "Paged history and opt-in caches" },
+    raw: { icon: "api-book", line: "Any route or event, in Fluxer's names" },
 } satisfies Record<FeatureSlug, { icon: IconName; line: string }>
 ---
 

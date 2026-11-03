@@ -27,19 +27,18 @@ import type { GatewayMessageDispatch, MessageObservation } from "./message-field
 import { MessageError } from "#sdk/message-errors"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
-import { decodeAttachments, encodeAttachments, type EncodedBody } from "./attachments.js"
+import { decodeAttachments, encodeAttachments, type EncodedBody, type WaveformTarget } from "./attachments.js"
 import { decodeThread } from "./channel-decode.js"
 import { decodeDeletionMember, decodeDispatchMember } from "./guilds.js"
 import { count, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 
 const writableMessageFlags = MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications
+/** Whether a flags value is a whole number Fluxer reads as a nonnegative 32-bit integer */
+const writableFlagRange = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 2_147_483_647
 const writableFlags = (value: unknown): value is number =>
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0 &&
-    value <= 2_147_483_647 &&
-    (value & ~writableMessageFlags) === 0
+    writableFlagRange(value) && (value & ~writableMessageFlags) === 0
 
 /** Decode the public source snapshot separately from Guild so it cannot enter the guild cache */
 export function decodeCrosspostSource(value: unknown): CrosspostSource | undefined {
@@ -54,7 +53,8 @@ export function decodeCrosspostSource(value: unknown): CrosspostSource | undefin
         (guild.approximate_presence_count !== null && !count(guild.approximate_presence_count)) ||
         typeof guild.discoverable !== "boolean" ||
         (guild.icon !== undefined && guild.icon !== null && typeof guild.icon !== "string") ||
-        (guild.banner !== undefined && guild.banner !== null && typeof guild.banner !== "string")
+        (guild.banner !== undefined && guild.banner !== null && typeof guild.banner !== "string") ||
+        (guild.badge_ids !== undefined && !(Array.isArray(guild.badge_ids) && guild.badge_ids.every(identifier)))
     )
         return undefined
     const features: Array<CrosspostSourceGuild["features"][number]> = []
@@ -73,6 +73,7 @@ export function decodeCrosspostSource(value: unknown): CrosspostSource | undefin
             discoverable: guild.discoverable,
             ...(guild.icon === undefined ? {} : { icon: guild.icon }),
             ...(guild.banner === undefined ? {} : { banner: guild.banner }),
+            ...(guild.badge_ids === undefined ? {} : { badgeIds: Object.freeze([...(guild.badge_ids as string[])]) }),
         }),
     })
 }
@@ -314,8 +315,13 @@ function decodeStickers(value: unknown, construct = true): readonly MessageStick
     return stickers ? Object.freeze(stickers) : true
 }
 
-// oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per user field
-function decodeMessageUser(value: unknown, construct = true): MessageUser | true | undefined {
+/** Whether a reply mention preference is one this SDK knows. Users and message users leave out any other value instead
+ * of failing, so a preference Fluxer adds later cannot break reads of a descriptive field
+ */
+export const mentionPreferenceKnown = (value: unknown): value is 0 | 1 | 2 => value === 0 || value === 1 || value === 2
+
+/** Also decodes reaction-user page items, which carry the same partial user fields */
+export function decodeMessageUser(value: unknown, construct = true): MessageUser | true | undefined {
     if (
         !record(value) ||
         !identifier(value.id) ||
@@ -326,11 +332,7 @@ function decodeMessageUser(value: unknown, construct = true): MessageUser | true
         (value.avatar_color !== undefined && value.avatar_color !== null && !int32(value.avatar_color)) ||
         (value.bot !== undefined && typeof value.bot !== "boolean") ||
         (value.system !== undefined && typeof value.system !== "boolean") ||
-        (value.flags !== undefined && !int32(value.flags)) ||
-        (value.mention_flags !== undefined &&
-            value.mention_flags !== 0 &&
-            value.mention_flags !== 1 &&
-            value.mention_flags !== 2)
+        (value.flags !== undefined && !int32(value.flags))
     )
         return undefined
     if (!construct) return true
@@ -344,7 +346,7 @@ function decodeMessageUser(value: unknown, construct = true): MessageUser | true
         ...(value.avatar_color === undefined ? {} : { avatarColor: value.avatar_color }),
         ...(value.system === undefined ? {} : { isSystem: value.system }),
         ...(value.flags === undefined ? {} : { flags: value.flags }),
-        ...(value.mention_flags === undefined ? {} : { mentionFlags: value.mention_flags as 0 | 1 | 2 }),
+        ...(mentionPreferenceKnown(value.mention_flags) ? { mentionFlags: value.mention_flags } : {}),
     })
 }
 
@@ -625,6 +627,41 @@ function encodeStickerIds(stickerInput: unknown): readonly unknown[] | undefined
     return stickerIds
 }
 
+/**
+ * Fluxer's voice-note rules, checked in its order: No content, embeds or stickers, and exactly one new attachment with
+ * a waveform and a duration (fluxer_api/src/api/channel/services/message/MessageValidationService.ts:202 at 5f3fc0b1).
+ * Fluxer also checks that the file is audio and that the duration is within the instance's limit, 1,200 seconds by
+ * default, which it can configure, so those stay with Fluxer
+ */
+function voiceNoteFailure(
+    content: unknown,
+    body: { readonly embeds?: readonly unknown[] } | undefined,
+    stickerIds: readonly unknown[] | undefined,
+    attachments: readonly Record<string, unknown>[] | undefined,
+): InputValidationFailure | undefined {
+    if (typeof content === "string" && content.length > 0)
+        return inputValidationFailure("content", "relationship", "A voice note cannot have message content")
+    if (body?.embeds?.length) return inputValidationFailure("embeds", "relationship", "A voice note cannot have embeds")
+    if (stickerIds?.length)
+        return inputValidationFailure("stickerIds", "relationship", "A voice note cannot have stickers")
+    if (attachments?.length !== 1)
+        return inputValidationFailure("attachments", "length", "A voice note needs exactly one attachment")
+    const [attachment] = attachments
+    if (attachment!.waveform === undefined)
+        return inputValidationFailure(
+            "attachments[].waveform",
+            "required",
+            "A voice note's attachment needs a waveform",
+        )
+    if (attachment!.duration === undefined)
+        return inputValidationFailure(
+            "attachments[].duration",
+            "required",
+            "A voice note's attachment needs a duration",
+        )
+    return undefined
+}
+
 function hasMessageContent(
     content: unknown,
     body: { readonly embeds?: readonly unknown[] },
@@ -671,7 +708,8 @@ const messageInputKeys: readonly string[] = [
 /**
  * Unknown input fields fail before dispatch, and unknown wire response fields are not copied into snapshots.
  * Each top-level input field is read at most once, in validation order, so the validated value is the one sent.
- * A direct message rejects its own messageReference before the other fields are checked
+ * A direct message rejects its own messageReference before the other fields are checked. Voice notes are where the
+ * message is sent, which sets the longest waveform, or false for a webhook forward, which carries no voice note
  */
 export function encodeMessage(
     channelId: unknown,
@@ -679,6 +717,7 @@ export function encodeMessage(
     defaultNonce: string,
     replyTarget?: MessageReference,
     directMessage = false,
+    voiceNotes: WaveformTarget | false = "message",
 ): EncodedBody | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError({ reason: "input", outcome: "notDispatched", inputValidation: failure.detail })
@@ -700,21 +739,33 @@ export function encodeMessage(
     if (unsupported) return invalid(unsupported)
     const nonce = encodeNonce(field("nonce"), defaultNonce)
     if (nonce instanceof InputValidationFailure) return invalid(nonce)
-    const attachments = encodeAttachments(field("attachments"), false)
+    const attachments = encodeAttachments(field("attachments"), false, voiceNotes === false ? "message" : voiceNotes)
     if (attachments instanceof InputValidationFailure) return invalid(attachments)
     const body = encodeBody(field, attachments.uploadedFilenames)
     if (body instanceof InputValidationFailure) return invalid(body)
     const stickerIds = encodeStickerIds(field("stickerIds"))
     if (stickerIds instanceof InputValidationFailure) return invalid(stickerIds)
     const flags = field("flags")
-    if (flags !== undefined && !writableFlags(flags))
+    // The range is checked on the value sent, before the VoiceMessage bit is removed by 32-bit arithmetic that would
+    // drop a fraction or the bits above 32
+    const voiceNote = voiceNotes !== false && writableFlagRange(flags) && (flags & MessageFlags.VoiceMessage) !== 0
+    if (
+        flags !== undefined &&
+        !(writableFlagRange(flags) && writableFlags(voiceNote ? flags & ~MessageFlags.VoiceMessage : flags))
+    )
         return invalid(
             inputValidationFailure(
                 "flags",
                 "allowedValue",
-                "Writable message flags may contain only SuppressEmbeds and SuppressNotifications. Server-managed flags cannot be sent or edited",
+                voiceNotes !== false
+                    ? "Message sends support only SuppressEmbeds, SuppressNotifications and VoiceMessage"
+                    : "Webhook forwards support only SuppressEmbeds and SuppressNotifications",
             ),
         )
+    if (voiceNote) {
+        const failure = voiceNoteFailure(field("content"), body, stickerIds, attachments.metadata)
+        if (failure) return invalid(failure)
+    }
     const tts = field("tts")
     if (tts !== undefined && typeof tts !== "boolean")
         return invalid(inputValidationFailure("tts", "type", "Message tts must be a boolean"))
@@ -921,7 +972,7 @@ export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure
         return inputValidationFailure(
             "flags",
             "allowedValue",
-            "Writable message flags may contain only SuppressEmbeds and SuppressNotifications. Server-managed flags cannot be sent or edited",
+            "Message edits support only SuppressEmbeds and SuppressNotifications. A message cannot become a voice note by an edit",
         )
     if (!body && (hasBodyInput || flags === undefined))
         return inputValidationFailure("input", "required", "A message edit must contain at least one editable field")

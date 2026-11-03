@@ -111,6 +111,26 @@ test("restarts are recorded with their delay and attempt", async () => {
     })
 })
 
+test("stopping reports how often a collapsed record repeated", async () => {
+    const logs = captureLogs()
+    const created = supervisor.create({
+        entry,
+        totalShards: 1,
+        assignments: [{ id: "only", shardIds: [0] }],
+        childOutput: "ignore",
+        execArgv: [],
+        restart: { maxAttempts: 1, minDelayMs: 1, maxDelayMs: 1 },
+        // The default collapsing shows the first identical exit record and holds back the second
+        logging: logs.logging,
+    })
+    const started = await created.start()
+    expect(started.isErr() && started.error).toMatchObject({ reason: "restartLimit" })
+    await created.shutdown()
+    const exits = logs.withCode("supervisor.exit")
+    expect(exits.map((record) => record.fields?.repeated)).toEqual([undefined, 1])
+    expect(exits[1]).toMatchObject({ level: "warn", fields: { child: "only", exitCode: 3 } })
+})
+
 test("pretty prefix output labels readable child records and keeps a crash trace written just before exit", async () => {
     vi.stubEnv("FLUXERLY_LOG_FORMAT", undefined)
     vi.stubEnv("FLUXERLY_LOG_COLOR", undefined)

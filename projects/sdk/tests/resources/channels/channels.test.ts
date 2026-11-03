@@ -56,12 +56,12 @@ test.each(modes)("%s sends audit reasons only on supported channel mutations", a
     await api.removePermissionOverwrite("10", "50", options)
 
     expect(calls).toEqual([
-        { method: "POST", path: "/v1/guilds/20/channels", reason: "channel audit" },
-        { method: "PATCH", path: "/v1/channels/10", reason: "channel audit" },
-        { method: "DELETE", path: "/v1/channels/10", reason: "channel audit" },
-        { method: "PATCH", path: "/v1/guilds/20/channels", reason: "channel audit" },
-        { method: "PUT", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
-        { method: "DELETE", path: "/v1/channels/10/permissions/50", reason: "channel audit" },
+        { method: "POST", path: "/api/v1/guilds/20/channels", reason: "channel audit" },
+        { method: "PATCH", path: "/api/v1/channels/10", reason: "channel audit" },
+        { method: "DELETE", path: "/api/v1/channels/10", reason: "channel audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/channels", reason: "channel audit" },
+        { method: "PUT", path: "/api/v1/channels/10/permissions/50", reason: "channel audit" },
+        { method: "DELETE", path: "/api/v1/channels/10/permissions/50", reason: "channel audit" },
     ])
 
     const readOptions = { auditReason: "not applicable" } as RequestOptions
@@ -168,7 +168,7 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
 
     await api.create("20", { type: ChannelType.Text, name: "inherited", parentId: "12" })
     expect(calls.at(-1)).toMatchObject({
-        path: "/v1/guilds/20/channels",
+        path: "/api/v1/guilds/20/channels",
         method: "POST",
         body: { type: 0, name: "inherited", parent_id: "12" },
     })
@@ -193,7 +193,7 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
     })
     await api.edit("10", { name: "edited", topic: "current", rateLimitPerUser: 15 })
     expect(calls.at(-1)).toMatchObject({
-        path: "/v1/channels/10",
+        path: "/api/v1/channels/10",
         method: "PATCH",
         body: { name: "edited", topic: "current", rate_limit_per_user: 15 },
     })
@@ -207,7 +207,7 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
         },
     ])
     expect(calls.at(-1)).toMatchObject({
-        path: "/v1/guilds/20/channels",
+        path: "/api/v1/guilds/20/channels",
         method: "PATCH",
         body: [
             {
@@ -226,7 +226,7 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
         permissionOverwrites: [{ id: "51", type: "member", allow: maximumPermission, deny: maximumPermission }],
     })
     expect(calls.at(-1)).toMatchObject({
-        path: "/v1/guilds/20/channels",
+        path: "/api/v1/guilds/20/channels",
         method: "POST",
         body: {
             type: 0,
@@ -240,7 +240,7 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
         permissionOverwrites: [{ id: "51", type: "member", allow: maximumPermission, deny: maximumPermission }],
     })
     expect(calls.at(-1)).toMatchObject({
-        path: "/v1/channels/10",
+        path: "/api/v1/channels/10",
         method: "PATCH",
         body: {
             permission_overwrites: [
@@ -255,14 +255,14 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
         deny: maximumPermission,
     })
     expect(calls.at(-1)).toMatchObject({
-        path: "/v1/channels/10/permissions/51",
+        path: "/api/v1/channels/10/permissions/51",
         method: "PUT",
         body: { type: 1, allow: maximumPermission.toString(), deny: maximumPermission.toString() },
     })
     await api.removePermissionOverwrite("10", "51")
-    expect(calls.at(-1)).toMatchObject({ path: "/v1/channels/10/permissions/51", method: "DELETE" })
+    expect(calls.at(-1)).toMatchObject({ path: "/api/v1/channels/10/permissions/51", method: "DELETE" })
     await api.delete("10")
-    expect(calls.at(-1)).toMatchObject({ path: "/v1/channels/10", method: "DELETE" })
+    expect(calls.at(-1)).toMatchObject({ path: "/api/v1/channels/10", method: "DELETE" })
 })
 
 test.each(modes)(
@@ -316,27 +316,27 @@ test.each(modes)(
         expect((await api.fetch()).permissionOverwrites).toEqual(cleared)
 
         expect(calls.filter((call) => call.features === null)).toEqual([
-            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/api/v1/channels/10", method: "GET", body: undefined, features: null },
             {
-                path: "/v1/guilds/20/channels",
+                path: "/api/v1/guilds/20/channels",
                 method: "POST",
                 body: { type: 0, name: "inherited" },
                 features: null,
             },
             {
-                path: "/v1/channels/10",
+                path: "/api/v1/channels/10",
                 method: "PATCH",
                 body: { name: "unchanged permissions" },
                 features: null,
             },
-            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
-            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
-            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
-            { path: "/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/api/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/api/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/api/v1/channels/10", method: "GET", body: undefined, features: null },
+            { path: "/api/v1/channels/10", method: "GET", body: undefined, features: null },
         ])
         expect(calls.filter((call) => call.features !== null)).toEqual([
             {
-                path: "/v1/guilds/20/channels",
+                path: "/api/v1/guilds/20/channels",
                 method: "POST",
                 body: {
                     type: 0,
@@ -346,7 +346,7 @@ test.each(modes)(
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/guilds/20/channels",
+                path: "/api/v1/guilds/20/channels",
                 method: "POST",
                 body: {
                     type: 0,
@@ -356,25 +356,25 @@ test.each(modes)(
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/channels/10",
+                path: "/api/v1/channels/10",
                 method: "PATCH",
                 body: { permission_overwrites: [{ id: "50", type: 0, allow: bit.toString(), deny: "0" }] },
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/channels/10",
+                path: "/api/v1/channels/10",
                 method: "PATCH",
                 body: { permission_overwrites: [{ id: "50", type: 0, allow: "0", deny: "0" }] },
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/channels/10/permissions/50",
+                path: "/api/v1/channels/10/permissions/50",
                 method: "PUT",
                 body: { type: 0, allow: bit.toString(), deny: "0" },
                 features: "view_channel_members_permission",
             },
             {
-                path: "/v1/channels/10/permissions/50",
+                path: "/api/v1/channels/10/permissions/50",
                 method: "PUT",
                 body: { type: 0, allow: "0", deny: "0" },
                 features: "view_channel_members_permission",
@@ -543,8 +543,8 @@ test.each(modes)("%s edits distinguish a null topic, an empty topic and empty ov
     expect(await api.edit("10", { permissionOverwrites: [] })).toMatchObject({ permissionOverwrites: [] })
 
     expect(requests).toEqual([
-        { method: "PATCH", path: "/v1/channels/10", body: { topic: null } },
-        { method: "PATCH", path: "/v1/channels/10", body: { permission_overwrites: [] } },
+        { method: "PATCH", path: "/api/v1/channels/10", body: { topic: null } },
+        { method: "PATCH", path: "/api/v1/channels/10", body: { permission_overwrites: [] } },
     ])
 })
 
@@ -780,11 +780,11 @@ test.each(modes)(
         let status = 204
         rest(async (url, init) => {
             const path = new URL(url).pathname
-            if (init.method === "GET" && /^\/v1\/channels\/21\/messages\/[1-4]$/.test(path)) {
+            if (init.method === "GET" && /^\/api\/v1\/channels\/21\/messages\/[1-4]$/.test(path)) {
                 await new Promise<void>((resolve) => held.push(resolve))
                 return Response.json(message(path.at(-1)!, "21"))
             }
-            if (init.method === "GET" && path === "/v1/channels/20/messages/10") {
+            if (init.method === "GET" && path === "/api/v1/channels/20/messages/10") {
                 if (delayed) {
                     started = true
                     await new Promise<void>((resolve) => {
@@ -793,7 +793,7 @@ test.each(modes)(
                 }
                 return Response.json(message())
             }
-            if (init.method === "DELETE" && path === "/v1/channels/20")
+            if (init.method === "DELETE" && path === "/api/v1/channels/20")
                 return status === 204 ? new Response(null, { status }) : Response.json({}, { status })
             return Response.json(channel())
         })
@@ -906,6 +906,25 @@ test.each(modes)("%s awaits active channel request cleanup on cancellation and s
     }
 })
 
+test.each(modes)("%s keeps a channel whose content-warning level the SDK does not know", async (mode) => {
+    let response: unknown
+    rest(async () => Response.json(response))
+    const api = await setup(mode)
+
+    response = channel("10", { content_warning_level: 2 })
+    expect(await api.fetch()).toMatchObject({ id: "10", contentWarningLevel: 2 })
+    response = [channel("10", { content_warning_level: 7 }), voiceChannel("11", { content_warning_level: 0 })]
+    expect((await api.fetchAll()).map((value) => value.contentWarningLevel)).toEqual([7, 0])
+
+    for (const level of [1.5, "2", null, 2 ** 31])
+        await expect(
+            (async () => {
+                response = channel("10", { content_warning_level: level })
+                return api.fetch()
+            })(),
+        ).rejects.toMatchObject({ reason: "response", outcome: "unknown", status: 200 })
+})
+
 /** Run a native Effect with an optional AbortSignal, throwing its typed failure */
 async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> {
     const result = await Effect.runPromise(typedResult(effect), signal ? { signal } : undefined)
@@ -916,7 +935,7 @@ async function run<A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Pro
 function rest(handler: (url: string, init: RequestInit) => Promise<Response>) {
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) =>
         url.endsWith("/gateway/bot")
-            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.app" }))
+            ? Promise.resolve(Response.json({ url: "wss://gateway.fluxer.com" }))
             : handler(url, init),
     )
 }

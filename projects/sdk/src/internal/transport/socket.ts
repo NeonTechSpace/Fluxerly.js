@@ -39,11 +39,12 @@ export interface GatewaySocket {
     terminate(): void
     on(event: "message", listener: (data: SocketData, binary: boolean) => void): unknown
     on(event: "error", listener: (error: Error & { code?: string }) => void): unknown
-    on(event: "close", listener: (code: number) => void): unknown
+    /** The ws library passes the close frame's reason bytes, which other implementations may leave out */
+    on(event: "close", listener: (code: number, reason?: Uint8Array | string) => void): unknown
     once(event: "close", listener: () => void): unknown
     off(event: "message", listener: (data: SocketData, binary: boolean) => void): unknown
     off(event: "error", listener: (error: Error & { code?: string }) => void): unknown
-    off(event: "close", listener: (() => void) | ((code: number) => void)): unknown
+    off(event: "close", listener: (() => void) | ((code: number, reason?: Uint8Array | string) => void)): unknown
 }
 
 /** Open one socket. Connection failures arrive as error or close events, and a synchronous throw is treated as an SDK defect */

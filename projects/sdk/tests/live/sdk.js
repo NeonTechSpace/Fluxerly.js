@@ -4,11 +4,13 @@
 import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Clock, Duration, Effect } from "effect"
 import WebSocket from "ws"
+import { verifyBucketLearning } from "./support/bucket-learning.js"
+import { controlledClock } from "./support/controlled-clock.js"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const cancelRecovery = process.argv[3] === "--cancel-recovery"
@@ -51,7 +53,7 @@ function observeGateway() {
             const [socket] = sockets
             const url = new URL(socket.url)
             assert.equal(url.protocol, "wss:")
-            assert.equal(url.host, "gateway.fluxer.app")
+            assert.equal(url.host, "gateway.fluxer.com")
             // Terminate only this process's authenticated SDK connection, not the server or host network
             socket.terminate()
             const deadline = performance.now() + 5000
@@ -83,7 +85,8 @@ function observeGateway() {
 }
 
 async function waitForReady(client) {
-    const deadline = performance.now() + 35_000
+    // Running the client starts its discovery, whose paced slot comes on top of the 35 s
+    const deadline = performance.now() + pacedDeadlineMs(35_000, 1, { clients: 1 })
     while (client.state !== "Connected") {
         assert.ok(client.state !== "Closed" && performance.now() < deadline)
         await sleep(10)
@@ -117,7 +120,7 @@ function instanceDocument(value) {
 }
 
 async function hostedInstanceDocument() {
-    let target = "https://fluxer.app/.well-known/fluxer"
+    let target = "https://fluxer.com/.well-known/fluxer"
     for (let redirects = 0; redirects <= 3; redirects++) {
         const url = new URL(target)
         assert.equal(url.protocol, "https:")
@@ -126,7 +129,10 @@ async function hostedInstanceDocument() {
         assert.equal(url.password, "")
         assert.equal(url.search, "")
         assert.equal(url.hash, "")
-        const response = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(10_000) })
+        const response = await fetch(target, {
+            redirect: "manual",
+            signal: AbortSignal.timeout(pacedDeadlineMs(10_000, 1)),
+        })
         if ([301, 302, 303, 307, 308].includes(response.status)) {
             await response.body?.cancel()
             const location = response.headers.get("location")
@@ -230,21 +236,18 @@ function verifyCurrentApplication(value, applicationId, response) {
 
 async function verifyInstallationLink(link, applicationId) {
     const url = new URL(link)
-    assert.equal(url.origin, "https://api.fluxer.app")
-    assert.equal(url.pathname, "/v1/oauth2/authorize")
+    assert.equal(url.origin, "https://fluxer.com")
+    assert.equal(url.pathname, "/oauth2/authorize")
     assert.equal(url.searchParams.get("client_id"), applicationId)
     assert.equal(url.searchParams.get("scope"), "bot")
     assert.equal(url.searchParams.get("permissions"), "0")
     assert.equal([...url.searchParams.keys()].sort().join(","), "client_id,permissions,scope")
-    // The link must reach the web app's installation page with its query intact, wherever Fluxer serves the web app.
-    // The redirect is read without following it, so no page is opened and nothing is authorized
-    const response = await fetch(link, { redirect: "manual", signal: AbortSignal.timeout(10_000) })
+    // The link must be the installation page itself, not a redirect. The web app answers 404 for routes it does not
+    // serve. Only the page's HTML is fetched, without credentials, so nothing is authorized
+    const response = await fetch(link, { redirect: "manual", signal: AbortSignal.timeout(pacedDeadlineMs(10_000, 1)) })
     await response.body?.cancel()
-    assert.ok([301, 302, 303, 307, 308].includes(response.status))
-    const target = new URL(response.headers.get("location") ?? "", link)
-    assert.equal(target.protocol, "https:")
-    assert.equal(target.pathname, "/oauth2/authorize")
-    assert.equal(target.search, url.search)
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get("content-type") ?? "", /^text\/html/)
 }
 
 // Local lookups return plain values in the default API and never-failing Effects in the native API
@@ -279,7 +282,7 @@ async function verifyDiagnostics(client, guildId, token, run) {
     let pending
     globalThis.fetch = async (url, init) => {
         const response = await originalFetch(url, init)
-        if (new URL(String(url)).pathname === `/v1/guilds/${guildId}`) {
+        if (new URL(String(url)).pathname === `/api/v1/guilds/${guildId}`) {
             received = true
             await barrier
         }
@@ -291,7 +294,8 @@ async function verifyDiagnostics(client, guildId, token, run) {
             (value) => ({ value }),
             () => ({ failed: true }),
         )
-        const deadline = performance.now() + 15_000
+        // The guild read above may still wait for its paced slot when this deadline starts
+        const deadline = performance.now() + pacedDeadlineMs(15_000, 1)
         while (!received) {
             assert.ok(performance.now() < deadline)
             await sleep(5)
@@ -383,49 +387,6 @@ async function verifyQuality(client, token, run, fail) {
     report(stage, { passed: true, remoteMutations: false })
 }
 
-/**
- * Control the SDK's default Effect Clock, which clients created without their own Clock read for deadlines and waits.
- * Time stands still until advance moves it, so a window the check injects ends only when the check says so.
- * Restoring waits until real time has caught up, so SDK time never runs backwards
- */
-function controlledClock() {
-    const clock = Effect.runSync(Clock.Clock)
-    const start = clock.monotonicTimeNanosUnsafe()
-    let offsetMs = 0
-    let restored = false
-    const pending = new Set()
-    const now = () => start + BigInt(offsetMs) * 1_000_000n
-    clock.monotonicTimeNanosUnsafe = now
-    clock.sleep = (duration) =>
-        Effect.callback((resume) => {
-            const item = { at: offsetMs + Duration.toMillis(duration), wake: () => resume(Effect.void) }
-            if (item.at <= offsetMs) return resume(Effect.void)
-            pending.add(item)
-            return Effect.sync(() => pending.delete(item))
-        })
-    return {
-        advance(milliseconds) {
-            offsetMs += milliseconds
-            for (const item of [...pending])
-                if (item.at <= offsetMs) {
-                    pending.delete(item)
-                    item.wake()
-                }
-        },
-        async restore() {
-            if (restored) return
-            restored = true
-            while (process.hrtime.bigint() < now())
-                await sleep(Math.ceil(Number(now() - process.hrtime.bigint()) / 1e6))
-            delete clock.monotonicTimeNanosUnsafe
-            delete clock.sleep
-            // Sleeps started on the controlled clock end now, so their owners schedule again on real time
-            for (const item of pending) item.wake()
-            pending.clear()
-        },
-    }
-}
-
 async function verifyRateLimits(client, guildId, userId, run, fail) {
     stage = "rate_limits_discovery"
     await run(client.instance.resolve())
@@ -435,11 +396,11 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
     let remoteReads = 0
     globalThis.fetch = async (input, init) => {
         const url = new URL(String(input))
-        assert.equal(url.origin, "https://api.fluxer.app")
+        assert.equal(url.origin, "https://fluxer.com")
         assert.equal(init?.method, "GET")
-        assert.ok(url.pathname === "/v1/users/@me" || url.pathname === `/v1/guilds/${guildId}`)
+        assert.ok(url.pathname === "/api/v1/users/@me" || url.pathname === `/api/v1/guilds/${guildId}`)
         if (injected === 0) {
-            assert.equal(url.pathname, "/v1/users/@me")
+            assert.equal(url.pathname, "/api/v1/users/@me")
             injected++
             // A controlled rejection avoids deliberately exhausting the hosted bot's global limit
             return new Response("fixture non-JSON rejection", {
@@ -477,9 +438,11 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         // The injected window passes, which ends the global pause
         clock.advance(retryAfterMs)
         await clock.restore()
-        assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
-        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
-        const raw = await run(client.rest.request({ method: "GET", path: "/users/@me", timeoutMs: 10_000 }))
+        assert.equal((await run(client.users.fetchSelf({ timeoutMs: pacedDeadlineMs(10_000, 1) }))).id, userId)
+        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: pacedDeadlineMs(10_000, 1) }))).id, guildId)
+        const raw = await run(
+            client.rest.request({ method: "GET", path: "/users/@me", timeoutMs: pacedDeadlineMs(10_000, 1) }),
+        )
         assert.equal(raw.status, 200)
         assert.equal(raw.body?.id, userId)
         assert.equal(remoteReads, 3)
@@ -490,57 +453,17 @@ async function verifyRateLimits(client, guildId, userId, run, fail) {
         globalThis.fetch = originalFetch
         await clock.restore()
     }
-    await verifyBucketLearning(client, guildId, userId, run, fail)
-}
-
-async function verifyBucketLearning(client, guildId, userId, run, fail) {
-    stage = "bucket_learning_live_headers"
-    const originalFetch = globalThis.fetch
-    let requests = 0
-    let headersObserved = 0
-    globalThis.fetch = async (input, init) => {
-        const url = new URL(String(input))
-        assert.equal(url.origin, "https://api.fluxer.app")
-        assert.equal(init?.method, "GET")
-        assert.ok(url.pathname === "/v1/users/@me" || url.pathname === `/v1/guilds/${guildId}`)
-        requests++
-        const response = await originalFetch(input, init)
-        assert.ok(response.ok)
-        if (/^[a-f0-9]{16}$/.test(response.headers.get("x-ratelimit-bucket") ?? "")) headersObserved++
-        if (requests > 3) return response
-        const headers = new Headers(response.headers)
-        // Override only scheduling metadata on real read responses. This opaque,
-        // unrecognized template is intentionally treated as account-wide. The
-        // three responses coherently consume a three-request leaky bucket whose
-        // first refill remains beyond the following 100 ms admission deadline
-        headers.set("x-ratelimit-bucket", "fixture-shared-read-bucket")
-        headers.set("x-ratelimit-limit", "3")
-        headers.set("x-ratelimit-remaining", String(3 - requests))
-        headers.set("x-ratelimit-reset-after", ["0.333", "0.667", "1"][requests - 1])
-        return new Response(response.body, { status: response.status, headers })
-    }
-    try {
-        assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
-        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
-        assert.equal((await run(client.users.fetchSelf({ timeoutMs: 10_000 }))).id, userId)
-        stage = "bucket_learning_shared_wait"
-        // The refill is past the deadline, so the read fails at once with the remaining wait, unsent
-        const rejected = await fail(client.guilds.fetch(guildId, { timeoutMs: 100 }))
-        assert.equal(rejected.reason, "rateLimit")
-        assert.equal(rejected.outcome, "notDispatched")
-        assert.ok(rejected.retryAfterMs >= 100)
-        assert.equal(requests, 3)
-        assert.equal(client.diagnostics().rest.queuedRequests, 0)
-        report(stage, { passed: true, injectedHeaderSets: 3, realBucketHeadersObserved: headersObserved })
-        await sleep(1100)
-        stage = "bucket_learning_live_recovery"
-        assert.equal((await run(client.guilds.fetch(guildId, { timeoutMs: 10_000 }))).id, guildId)
-        assert.equal(requests, 4)
-        assert.equal(client.diagnostics().rest.activeRequests, 0)
-        report(stage, { passed: true, remoteReads: requests, remoteMutations: false })
-    } finally {
-        globalThis.fetch = originalFetch
-    }
+    await verifyBucketLearning({
+        client,
+        guildId,
+        userId,
+        run,
+        fail,
+        setStage: (next) => {
+            stage = next
+        },
+        report,
+    })
 }
 
 // A watchdog is failure containment, never evidence of successful cleanup
@@ -548,7 +471,7 @@ async function verifyBucketLearning(client, guildId, userId, run, fail) {
 setTimeout(() => {
     report("process_timeout", { passed: false, cleanExitVerified: false })
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")

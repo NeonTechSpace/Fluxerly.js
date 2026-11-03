@@ -82,21 +82,22 @@ jobs:
           working-directory: projects
           require-lockfile: true
           cache: true
-      - name: Check release tooling types and tests
-        id: release
-        run: pnpm --filter @fluxerly/release test
-        working-directory: projects
-      - name: Check contribution permission behavior and forms
-        id: contributions
-        run: pnpm run check:contributions
-        working-directory: projects
       - name: Build the SDK declarations for the documentation reference
         id: build
         run: pnpm --filter @neontechspace/fluxerly build
         working-directory: projects
-      - name: Check the documentation website build, types and tests
+      - name: Restore Fluxer's pinned OpenAPI document and docs source
+        id: fluxer_source_cache
+        # Saved here and only restored by the release and website workflows, which never save caches. The endpoint map
+        # checks every file against the hash in projects/release/upstream/manifest.json, so the key only saves downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: projects/web/.cache/fluxer
+          key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
+      - name: Check release tooling, contribution forms and the documentation website side by side
         id: website
-        run: pnpm --filter fluxerly-docs check
+        # Each check starts once the checks it reads from have passed, and the log names every result with its time
+        run: node scripts/check.mjs release contributions web
         working-directory: projects
       - name: Summarize website and release tooling checks
         if: always()
@@ -121,15 +122,37 @@ jobs:
         with:
           working-directory: projects
           install: false
+      - name: Restore the kept actionlint release
+        id: actionlint_cache
+        # Keyed by the pinned release and its checksum. The lint step checks the kept archive against that checksum before
+        # each use, so an entry can't change what runs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/actionlint
+          key: actionlint-1.7.12-linux-amd64-8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
       - name: Lint workflow syntax, expressions and shell scripts
         id: actionlint
-        # The allowed-actions policy accepts no container images, so the pinned release binary is verified by its checksum
+        # The allowed-actions policy accepts no container images, so the pinned release binary is verified by its checksum.
+        # An absent or damaged kept archive is downloaded again and checked the same way
         run: |
-          curl --fail --silent --show-error --location --output actionlint.tar.gz \
-            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file actionlint.tar.gz actionlint
+          archive="$RUNNER_TEMP/actionlint/actionlint_1.7.12_linux_amd64.tar.gz"
+          checksum="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive"
+          if ! echo "$checksum" | sha256sum --check --strict --status 2>/dev/null; then
+            mkdir -p "$RUNNER_TEMP/actionlint"
+            curl --fail --silent --show-error --location --output "$archive" \
+              https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+            echo "$checksum" | sha256sum --check --strict
+          fi
+          tar --extract --gzip --file "$archive" actionlint
           ./actionlint -color
+      - name: Restore the kept zizmor download
+        id: zizmor_cache
+        # The action downloads zizmor's wheel through pip, which reuses a response it already holds. pip checks the wheel
+        # against the hashes the action pins for this version, so an entry can't change what runs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pip
+          key: zizmor-pip-${{ runner.os }}-1.30.1
       - name: Audit workflow security
         id: zizmor
         uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
@@ -161,6 +184,14 @@ jobs:
           working-directory: projects
           require-lockfile: true
           cache: true
+      - name: Restore Fluxer's pinned OpenAPI document and docs source
+        id: fluxer_source_cache
+        # Saved here and only restored by the release and website workflows, which never save caches. The endpoint map
+        # checks every file against the hash in projects/release/upstream/manifest.json, so the key only saves downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: projects/web/.cache/fluxer
+          key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
       - name: Build the SDK and documentation
         id: build
         run: pnpm build
@@ -194,6 +225,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           AFTER_SHA: ${{ github.sha }}
         run: node projects/release/github.js stable-pending
+      - name: Restore the kept release snapshots
+        id: release_snapshots_cache
+        if: github.event_name == 'push'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: projects/web/.cache/releases
+          key: release-snapshots-${{ github.sha }}
+          restore-keys: release-snapshots-
+      - name: Keep a copy of each release snapshot the website imports
+        id: release_snapshots
+        # The website workflow restores these copies and checks each against the fresh release metadata, so a deploy
+        # downloads only snapshots published since. A failed read here costs that deploy the downloads, not this Check
+        if: github.event_name == 'push'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node web/scripts/fetch-releases.js --cache-only
+        working-directory: projects
+      - name: Save the release snapshots when they changed
+        id: release_snapshots_save
+        if: >-
+          github.event_name == 'push' && steps.release_snapshots.outcome == 'success' &&
+          hashFiles('projects/web/.cache/releases/*.json') != '' &&
+          steps.release_snapshots_cache.outputs.cache-matched-key != format('release-snapshots-{0}', hashFiles('projects/web/.cache/releases/*.json'))
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: projects/web/.cache/releases
+          key: release-snapshots-${{ hashFiles('projects/web/.cache/releases/*.json') }}
       - name: Check documentation in a browser
         id: browser
         env:
@@ -250,6 +309,12 @@ jobs:
         id: test
         if: matrix.runtime
         run: pnpm --filter @neontechspace/fluxerly test
+        working-directory: projects
+      # The sdk job's check runs the example bots' tests on the development Node version
+      - name: Run the example bots' tests on the declared Node floor
+        id: examples
+        if: matrix.runtime
+        run: pnpm --filter @neontechspace/fluxerly test:examples
         working-directory: projects
       # The sdk job's check already packs and runs these consumers on the development Node version
       - name: Check packed JavaScript and TypeScript consumers on the declared Node floor

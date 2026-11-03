@@ -7,6 +7,12 @@ import { createServer } from "node:http"
 import { Effect, Exit, Scope } from "effect"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
+import { pacedDeadlineMs } from "./support/watchdogs.js"
+
+/** A raw request, whose timeout starts before its paced slot */
+const rawTimeoutMs = pacedDeadlineMs(15_000, 1)
+/** An OAuth operation: its request and a discovery the client may make first, each with a paced slot */
+const requestTimeoutMs = pacedDeadlineMs(15_000, 2, { clients: 1 })
 
 // Default mode requires manual consent; --no-consent performs only explicit read and URL-construction checks
 // Neither mode is part of CI or schedules
@@ -15,7 +21,7 @@ const noConsent = process.argv.includes("--no-consent")
 const mode = process.argv.slice(2).find((argument) => argument !== "--no-consent")
 const redirectUri = "http://localhost:3000/auth/fluxer/callback"
 const callbackPath = "/auth/fluxer/callback"
-const apiBase = "https://api.fluxer.app"
+const apiBase = "https://fluxer.com/api"
 const identityChecks = { "/applications/@me": "application_identity", "/users/@me": "bot_identity" }
 const report = createReporter({ mode })
 
@@ -47,7 +53,7 @@ async function botGet(path, token, check) {
         response = await fetch(`${apiBase}${path}`, {
             headers: { Authorization: `Bot ${token}` },
             redirect: "error",
-            signal: AbortSignal.timeout(15_000),
+            signal: AbortSignal.timeout(rawTimeoutMs),
         })
         return await responseJson(response, check)
     } catch (error) {
@@ -62,7 +68,7 @@ async function bearerGet(path, token, check) {
         response = await fetch(`${apiBase}${path}`, {
             headers: { Authorization: `Bearer ${token}` },
             redirect: "error",
-            signal: AbortSignal.timeout(15_000),
+            signal: AbortSignal.timeout(rawTimeoutMs),
         })
         return await responseJson(response, check)
     } catch (error) {
@@ -77,7 +83,7 @@ async function verifyRevokedIdentity(token) {
         response = await fetch(`${apiBase}/oauth2/userinfo`, {
             headers: { Authorization: `Bearer ${token}` },
             redirect: "error",
-            signal: AbortSignal.timeout(15_000),
+            signal: AbortSignal.timeout(rawTimeoutMs),
         })
         assert.equal(response.status, 401)
     } catch (error) {
@@ -89,7 +95,7 @@ async function verifyRevokedIdentity(token) {
 }
 
 async function verifySdkIntrospection(client, token, tokenType, grantedScopes, clientId) {
-    const result = await operation(client.introspect(token, { timeoutMs: 15_000 }))
+    const result = await operation(client.introspect(token, { timeoutMs: requestTimeoutMs }))
     assert.equal(result.active, true)
     assert.equal(result.clientId, clientId)
     assert.equal(result.tokenType, tokenType)
@@ -116,18 +122,18 @@ function hasUnknownOAuthFailure(value, seen = new Set()) {
 async function discoverHostedApi() {
     let response
     try {
-        response = await fetch("https://api.fluxer.app/.well-known/fluxer", {
+        response = await fetch(`${apiBase}/.well-known/fluxer`, {
             redirect: "error",
-            signal: AbortSignal.timeout(15_000),
+            signal: AbortSignal.timeout(rawTimeoutMs),
         })
         const document = await responseJson(response, "instance_discovery")
         const selected = new URL(document?.endpoints?.api_public)
         assert.equal(selected.protocol, "https:")
-        assert.equal(selected.hostname, "api.fluxer.app")
+        assert.equal(selected.hostname, "fluxer.com")
         assert.equal(selected.port, "")
         assert.equal(selected.username, "")
         assert.equal(selected.password, "")
-        assert.equal(selected.pathname, "/")
+        assert.equal(selected.pathname, "/api")
         assert.equal(selected.search, "")
         assert.equal(selected.hash, "")
         assert.equal(selected.href, new URL(apiBase).href)
@@ -225,7 +231,8 @@ const cleanup = {
     callbackClosed: false,
     sdkClosed: false,
 }
-const deadlineAt = Date.now() + 300_000
+// The person's five minutes, plus the paced identity reads, raw discovery and the client's discovery
+const deadlineAt = Date.now() + pacedDeadlineMs(300_000, 5, { clients: 2 })
 
 try {
     assert.ok((mode === "default" || mode === "effect") && process.argv.length === (noConsent ? 4 : 3))
@@ -243,7 +250,7 @@ try {
             },
             body: new URLSearchParams({ token }).toString(),
             redirect: "error",
-            signal: AbortSignal.timeout(15_000),
+            signal: AbortSignal.timeout(rawTimeoutMs),
         })
         const result = await responseJson(response, "token_introspection")
         assert.equal(result.active, active)
@@ -290,7 +297,7 @@ try {
                     permissions: 0n,
                     disableGuildSelect: true,
                 },
-                { timeoutMs: 15_000 },
+                { timeoutMs: requestTimeoutMs },
             ),
         )
         const url = new URL(authorizationUrl)
@@ -308,7 +315,7 @@ try {
 
         const invalidToken = randomBytes(32).toString("base64url")
         stage = "inactive_introspection"
-        const sdkIntrospection = await operation(client.introspect(invalidToken, { timeoutMs: 15_000 }))
+        const sdkIntrospection = await operation(client.introspect(invalidToken, { timeoutMs: requestTimeoutMs }))
         assert.deepEqual(sdkIntrospection, { active: false })
         await verifyToken(invalidToken, false)
         report(stage, { passed: true, independentlyConfirmed: true })
@@ -316,7 +323,9 @@ try {
         stage = "invalid_bearer_connections"
         let rejected = false
         try {
-            await operation(client.fetchConnections(randomBytes(32).toString("base64url"), { timeoutMs: 15_000 }))
+            await operation(
+                client.fetchConnections(randomBytes(32).toString("base64url"), { timeoutMs: requestTimeoutMs }),
+            )
         } catch (error) {
             assert.equal(error?._tag, "OAuthOperationError")
             assert.equal(error?.reason, "rejected")
@@ -326,7 +335,9 @@ try {
             rejected = true
         }
         assert.equal(rejected, true)
-        assert.deepEqual(await operation(client.introspect(invalidToken, { timeoutMs: 15_000 })), { active: false })
+        assert.deepEqual(await operation(client.introspect(invalidToken, { timeoutMs: requestTimeoutMs })), {
+            active: false,
+        })
         report(stage, { passed: true, clientRemainedUsable: true })
     } else {
         const pkce = sdk.oauth.createPkce()
@@ -344,7 +355,7 @@ try {
                     state,
                     codeChallenge: pkce.challenge,
                 },
-                { timeoutMs: 15_000 },
+                { timeoutMs: requestTimeoutMs },
             ),
         )
         const url = new URL(authorizationUrl)
@@ -374,7 +385,10 @@ try {
         stage = "exchange_code"
         try {
             currentTokens = await operation(
-                client.exchangeCode({ code, redirectUri, codeVerifier: pkce.verifier }, { timeoutMs: 15_000 }),
+                client.exchangeCode(
+                    { code, redirectUri, codeVerifier: pkce.verifier },
+                    { timeoutMs: requestTimeoutMs },
+                ),
             )
             issuedPairs.push(currentTokens)
         } catch (error) {
@@ -397,11 +411,15 @@ try {
         await verifyToken(currentTokens.refreshToken, true)
 
         stage = "sdk_bearer_reads"
-        const identity = await operation(client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }))
-        const guilds = await operation(
-            client.fetchGuilds(currentTokens.accessToken, { limit: 200 }, { timeoutMs: 15_000 }),
+        const identity = await operation(
+            client.fetchIdentity(currentTokens.accessToken, { timeoutMs: requestTimeoutMs }),
         )
-        const connections = await operation(client.fetchConnections(currentTokens.accessToken, { timeoutMs: 15_000 }))
+        const guilds = await operation(
+            client.fetchGuilds(currentTokens.accessToken, { limit: 200 }, { timeoutMs: requestTimeoutMs }),
+        )
+        const connections = await operation(
+            client.fetchConnections(currentTokens.accessToken, { timeoutMs: requestTimeoutMs }),
+        )
         assert.match(identity.id, /^\d+$/)
         assert.ok(Array.isArray(guilds))
         assert.ok(Array.isArray(connections))
@@ -445,7 +463,7 @@ try {
         stage = "refresh_rotation"
         const previousTokens = currentTokens
         try {
-            currentTokens = await operation(client.refresh(currentTokens.refreshToken, { timeoutMs: 15_000 }))
+            currentTokens = await operation(client.refresh(currentTokens.refreshToken, { timeoutMs: requestTimeoutMs }))
             issuedPairs.push(currentTokens)
         } catch (error) {
             tokenMutationUncertain = hasUnknownOAuthFailure(error)
@@ -469,7 +487,7 @@ try {
         report(stage, { passed: true, accessAndRefreshActive: true })
         stage = "refreshed_identity"
         const refreshedIdentity = await operation(
-            client.fetchIdentity(currentTokens.accessToken, { timeoutMs: 15_000 }),
+            client.fetchIdentity(currentTokens.accessToken, { timeoutMs: requestTimeoutMs }),
         )
         assert.equal(refreshedIdentity.id, identity.id)
         report(stage, { passed: true, identityMatches: true })
@@ -477,7 +495,10 @@ try {
         stage = "access_revocation"
         cleanup.accessRevocationAttempted = true
         await operation(
-            client.revoke({ token: currentTokens.accessToken, tokenTypeHint: "access_token" }, { timeoutMs: 15_000 }),
+            client.revoke(
+                { token: currentTokens.accessToken, tokenTypeHint: "access_token" },
+                { timeoutMs: requestTimeoutMs },
+            ),
         )
         accessRevoked = true
         await verifyRevokedIdentity(currentTokens.accessToken)
@@ -499,7 +520,10 @@ try {
         try {
             cleanup.accessRevocationAttempted = true
             await operation(
-                client.revoke({ token: pair.accessToken, tokenTypeHint: "access_token" }, { timeoutMs: 15_000 }),
+                client.revoke(
+                    { token: pair.accessToken, tokenTypeHint: "access_token" },
+                    { timeoutMs: requestTimeoutMs },
+                ),
             )
             await verifyRevokedIdentity(pair.accessToken)
             await verifyToken(pair.accessToken, false)
@@ -511,7 +535,10 @@ try {
         try {
             cleanup.refreshRevocationAttempted = true
             await operation(
-                client.revoke({ token: pair.refreshToken, tokenTypeHint: "refresh_token" }, { timeoutMs: 15_000 }),
+                client.revoke(
+                    { token: pair.refreshToken, tokenTypeHint: "refresh_token" },
+                    { timeoutMs: requestTimeoutMs },
+                ),
             )
             await verifyToken(pair.refreshToken, false)
             confirmed.refresh = true

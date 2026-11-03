@@ -56,7 +56,10 @@ export function safeFailure(error) {
         if (reasons.has(error?.reason)) result.reason = error.reason
         const outcome = error?.outcome
         if (outcomes.has(outcome)) result.outcome = outcome
-        if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) result.status = error.status
+        if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) {
+            result.status = error.status
+            if (error.status >= 500) result.providerFault = true
+        }
         const code = [error?.code, error?.cause?.code].find((value) => codes.has(value))
         if (code) result.code = code
         return result
@@ -77,7 +80,7 @@ export function observeUploads(original, emit) {
         const phase =
             url.origin === "https://uploads.fluxer.app"
                 ? "put"
-                : url.origin !== "https://api.fluxer.app"
+                : !url.href.startsWith("https://fluxer.com/api/")
                   ? undefined
                   : url.pathname.endsWith("/attachments/complete")
                     ? "complete"

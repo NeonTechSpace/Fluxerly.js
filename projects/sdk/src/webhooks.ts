@@ -2,6 +2,7 @@ import type { RequestOptions } from "./client.js"
 import type { InstanceOptions } from "./instance.js"
 import type { ClientClosedError } from "./errors.js"
 import type { LoggingOptions } from "./logging.js"
+import type { User } from "./users.js"
 import {
     operationErrorFields,
     operationErrorSettings,
@@ -49,6 +50,11 @@ export interface WebhookBase {
     readonly name: string
     /** Identifier for the webhook's avatar image, not a complete URL. Null means no custom avatar */
     readonly avatar: string | null
+    /** Account that created the webhook, from reads, lists and creation by the bot. Absent from reads with the webhook
+     * token, and when Fluxer's account data is incomplete. Fluxer shows a deleted creator as its deleted-user account.
+     * Fluxer names it user
+     */
+    readonly creator?: User
 }
 
 /**
@@ -189,7 +195,7 @@ export interface WebhookEdit {
     readonly name?: string
     /** Base64 image data URI, or null to remove the avatar. Follower webhooks reject any supplied avatar change */
     readonly avatar?: string | null
-    /** Move future messages within the same community, subject to Fluxer's permissions. Followers require a text channel, while incoming webhooks allow text, voice or announcement channels */
+    /** Move future messages within the same community, subject to Fluxer's permissions. Followers require a text channel, while incoming webhooks allow text, voice, announcement, forum or media channels */
     readonly channelId?: string
 }
 
@@ -234,10 +240,11 @@ export type WebhookMessageReference = WebhookReplyReference | WebhookForwardRefe
 export type WebhookMessageOptions = {
     /** Application-chosen correlation nonce, a string of 1–32 UTF-16 code units or a nonnegative safe integer encoded as a decimal string.
      * Omission sends no nonce, unless the forward source supplies one. Supplying both locations fails locally.
-     * For five minutes after saving a message, Fluxer tries to suppress another send through this webhook with the same nonce. This does not guarantee exactly-once delivery
+     * For five minutes after saving a message, Fluxer tries to suppress another send through this webhook with the same nonce. This does not guarantee exactly-once delivery.
+     * A supplied nonce is shared across all channels for this webhook. Use a different nonce for each intended message. While the earlier send is cached, reusing its nonce in another channel fails with a not found error whose provider code is UNKNOWN_MESSAGE
      */
     readonly nonce?: MessageNonce
-    /** Message behavior flags from MessageFlags. Only SuppressEmbeds and SuppressNotifications are writable, and omission uses Fluxer's default. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed. Those bits and VoiceMessage fail locally before dispatch */
+    /** Message behavior flags from MessageFlags. SuppressEmbeds and SuppressNotifications are writable, and VoiceMessage on a send that carries a voice note, not on a forward. Omission uses Fluxer's default. A webhook voice note's waveform may hold at most 256 characters. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed and fail locally before dispatch */
     readonly flags?: number
     /** Which mentions may notify people. By default, mention text does not enable notifications */
     readonly allowedMentions?: AllowedMentions
@@ -257,7 +264,8 @@ export type WebhookMessageOptions = {
 /**
  * Settings for starting a new post in a forum or media channel through a webhook.
  * The webhook must belong to that forum or media channel, and Fluxer rejects threadName for any other channel.
- * Set them only on a new message, not on a reply or forward
+ * Set them only on a new message, not on a reply or forward.
+ * While the first send is cached, repeating threadName with the same nonce fails with a not found error instead of returning the original post. Save the returned channel ID and message ID after a successful send
  *
  * @category Invites and webhooks
  */
@@ -270,7 +278,8 @@ export interface WebhookForumPostOptions {
     readonly threadName?: string
     /** IDs of the tags to apply to the new post, at most 5. This needs threadName. Fluxer rejects an ID that the channel
      * does not have, a moderated tag because a webhook cannot manage threads, and a post with no tag when the channel
-     * has ChannelFlags.RequireTag
+     * has ChannelFlags.RequireTag.
+     * Fluxer names it applied_tags
      */
     readonly appliedTagIds?: readonly string[]
 }
@@ -327,7 +336,7 @@ export interface WebhookTokenEdit {
  * @category Invites and webhooks
  */
 export interface WebhookMessageEdit {
-    /** Replace only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications. Omit to preserve them, or use zero to clear both. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed. Those bits and VoiceMessage fail locally before dispatch */
+    /** Replacement flags containing only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications. Supplying flags, including 0, also clears MessageFlags.VoiceMessage, which an edit cannot set again. Omit flags to preserve the existing flags, including a voice note's flag. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed. Those bits and VoiceMessage fail locally before dispatch */
     readonly flags?: number
     /** New message text, or an empty string to remove the existing text */
     readonly content?: string
@@ -383,8 +392,8 @@ export type WebhookClientOptions = (
     readonly uploadMaxBytes?: number
     /**
      * Log records for this webhook client, with the same settings as the client option logging. Omit it for the default
-     * console output of Info and above. A rejected webhook token logs one rest.rejected Warn record per route and
-     * Fluxer code, even when the application handles the failure
+     * console output of Info and above. A rejected webhook token logs a rest.rejected Warn record even when the
+     * application handles the failure. Repeats follow logging.dedupe, which by default shows one per minute
      */
     readonly logging?: LoggingOptions
 }

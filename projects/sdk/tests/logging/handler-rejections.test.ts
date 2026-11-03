@@ -74,7 +74,7 @@ async function open(mode: Mode, handling: Handling, onError?: () => unknown): Pr
     }
 }
 
-const problems = (driver: Driver) =>
+const problems = (driver: Pick<Driver, "logs">) =>
     driver.logs().filter((record) => record.level === "warn" || record.level === "error")
 
 test.each(modes)(
@@ -120,4 +120,53 @@ test.each(modes)("%s a failed reply passed to onError still logs the rest.reject
     await bot.send("hello")
     expect(reports).toBe(1)
     expect(problems(bot).map((record) => record.code)).toEqual(["rest.rejected"])
+})
+
+test.each(modes)("%s a handler failed by a rejected role grant names the community in its one record", async (mode) => {
+    const rejected = { status: 403, body: { code: "MISSING_PERMISSIONS", message: "Missing Permissions" } }
+    const route = "PUT /guilds/:id/members/:id/roles/:id"
+    type Context = {
+        readonly event: { readonly guildId: string; readonly userId: string }
+        readonly client: { readonly members: { addRole(member: object, roleId: string): unknown } }
+    }
+    const grant = ({ event, client }: Context) =>
+        client.members.addRole({ guildId: event.guildId, userId: event.userId }, "50")
+    const driver: Pick<Driver, "logs" | "failures"> & { join(guildId: string): Promise<void> } = await (async () => {
+        if (mode === "default") {
+            const bot = createDefaultTestBot({
+                events: { guildMemberAdd: async (context: Context) => grant(context) },
+            } as never)
+            onTestFinished(() => bot.shutdown())
+            bot.rest.respond(route, rejected)
+            await bot.ready()
+            return {
+                join: async (guildId) => {
+                    bot.emit("GUILD_MEMBER_ADD", bot.fixtures.member({ guild_id: guildId }))
+                    await bot.idle()
+                },
+                logs: () => bot.logs(),
+                failures: () => bot.failures(),
+            }
+        }
+        const scope = Scope.makeUnsafe()
+        onTestFinished(() => unwrap(Scope.close(scope, Exit.void)))
+        const bot = await unwrap(
+            createNativeTestBot({ events: { guildMemberAdd: grant } } as never).pipe(Scope.provide(scope)),
+        )
+        bot.rest.respond(route, rejected)
+        await unwrap(bot.ready())
+        return {
+            join: async (guildId) => {
+                await unwrap(bot.emit("GUILD_MEMBER_ADD", bot.fixtures.member({ guild_id: guildId })))
+                await unwrap(bot.idle())
+            },
+            logs: () => bot.logs(),
+            failures: () => bot.failures(),
+        }
+    })()
+    await driver.join("301")
+    expect(driver.failures()).toHaveLength(1)
+    expect(problems(driver)).toEqual([
+        expect.objectContaining({ code: "events.handlerFailed", fields: expect.objectContaining({ guildId: "301" }) }),
+    ])
 })

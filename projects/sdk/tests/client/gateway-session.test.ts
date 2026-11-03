@@ -158,6 +158,18 @@ describeBothApis("gateway session", (mode) => {
         await vi.waitFor(() => expect(raw).toEqual(["READY 1", "RESUMED 2", "READY 4"]))
     })
 
+    test("logs the gateway's close reason as one cleaned line", async () => {
+        const clock = sdkClock()
+        const { server, client, logs } = await start(mode)
+        await settle(client.connect())
+        server.closeCurrent(4008, "Identify\nrate \u202elimited")
+        await clock.waiting(500)
+        const lost = logs.withCode("lifecycle.connectionLost").at(-1)
+        expect(lost?.message).toContain("(Fluxer's reason: Identify rate limited)")
+        await clock.advance(500)
+        await vi.waitFor(() => expect(client.state).toBe("Connected"))
+    })
+
     test("keeps heartbeating across acknowledged cycles without starting recovery", async () => {
         const clock = sdkClock()
         const { server, client, logs } = await start(mode, { heartbeatIntervalMs: 1_000, heartbeatAck: false })

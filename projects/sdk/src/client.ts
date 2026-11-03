@@ -71,7 +71,8 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         /** Maximum reserved attachment transfer bytes across queued and active operations, as a positive safe integer.
          * Defaults to 104,857,600 (100 MiB), separate from the rest.queuedJsonMaxBytes queued JSON budget (4 MiB by default).
          * The SDK reserves accepted byte-array lengths, file sizes or declared stream sizes before waiting for a request slot.
-         * A new operation fails with busy if its reservation would exceed this limit.
+         * A new operation fails with busy if its reservation would exceed this limit beside the bytes already reserved, and
+         * with reason input and inputValidation.path files if its attachments alone are larger than this limit.
          * Reservations remain held across rate-limit retries and release after transport cleanup.
          * This excludes caller buffers, metadata and runtime overhead, so it is not a JavaScript heap or process-memory ceiling
          */
@@ -83,7 +84,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * with its close code and next step, rate-limit waits of at least one second, shutdown, and application errors in full.
      * Raise or lower the level, adjust single categories, enable Debug records or send records to an application sink.
      * Creation copies and checks these settings without printing anything.
-     * Records never contain tokens or other credentials. Logging does not consume or replace returned operation failures
+     * Records mask the bot token and recognized credentials, such as Authorization headers, passwords and cookies. Logging does not consume or replace returned operation failures
      *
      * @example
      * ```ts
@@ -104,7 +105,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
     /**
      * Receive every failure that has no returned result: Event handler, command, collector callback and filter,
      * cleanup progress and cache-callback failures, subscriptions stopped by overflow, and failed state observers.
-     * The report holds the original error and IDs of the message involved, never message content.
+     * The report holds the original error and IDs of the message involved. The SDK adds no message content, but the original error can contain some.
      * A subscription's own onError takes precedence for that subscription.
      * Without a hook the SDK logs each failure at Error with its message, stack and cause chain.
      * A failure only queues its report. Reports are delivered one at a time in order. Up to 256 wait while the hook is busy, and later ones are logged instead, with fields.reportOutcome "queueFull", and counted in diagnostics().counters.reportsDropped.
@@ -152,8 +153,8 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * Omit this setting to retain no snapshots, without disabling REST reads or event delivery.
      * Each category has its own client-wide budget shared across this client's shards, not a budget per shard or community.
      * A lost gateway connection clears affected users, direct messages and messages, even after the session resumes.
-     * Community, member, role, emoji, sticker and channel snapshots stay while the shard resumes, because Fluxer replays every
-     * missed event on Resume, and are cleared whenever the shard starts a new session, including its first, so snapshots read
+     * Community, member, role, emoji, sticker and channel snapshots stay while the shard resumes, because Fluxer replays the
+     * dispatches that change them on Resume, and are cleared whenever the shard starts a new session, including its first, so snapshots read
      * before connecting do not outlast the first READY. Cached threads are the exception:
      * Fluxer does not replay thread list changes, so a resumed shard's threads are cleared.
      * Resume sends no community snapshots, so a process that resumes a session from sharding.sessions refills the enabled
@@ -273,7 +274,8 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
         /**
          * Maximum attempts to start each local shard, including its first attempt, as a positive safe integer.
          * The SDK retries only failures it classifies as transient, and the overall deadline can stop retries sooner.
-         * This does not limit recovery attempts after a session has become ready
+         * An instance discovery that Fluxer rate-limits with a wait does not count, so startup waits it out until the
+         * deadline. This does not limit recovery attempts after a session has become ready
          * @defaultValue 3
          */
         readonly maxStartupAttempts?: number
@@ -338,7 +340,7 @@ export interface GatewayOptions {
      * Dispatch types Fluxer should not send to this client's sessions, to save bandwidth and decoding.
      * Omission suppresses nothing. An array lists upper-case dispatch names such as TYPING_START or PRESENCE_UPDATE:
      * Names may use letters, digits and underscores up to 64 characters, are upper-cased and deduplicated, and the list
-     * may hold at most 256 names that encode to at most 2,560 bytes, keeping Identify within Fluxer's 4,096-byte limit.
+     * may hold at most 256 names that encode to at most 2,560 bytes, keeping Identify within the 4,096 bytes every Fluxer instance accepts.
      * Creation rejects READY, RESUMED and the request replies GUILD_MEMBERS_CHUNK, RATE_LIMITED, GUILD_COUNTS_UPDATE and
      * CHANNEL_MEMBER_COUNTS_UPDATE, and any type an enabled cache category needs to stay current, with ConfigurationError.
      * Fluxer still delivers MESSAGE_CREATE for a message that directly mentions the bot, @here or @everyone, but not
@@ -504,9 +506,34 @@ export interface CacheDiagnostic {
     }
 }
 
+/**
+ * Queued HTTP requests that wait for a rate limit, as diagnostics().rest.rateLimitHold reports them at the moment of the call.
+ * Once a hold lasts a second, the client also logs it once with code ratelimit.queueHeld, at most once a minute per reason.
+ * Requests that wait only for a free slot or a retry backoff are not counted
+ *
+ * @category Logging and diagnostics
+ */
+export interface RestRateLimitHold {
+    /** Why they wait: "global" for a global limit Fluxer declared, which a supervisor shares with its other children,
+     * "client" for a pause of this client after a 429 that named no limit, such as one from a proxy, including the wait
+     * for the one request that shows whether it has passed, and "route" when only learned route limits hold them
+     */
+    readonly reason: "global" | "client" | "route"
+    /** Queued requests that wait for any rate limit, including route limits during a global or client pause */
+    readonly requests: number
+    /** Milliseconds until the longest known wait among them ends, rounded up. 0 while they wait only for the request
+     * that tests a client pause
+     */
+    readonly waitMs: number
+    /** Method and route template with IDs replaced, such as "POST /channels/:id/messages", of the route with the most
+     * requests waiting for its own limit, or null when none waits for a route limit
+     */
+    readonly route: string | null
+}
+
 /** Inspect this client's current connection state, occupied request slots and cache usage.
  * These local values do not describe other processes or guarantee that a later request can start or the gateway will stay ready.
- * Diagnostics include no token, remote route, resource ID or cached payload
+ * Diagnostics include no token, raw request path, resource ID or cached payload. A rate-limit hold may name a method and route template with IDs replaced
  *
  * @category Logging and diagnostics
  */
@@ -536,6 +563,8 @@ export interface ClientDiagnostics {
         readonly queuedJsonBytes: number
         /** Maximum accounted JSON-body bytes allowed in the shared queue */
         readonly queuedJsonByteCapacity: number
+        /** Why queued requests wait for a rate limit at this moment, or null when none does */
+        readonly rateLimitHold: RestRateLimitHold | null
     }
     /** Attachment transfer reservations across queued and active uploads, not caller buffers or remote temporary storage */
     readonly uploads: {
@@ -673,6 +702,12 @@ export interface ScheduleOptions {
      * through 2,147,483,647. Runs therefore never overlap. Without it the task runs once
      */
     readonly intervalMs?: number
+    /**
+     * Name of the task, 1 through 100 characters without control characters. A failed run's lifecycle.taskFailed record
+     * names it in its message and fields.task, and its FailureReport in taskName, so failures of different tasks stay
+     * apart. Without it a failed run is reported as an unnamed task
+     */
+    readonly name?: string
 }
 
 /** Settings for one remote operation: Its deadline. Methods document what their deadline covers beyond these rules.
@@ -695,9 +730,9 @@ export interface RequestOptions {
  * @category Options
  */
 export interface AuditedRequestOptions extends RequestOptions {
-    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
-     * Sent only as the raw X-Audit-Log-Reason header, without URL escaping, because Fluxer does not decode escapes.
-     * Non-ASCII and control characters fail before dispatch. Omission sends no header. Never included in SDK errors or diagnostics.
+    /** Optional audit-log reason, 1–512 UTF-16 code units after trimming, in any language.
+     * Sent only as the X-Audit-Log-Reason header carrying the reason's UTF-8 bytes, which Fluxer decodes, without URL escaping.
+     * Control characters, line separators and lone surrogates fail before dispatch. Omission sends no header. Never included in SDK errors or diagnostics.
      * Header delivery does not guarantee that Fluxer stores the reason in an audit entry. Methods name the known paths that do not
      */
     readonly auditReason?: string

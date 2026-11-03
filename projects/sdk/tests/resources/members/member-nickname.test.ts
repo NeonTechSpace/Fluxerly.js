@@ -83,9 +83,9 @@ test.each(modes)("%s sets and clears a nickname through the public client", asyn
     expect((await api.setNickname(null)).nickname).toBeNull()
     expect((await api.get())?.nickname).toBeNull()
     expect(calls).toEqual([
-        { path: "/v1/guilds/20/members/31", method: "GET", body: {} },
-        { path: "/v1/guilds/20/members/31", method: "PATCH", body: { nick: "Renamed" } },
-        { path: "/v1/guilds/20/members/31", method: "PATCH", body: { nick: null } },
+        { path: "/api/v1/guilds/20/members/31", method: "GET", body: {} },
+        { path: "/api/v1/guilds/20/members/31", method: "PATCH", body: { nick: "Renamed" } },
+        { path: "/api/v1/guilds/20/members/31", method: "PATCH", body: { nick: null } },
     ])
 })
 

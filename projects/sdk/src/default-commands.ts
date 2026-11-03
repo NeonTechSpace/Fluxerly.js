@@ -56,6 +56,7 @@ import { suggestName } from "#sdk/internal/suggest"
 import type { SendError } from "#sdk/message-errors"
 import type { Message, MessageCore, ReplyInput } from "#sdk/messages"
 import * as Cause from "effect/Cause"
+import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import { clientServices, type ClientServices } from "#sdk/internal/client-registry"
@@ -815,8 +816,11 @@ class DefaultPrefixCommandRouterOwner<M extends MessageCore> implements PrefixCo
         const controller = new AbortController()
         const abort = () => controller.abort()
         signal.addEventListener("abort", abort, { once: true })
-        // The router runs as a client.on handler, so its commands share that invocation's rejection records
-        return Effect.runPromise(withRejectionScope(operation, currentRejectionScope()), { signal: controller.signal })
+        // The router runs as a client.on handler, so its commands share that invocation's rejection records. A test
+        // client's manual clock, when attached, also times its cooldowns and rejection replies
+        const clock = services?.logging.clock
+        const timed = clock === undefined ? operation : operation.pipe(Effect.provideService(Clock.Clock, clock))
+        return Effect.runPromise(withRejectionScope(timed, currentRejectionScope()), { signal: controller.signal })
             .catch((error: unknown) => {
                 if (signal.aborted) return
                 throw error
@@ -854,7 +858,9 @@ function aroundCommand<M extends MessageCore, E>(
                 stages[index] = stage
                 return stage
             }
-            const stage = (outcome = Effect.runPromiseExit(withRejectionScope(rest, rejections), { signal })).then(
+            // The rest keeps the dispatch Clock, which times its cooldown claim
+            const timed = rest.pipe(Effect.provideService(Clock.Clock, fiber.getRef(Clock.Clock)))
+            const stage = (outcome = Effect.runPromiseExit(withRejectionScope(timed, rejections), { signal })).then(
                 (exit) => {
                     restExit = exit
                     if (Exit.isFailure(exit)) throw (restError = primaryError(exit.cause))
@@ -1109,11 +1115,15 @@ function defaultCooldown<M extends MessageCore>(
             const claim: Effect.Effect<unknown, ConfigurationError> =
                 store !== undefined
                     ? defaultCallback(() => store.claim(request))
-                    : configurationEffect(() => {
-                          const claimed = routerStore.claim(request)
-                          if (claimed._tag === "Failure") throw claimed.error
-                          return claimed.value
-                      })
+                    : // The router's own store reads the dispatch Clock, the wall time its rejection replies also use,
+                      // so a test client's manual clock moves both
+                      Clock.clockWith((clock) =>
+                          configurationEffect(() => {
+                              const claimed = routerStore.claim(request, clock.currentTimeMillisUnsafe())
+                              if (claimed._tag === "Failure") throw claimed.error
+                              return claimed.value
+                          }),
+                      )
             return Effect.map(claim, (value) => ({ key: request.key, claim: value }))
         }),
     )

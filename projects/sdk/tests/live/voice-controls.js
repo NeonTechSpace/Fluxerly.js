@@ -18,9 +18,10 @@ import {
     snowflake as idPattern,
 } from "./support/harness.js"
 import { pendingResolution, rejoinedBaseline, sameState } from "./support/voice-state.js"
-import { createReporter } from "./support/reporting.js"
+import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { createSandboxApi } from "./support/sandbox-api.js"
 import { settle as value } from "./support/results.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 
@@ -275,7 +276,8 @@ async function removeTestChannel() {
 
 async function requireRejoin() {
     report("participant_action_required", { action: "join_the_original_voice_channel_to_finish_recovery" })
-    const deadline = performance.now() + 90_000
+    // A fresh client's discovery and a raw member read start within the person's 90 seconds
+    const deadline = performance.now() + pacedDeadlineMs(90_000, 2, { clients: 1 })
     let current = await freshCurrentState()
     while (performance.now() < deadline) {
         const event = voiceEvents.at(-1)
@@ -354,7 +356,7 @@ async function restore() {
 const watchdog = setTimeout(() => {
     console.error(JSON.stringify({ mode, stage, passed: false, reason: "deadline", journalRetained: true }))
     process.exit(1)
-}, 330_000).unref()
+}, harnessWatchdogMs()).unref()
 
 async function run() {
     lock = acquireLock()
@@ -406,6 +408,7 @@ async function run() {
         journal = journalFile.read()
         stage = "recover_prior_voice_test"
         await restore()
+        recoveredOnly()
         return
     }
     const baseline = freshSnapshotState(await rawMember())

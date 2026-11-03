@@ -144,6 +144,8 @@ export function fetchCanManage(
                           operation: "members.fetchCanManage",
                           reason: "response",
                           outcome: "unknown",
+                          // Every step was a read, so nothing can have changed
+                          read: true,
                       }),
                   )
                 : manageable

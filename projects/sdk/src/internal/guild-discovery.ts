@@ -116,6 +116,7 @@ function discoveryGuild(value: unknown): DiscoveryGuild | undefined {
         !integer(value.online_count) ||
         !Array.isArray(value.features) ||
         !value.features.every((feature) => typeof feature === "string") ||
+        (value.badge_ids !== undefined && !(Array.isArray(value.badge_ids) && value.badge_ids.every(identifier))) ||
         !integer(value.verification_level)
     )
         return undefined
@@ -132,6 +133,7 @@ function discoveryGuild(value: unknown): DiscoveryGuild | undefined {
         onlineCount: value.online_count,
         features: Object.freeze([...value.features] as string[]),
         verificationLevel: value.verification_level,
+        ...(value.badge_ids === undefined ? {} : { badgeIds: Object.freeze([...(value.badge_ids as string[])]) }),
     })
 }
 

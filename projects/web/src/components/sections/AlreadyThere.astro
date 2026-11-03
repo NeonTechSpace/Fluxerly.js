@@ -22,7 +22,7 @@ const items: Item[] = [
     {
         icon: "results-signpost",
         title: "Failures You Can Read",
-        text: "Network calls return a Result, a success or a failure, instead of throwing, so your code handles expected errors where they happen. The SDK masks the bot token in everything it logs",
+        text: "Network calls return a Result, a success or a failure, instead of throwing, so your code handles expected errors where they happen. The SDK masks the bot token and other recognized credentials in everything it logs",
         code: "if (sent.isErr()) throw sent.error",
         href: guide("reliability"),
         link: "Reliability Guide",
@@ -46,7 +46,7 @@ const items: Item[] = [
     {
         icon: "cooldown-hourglass",
         title: "Rate Limits, Handled",
-        text: "When Fluxer answers 429, the SDK waits and retries within the request's deadline. A write with an uncertain outcome is never repeated automatically",
+        text: "When Fluxer answers 429 with a delay, the SDK waits and retries within the request's deadline, unless the body is a Blob, File or stream upload that cannot be sent twice. A write with an uncertain outcome is never repeated automatically",
         log: { level: "WARN", category: "ratelimit", code: "ratelimit.wait" },
         href: guide("reliability", "limits-and-retry-rules"),
         link: "Limits and Retry Rules",

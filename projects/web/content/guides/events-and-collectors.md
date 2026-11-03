@@ -10,7 +10,7 @@ The helpers below take the `client` from the [first bot example](/docs/quick-sta
 
 ## Distinguish a join from community availability
 
-The `guildCreate` event arrives when the bot joins a community, and also when a community's data becomes available at startup or after an outage. Check `isNewJoin` when a handler should react only to a new join
+The `guildCreate` event arrives when the bot joins a community, and also when a community's data becomes available at startup or after an outage. Check `isNewJoin` when a handler should react only to a new join. To know when a member joins a community the bot is already in, handle `guildMemberAdd` instead, which carries the member who joined
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -24,6 +24,8 @@ export function observeGuildJoins(client: Client, rememberGuild: (id: string) =>
 ```
 
 The `client.on` method returns a subscription. Call its `close()` method when the handler is no longer needed
+
+The event carries the community itself, not its channels, roles or emoji. To find a channel by name when the bot joins, call `client.channels.fetchAll(guild.id)` in the handler. With `cache: { channels: true }`, the community's channels are also kept from the event, so `client.channels.get(id)` reads one without a request
 
 The event can also carry `memberCount`, `onlineCount` and `joinedAt`, as Fluxer reported them when it delivered the event. They are a snapshot that neither `guildUpdate` nor the guild cache refreshes, so call `guilds.fetchCounts` for current totals. Here `onlineCount` is the guild-wide figure every recipient receives, while `guilds.fetchCounts` counts only the online members the bot can see, so the two can differ
 
@@ -40,19 +42,25 @@ A successful `connect()` means Fluxer accepted the session, not that every commu
 <details>
 <summary>What else does a handler receive?</summary>
 
-A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, `receipt` numbers events in the order the client received them, and `receivedBytes` is the size of the gateway message that carried it. Compare receipts to tell which of two events came first, as [`EventContext.receipt`](/docs/api/js-ts/events-and-collectors/#eventcontext-receipt) describes. Work that is not an event, such as a timer, can read `client.lastReceipt` when it starts and treat any event with a larger receipt as newer. For a change or removal, the context's `previous` holds the cached value from before it, as the [next section](/docs/events-and-collectors/#log-edits-and-deletions) shows
+A `client.on` handler receives the event, an `AbortSignal` that is aborted when the subscription closes or the client shuts down, and an event context. The context's `shardId` names the shard that received the event, `sessionEpoch` is that shard's session when the event arrived, `receipt` numbers events in the order the client received them, and `receivedBytes` is the size of the gateway message that carried it
+
+Compare receipts to tell which of two events came first, as [`EventContext.receipt`](/docs/api/js-ts/events-and-collectors/#eventcontext-receipt) describes. Work that is not an event, such as a timer, can read `client.lastReceipt` when it starts and treat any event with a larger receipt as newer. For a change or removal, the context's `previous` holds the cached value from before it, as the [next section](/docs/events-and-collectors/#log-edits-and-deletions) shows
+
 Pass the signal to SDK operations inside the handler so they stop with it. To run code around every handler, such as timing or tracing, register event [middleware](/docs/glossary/#middleware) with `client.use`
 
-A handler runs one event at a time by default, except a `messageCreate` handler, which runs up to eight at a time so that one slow message does not stall the next ones. Those messages can finish out of order, and `{ concurrency: 1 }` or a `partition` keeps related messages in order. Later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead
+A handler runs one event at a time by default, except a `messageCreate` handler, which runs up to eight at a time so that one slow message does not stall the next ones. Those messages can finish out of order, and `{ concurrency: 1 }` or a `partition` keeps related messages in order
 
-To handle several events at a time and still keep related events in order, pass a `partition` option. The value `"channel"` keys each event by its channel, `"guild"` by its community, and a function returns a key of its own. Events with different keys run side by side, up to eight at a time unless `concurrency` says otherwise, while events with the same key run one after another in the order they arrived.
-When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. The [`overflow`](/docs/api/js-ts/events-and-collectors/#handleroptions-overflow) reference lists how the backlog to drop from is chosen
+Later events wait in a queue of up to 256 events. When the queue is full, the oldest waiting event is dropped and a Warn record is logged, while the handler keeps running. Pass `{ overflow: "stop" }` as the third argument of `client.on` to close the subscription instead
+
+To handle several events at a time and still keep related events in order, pass a `partition` option. The value `"channel"` keys each event by its channel, `"guild"` by its community, and a function returns a key of its own
+
+Events with different keys run side by side, up to eight at a time unless `concurrency` says otherwise, while events with the same key run one after another in the order they arrived. When the queue is full, a partitioned handler drops from the longest backlog instead of the oldest event overall. The [`overflow`](/docs/api/js-ts/events-and-collectors/#handleroptions-overflow) reference lists how the backlog to drop from is chosen
 
 </details>
 
 ## Log edits and deletions
 
-Update and delete events carry only the new state or the removed IDs. When the matching cache is enabled, the handler's context also holds `previous`, the value that cache held just before the change, so a log can show what changed. Enable the message cache for message edits and deletions, the member and role caches for member and role changes, the channel cache for channels and threads, and the guild cache for community changes
+Update events carry the new state. A single-message deletion can also carry the deleted text in `content` and the author's ID in `authorId`, even without a cache. When the matching cache is enabled, the handler's context also holds `previous`, the value that cache held just before the change, so a log can show what changed. Enable the message cache for message edits and deletions, the member and role caches for member and role changes, the channel cache for channels and threads, and the guild cache for community changes
 
 Fluxer sends only IDs for a bulk deletion, such as the messages a ban removes, so its `previous` is the only source of their content and authors. It lists the messages the cache held and leaves out the rest, so compare it with the event's `ids` to see how many are unknown
 
@@ -68,7 +76,8 @@ export function logMessageChanges(client: Client, log: (line: string) => void) {
             log(`Message ${message.id} was edited from "${previous.content}" to "${message.content}"`)
     })
     const deletions = client.on("messageDelete", (deletion, _signal, { previous }) => {
-        log(`Message ${deletion.id} was deleted${previous === undefined ? "" : `: "${previous.content}"`}`)
+        const content = deletion.content === undefined ? previous?.content : deletion.content
+        log(`Message ${deletion.id} was deleted${typeof content === "string" ? `: "${content}"` : ""}`)
     })
     const purges = client.on("messageDeleteBulk", (batch, _signal, { previous }) => {
         log(`${batch.ids.length} messages were deleted, ${previous?.length ?? 0} of them cached`)
@@ -81,7 +90,9 @@ The snapshot is the client's own last observation, never fetched. It is `undefin
 
 ## Wait for a community's setup
 
-A partitioned handler's key can need its own setup before its events run, such as a community that is still loading its data after a restart. Waiting inside the handler holds one of the shared slots, so starting communities would stall every other one. The `partitionReady` option moves that wait out of the handler: The SDK calls it with the key before the first waiting event of that key starts, and the key's events stay in the queue, using no slot, until the returned promise settles. Events of other keys keep running meanwhile
+A partitioned handler's key can need its own setup before its events run, such as a community that is still loading its data after a restart. Waiting inside the handler holds one of the shared slots, so starting communities would stall every other one
+
+The `partitionReady` option moves that wait out of the handler: The SDK calls it with the key before the first waiting event of that key starts, and the key's events stay in the queue, using no slot, until the returned promise settles. Events of other keys keep running meanwhile
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -95,8 +106,10 @@ export function afterServerSetup(client: Client, setups: Map<string, Promise<voi
 }
 ```
 
-The hook is valid only together with `partition`, and in the Effect entry point it returns an Effect. A promise that never settles holds the key until the subscription closes, and a draining shutdown waits for held events until its `drainMs` passes.
-The SDK remembers that a key is ready only while it has waiting or running events, so the hook is called again for the next burst after the key went idle. Hooks for different keys run at the same time, so keep the hook a cheap check that answers at once when the key is ready.
+The hook is valid only together with `partition`, and in the Effect entry point it returns an Effect. A promise that never settles holds the key until the subscription closes, and a draining shutdown waits for held events until its `drainMs` passes
+
+The SDK remembers that a key is ready only while it has waiting or running events, so the hook is called again for the next burst after the key went idle. Hooks for different keys run at the same time, so keep the hook a cheap check that answers at once when the key is ready
+
 A hook that throws or rejects reports every waiting event of that key as a failure of its handler, and those handlers do not run. Held events count toward `maxPendingMessages`, 256 by default, so a bot that waits for many starting communities needs a larger limit
 
 ## Follow threads
@@ -115,13 +128,16 @@ export function welcomeNewThreads(client: Client) {
 
 The other four are `threadUpdate`, with the thread after a change such as a rename, archive or lock, `threadDelete`, with the deleted thread's ID and parent, `threadListSync`, with the bot's active threads after Fluxer replaced them for a community or some of its channels, and `threadMembersUpdate`, with the accounts that joined or left a thread
 
+Fluxer also reports changes to the bot's own membership of a thread, which have no typed event. Read them from the [raw event](/docs/raw-requests-and-events/#read-an-event-without-a-type) as `THREAD_MEMBER_UPDATE`, whose `d` has Fluxer's documented thread member fields once `documented` is true
+
 Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no `threadDelete` for them. To notice that, handle `guildChannelDelete` and treat every thread whose `parentId` is the deleted channel as gone
 
 <details>
 <summary>What do thread events change in the cache?</summary>
 
-With `cache.channels` enabled, thread create and update events store the thread, a thread deletion removes it and a thread list replaces the cached threads it covers. A community's snapshot at startup also fills the cache with its active threads. When the bot's own membership of a thread changes, the SDK removes that cached thread, because its `membership` field would be out of date.
-Fluxer does not replay thread lists after a lost connection, so a resumed connection also removes its communities' cached threads. The [message cache](/docs/history-and-cache/#limit-the-message-cache) removes a deleted thread's messages
+With `cache.channels` enabled, thread create and update events store the thread, a thread deletion removes it and a thread list replaces the cached threads it covers. A community's snapshot at startup also fills the cache with its active threads
+
+When the bot's own membership of a thread changes, the SDK removes that cached thread, because its `membership` field would be out of date. Fluxer does not replay thread lists after a lost connection, so a resumed connection also removes its communities' cached threads. The [message cache](/docs/history-and-cache/#limit-the-message-cache) removes a deleted thread's messages
 
 </details>
 
@@ -214,9 +230,15 @@ export function showRules(client: Client, channelId: string, userId: string) {
 }
 ```
 
-With several pages, the returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`. Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Several pages need a connected gateway, while a single page is sent without a collector
+With several pages, the returned Result settles when listening ends, after `idleMs` without a click, 60 seconds by default, or `timeoutMs` after the first page, 5 minutes by default. The bot then removes its own arrows, and the current page stays shown. A page is text or an object with `content` and `embeds`
+
+Adding or removing an arrow turns the page, so the bot needs only Add Reactions and Read Message History. With `removeClicks: true`, only additions count and the bot removes each click, which needs Manage Messages. Several pages need a connected gateway, while a single page is sent without a collector
 
 In a command, the context's `paginate(pages)` lets the command's author flip by default, and `sendHelp()` sends the help pages this way. See [help in Commands](/docs/commands/#add-help-from-the-registered-commands)
+
+## Read events in Fluxer's own form
+
+Every dispatch also arrives as the `raw` event, with Fluxer's field names and, once `documented` is true, the payload type Fluxer's documentation describes for it. A voice join that Fluxer refuses arrives as the `gatewayError` event, which is not a dispatch and never reaches `raw`. [Raw requests and raw events](/docs/raw-requests-and-events/#read-an-event-without-a-type) shows both
 
 ## Wire it up
 

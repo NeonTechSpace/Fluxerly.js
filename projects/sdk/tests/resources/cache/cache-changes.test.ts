@@ -365,21 +365,39 @@ test("default listener failures are reported as cache failures without changing 
     const rejected = new Error("listener rejected")
     const returned = new Error("listener returned Err")
     const defaultClient = client as Client
-    defaultClient.cache.onChange(() => {
+    const throwing = defaultClient.cache.onChange(() => {
         throw thrown
     })
-    defaultClient.cache.onChange(() => Promise.reject(rejected))
-    defaultClient.cache.onChange(() => err(returned))
+    const rejecting = defaultClient.cache.onChange(() => Promise.reject(rejected))
+    const returning = defaultClient.cache.onChange(() => err(returned))
     const { changes } = await onChange("default", client)
     storeUser(client, "5")
     await vi.waitFor(() => expect(reports).toHaveLength(3))
-    expect(reports.map((report) => [report.kind, report.error])).toEqual([
-        ["cache", thrown],
-        ["cache", returned],
-        ["cache", rejected],
+    // Each report names its listener, so failures of different listeners can be told apart
+    expect(reports.map((report) => [report.kind, report.error, report.subscriptionId])).toEqual([
+        ["cache", thrown, throwing.id],
+        ["cache", returned, returning.id],
+        ["cache", rejected, rejecting.id],
     ])
     expect(changes).toEqual([{ kind: "users", op: "set", key: "5" }])
     expect(defaultClient.users.get("5")).toMatchObject({ id: "5" })
+})
+
+test("two default listeners that fail the same way log two Error records that name their listeners", async () => {
+    const records: LogRecord[] = []
+    const client = (await setup("default", {
+        cache: { users: true },
+        logging: { sink: (record: LogRecord) => void records.push(record) },
+    } as FixtureClientOptions)) as Client
+    const fail = () => {
+        throw new Error("export failed")
+    }
+    const first = client.cache.onChange(fail)
+    const second = client.cache.onChange(fail)
+    storeUser(client, "5")
+    const failed = () => records.filter((record) => record.code === "cache.policyFailed" && record.level === "error")
+    await vi.waitFor(() => expect(failed()).toHaveLength(2))
+    expect(failed().map((record) => record.subscriptionId)).toEqual([first.id, second.id])
 })
 
 test("native listener failures are reported with their Cause without changing the cache or other listeners", async () => {
@@ -392,7 +410,7 @@ test("native listener failures are reported with their Cause without changing th
     const defect = new Error("listener died")
     const scope = Scope.makeUnsafe()
     onTestFinished(() => Effect.runPromise(Scope.close(scope, Exit.void)))
-    await Effect.runPromise(
+    const [failing, dying] = await Effect.runPromise(
         Effect.all([
             client.cache.onChange(() => Effect.fail(failed)),
             client.cache.onChange(() => Effect.die(defect)),
@@ -401,9 +419,9 @@ test("native listener failures are reported with their Cause without changing th
     const { changes } = await onChange("native", client)
     storeUser(client, "5")
     await vi.waitFor(() => expect(reports).toHaveLength(2))
-    expect(reports.map((report) => [report.kind, report.error])).toEqual([
-        ["cache", failed],
-        ["cache", defect],
+    expect(reports.map((report) => [report.kind, report.error, report.subscriptionId])).toEqual([
+        ["cache", failed, failing.id],
+        ["cache", defect, dying.id],
     ])
     expect(reports.every((report) => report.cause !== undefined)).toBe(true)
     expect(changes).toEqual([{ kind: "users", op: "set", key: "5" }])

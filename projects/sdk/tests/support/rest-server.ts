@@ -128,6 +128,6 @@ export function rateLimitedResponse(options: RateLimitOptions = {}): Response {
     const retryAfter = options.retryAfterSeconds ?? 1
     return new Response(JSON.stringify({ retry_after: retryAfter, global: false }), {
         status: 429,
-        headers: { "content-type": "application/json", "retry-after": String(Math.ceil(retryAfter)) },
+        headers: { "content-type": "application/json", "retry-after": String(retryAfter) },
     })
 }

@@ -19,7 +19,7 @@ const accent = "cyan"
         <Fragment slot="title">Each Key Is a Command</Fragment>
         <Fragment slot="text">
             <p>A prefix command is a message that starts with a prefix, such as <code class="inline-code">!ping</code>. Pass your commands to <code class="inline-code">runBot</code>, and its command router reads the name after the prefix and runs the matching <code class="inline-code">execute</code></p>
-            <p>If a reply fails, the router reports it with the command's name, and every other command keeps working</p>
+            <p>Return the reply from <code class="inline-code">execute</code>, as here. If it fails, the router reports it with the command's name, and every other command keeps working</p>
         </Fragment>
         <CodePanel file="bot.ts" label="Two commands" code={registerCommands} />
     </Scene>
@@ -54,7 +54,7 @@ const accent = "cyan"
     <Scene id="help" step={5} side="left" {accent} guide={guide("commands", "add-help-from-the-registered-commands")} guideLabel="Generated Help in the Docs">
         <Fragment slot="title">Help and Pages from the Same Definitions</Fragment>
         <Fragment slot="text">
-            <p>Every command receives <code class="inline-code">sendHelp</code>, which lists the commands with their descriptions, and <code class="inline-code">paginate</code>, which shows any list as pages that the command's author flips with ◀ and ▶ reactions</p>
+            <p>Every command receives <code class="inline-code">sendHelp</code>, which lists the commands with their descriptions, and <code class="inline-code">paginate</code>, which shows any list as pages that the command's author flips with ◀ and ▶ reactions. The bot needs Add Reactions and Read Message History for these pages</p>
             <p>Help is built from the definitions the router already has, so it matches the commands</p>
         </Fragment>
         <CodePanel file="bot.ts" label="A help command and reaction pages" code={helpPages} />

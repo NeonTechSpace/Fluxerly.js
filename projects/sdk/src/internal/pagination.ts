@@ -20,7 +20,9 @@ import { guildList } from "./guild-lifecycle.js"
 import { auditLogPage } from "./audit-logs.js"
 import { comparePinTimestamps, encodePinsQuery } from "./pins.js"
 import { encodeReactionUsersQuery, resolveReactionEmoji } from "./reactions.js"
-import { readThreadMembers, threadMemberPage } from "./threads.js"
+import { readThreadMembers, threadArchived, threadMemberPage } from "./threads.js"
+import type { GuildThreadChannel } from "#sdk/channels"
+import type { ArchivedThreadScope } from "#sdk/threads"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
 interface Page<A> {
@@ -46,7 +48,7 @@ const positive = (value: unknown): value is number =>
     typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
 /**
- * Default page allowance when the caller sets only maxItems: the pages maxItems needs at full pageSize plus 100 spare
+ * Default page allowance when the caller sets only maxItems: The pages maxItems needs at full pageSize plus 100 spare
  * pages for short pages or skipped duplicates. It stays finite, so a server that returns almost nothing per page cannot
  * keep a traversal running without bound
  */
@@ -329,6 +331,93 @@ export const threadMemberPagination = <M extends MessageCore = Message>(
         },
         "withMember",
     )
+
+/** Archived threads of a channel. The scope is read once here and the limits are left to prepare, as for audit logs */
+export const archivedThreadPagination = <M extends MessageCore = Message>(
+    owner: ClientOwner<M>,
+    channelId: string,
+    query: unknown,
+    options?: RequestOptions,
+) =>
+    suspendInput(() => {
+        const invalid = (detail: InputValidationFailure) =>
+            Effect.fail(
+                new PaginationError({
+                    operation: "threads.iterateArchived",
+                    reason: "input",
+                    inputValidation: detail.detail,
+                }),
+            )
+        if (!record(query))
+            return invalid(inputValidationFailure("query", "type", "Archived thread iteration query must be an object"))
+        const unsupported = unsupportedKeyFailure(
+            query,
+            ["maxItems", "maxPages", "pageSize", "before", "scope"],
+            "query",
+            "the archived thread iteration query",
+        )
+        if (unsupported) return invalid(unsupported)
+        const field = fieldsOnce(query)
+        const scope = field("scope")
+        const bounds: Record<string, unknown> = {}
+        for (const key of ["maxItems", "maxPages", "pageSize", "before"]) {
+            const value = field(key)
+            if (value !== undefined) bounds[key] = value
+        }
+        return prepare(owner, "threads.iterateArchived", bounds, options, "before", 50, 100, (settings) => {
+            if (settings.pageSize < 2)
+                return inputValidationFailure(
+                    "query.pageSize",
+                    "range",
+                    "The limit pageSize must be an integer from 2 through 100",
+                )
+            // Fluxer accepts at least 2 threads a page, and the traversal still stops at maxItems
+            const pageQuery = (cursor: string | undefined, limit: number) => ({
+                ...(scope === undefined ? {} : { scope: scope as ArchivedThreadScope }),
+                ...cursorQuery("before", cursor, Math.max(2, limit)),
+            })
+            const validated = threadArchived(channelId, pageQuery(settings.cursor, settings.pageSize))
+            if (validated instanceof InputValidationFailure) return validated
+            const byId = scope === "joinedPrivate"
+            // Fluxer lists "public" and "private" threads archived strictly before the cursor
+            // (ThreadRepository.ts:537 to 583 at 5f3fc0b1), so the next cursor is 1 ms after the page's last archive time,
+            // which keeps threads archived in that same millisecond. The last thread itself comes again and is skipped by
+            // its ID. When a whole page shares that millisecond, the cursor moves to it and skips the rest of it
+            const next = (cursor: string | undefined, last: GuildThreadChannel): string => {
+                if (byId) return last.id
+                const archivedAt = Date.parse(last.archiveTimestamp)
+                return new Date(
+                    cursor !== undefined && Date.parse(cursor) === archivedAt + 1 ? archivedAt : archivedAt + 1,
+                ).toISOString()
+            }
+            return {
+                identity: (thread: GuildThreadChannel) => thread.id,
+                advances: byId
+                    ? (previous, following) => BigInt(following) < BigInt(previous)
+                    : (previous, following) => Date.parse(following) < Date.parse(previous),
+                // A later archive-time page repeats the threads of the previous page's last millisecond, so it asks
+                // for a full page even when fewer items remain. A shorter one could fill with those repeats and move the
+                // cursor past a tie that fits a page. The traversal still stops at maxItems
+                load: (cursor, limit) =>
+                    owner
+                        .channel(
+                            "threads.fetchArchived",
+                            () =>
+                                threadArchived(
+                                    channelId,
+                                    pageQuery(cursor, byId || cursor === settings.cursor ? limit : settings.pageSize),
+                                ),
+                            settings.options,
+                        )
+                        .pipe(
+                            Effect.map((page) => {
+                                const last = page.threads.at(-1)
+                                return { items: page.threads, next: page.hasMore && last ? next(cursor, last) : null }
+                            }),
+                        ),
+            }
+        })
+    })
 
 export const guildPagination = <M extends MessageCore = Message>(
     owner: ClientOwner<M>,

@@ -2,27 +2,58 @@
 
 // Comparison of upstream Fluxer protocol documents with a reviewed pin or a previous observation
 import { createHash } from "node:crypto"
-import { appendFile, readFile, writeFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const manifestPath = fileURLToPath(new URL("./upstream/manifest.json", import.meta.url))
+// The CLI, the SDK's fixture generators and its guild feature check keep a copy of each upstream file here (gitignored),
+// named by its Git object ID
+export const copiesPath = fileURLToPath(new URL("./.cache/upstream/", import.meta.url))
 const commitPattern = /^[a-f0-9]{40}$/
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const maximumBytes = 32 * 1024 * 1024
 const listLimit = 30
+// GitHub refuses an issue comment over 65,536 characters
+const commentLimit = 60_000
+const subjectLimit = 200
 // A regenerated upstream document can change hundreds of schemas, so details stop here to keep the job summary readable
 const detailedLimit = 40
 const detailLimit = 6
 const methods = ["get", "put", "post", "patch", "delete", "options", "head", "trace"]
 const schemaPrefix = "#/components/schemas/"
-// Security schemes a bot or OAuth2 application can hold. An operation without a requirement needs no token
+// Security schemes a bot or OAuth2 application can hold. This reads OpenAPI metadata, and a route can check other credentials at runtime
 const applicationSchemes = new Set(["botToken", "oauth2Token", "bearerToken"])
 const wordingKeys = new Set(["description", "summary", "example", "examples", "title", "x-enumDescriptions"])
 // Fluxer lists enum names and descriptions in step with enum values, so these lists are keyed by the value they describe
 const enumLists = ["x-enumNames", "x-enumDescriptions"]
 const experimentKey = "x-fluxer-experiment"
 const documentSuffixes = [".md", ".mdx"]
+// The Fluxer docs files the website's endpoint map reads (projects/web/scripts/docs/fluxer-source.mjs): the docs site's
+// config, whose sidebar orders the pages, and every page under the HTTP API folder. Each is pinned by hash, so the build
+// checks every file it uses, downloaded or cached, against this repository
+export const endpointDocsConfig = "fluxer_docs/astro.config.ts"
+export const endpointDocsDirectory = "fluxer_docs/src/content/docs/http-api"
+// Fluxer paths whose changes can reach a bot, listed for review. A commit touching one is not proof of bot impact
+const watchedPaths = [
+    "fluxer_api/src/api",
+    "fluxer_gateway/src",
+    "fluxer_gateway/rebar.config",
+    "packages/schema",
+    "packages/constants",
+    "packages/errors",
+    "packages/instance_bootstrap",
+    "fluxer_media_proxy/src",
+    "fluxer_unfurl/src",
+    "fluxer_docs/src/content/docs/gateway",
+    "fluxer_docs/src/content/docs/http-api",
+    "pnpm-workspace.yaml",
+]
+// Folders whose subfolders are compared with the baseline's: the repository root and Fluxer's package folders. A new
+// subfolder whose name matches voiceNames may hold Fluxer's new voice system, which no watched path can name before it
+// exists. A missing folder here is skipped, since it only narrows the comparison
+const folderParents = ["", "packages", "fluxer_app/pkgs", "fluxer_api/pkgs"]
+const voiceNames = /voice|rtc|media|webtransport|quic|dave|livekit|sfu/i
 // Keys under these maps are field names, so a field named description is structure, not wording
 const nameMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "parameters", "x-enumNames", "x-bitflagValues"])
 // Values under these keys are data, so a title inside a default value is structure, not wording
@@ -32,11 +63,13 @@ const setKeys = new Set(["enum", "required", "type", "tokens"])
 
 /**
  * @typedef {{ path: string, sha256: string }} PinnedFile
- * @typedef {{ repository: string, branch: string, commit: string, files: { openapi: PinnedFile }, gatewayDocs: PinnedFile, rateLimits: PinnedFile }} Manifest
+ * @typedef {{ repository: string, branch: string, commit: string, files: { openapi: PinnedFile }, endpointDocs?: PinnedFile[], gatewayDocs: PinnedFile, rateLimits: PinnedFile, sourceFacts?: PinnedFile[], voice?: PinnedFile[], folders?: string[] }} Manifest
  * @typedef {{
  *     resolveCommit(repository: string, branch: string): Promise<string>,
  *     fetchFile(repository: string, commit: string, path: string): Promise<Buffer>,
- *     listDirectory(repository: string, commit: string, directory: string): Promise<{ path: string, type: string }[]>,
+ *     listDirectory(repository: string, commit: string, directory: string): Promise<{ path: string, type: string, sha?: string }[]>,
+ *     listCommits(repository: string, head: string, options: { path?: string, page: number }): Promise<{ sha: string, subject: string }[]>,
+ *     checkPath(repository: string, commit: string, path: string): Promise<void>,
  * }} Source
  * @typedef {{ added: string[], removed: string[], changed: { name: string, details: string[] }[], wordingOnly: string[] }} ChangeGroup
  * @typedef {{ application: ChangeGroup, userOnly: ChangeGroup }} SurfaceChanges
@@ -51,6 +84,47 @@ const pinnedPath = (/** @type {any} */ file) =>
     !file.path.split("/").includes("..") &&
     /^[a-f0-9]{64}$/.test(file.sha256 ?? "")
 
+/**
+ * The endpoint map's docs files: the config and pages under the HTTP API folder, each once. Only the repository pin has
+ * them, since a drift check's observation does not read them
+ * @param {any} files
+ */
+const endpointDocsValid = (files) =>
+    files === undefined ||
+    (Array.isArray(files) &&
+        files.every(pinnedPath) &&
+        files.some((/** @type {PinnedFile} */ file) => file.path === endpointDocsConfig) &&
+        files.every(
+            (/** @type {PinnedFile} */ { path }) =>
+                path === endpointDocsConfig ||
+                (path.startsWith(`${endpointDocsDirectory}/`) && documentSuffixes.some((suffix) => path.endsWith(suffix))),
+        ) &&
+        new Set(files.map((/** @type {PinnedFile} */ file) => file.path)).size === files.length)
+
+/**
+ * Fluxer source files whose rules the SDK copies, such as request limits in its schemas, which the OpenAPI document leaves
+ * out. Each is watched by hash, each path once
+ * @param {any} files
+ */
+const sourceFactsValid = (files) =>
+    files === undefined ||
+    (Array.isArray(files) &&
+        files.every(pinnedPath) &&
+        new Set(files.map((/** @type {PinnedFile} */ file) => file.path)).size === files.length)
+
+/**
+ * The subfolder paths found in folderParents, each once
+ * @param {any} folders
+ */
+const foldersValid = (folders) =>
+    folders === undefined ||
+    (Array.isArray(folders) &&
+        folders.every(
+            (/** @type {any} */ path) =>
+                typeof path === "string" && path !== "" && !path.startsWith("/") && !path.split("/").includes("..") && !path.split("/").includes(""),
+        ) &&
+        new Set(folders).size === folders.length)
+
 /** @param {any} manifest @returns {Manifest} */
 export function validateManifest(manifest) {
     const files = manifest?.files
@@ -62,7 +136,12 @@ export function validateManifest(manifest) {
         Object.keys(files).sort().join(",") !== "openapi" ||
         !Object.values(files).every(pinnedPath) ||
         !pinnedPath(manifest.gatewayDocs) ||
-        !pinnedPath(manifest.rateLimits)
+        !pinnedPath(manifest.rateLimits) ||
+        !endpointDocsValid(manifest.endpointDocs) ||
+        !sourceFactsValid(manifest.sourceFacts) ||
+        // Fluxer's voice docs and code, each a file or folder hashed with everything under it, each path once
+        !sourceFactsValid(manifest.voice) ||
+        !foldersValid(manifest.folders)
     )
         throw new Error("Upstream manifest is invalid")
     return manifest
@@ -239,7 +318,7 @@ const reachableBy = (/** @type {string[] | undefined} */ tokens) =>
     tokens !== undefined && (tokens.length === 0 || tokens.some((token) => applicationSchemes.has(token)))
 
 /**
- * Names every component schema reachable through $ref from an operation a bot, OAuth2 application or anonymous caller can use
+ * Names every component schema reachable through $ref from an operation whose OpenAPI security lists a bot or OAuth2 scheme or no requirement
  * @param {any} spec
  * @param {ReturnType<typeof operations>} found
  */
@@ -421,6 +500,71 @@ async function readBuckets(manifest, source, commit) {
 }
 
 /**
+ * Lists a folder's direct entries at a commit. An empty directory is the repository root
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ * @param {string} directory
+ */
+async function listFolder(manifest, source, commit, directory) {
+    const entries = await source.listDirectory(manifest.repository, commit, directory)
+    const prefix = directory ? `${directory}/` : ""
+    if (entries.some(({ path }) => !path.startsWith(prefix) || path.length === prefix.length || path.slice(prefix.length).includes("/") || path.split("/").includes("..")))
+        throw new Error(`Upstream listing of ${directory || "the repository root"} is outside it`)
+    return entries
+}
+
+/**
+ * The entry a path names at a commit, read from its folder's listing, or undefined when the path does not exist
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ * @param {string} path
+ */
+const findEntry = async (manifest, source, commit, path) =>
+    (await listFolder(manifest, source, commit, path.split("/").slice(0, -1).join("/"))).find((entry) => entry.path === path)
+
+/**
+ * Every file under a watched voice path, which may be a file or a folder, by its Git object ID. The listings name each
+ * ID, so nothing is downloaded unless a listing leaves one out. A path that does not exist has no files, so Fluxer
+ * removing its current voice code is reported as a change instead of failing the check
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ * @param {string} path
+ */
+async function readVoiceFiles(manifest, source, commit, path) {
+    /** @type {Map<string, string>} */
+    const ids = new Map()
+    const add = async (/** @type {{ path: string, type: string, sha?: string }} */ entry) => {
+        if (entry.type === "dir") for (const child of await listFolder(manifest, source, commit, entry.path)) await add(child)
+        else if (entry.type === "file") ids.set(entry.path, entry.sha ?? gitObjectId(await source.fetchFile(manifest.repository, commit, entry.path)))
+        else ids.set(entry.path, `${entry.type} ${entry.sha ?? ""}`)
+    }
+    const entry = await findEntry(manifest, source, commit, path)
+    if (entry) await add(entry)
+    return ids
+}
+
+const voiceHash = (/** @type {Map<string, string>} */ ids) =>
+    sha256(Buffer.from([...ids].map(([path, id]) => `${path} ${id}`).sort(compare).join("\n")))
+
+/**
+ * The subfolders of each folder in folderParents at a commit, in path order
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ */
+async function readFolders(manifest, source, commit) {
+    const folders = []
+    for (const parent of folderParents) {
+        if (parent && (await findEntry(manifest, source, commit, parent))?.type !== "dir") continue
+        for (const { path, type } of await listFolder(manifest, source, commit, parent)) if (type === "dir") folders.push(path)
+    }
+    return folders.sort(compare)
+}
+
+/**
  * @param {Manifest} manifest
  * @param {Source} source
  * @param {string} commit
@@ -431,6 +575,33 @@ export const readGatewayDocs = (manifest, source, commit) =>
         label: "gateway documentation",
         suffixes: documentSuffixes,
     })
+
+/**
+ * The endpoint map's docs files at a commit with their hashes: the config, then every Markdown page under the HTTP API
+ * folder and its subfolders, in path order
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ * @returns {Promise<PinnedFile[]>}
+ */
+export async function readEndpointDocs(manifest, source, commit) {
+    const list = async (/** @type {string} */ directory) => {
+        const entries = await source.listDirectory(manifest.repository, commit, directory)
+        /** @type {string[]} */
+        const paths = []
+        for (const { path, type } of entries) {
+            if (!path.startsWith(`${directory}/`) || path.split("/").includes("..")) throw new Error("Upstream endpoint docs listing is outside its directory")
+            if (type === "dir") paths.push(...(await list(path)))
+            else if (type !== "file") throw new Error(`Upstream endpoint docs folder contains ${path}, which is neither a file nor a folder`)
+            else if (documentSuffixes.some((suffix) => path.endsWith(suffix))) paths.push(path)
+        }
+        return paths
+    }
+    const paths = [endpointDocsConfig, ...(await list(endpointDocsDirectory)).sort(compare)]
+    const files = []
+    for (const path of paths) files.push({ path, sha256: sha256(await source.fetchFile(manifest.repository, commit, path)) })
+    return files
+}
 
 /**
  * Hashes a set of documents by path and content, so an added, removed or edited document changes the hash
@@ -487,6 +658,37 @@ export async function checkUpstream(manifest, source) {
         current: gatewayHash,
         changed: gatewayHash !== manifest.gatewayDocs.sha256,
     }
+    // A rule the SDK copies from Fluxer's source changed. The file's own history shows what to review
+    const sourceFacts = []
+    for (const fact of manifest.sourceFacts ?? []) {
+        const hash = sha256(await source.fetchFile(manifest.repository, commit, fact.path))
+        sourceFacts.push({ path: fact.path, pinned: fact.sha256, current: hash, changed: hash !== fact.sha256 })
+    }
+    /** @type {{ path: string, pinned: string, current: string, changed: boolean, found: boolean, files?: { added: string[], removed: string[], changed: string[] } }[]} */
+    const voice = []
+    for (const watched of manifest.voice ?? []) {
+        const ids = await readVoiceFiles(manifest, source, commit, watched.path)
+        const hash = voiceHash(ids)
+        const entry = { path: watched.path, pinned: watched.sha256, current: hash, changed: hash !== watched.sha256, found: ids.size > 0 }
+        if (entry.changed) {
+            // Only a changed path reads the baseline's listings, to name the files that differ
+            const before = await readVoiceFiles(manifest, source, manifest.commit, watched.path)
+            const after = [...ids.keys()]
+            voice.push({
+                ...entry,
+                files: {
+                    added: after.filter((path) => !before.has(path)),
+                    removed: [...before.keys()].filter((path) => !ids.has(path)),
+                    changed: after.filter((path) => before.has(path) && before.get(path) !== ids.get(path)),
+                },
+            })
+        } else voice.push(entry)
+    }
+    // A new folder is reported for review, not counted as drift, since no watched document changed
+    const folders = manifest.folders && (await readFolders(manifest, source, commit))
+    const newVoiceFolders = (folders ?? []).filter(
+        (path) => !manifest.folders?.includes(path) && voiceNames.test(path.split("/").at(-1) ?? ""),
+    )
     const buckets = await readBuckets(manifest, source, commit)
     const bucketHash = sha256(Buffer.from(buckets.join("\n")))
     const rateLimits = {
@@ -510,20 +712,37 @@ export async function checkUpstream(manifest, source) {
         repository: manifest.repository,
         pinnedCommit: manifest.commit,
         commit,
-        drift: gatewayDocs.changed || rateLimits.changed || Object.values(files).some((file) => file.changed),
+        drift:
+            gatewayDocs.changed ||
+            rateLimits.changed ||
+            Object.values(files).some((file) => file.changed) ||
+            sourceFacts.some((fact) => fact.changed) ||
+            voice.some((entry) => entry.changed),
         files: Object.fromEntries(
             Object.entries(files).map(([key, { path, pinned, current, changed }]) => [key, { path, pinned, current, changed }]),
         ),
         gatewayDocs,
         rateLimits,
+        sourceFacts,
+        voice,
+        ...(folders ? { folders } : {}),
+        newVoiceFolders,
         ...details,
     }
 }
 
-/** @param {string} value */
+/**
+ * Makes upstream text inert in Markdown. A zero-width space stops GitHub reading a mention, an issue reference, an issue
+ * path such as owner/repo/issues/1 or a bare link, each of which would reach people or issues. An entity would not, since
+ * GitHub decodes it first. The spaces go in before entities, whose own # must stay intact
+ * @param {string} value
+ */
 function escape(value) {
-    // oxlint-disable-next-line no-control-regex -- Control characters are replaced so upstream text cannot break the summary
-    return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/[&<>|`*_[\]\\]/g, (character) => `&#${character.charCodeAt(0)};`)
+    return value
+        // oxlint-disable-next-line no-control-regex -- Control characters are replaced so upstream text cannot break the summary
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .replace(/(?<=[@#]|:(?=\/\/)|\/(?=\d)|\bwww(?=\.)|\bgh(?=-\d))/gi, "\u200b")
+        .replace(/[&<>|`*_[\]\\]/g, (character) => `&#${character.charCodeAt(0)};`)
 }
 
 /**
@@ -545,8 +764,8 @@ function detailedList(label, entries) {
     if (!entries.length) return []
     const lines = [`- ${label} (${entries.length}):`]
     for (const { name, details } of entries.slice(0, detailedLimit)) {
-        const more = details.length > detailLimit ? `; and ${details.length - detailLimit} more` : ""
-        lines.push(`  - ${escape(name)}: ${details.slice(0, detailLimit).map(escape).join("; ")}${more}`)
+        const more = details.length > detailLimit ? `, plus ${details.length - detailLimit} more` : ""
+        lines.push(`  - ${escape(name)}: ${details.slice(0, detailLimit).map(escape).join(", ")}${more}`)
     }
     lines.push(
         ...nameList(
@@ -582,8 +801,8 @@ function surfaceReport(title, { application, userOnly }) {
     return [
         `### ${title}`,
         "",
-        ...(reachable.length ? ["Usable with a bot token, an OAuth2 token or no token:", "", ...reachable, ""] : []),
-        ...(other.length ? ["User session or admin only:", "", ...other, ""] : []),
+        ...(reachable.length ? ["OpenAPI lists bot, OAuth2 or no security requirement:", "", ...reachable, ""] : []),
+        ...(other.length ? ["Other operations and schemas:", "", ...other, ""] : []),
     ]
 }
 
@@ -597,7 +816,7 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
     const lines = [
         "## Upstream Fluxer drift",
         "",
-        result.drift ? "Upstream changed since the comparison baseline" : "No upstream drift from the comparison baseline",
+        result.drift ? "Watched documents changed since the comparison baseline" : "Watched documents match the comparison baseline",
         "",
         `Baseline: ${kind}`,
         "",
@@ -613,7 +832,7 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
             "## Since the repository pin",
             "",
             sincePin.drift
-                ? "Watched documents differ from the repository pin. This comparison does not fail the check"
+                ? "Watched documents differ from the repository pin"
                 : "Watched documents match the repository pin",
             "",
             `Pinned commit: ${escape(sincePin.pinnedCommit)}`,
@@ -636,11 +855,49 @@ function changeReport(result) {
         ...Object.values(result.files).map((file) => `| ${escape(file.path)} | ${file.changed ? "changed" : "unchanged"} |`),
         `| Gateway documents in ${escape(result.gatewayDocs.path)} | ${result.gatewayDocs.changed ? "changed" : "unchanged"} |`,
         `| Rate-limit buckets in ${escape(result.rateLimits.path)} | ${result.rateLimits.changed ? "changed" : "unchanged"} |`,
+        ...result.sourceFacts.map((fact) => `| ${escape(fact.path)} | ${fact.changed ? "changed" : "unchanged"} |`),
+        ...result.voice.map(
+            (entry) => `| Voice files in ${escape(entry.path)} | ${entry.changed ? "changed" : "unchanged"}${entry.found ? "" : ", not found"} |`,
+        ),
         "",
     ]
+    const facts = result.sourceFacts.filter((fact) => fact.changed).map((fact) => fact.path)
+    if (facts.length)
+        lines.push(
+            "### Fluxer source files the SDK copies rules from",
+            "",
+            "Review the SDK limits and checks that cite each changed file",
+            "",
+            ...nameList("Changed", facts),
+            "",
+        )
+    const voice = result.voice.filter((entry) => entry.files)
+    if (voice.length)
+        lines.push(
+            "### Fluxer voice docs and code",
+            "",
+            "Review whether bot voice, its transport or its contract changed",
+            "",
+            ...voice.flatMap(({ path, files }) => [
+                ...nameList(`Files added in ${escape(path)}`, files?.added ?? []),
+                ...nameList(`Files removed from ${escape(path)}`, files?.removed ?? []),
+                ...nameList(`Files changed in ${escape(path)}`, files?.changed ?? []),
+            ]),
+            "",
+        )
+    if (result.newVoiceFolders.length)
+        lines.push(
+            "### New folders that may hold voice work",
+            "",
+            "Their names mention voice, RTC, media, WebTransport, QUIC, DAVE, LiveKit or an SFU. Consider watching them",
+            "",
+            ...nameList("Added", result.newVoiceFolders),
+            "",
+        )
     if (result.openapi) {
         const endpoints = surfaceReport("REST endpoints", result.openapi.endpoints)
         const schemas = surfaceReport("Component schemas", result.openapi.schemas)
+        if (endpoints.length || schemas.length) lines.push("Access groups follow OpenAPI metadata. Runtime credentials and permissions may differ", "")
         lines.push(...endpoints, ...schemas)
         if (result.openapi.other.length) lines.push("### Other OpenAPI sections", "", ...nameList("Changed", result.openapi.other), "")
         if (!endpoints.length && !schemas.length && !result.openapi.other.length)
@@ -672,6 +929,65 @@ function changeReport(result) {
         )
     }
     return lines
+}
+
+/**
+ * Lists the commits after the baseline that touch a watched path, oldest first. A watched path that no longer exists fails
+ * the check, because GitHub lists no commits for it and that would look like a quiet week
+ * @param {Manifest} baseline
+ * @param {Source} source
+ * @param {string} head
+ */
+async function watchedCommits({ repository, commit: last }, source, head) {
+    for (const path of watchedPaths)
+        await source.checkPath(repository, head, path).catch((/** @type {Error} */ error) => {
+            throw new Error(`Cannot read watched upstream path ${path}: ${error.message}`, { cause: error })
+        })
+    const range = []
+    for (let page = 1; last !== head; page++) {
+        const commits = await source.listCommits(repository, head, { page })
+        if (!commits.length) throw new Error(`Baseline commit ${last} is not in the upstream branch history`)
+        const end = commits.findIndex(({ sha }) => sha === last)
+        range.push(...(end === -1 ? commits : commits.slice(0, end)))
+        if (end !== -1) break
+    }
+    const inRange = new Set(range.map(({ sha }) => sha))
+    const touched = new Set()
+    if (range.length)
+        for (const path of watchedPaths)
+            for (let page = 1; ; page++) {
+                const commits = await source.listCommits(repository, head, { path, page })
+                for (const { sha } of commits) if (inRange.has(sha)) touched.add(sha)
+                if (!commits.length || !commits.every(({ sha }) => inRange.has(sha))) break
+            }
+    return range.filter(({ sha }) => touched.has(sha)).reverse()
+}
+
+/**
+ * @param {string} repository
+ * @param {{ sha: string, subject: string }[]} commits
+ */
+function sourceReport(repository, commits) {
+    if (!commits.length) return ["## Source changes to review", "", "No commit touched a watched path"]
+    return [
+        "## Source changes to review",
+        "",
+        "Bot impact has not been checked",
+        "",
+        ...commits.map(
+            ({ sha, subject }) =>
+                `- [${sha.slice(0, 10)}](https://github.com/${repository}/commit/${sha}) ${escape(subject.slice(0, subjectLimit))}`,
+        ),
+    ]
+}
+
+/**
+ * Cuts a comment at a line end when GitHub would refuse it, because a refused comment would stop every later report
+ * @param {string} text
+ */
+function limitComment(text) {
+    if (text.length <= commentLimit) return text
+    return `${text.slice(0, text.lastIndexOf("\n", commentLimit))}\n\nThis report is too long for one comment. The run's job summary has all of it`
 }
 
 /**
@@ -719,25 +1035,123 @@ export const githubSource = {
         if (!Array.isArray(entries)) throw new Error("Upstream directory listing is invalid")
         if (entries.some((entry) => typeof entry?.path !== "string" || typeof entry.type !== "string"))
             throw new Error("Upstream directory listing is invalid")
-        return entries.map(({ path, type }) => ({ path, type }))
+        // A file's sha is its Git object ID, which names its exact bytes
+        return entries.map(({ path, type, sha }) => ({ path, type, ...(commitPattern.test(sha ?? "") ? { sha } : {}) }))
+    },
+    async listCommits(repository, head, { path, page }) {
+        if (!commitPattern.test(head)) throw new Error("Upstream files are read only at exact commits")
+        const query = new URLSearchParams({ sha: head, per_page: "100", page: String(page), ...(path ? { path } : {}) })
+        const url = `https://api.github.com/repos/${repository}/commits?${query.toString()}`
+        const commits = JSON.parse((await download(url, githubHeaders("application/vnd.github+json"))).toString("utf8"))
+        if (!Array.isArray(commits) || commits.some((item) => !commitPattern.test(item?.sha ?? "") || typeof item.commit?.message !== "string"))
+            throw new Error("Upstream commit listing is invalid")
+        return commits.map(({ sha, commit }) => ({ sha, subject: commit.message.split("\n", 1)[0] }))
+    },
+    async checkPath(repository, commit, path) {
+        if (!commitPattern.test(commit)) throw new Error("Upstream files are read only at exact commits")
+        await download(`https://api.github.com/repos/${repository}/contents/${encodePath(path)}?ref=${commit}`, githubHeaders("application/vnd.github+json"))
     },
 }
 
+/**
+ * Reads each file and listing at an exact commit once per run. A comparison with the previous run and with the pin reads
+ * the same upstream commit twice, and its contents can't change
+ * @param {Source} source
+ * @returns {Source}
+ */
+function remembering(source) {
+    /** @type {Map<string, Promise<any>>} */
+    const reads = new Map()
+    const once = (/** @type {string} */ key, /** @type {() => Promise<any>} */ read) => {
+        if (!reads.has(key)) reads.set(key, read())
+        return /** @type {Promise<any>} */ (reads.get(key))
+    }
+    return {
+        ...source,
+        fetchFile: (repository, commit, path) => once(`file ${repository} ${commit} ${path}`, () => source.fetchFile(repository, commit, path)),
+        listDirectory: (repository, commit, directory) =>
+            once(`list ${repository} ${commit} ${directory}`, () => source.listDirectory(repository, commit, directory)),
+    }
+}
+
+/** The Git object ID of a file's bytes, the sha a folder listing names it by */
+const gitObjectId = (/** @type {Buffer} */ bytes) =>
+    createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")
+
+/**
+ * Keeps a copy of each upstream file in a folder, named by its Git object ID, so a run downloads only the files that
+ * changed since the copies were kept. The ID comes from a fresh listing of the file's folder at the commit being read, and
+ * a copy is used only when its bytes hash to that ID, so the folder can't change what a run reads. A file whose listing
+ * names no ID is downloaded as before. prune removes the copies this run did not read
+ * @param {Source} source
+ * @param {string} folder
+ * @returns {Source & { prune(): Promise<void> }}
+ */
+export function keepingCopies(source, folder) {
+    /** @type {Map<string, string>} */
+    const ids = new Map()
+    /** @type {Set<string>} */
+    const read = new Set()
+    /** @type {Source["listDirectory"]} */
+    const listDirectory = async (repository, commit, directory) => {
+        const entries = await source.listDirectory(repository, commit, directory)
+        for (const { path, sha } of entries) if (sha) ids.set(`${repository} ${commit} ${path}`, sha)
+        return entries
+    }
+    return {
+        ...source,
+        listDirectory,
+        async fetchFile(repository, commit, path) {
+            const key = `${repository} ${commit} ${path}`
+            if (!ids.has(key)) await listDirectory(repository, commit, path.split("/").slice(0, -1).join("/"))
+            const id = ids.get(key)
+            if (!id) return source.fetchFile(repository, commit, path)
+            read.add(id)
+            const copy = join(folder, id)
+            const kept = await readFile(copy).catch(() => undefined)
+            if (kept && gitObjectId(kept) === id) return kept
+            const bytes = await source.fetchFile(repository, commit, path)
+            if (gitObjectId(bytes) !== id) throw new Error(`Upstream ${path} at ${commit} does not match the Git object its folder lists`)
+            // Written beside its place and renamed, so a stopped run leaves no partial copy under the ID
+            await mkdir(folder, { recursive: true })
+            const partial = `${copy}.${process.pid}.partial`
+            await writeFile(partial, bytes)
+            await rename(partial, copy)
+            return bytes
+        },
+        async prune() {
+            for (const name of await readdir(folder).catch(() => []))
+                if (commitPattern.test(name) && !read.has(name)) await rm(join(folder, name), { force: true })
+        },
+    }
+}
+
+/**
+ * Reads a source at one commit instead of its branch head
+ * @param {Source} source
+ * @param {string} commit
+ * @returns {Source}
+ */
+const atCommit = (source, commit) => ({ ...source, resolveCommit: async () => commit })
+
 /** @param {string[]} args */
 function parseArguments(args) {
-    /** @type {{ update?: boolean, baseline?: string, record?: string }} */
+    /** @type {{ update?: string, baseline?: string, record?: string, comment?: string }} */
     const options = {}
     for (let index = 0; index < args.length; index++) {
         const arg = args[index]
-        if (arg === "--update" && !options.update) options.update = true
-        else if ((arg === "--baseline" || arg === "--record") && options[arg.slice(2)] === undefined) {
+        if (arg === "--update" && options.update === undefined) {
+            const commit = args[++index]
+            if (!commit || !commitPattern.test(commit)) throw new Error("--update requires the full 40-character commit that was reviewed")
+            options.update = commit
+        } else if ((arg === "--baseline" || arg === "--record" || arg === "--comment") && options[arg.slice(2)] === undefined) {
             const path = args[++index]
             if (!path || path.startsWith("--")) throw new Error(`${arg} requires a file path`)
             options[arg.slice(2)] = path
-        } else throw new Error("Use --update or --baseline <file> and --record <file>, with each argument at most once")
+        } else throw new Error("Use --update <commit> or --baseline <file>, --record <file> and --comment <file>, with each argument at most once")
     }
-    if (options.update && (options.baseline || options.record))
-        throw new Error("Use --update separately from --baseline and --record")
+    if (options.update && (options.baseline || options.record || options.comment))
+        throw new Error("Use --update separately from --baseline, --record and --comment")
     return options
 }
 
@@ -769,7 +1183,16 @@ async function readBaseline(manifest, path) {
             previous.gatewayDocs.path !== manifest.gatewayDocs.path ||
             previous.rateLimits.path !== manifest.rateLimits.path
         ) throw new Error("Baseline target differs from the repository manifest")
-        return { manifest: previous, kind: "previous-run" }
+        // A source file the repository pin watches but the previous run did not, such as one added since, compares with
+        // its pinned hash until a run records it
+        const sourceFacts = manifest.sourceFacts?.map((fact) => previous.sourceFacts?.find(({ path }) => path === fact.path) ?? fact)
+        // The same goes for a watched voice path, and for the folder list when the previous run recorded none
+        const voice = manifest.voice?.map((entry) => previous.voice?.find(({ path }) => path === entry.path) ?? entry)
+        const folders = manifest.folders && (previous.folders ?? manifest.folders)
+        return {
+            manifest: { ...previous, ...(sourceFacts ? { sourceFacts } : {}), ...(voice ? { voice } : {}), ...(folders ? { folders } : {}) },
+            kind: "previous-run",
+        }
     } catch {
         return { manifest, kind: "repository-pin", reason: "Previous-run baseline is invalid or targets different upstream documents" }
     }
@@ -789,44 +1212,80 @@ function observation(manifest, result) {
         files: { openapi: file("openapi") },
         gatewayDocs: { path: result.gatewayDocs.path, sha256: result.gatewayDocs.current },
         rateLimits: { path: result.rateLimits.path, sha256: result.rateLimits.current },
+        ...(manifest.sourceFacts ? { sourceFacts: result.sourceFacts.map(({ path, current }) => ({ path, sha256: current })) } : {}),
+        ...(manifest.voice ? { voice: result.voice.map(({ path, current }) => ({ path, sha256: current })) } : {}),
+        ...(result.folders ? { folders: result.folders } : {}),
     }
 }
 
 /**
- * Runs the CLI check with injectable upstream reads for offline behavior tests
+ * Runs the CLI check with injectable upstream reads for offline behavior tests. Upstream changes are reported, not failed,
+ * so a thrown error is the only way this fails and a red run always means the check itself broke
  * @param {string[]} args
- * @param {{ source?: Source, manifestFile?: string, summaryFile?: string }} [dependencies]
+ * @param {{ source?: Source, manifestFile?: string, summaryFile?: string, copiesFolder?: string }} [dependencies] With
+ * copiesFolder, each upstream file is read from a kept copy when it is unchanged, and only this run's copies stay
  */
 export async function runUpstream(args, {
-    source = githubSource,
+    source: upstreamSource = githubSource,
     manifestFile = manifestPath,
     summaryFile = process.env.GITHUB_STEP_SUMMARY,
+    copiesFolder,
 } = {}) {
     const options = parseArguments(args)
+    const copies = copiesFolder ? keepingCopies(upstreamSource, copiesFolder) : undefined
+    const source = remembering(copies ?? upstreamSource)
     const manifest = validateManifest(JSON.parse(await readFile(manifestFile, "utf8")))
     const baseline = await readBaseline(manifest, options.baseline)
-    const result = await checkUpstream(baseline.manifest, source)
+    // An update records the commit that was reviewed, which is not the branch head once upstream has moved
+    const result = await checkUpstream(baseline.manifest, options.update ? atCommit(source, options.update) : source)
     const observed = observation(baseline.manifest, result)
     if (options.update) {
-        await writeFile(manifestFile, JSON.stringify(observed, null, 4) + "\n")
-        return { exitCode: 0, report: `Pinned ${manifest.repository} at ${result.commit}`, result, baseline }
+        // Moving the pin also pins the docs files the website's endpoint map reads at that commit
+        const { files, gatewayDocs, rateLimits, sourceFacts, voice, folders, ...identity } = observed
+        const endpointDocs = await readEndpointDocs(manifest, source, result.commit)
+        const pin = {
+            ...identity,
+            files,
+            endpointDocs,
+            gatewayDocs,
+            rateLimits,
+            ...(sourceFacts ? { sourceFacts } : {}),
+            ...(voice ? { voice } : {}),
+            ...(folders ? { folders } : {}),
+        }
+        await writeFile(manifestFile, JSON.stringify(pin, null, 4) + "\n")
+        await copies?.prune()
+        return { report: `Pinned ${manifest.repository} at ${result.commit}`, result, baseline }
     }
     if (options.record) await writeFile(options.record, JSON.stringify(observed, null, 4) + "\n")
     // A change since the pin stays visible after the run that signalled it, at the commit the previous-run comparison read
     const sincePin =
         baseline.kind === "previous-run"
-            ? await checkUpstream(manifest, { ...source, resolveCommit: async () => result.commit })
+            ? await checkUpstream(manifest, atCommit(source, result.commit))
             : undefined
-    const report = renderReport(result, baseline, sincePin)
+    const commits = options.comment ? await watchedCommits(baseline.manifest, source, result.commit) : undefined
+    const sources = commits ? ["", ...sourceReport(baseline.manifest.repository, commits)] : []
+    const report = [renderReport(result, baseline, sincePin), ...sources].join("\n")
     if (summaryFile) await appendFile(summaryFile, report + "\n")
-    // Only the change since the previous run fails, so one upstream change fails one run, not every run until the pin moves
-    return { exitCode: result.drift ? 1 : 0, report, result, baseline, sincePin }
+    // The comment holds only what changed since the last report. Nothing new means no comment
+    if (options.comment && (result.drift || result.newVoiceFolders.length || commits?.length))
+        await writeFile(options.comment, limitComment([renderReport(result, baseline), ...sources].join("\n")) + "\n")
+    await copies?.prune()
+    return { report, result, baseline, sincePin, commits }
 }
 
 async function main() {
-    const { exitCode, report } = await runUpstream(process.argv.slice(2))
+    const args = process.argv.slice(2)
+    const { report } = await runUpstream(args, { copiesFolder: copiesPath })
     console.log(report)
-    process.exitCode = exitCode
+    // Moving the pin regenerates the route types client.rest.call checks, from the newly pinned files. The OpenAPI
+    // example and gateway docs fixtures remain separate steps, which docs/REPOSITORY.md lists
+    if (args.includes("--update")) {
+        const generator = new URL("../sdk/scripts/rest-routes.js", import.meta.url).href
+        const { writeRestRoutes } = await import(generator)
+        const { routes } = await writeRestRoutes()
+        console.log(`Regenerated the types of ${routes} REST routes in sdk/src/rest-routes.ts`)
+    }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

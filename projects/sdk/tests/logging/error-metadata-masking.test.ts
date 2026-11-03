@@ -132,3 +132,104 @@ test("native log causes and annotations mask application error names and codes",
     expect(output).not.toContain(fixtureToken)
     expect(output).toContain("[redacted]")
 })
+
+test("native log records mask passwords and cookies in application error messages", async () => {
+    const records: unknown[] = []
+    const reported = Promise.withResolvers<void>()
+    const logger = Logger.make((record) => {
+        const annotations = { ...record.fiber.getRef(References.CurrentLogAnnotations) }
+        records.push({ message: record.message, cause: record.cause })
+        if (annotations["fluxerly.code"] === "events.handlerFailed") reported.resolve()
+    })
+    const server = await startGatewayServer()
+    stubFetchWithHostedDiscovery(async () => Response.json({}))
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* native.createClient({ token: fixtureToken })
+                yield* client.on("typingStart", () =>
+                    // The password comes first and the cookie is on its own line, so each rule is checked on its own
+                    Effect.fail(
+                        new Error(
+                            'Login failed {"password":"native pw-canary horse"}\nRequest failed Cookie: session="native-cookie-canary"; theme=dark',
+                        ),
+                    ),
+                )
+                yield* client.connect()
+                server.dispatch("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 })
+                yield* Effect.promise(() => reported.promise)
+                yield* client.shutdown()
+            }),
+        ).pipe(Effect.withLogger(logger)),
+    )
+    const output = inspect(records, { depth: 20 })
+    expect(output).not.toContain("native-cookie-canary")
+    expect(output).not.toContain("pw-canary")
+    expect(output).not.toContain("horse")
+    expect(output).toContain("[redacted]")
+})
+
+// Catches: Gateway records used the logger the client was created under, while lifecycle records used the run's logger
+test("native gateway records reach the logger the client runs under, like its lifecycle records", async () => {
+    const created: string[] = []
+    const ran: string[] = []
+    const dispatched = Promise.withResolvers<void>()
+    const codeOf = (record: Logger.Options<unknown>) =>
+        String({ ...record.fiber.getRef(References.CurrentLogAnnotations) }["fluxerly.code"])
+    const creation = Logger.make((record) => void created.push(codeOf(record)))
+    const run = Logger.make((record) => void ran.push(codeOf(record)))
+    const server = await startGatewayServer()
+    stubFetchWithHostedDiscovery(async () => Response.json({}))
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* native
+                    .createClient({ token: fixtureToken, logging: { debug: ["gateway"] } })
+                    .pipe(Effect.withLogger(creation))
+                // The dispatch record is written before the handler runs
+                yield* client.on("typingStart", () => Effect.sync(() => dispatched.resolve()))
+                yield* Effect.gen(function* () {
+                    yield* client.connect()
+                    server.dispatch("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 })
+                    yield* Effect.promise(() => dispatched.promise)
+                }).pipe(Effect.withLogger(run))
+                yield* client.shutdown().pipe(Effect.withLogger(run))
+            }),
+        ),
+    )
+    expect(ran).toContain("gateway.dispatch")
+    expect(created.filter((code) => code.startsWith("gateway."))).toEqual([])
+})
+
+// Catches: Native records rebuilt an AggregateError as a plain Error, so a custom logger lost the reason of every attempt
+test("native log causes keep the masked members of an AggregateError", async () => {
+    const failure = await Promise.any([
+        Promise.reject(new Error("primary down")),
+        Promise.reject(new Error("backup token=synthetic123")),
+    ]).catch((error: unknown) => error)
+    const values: unknown[] = []
+    const reported = Promise.withResolvers<void>()
+    const logger = Logger.make((record) => {
+        const annotations = { ...record.fiber.getRef(References.CurrentLogAnnotations) }
+        if (annotations["fluxerly.code"] !== "events.handlerFailed") return
+        for (const reason of record.cause.reasons) values.push(reason._tag === "Fail" ? reason.error : undefined)
+        reported.resolve()
+    })
+    const server = await startGatewayServer()
+    stubFetchWithHostedDiscovery(async () => Response.json({}))
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* native.createClient({ token: fixtureToken })
+                yield* client.on("typingStart", () => Effect.fail(failure))
+                yield* client.connect()
+                server.dispatch("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1 })
+                yield* Effect.promise(() => reported.promise)
+                yield* client.shutdown()
+            }),
+        ).pipe(Effect.withLogger(logger)),
+    )
+    const shown = values.find((value): value is AggregateError => value instanceof AggregateError)
+    expect(shown?.errors.map((member: Error) => member.message)).toEqual(["primary down", "backup token=[redacted]"])
+    expect(inspect(values, { depth: 20 })).not.toContain("synthetic123")
+})

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import {
+    builders,
     createClient,
     type Attachment,
     type AttachmentFileSource,
@@ -16,11 +17,16 @@ import {
     CancelledError,
     ConfigurationError,
     type EditMessageInput,
+    errors,
+    type FluxerlyError,
     type LogRecord,
     type MessageInput,
+    MessageFlags,
     SdkDefect,
 } from "../../../src/index.js"
-import { createClient as createNative } from "../../../src/effect.js"
+import { encodeMessage } from "../../../src/internal/message.js"
+import { MessageError } from "../../../src/message-errors.js"
+import { builders as nativeBuilders, createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { driveSdkTime, fakeHostTime, hostTurnsUntil, sdkClock } from "../../support/client-clock.js"
 import { sendJson, startRestServer } from "../../support/rest-server.js"
@@ -139,12 +145,12 @@ function instanceDocument(presignedAttachmentUploads: boolean) {
     return {
         api_code_version: 1,
         endpoints: {
-            api_public: "https://api.fluxer.app",
-            gateway: "wss://gateway.fluxer.app",
-            media: "https://media.fluxer.app",
-            static_cdn: "https://cdn.fluxer.app",
-            webapp: "https://web.fluxer.app",
-            invite: "https://fluxer.app",
+            api_public: "https://fluxer.com/api",
+            gateway: "wss://gateway.fluxer.com",
+            media: "https://fluxerusercontent.com",
+            static_cdn: "https://fluxerstatic.com",
+            webapp: "https://fluxer.com",
+            invite: "https://fluxer.gg",
         },
         features: { presigned_attachment_uploads: presignedAttachmentUploads },
     }
@@ -220,7 +226,7 @@ function transport(
     let sequence = 0
     const fetch = vi.fn(async (url: string, init: RequestInit) => {
         const headers = new Headers(init.headers)
-        if (url === "https://fluxer.app/.well-known/fluxer") {
+        if (url === "https://fluxer.com/.well-known/fluxer") {
             check(init.method === "GET", `discovery method ${init.method}`)
             check(!headers.has("authorization"), "discovery sent authorization")
             check(init.redirect === "manual", `discovery redirect ${init.redirect}`)
@@ -229,7 +235,7 @@ function transport(
                 : Response.json(instanceDocument(handlers.presignedAttachmentUploads ?? true))
         }
         check(init.redirect === "error", `${url} redirect ${init.redirect}`)
-        if (url.startsWith("https://media.fluxer.app/attachments/")) {
+        if (url.startsWith("https://fluxerusercontent.com/attachments/")) {
             check(!headers.has("authorization"), "download sent authorization")
             check(init.method === "GET", `download method ${init.method}`)
             if (!handlers.download) {
@@ -238,7 +244,7 @@ function transport(
             }
             return handlers.download(url, init)
         }
-        if (url.startsWith("https://") && !url.startsWith("https://api.fluxer.app/")) {
+        if (url.startsWith("https://") && !url.startsWith("https://fluxer.com/api/")) {
             check(!headers.has("authorization"), "upload sent authorization")
             check(init.method === "PUT", `upload method ${init.method}`)
             if (handlers.put) return handlers.put(init)
@@ -246,7 +252,7 @@ function transport(
             check(length === Number(headers.get("content-length")), `upload body ${length} bytes`)
             return new Response(null, { status: 200 })
         }
-        check(url.startsWith("https://api.fluxer.app/v1/"), `unexpected URL ${url}`)
+        check(url.startsWith("https://fluxer.com/api/v1/"), `unexpected URL ${url}`)
         check(headers.get("authorization") === "Bot fixture-only-not-a-credential", "missing bot authorization")
         // A request body that fails while being read rejects this fetch, as it would on a real transport
         const json = await requestJson(init, headers)
@@ -376,6 +382,147 @@ test.each(modes)(
             ...inputRejected,
         })
         expect(calls).toHaveLength(5)
+    },
+)
+
+// Fluxer keeps the caller's IS_SPOILER and CONTAINS_EXPLICIT_MEDIA bits and a voice note's duration and waveform
+// (AttachmentProcessingService.ts:191 and :202, MessageValidationService.ts:202 at 5f3fc0b1)
+test.each(modes)("%s sends an explicit-media mark and a voice note as Fluxer reads them", async (mode) => {
+    const calls: any[] = []
+    transport({
+        put: async (init) => {
+            await readBytes(init)
+            return new Response(null)
+        },
+        message: async (json) => {
+            calls.push(json)
+            return Response.json(wire())
+        },
+    })
+    const api = await driver(mode)
+    const audio = { data: new Uint8Array([1, 2]), filename: "note.ogg", contentType: "audio/ogg" }
+    await api.send({ attachments: [{ ...audio, spoiler: true, explicitMedia: true }] })
+    expect(calls[0].attachments[0].flags).toBe(24)
+    await api.send({ attachments: [{ ...audio, explicitMedia: true }] })
+    expect(calls[1].attachments[0].flags).toBe(16)
+    const voice = { ...audio, duration: 3, waveform: "AAEC" }
+    await api.reply({ attachments: [voice], flags: MessageFlags.VoiceMessage | MessageFlags.SuppressNotifications })
+    expect(calls[2]).toMatchObject({ flags: 12288, attachments: [{ duration: 3, waveform: "AAEC", flags: 0 }] })
+    expect(calls[2]).not.toHaveProperty("content")
+    const local = [
+        [{ attachments: [voice], content: "hi" }, "content"],
+        [{ attachments: [voice], embeds: [{ title: "x" }] }, "embeds"],
+        [{ attachments: [voice], stickerIds: ["1"] }, "stickerIds"],
+        [{ attachments: [voice, audio] }, "attachments"],
+        [{ attachments: [{ ...audio, duration: 3 }] }, "attachments[].waveform"],
+        [{ attachments: [{ ...audio, waveform: "AAEC" }] }, "attachments[].duration"],
+    ] as const
+    for (const [input, path] of local)
+        await expect(
+            api.send({ ...input, flags: MessageFlags.VoiceMessage } as unknown as MessageInput),
+        ).rejects.toMatchObject({ _tag: "MessageError", ...inputRejected, inputValidation: { path } })
+    for (const [field, value] of [
+        ["explicitMedia", 1],
+        ["duration", -1],
+        ["duration", 1.5],
+        ["waveform", ""],
+        ["waveform", "a".repeat(4097)],
+    ] as const)
+        await expect(
+            api.send({ attachments: [{ ...audio, [field]: value }] } as unknown as MessageInput),
+        ).rejects.toMatchObject({ ...inputRejected, inputValidation: { path: `attachments[].${field}` } })
+    // An edit cannot turn a message into a voice note
+    await expect(api.edit({ flags: MessageFlags.VoiceMessage })).rejects.toMatchObject({
+        ...inputRejected,
+        inputValidation: { path: "flags" },
+    })
+    expect(calls).toHaveLength(3)
+})
+
+// The message builder copies an attachment's supported fields, so getters and non-enumerable fields must survive it
+test.each(modes)(
+    "%s keeps an attachment's explicit-media mark and voice-note fields through the builder",
+    async (mode) => {
+        const calls: any[] = []
+        transport({
+            put: async (init) => {
+                await readBytes(init)
+                return new Response(null)
+            },
+            message: async (json) => {
+                calls.push(json)
+                return Response.json(wire())
+            },
+        })
+        const api = await driver(mode)
+        const entry = mode === "default" ? builders : nativeBuilders
+        class VoiceAttachment {
+            readonly data = new Uint8Array([1, 2])
+            readonly filename = "note.ogg"
+            readonly contentType = "audio/ogg"
+            get duration() {
+                return 3
+            }
+            get waveform() {
+                return "AAEC"
+            }
+        }
+        const marked = Object.defineProperty(
+            { data: new Uint8Array([1, 2]), filename: "image.png", contentType: "image/png" },
+            "explicitMedia",
+            { value: true },
+        )
+        await api.send(entry.message().attachment(new VoiceAttachment()).flags(MessageFlags.VoiceMessage).build())
+        await api.send(entry.message().attachment(marked).build())
+        expect(calls[0]).toMatchObject({
+            flags: MessageFlags.VoiceMessage,
+            attachments: [{ duration: 3, waveform: "AAEC" }],
+        })
+        expect(calls[1].attachments[0].flags).toBe(16)
+    },
+)
+
+// Webhook files go as multipart, whose attachment schema reads waveforms of at most 256 characters, while messages and
+// forum posts read up to 4,096 (WebhookRequestSchemas.ts:79 and AttachmentSchemas.ts:29 at 5f3fc0b1). A webhook forward
+// carries no attachment and no voice note
+test("message encoding applies the waveform limit of where a voice note is sent", () => {
+    const audio = { data: new Uint8Array([1]), filename: "note.ogg", duration: 3 }
+    const voiceNote = (waveform: string) => ({
+        attachments: [{ ...audio, waveform }],
+        flags: MessageFlags.VoiceMessage,
+    })
+    expect(encodeMessage("0", voiceNote("A".repeat(256)), "", undefined, false, "webhook")).not.toBeInstanceOf(
+        MessageError,
+    )
+    expect(encodeMessage("0", voiceNote("A".repeat(257)), "", undefined, false, "webhook")).toMatchObject({
+        inputValidation: { path: "attachments[].waveform", constraint: "length" },
+    })
+    expect(encodeMessage("0", voiceNote("A".repeat(4096)), "")).not.toBeInstanceOf(MessageError)
+    expect(encodeMessage("0", voiceNote("A".repeat(4097)), "")).toMatchObject({
+        inputValidation: { path: "attachments[].waveform" },
+    })
+    const forwardOptions = encodeMessage(
+        "0",
+        { content: "_", flags: MessageFlags.VoiceMessage },
+        "",
+        undefined,
+        false,
+        false,
+    )
+    expect(forwardOptions).toMatchObject({ inputValidation: { path: "flags" } })
+})
+
+// Flags are 32-bit integers to Fluxer, so a fraction or a bit above 32 must fail before the VoiceMessage bit is removed
+test.each([8192.5, 2 ** 32 + 8192, -8192])(
+    "message encoding refuses VoiceMessage flags %s outside Fluxer's range",
+    (flags) => {
+        const voice = { data: new Uint8Array([1]), filename: "note.ogg", duration: 3, waveform: "AAEC" }
+        expect(encodeMessage("0", { attachments: [voice], flags }, "")).toMatchObject({
+            inputValidation: { path: "flags", constraint: "allowedValue" },
+        })
+        expect(encodeMessage("0", { attachments: [voice], flags: MessageFlags.VoiceMessage }, "")).not.toBeInstanceOf(
+            MessageError,
+        )
     },
 )
 
@@ -552,6 +699,10 @@ test.each(modes)("%s links same-message image uploads through embed image and th
             attachments: [upload("same.png"), upload("same.png")],
             embeds: [{ image: { url: "attachment://same.png" } }],
         },
+        // Fluxer renames these uploads, so the reference would not match
+        { content: "Dots", attachments: [upload("plot..png")], embeds: [{ image: { url: "attachment://plot..png" } }] },
+        { content: "Device", attachments: [upload("CON.png")], embeds: [{ image: { url: "attachment://CON.png" } }] },
+        { content: "Device", attachments: [upload("aux.png")], embeds: [{ image: { url: "attachment://aux.png" } }] },
         { content: "Top level", attachments: [upload("image.png")], embeds: [{ url: "attachment://image.png" }] },
         {
             content: "Author",
@@ -597,7 +748,7 @@ test.each(modes)("%s validates metadata and projects nullable fields across fetc
     ]
     vi.stubGlobal("fetch", async (url: string) =>
         Response.json(
-            url === "https://fluxer.app/.well-known/fluxer"
+            url === "https://fluxer.com/.well-known/fluxer"
                 ? instanceDocument(true)
                 : url.includes("?")
                   ? [wire(payload)]
@@ -802,7 +953,7 @@ test.each(modes)(
             message: async (json) => {
                 nonces.push(json.nonce)
                 calls++
-                if (calls === 1) return Response.json({ retry_after: 0.001 }, { status: 429 })
+                if (calls === 1) return Response.json({ retry_after: 0.001, global: false }, { status: 429 })
                 if (calls === 2) {
                     replayed.resolve()
                     await releaseReplay.promise
@@ -878,7 +1029,7 @@ test.each(modes)("%s rejects untrusted upload plans before disclosing file bytes
         })
         await expect(api.send(input)).rejects.toMatchObject({ reason: "response", outcome: "notDispatched" })
         expect(
-            fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/v1/channels/20/attachments"),
+            fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/api/v1/channels/20/attachments"),
         ).toHaveLength(1)
     }
 })
@@ -890,10 +1041,10 @@ test.each(modes)("%s stops before message mutation when multipart completion is 
     await expect(api.edit(input)).rejects.toMatchObject({ reason: "response", outcome: "notDispatched" })
     expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
         "/.well-known/fluxer",
-        "/v1/channels/20/attachments",
+        "/api/v1/channels/20/attachments",
         "/fixture-0/0",
         "/fixture-0/1",
-        "/v1/channels/20/attachments/complete",
+        "/api/v1/channels/20/attachments/complete",
     ])
     transport()
     expect((await api.send(input)).id).toBe("10")
@@ -930,7 +1081,7 @@ test.each(modes)("%s rejects malformed part ranges before uploading and bounds p
         })
         await expect(api.send(input)).rejects.toMatchObject({ reason: "response", outcome: "notDispatched" })
         expect(
-            fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/v1/channels/20/attachments"),
+            fetch.mock.calls.filter(([url]) => new URL(url).pathname === "/api/v1/channels/20/attachments"),
         ).toHaveLength(1)
     }
 })
@@ -983,6 +1134,38 @@ test.each(modes)("%s uses one deadline across upload stages and does not dispatc
     }
     transport()
     expect((await api.send(input)).id).toBe("10")
+})
+
+// Storage or a proxy in front of it can send only the header, and a body never shortens the header's wait
+test.each(modes)("%s reports the longer Retry-After of a signed upload 429's header and body", async (mode) => {
+    const now = 1_700_000_000_000
+    vi.spyOn(Date, "now").mockReturnValue(now)
+    const api = await driver(mode, { uploads: { maxBytes: 1 } })
+    const input = { attachments: [{ data: new Uint8Array([1]), filename: "file.bin" }] }
+    for (const { headers, body, expected } of [
+        { headers: { "retry-after": "60" }, body: null, expected: 60_000 },
+        { headers: { "retry-after": "60" }, body: { retry_after: 30 }, expected: 60_000 },
+        { headers: { "retry-after": "5" }, body: { retry_after: 30 }, expected: 30_000 },
+        { headers: { "retry-after": new Date(now + 120_000).toUTCString() }, body: null, expected: 120_000 },
+    ]) {
+        let messages = 0
+        transport({
+            put: async (init) => {
+                await readBytes(init)
+                return body === null
+                    ? new Response(null, { status: 429, headers })
+                    : Response.json(body, { status: 429, headers })
+            },
+            message: async () => {
+                messages++
+                return Response.json(wire())
+            },
+        })
+        const error = await api.send(input).catch((error) => error)
+        expect(error).toMatchObject({ reason: "rateLimit", status: 429, retryAfterMs: expected })
+        expect(errors.isRetryable(error)).toBe(true)
+        expect(messages).toBe(0)
+    }
 })
 
 // A stage given a fresh copy of timeoutMs would wait out a 429 that the whole operation has no time left for
@@ -1172,7 +1355,7 @@ test.each(modes)("%s shutdown settles active and queued upload operations", asyn
     const api = await driver(mode, { uploads: { maxBytes: 5 } })
     let active = 0
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
-        if (url === "https://fluxer.app/.well-known/fluxer") return Response.json(instanceDocument(true))
+        if (url === "https://fluxer.com/.well-known/fluxer") return Response.json(instanceDocument(true))
         active++
         await new Promise<void>((resolve) => init.signal!.addEventListener("abort", () => resolve(), { once: true }))
         active--
@@ -1200,7 +1383,7 @@ test.each(modes)("%s cache budgets measure attachment metadata rather than remot
     const size = Buffer.byteLength(JSON.stringify(projected))
     vi.stubGlobal("fetch", async (url: string) =>
         Response.json(
-            url === "https://fluxer.app/.well-known/fluxer" ? instanceDocument(true) : wire(projected.attachments),
+            url === "https://fluxer.com/.well-known/fluxer" ? instanceDocument(true) : wire(projected.attachments),
         ),
     )
     const exact = await driver(mode, {}, size)
@@ -1776,7 +1959,7 @@ test.each(
             },
         })
         vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
-            if (!new URL(url).pathname.startsWith("/v1/channels/20/messages")) return fetch(url, init)
+            if (!new URL(url).pathname.startsWith("/api/v1/channels/20/messages")) return fetch(url, init)
             const [body, inspection] = (init.body as ReadableStream<Uint8Array>).tee()
             const result = fetch(url, { ...init, body })
             multipartBodies.push(new TextDecoder().decode(await readBytes({ body: inspection })))
@@ -1856,13 +2039,100 @@ test.each(modes)("%s does not reread a finite stream after an inline multipart r
     expect(reads).toBe(2)
 })
 
+// Catches: A send or reply that read a caller's stream, inline or through a presigned upload, and then hit a rate limit
+// was called retryable with the generic wait hint, although repeating it would send the used stream. A Blob can be read
+// again by a new call, so it stays retryable
+test.each(modes.flatMap((mode) => [true, false].map((presigned) => ({ mode, presigned }))))(
+    "$mode marks a rate-limited send or reply that read a stream as not retryable (presigned uploads: $presigned)",
+    async ({ mode, presigned }) => {
+        transport({
+            presignedAttachmentUploads: presigned,
+            // The transport reads the whole multipart body or PUT first. A wait past the deadline fails at once, so the
+            // presigned message request is not sent again either
+            message: async () => Response.json({ retry_after: 60, global: false }, { status: 429 }),
+        })
+        // A fresh client for each call, so a learned rate limit does not stop the next call before it reads its input
+        const call = async (kind: "send" | "reply", input: MessageInput) => (await driver(mode))[kind](input)
+        for (const kind of ["send", "reply"] as const) {
+            const stream = chunks([new Uint8Array([1, 2, 3])])
+            const streamed: FluxerlyError = await call(kind, {
+                attachments: [{ stream, size: 3, filename: "report.bin" }],
+            }).then(
+                () => expect.fail("Expected a rate limit"),
+                (error: FluxerlyError) => error,
+            )
+            expect(streamed).toMatchObject({
+                reason: "rateLimit",
+                details: expect.objectContaining({ streamUsed: true }),
+            })
+            // The upload really used the stream up
+            expect(await stream.getReader().read()).toEqual({ done: true, value: undefined })
+            expect(streamed.hint).toContain("new stream")
+            expect(errors.isRetryable(streamed)).toBe(false)
+            const blob = new Blob([new Uint8Array([1, 2, 3])])
+            const blobbed: FluxerlyError = await call(kind, {
+                attachments: [{ file: blob, filename: "report.bin" }],
+            }).then(
+                () => expect.fail("Expected a rate limit"),
+                (error: FluxerlyError) => error,
+            )
+            expect(blobbed.details).not.toHaveProperty("streamUsed")
+            expect(errors.isRetryable(blobbed)).toBe(true)
+        }
+    },
+)
+
+// Catches: A 429 from the storage host of a signed upload, or from a proxy that named no limit, was described as Fluxer
+// rate-limiting the request, although neither came from Fluxer's API
+test.each(modes)("%s does not attribute a storage upload 429 to Fluxer", async (mode) => {
+    transport({ put: async () => new Response(null, { status: 429, headers: { "retry-after": "60" } }) })
+    const api = await driver(mode)
+    for (const attachments of [
+        [{ data: new Uint8Array([1, 2, 3]), filename: "bytes.bin" }],
+        [{ stream: chunks([new Uint8Array([1, 2, 3])]), size: 3, filename: "stream.bin" }],
+    ]) {
+        const error: FluxerlyError = await api.send({ attachments }).then(
+            () => expect.fail("Expected a rate limit"),
+            (failure: FluxerlyError) => failure,
+        )
+        expect(error).toMatchObject({ reason: "rateLimit", retryAfterMs: 60_000 })
+        expect(error.hint).toContain("60000 ms")
+        expect(error.hint).not.toContain("Fluxer")
+        expect(error.message).not.toContain("Fluxer rate-limited")
+    }
+})
+
+// Catches: A rate limit that arrived before the request read a caller's stream, such as one answered while an earlier
+// file was still being sent, was marked as having used the stream and not retryable, although the stream was still whole
+test.each(modes)("%s keeps a rate-limited send retryable when its stream was not read", async (mode) => {
+    vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+            url === "https://fluxer.com/.well-known/fluxer"
+                ? Response.json(instanceDocument(false))
+                : Response.json({ retry_after: 60, global: false }, { status: 429 }),
+        ),
+    )
+    const api = await driver(mode)
+    const stream = chunks([new Uint8Array([1, 2, 3])])
+    const error: FluxerlyError = await api.send({ attachments: [{ stream, size: 3, filename: "unread.bin" }] }).then(
+        () => expect.fail("Expected a rate limit"),
+        (failure: FluxerlyError) => failure,
+    )
+    expect(error).toMatchObject({ reason: "rateLimit" })
+    expect(error.details).not.toHaveProperty("streamUsed")
+    expect(errors.isRetryable(error)).toBe(true)
+    // The stream is still whole for the next call
+    expect(await stream.getReader().read()).toEqual({ done: false, value: new Uint8Array([1, 2, 3]) })
+})
+
 test.each(modes)("%s recreates copied inline bytes when a 429 arrives before multipart consumption", async (mode) => {
     const clock = sdkClock()
     let attempts = 0
     const observed: Uint8Array[] = []
     const fetch = vi.fn(async (url: string, init: RequestInit) => {
-        if (url === "https://fluxer.app/.well-known/fluxer") return Response.json(instanceDocument(false))
-        check(url === "https://api.fluxer.app/v1/channels/20/messages", `unexpected URL ${url}`)
+        if (url === "https://fluxer.com/.well-known/fluxer") return Response.json(instanceDocument(false))
+        check(url === "https://fluxer.com/api/v1/channels/20/messages", `unexpected URL ${url}`)
         const type = new Headers(init.headers).get("content-type")
         check(type?.startsWith("multipart/form-data; boundary=") === true, `message content type ${type}`)
         if (++attempts === 1) return Response.json({ retry_after: 0.001 }, { status: 429 })
@@ -1910,7 +2180,7 @@ test.each(modes)("%s bounds trusted attachment downloads without proxy fallback 
         filename: "fixture.bin",
         size: 3,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
         proxyUrl: "https://untrusted.example.test/proxy",
     }
     transport({
@@ -1926,13 +2196,19 @@ test.each(modes)("%s bounds trusted attachment downloads without proxy fallback 
     })
 })
 
+const usedStream = {
+    _tag: "AttachmentDownloadError",
+    reason: "input",
+    inputValidation: { path: "stream", constraint: "relationship" },
+} as const
+
 test.each(modes)("%s streams attachment chunks lazily, one time, and releases an early consumer", async (mode) => {
     const input: Attachment = {
         id: "40",
         filename: "fixture.bin",
         size: 99,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
     }
     let fetches = 0
     let cancelled = 0
@@ -1955,8 +2231,10 @@ test.each(modes)("%s streams attachment chunks lazily, one time, and releases an
         expect(fetches).toBe(1)
         await iterator.return?.()
         await vi.waitFor(() => expect(cancelled).toBe(1))
-        const repeated = stream[Symbol.asyncIterator]()
-        await expect(repeated.next()).resolves.toMatchObject({ value: { error: { reason: "busy" } } })
+        // A used stream never downloads again, so its failure names a new stream instead of a retry
+        const repeated = await stream[Symbol.asyncIterator]().next()
+        expect(repeated).toMatchObject({ value: { error: usedStream } })
+        expect(errors.isRetryable((repeated.value as { readonly error?: unknown } | undefined)?.error)).toBe(false)
     } else {
         const stream = api.native!.attachments.stream(input, { maxBytes: 3 })
         expect(fetches).toBe(0)
@@ -1964,8 +2242,10 @@ test.each(modes)("%s streams attachment chunks lazily, one time, and releases an
         expect(first).toMatchObject({ _tag: "Some", value: new Uint8Array([4, 5]) })
         await vi.waitFor(() => expect(cancelled).toBe(1))
         const repeated = await Effect.runPromise(Effect.flip(Stream.runHead(stream)))
-        expect(repeated).toMatchObject({ reason: "busy" })
+        expect(repeated).toMatchObject(usedStream)
+        expect(errors.isRetryable(repeated)).toBe(false)
     }
+    expect(fetches).toBe(1)
 })
 
 test.each(modes)(
@@ -1976,7 +2256,7 @@ test.each(modes)(
             filename: "fixture.bin",
             size: 0,
             flags: 0,
-            url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+            url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
         }
         let call = 0
         transport({
@@ -2013,7 +2293,7 @@ test.each(modes)("%s releases an idle attachment stream during client shutdown",
         filename: "fixture.bin",
         size: 0,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
     }
     let cancelled = 0
     transport({
@@ -2045,6 +2325,45 @@ test.each(modes)("%s releases an idle attachment stream during client shutdown",
     expect(cancelled).toBe(1)
 })
 
+// Shutdown while media is opening or reading is the client's closure, not a retryable network failure
+test.each(
+    modes.flatMap((mode) =>
+        (["download opening", "download body", "stream opening"] as const).map((phase) => ({ mode, phase })),
+    ),
+)("$mode reports client closure when shutdown interrupts $phase", async ({ mode, phase }) => {
+    const entered = Promise.withResolvers<void>()
+    transport({
+        download: async (_url, init) => {
+            const aborted = (fail: (reason: unknown) => void) =>
+                init.signal!.addEventListener("abort", () => fail(init.signal!.reason), { once: true })
+            if (phase.endsWith("opening"))
+                return new Promise<Response>((_resolve, reject) => {
+                    aborted(reject)
+                    entered.resolve()
+                })
+            return new Response(
+                new ReadableStream({
+                    start: (controller) => aborted((reason) => controller.error(reason)),
+                    pull: () => entered.resolve(),
+                }),
+            )
+        },
+    })
+    const api = await driver(mode)
+    const input = mediaInput()
+    const work: Promise<unknown> = phase.startsWith("stream")
+        ? drain(api, mode, input, { maxBytes: 10 }).then((result) => result.error)
+        : api.download(input, 10).then(
+              () => expect.fail("Expected the download to fail"),
+              (error: unknown) => error,
+          )
+    await entered.promise
+    await api.close()
+    const failure = await work
+    expect(failure).toMatchObject({ _tag: "ClientClosedError" })
+    expect(errors.isRetryable(failure)).toBe(false)
+})
+
 test.each(modes)("%s rejects untrusted streamed media before a credential-free GET", async (mode) => {
     const input: Attachment = {
         id: "40",
@@ -2073,7 +2392,7 @@ test.each(modes)("%s cancels a pending streamed read and admits a later stream",
         filename: "fixture.bin",
         size: 1,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin",
     }
     let release: (() => void) | undefined
     let starts = 0
@@ -2114,7 +2433,7 @@ test("default pre-aborted streamed signal yields CancelledError without a reques
         filename: "fixture.bin",
         size: 1,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin",
     }
     const fetch = transport({ download: async () => new Response(new Uint8Array([1])) })
     const api = await driver("default")
@@ -2131,7 +2450,7 @@ test.each(modes)("%s composes a bounded streamed download into one finite upload
         filename: "fixture.bin",
         size: 0,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
     }
     const uploaded: Uint8Array[] = []
     transport({
@@ -2169,7 +2488,7 @@ const streamInput: Attachment = {
     filename: "fixture.bin",
     size: 1,
     flags: 0,
-    url: "https://media.fluxer.app/attachments/20/40/fixture.bin",
+    url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin",
 }
 
 function lazyCopySource(api: Awaited<ReturnType<typeof driver>>, mode: Mode, input = streamInput) {
@@ -2927,7 +3246,7 @@ test.each(modes)("%s preserves a foreign download-body cancellation defect", asy
         filename: "fixture.bin",
         size: 3,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
     }
     transport({
         download: async () =>
@@ -2970,7 +3289,7 @@ test.each(modes)("%s preserves a foreign download-body cancellation defect", asy
 })
 
 test.each(modes)("%s snapshots attachment download URL and output budget before discovery", async (mode) => {
-    const original = "https://media.fluxer.app/attachments/20/40/original.bin?capability=fixture"
+    const original = "https://fluxerusercontent.com/attachments/20/40/original.bin?capability=fixture"
     const input = {
         id: "40",
         filename: "fixture.bin",
@@ -2997,7 +3316,7 @@ test.each(modes)("%s snapshots attachment download URL and output budget before 
     const api = await driver(mode)
     const pending = api.downloadOptions(input, options)
     await turn()
-    input.url = "https://media.fluxer.app/attachments/20/40/mutated.bin?capability=fixture"
+    input.url = "https://fluxerusercontent.com/attachments/20/40/mutated.bin?capability=fixture"
     options.maxBytes = Infinity
     release()
     await expect(pending).rejects.toMatchObject({ _tag: "AttachmentDownloadError", reason: "tooLarge" })
@@ -3012,7 +3331,7 @@ test.each(modes)(
             filename: "fixture.bin",
             size: 3,
             flags: 0,
-            url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+            url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
         }
         let release!: () => void
         const held = new Promise<void>((resolve) => (release = resolve))
@@ -3053,7 +3372,7 @@ test.each(modes)("%s waits for a late cancelled download response before releasi
         filename: "fixture.bin",
         size: 3,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
     }
     let starts = 0
     let resolveFirst!: (response: Response) => void
@@ -3109,7 +3428,7 @@ test.each(modes)("%s cancels and releases a reader after data before admitting t
         filename: "fixture.bin",
         size: 3,
         flags: 0,
-        url: "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture",
+        url: "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
     }
     let started = 0
     let yielded!: () => void
@@ -3207,7 +3526,9 @@ async function drain(api: DownloadDriver, mode: Mode, input: Attachment, options
     }
 }
 
-const mediaInput = (url = "https://media.fluxer.app/attachments/20/40/fixture.bin?capability=fixture"): Attachment => ({
+const mediaInput = (
+    url = "https://fluxerusercontent.com/attachments/20/40/fixture.bin?capability=fixture",
+): Attachment => ({
     id: "40",
     filename: "fixture.bin",
     size: 1,
@@ -3217,26 +3538,26 @@ const mediaInput = (url = "https://media.fluxer.app/attachments/20/40/fixture.bi
 
 /** Requests that reached the network other than the instance discovery document */
 const mediaRequests = (fetch: ReturnType<typeof transport>) =>
-    fetch.mock.calls.filter(([url]) => url !== "https://fluxer.app/.well-known/fluxer")
+    fetch.mock.calls.filter(([url]) => url !== "https://fluxer.com/.well-known/fluxer")
 
 test.each(modes)("%s refuses attachment URLs that are not the selected instance's media attachments", async (mode) => {
     const fetch = transport({ download: async () => new Response(new Uint8Array([1])) })
     const api = await driver(mode)
     const untrusted: Record<string, string> = {
-        "credentials in the URL": "https://user:secret@media.fluxer.app/attachments/20/40/fixture.bin",
-        "a user name without a password": "https://user@media.fluxer.app/attachments/20/40/fixture.bin",
-        "a password without a user": "https://:secret@media.fluxer.app/attachments/20/40/fixture.bin",
-        "a fragment": "https://media.fluxer.app/attachments/20/40/fixture.bin#fragment",
-        "a path outside the attachments folder": "https://media.fluxer.app/avatars/20/40/fixture.bin",
+        "credentials in the URL": "https://user:secret@fluxerusercontent.com/attachments/20/40/fixture.bin",
+        "a user name without a password": "https://user@fluxerusercontent.com/attachments/20/40/fixture.bin",
+        "a password without a user": "https://:secret@fluxerusercontent.com/attachments/20/40/fixture.bin",
+        "a fragment": "https://fluxerusercontent.com/attachments/20/40/fixture.bin#fragment",
+        "a path outside the attachments folder": "https://fluxerusercontent.com/avatars/20/40/fixture.bin",
         "a folder that only starts with the attachments name":
-            "https://media.fluxer.app/attachments-other/20/fixture.bin",
+            "https://fluxerusercontent.com/attachments-other/20/fixture.bin",
         "a path that climbs out of the attachments folder":
-            "https://media.fluxer.app/attachments/../avatars/20/fixture.bin",
-        "the plain HTTP scheme": "http://media.fluxer.app/attachments/20/40/fixture.bin",
-        "another port": "https://media.fluxer.app:8443/attachments/20/40/fixture.bin",
+            "https://fluxerusercontent.com/attachments/../avatars/20/fixture.bin",
+        "the plain HTTP scheme": "http://fluxerusercontent.com/attachments/20/40/fixture.bin",
+        "another port": "https://fluxerusercontent.com:8443/attachments/20/40/fixture.bin",
         "a host that only starts with the media host":
-            "https://media.fluxer.app.example.test/attachments/20/40/fixture.bin",
-        "a URL longer than the limit": `https://media.fluxer.app/attachments/20/40/${"a".repeat(8200)}`,
+            "https://fluxerusercontent.com.example.test/attachments/20/40/fixture.bin",
+        "a URL longer than the limit": `https://fluxerusercontent.com/attachments/20/40/${"a".repeat(8200)}`,
         "an empty URL": "",
     }
     for (const [name, url] of Object.entries(untrusted)) {
@@ -3262,10 +3583,10 @@ test.each(modes)("%s accepts only attachments under the media endpoint's own pat
     vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) => {
-            if (url === "https://fluxer.app/.well-known/fluxer")
+            if (url === "https://fluxer.com/.well-known/fluxer")
                 return Response.json({
                     ...document,
-                    endpoints: { ...document.endpoints, media: "https://media.fluxer.app/cdn/" },
+                    endpoints: { ...document.endpoints, media: "https://fluxerusercontent.com/cdn/" },
                 })
             requested.push(url)
             return new Response(new Uint8Array([2]))
@@ -3273,15 +3594,15 @@ test.each(modes)("%s accepts only attachments under the media endpoint's own pat
     )
     const api = await driver(mode)
     await expect(
-        api.download(mediaInput("https://media.fluxer.app/cdn/attachments/20/40/fixture.bin"), 3),
+        api.download(mediaInput("https://fluxerusercontent.com/cdn/attachments/20/40/fixture.bin"), 3),
     ).resolves.toEqual(new Uint8Array([2]))
     // The same attachment path without the endpoint's folder belongs to a different location
     await expect(
-        api.download(mediaInput("https://media.fluxer.app/attachments/20/40/fixture.bin"), 3),
+        api.download(mediaInput("https://fluxerusercontent.com/attachments/20/40/fixture.bin"), 3),
     ).rejects.toMatchObject({
         reason: "untrustedUrl",
     })
-    expect(requested).toEqual(["https://media.fluxer.app/cdn/attachments/20/40/fixture.bin"])
+    expect(requested).toEqual(["https://fluxerusercontent.com/cdn/attachments/20/40/fixture.bin"])
 })
 
 test.each(modes)("%s rejects invalid download options before any request", async (mode) => {
@@ -3332,6 +3653,23 @@ test.each(modes)("%s reports a rejected download status and releases the body an
     await expect(api.download(input, 3)).rejects.toMatchObject({ reason: "response", status: 500 })
     expect(cancelled).toBe(2)
     expect(starts).toBe(2)
+})
+
+// A refused download, such as one for a deleted message, is not a malformed answer or a test fixture problem
+test.each(modes)("%s explains a refused download as a refusal in both download paths", async (mode) => {
+    const input = mediaInput()
+    transport({ download: async () => new Response(null, { status: 404 }) })
+    const api = await driver(mode)
+    const buffered = await api.download(input, 3).then(
+        () => expect.fail("Expected the download to fail"),
+        (error: unknown) => error as FluxerlyError,
+    )
+    const streamed = (await drain(api, mode, input, { maxBytes: 3 })).error as FluxerlyError | undefined
+    for (const failure of [buffered, streamed]) {
+        expect(failure).toMatchObject({ _tag: "AttachmentDownloadError", reason: "response", status: 404 })
+        expect(failure?.message).not.toMatch(/expected format/)
+        expect(failure?.hint).not.toMatch(/fixture|responseField/)
+    }
 })
 
 test.each(modes)("%s rejects a content length that is not a byte count without reading the body", async (mode) => {

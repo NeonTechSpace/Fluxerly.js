@@ -47,10 +47,10 @@ describeBothApis("raw dispatch delivery", (mode) => {
         server.dispatch("FUTURE_EVENT", { anything: [1, 2] })
         await vi.waitFor(() => expect(raw).toHaveLength(3))
         expect(raw).toEqual([
-            { shardId: 0, t: "READY", s: 1, d: { session_id: "fixture-session" } },
-            { shardId: 0, t: "TYPING_START", s: 2, d: typing },
-            { shardId: 0, t: "FUTURE_EVENT", s: 3, d: { anything: [1, 2] } },
-        ] satisfies RawDispatch[])
+            { shardId: 0, t: "READY", s: 1, d: { session_id: "fixture-session" }, documented: true },
+            { shardId: 0, t: "TYPING_START", s: 2, d: typing, documented: true },
+            { shardId: 0, t: "FUTURE_EVENT", s: 3, d: { anything: [1, 2] }, documented: false },
+        ] satisfies (RawDispatch & { documented: boolean })[])
         expect(raw.every((item) => Object.isFrozen(item))).toBe(true)
         await vi.waitFor(() => expect(typed).toEqual([expect.objectContaining({ channelId: "20" })]))
         // Unknown types are still counted as unknown even though raw subscribers received them

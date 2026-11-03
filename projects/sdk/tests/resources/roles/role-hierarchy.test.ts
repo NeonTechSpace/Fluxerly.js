@@ -136,7 +136,7 @@ test("evaluates only target hierarchy with exact owner, self, tie and empty-role
 
 test("accepts the full public roles.fetchAll observation without caller filtering", async () => {
     stubFetchWithHostedDiscovery(async (url: string) => {
-        expect(new URL(url).pathname).toBe("/v1/guilds/20/roles")
+        expect(new URL(url).pathname).toBe("/api/v1/guilds/20/roles")
         return Response.json([wireRole("20", 0), wireRole("100", 2), wireRole("101", 1)])
     })
     const client = createClient({ token: "fixture" })
@@ -231,7 +231,12 @@ test.each(modes)("%s fetchCanManage reads four fresh inputs concurrently without
     for (let index = 0; index < releases.length; index++) releases[index]!(response(calls[index]!))
     await expect(pending).resolves.toBe(true)
     expect(new Set(calls)).toEqual(
-        new Set(["/v1/guilds/20", "/v1/guilds/20/members/@me", "/v1/guilds/20/members/3", "/v1/guilds/20/roles"]),
+        new Set([
+            "/api/v1/guilds/20",
+            "/api/v1/guilds/20/members/@me",
+            "/api/v1/guilds/20/members/3",
+            "/api/v1/guilds/20/roles",
+        ]),
     )
 })
 
@@ -332,6 +337,44 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s fetchCanManage reports inputs it cannot evaluate as a failed read", async (mode) => {
+    // The target holds a role the role list lacks, so the hierarchy cannot be evaluated
+    stubFetchWithHostedDiscovery(async (url: string) => {
+        const path = new URL(url).pathname
+        if (path.endsWith("/guilds/20"))
+            return Response.json({ id: "20", owner_id: "99", name: "fixture", features: [] })
+        if (path.endsWith("/roles")) return Response.json([wireRole("20", 0), wireRole("100", 2)])
+        const userId = path.endsWith("/members/@me") ? "2" : "3"
+        return Response.json({
+            user: { id: userId, username: "member" },
+            roles: [userId === "2" ? "100" : "101"],
+            joined_at: "2026-09-08T12:00:00Z",
+        })
+    })
+    const target = { guildId: "20", userId: "3" }
+    const failure =
+        mode === "default"
+            ? await (async () => {
+                  const client = createClient({ token: "fixture" })
+                  try {
+                      const result = await client.members.fetchCanManage(target)
+                      return result.isErr() ? result.error : undefined
+                  } finally {
+                      value(await client.shutdown())
+                  }
+              })()
+            : await Effect.runPromise(
+                  Effect.scoped(
+                      Effect.gen(function* () {
+                          const client = yield* createNative({ token: "fixture" })
+                          return yield* Effect.flip(client.members.fetchCanManage(target))
+                      }),
+                  ),
+              )
+    expect(failure).toBeInstanceOf(GuildOperationError)
+    expect(failure).toMatchObject({ reason: "response", details: { read: true } })
+})
+
 test.each(modes)("%s fetchCanManage checks the member named by actorUserId instead of the bot", async (mode) => {
     const calls: string[] = []
     stubFetchWithHostedDiscovery(async (url: string) => {
@@ -381,7 +424,12 @@ test.each(modes)("%s fetchCanManage checks the member named by actorUserId inste
     }
     expect(await run({ actorUserId: "5" })).toEqual({ answer: false })
     expect(new Set(calls)).toEqual(
-        new Set(["/v1/guilds/20", "/v1/guilds/20/members/5", "/v1/guilds/20/members/3", "/v1/guilds/20/roles"]),
+        new Set([
+            "/api/v1/guilds/20",
+            "/api/v1/guilds/20/members/5",
+            "/api/v1/guilds/20/members/3",
+            "/api/v1/guilds/20/roles",
+        ]),
     )
 
     calls.length = 0

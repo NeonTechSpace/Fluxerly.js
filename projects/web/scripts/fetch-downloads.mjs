@@ -1,6 +1,6 @@
 // Writes the npm download history of the SDK package to src/data/npm-downloads.json, one entry per day
 // from the day the package was created to the last full day. The build reads only that snapshot. The Website workflow runs
-// this before each deploy, so a new version of the site starts with current numbers, and the weekly fetch in
+// this before each deploy, so a new version of the site starts with current numbers, and the daily 04:00 UTC refresh in
 // functions/api/npm-downloads.ts counts from then on. Run with: pnpm downloads:fetch
 
 import { mkdir, writeFile } from "node:fs/promises"

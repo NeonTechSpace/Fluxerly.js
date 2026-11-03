@@ -12,13 +12,16 @@ Before production use, check how the application handles failures, restarts and 
 | ----------------- | ------------------------------------------------------------------------------------------------ |
 | Runtime           | Tested against Node.js 24.15 or newer                                                            |
 | Modules           | ESM only, with `"type": "module"` in `package.json` or `.mjs` files                              |
+| Package managers  | npm, pnpm or Bun installs the package, and Node.js runs the bot                                  |
 | JavaScript        | No TypeScript compiler requirement                                                               |
 | TypeScript        | TypeScript 7, not TypeScript 6 or earlier, with `@types/node` for the Node.js types              |
-| Native Effect     | Effect 4, in the range the installed package lists|
+| Native Effect     | Effect 4.1.2 or a later Effect 4 release, in the range the installed package lists               |
 | Web browsers      | Not supported. A bot runs as a Node.js program, not inside a web page                            |
 | Operating systems | Hosted CI uses Ubuntu. A passing Ubuntu run does not qualify every operating system or container |
 
-Check the installed package's manifest for its Node.js and Effect requirements. The default API needs Effect internally, and npm or pnpm normally installs that dependency automatically. Native Effect code must use a version within the Effect range listed there, not Effect 3 or an Effect 4 prerelease
+Check the installed package's manifest for its Node.js and Effect requirements. The default API needs Effect internally, and npm or pnpm normally installs that dependency automatically. Native Effect code must use a version within the Effect range listed there, not Effect 3 or an Effect 4 prerelease. Since SDK 1001.0.0 the range starts at Effect 4.1.2, because Effect 4.1.0 fails to type-check in a TypeScript project that has the Node.js types but no `DOM` library, and 4.1.2 is the newest Effect release
+
+Stable releases follow Epoch Semantic Versioning, so only a new major version or epoch can break existing code, and minor and patch releases are safe to take. Nightly builds can include breaking changes at any time
 
 
 ## Check SDK, instance and account support
@@ -40,7 +43,7 @@ The existing presigned-upload flag is an advertised Boolean used for attachment 
 
 ## Get help
 
-Use [troubleshooting](/docs/troubleshooting/) and the [FAQ](/docs/faq/) to diagnose a problem. Ask usage questions in [Q&A](https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/q-a), propose features in [Ideas](https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/ideas), and report reproducible SDK problems with the [bug-report form](https://github.com/NeonTechSpace/Fluxerly.js/issues/new?template=bug_report.yml)
+Use [troubleshooting](/docs/troubleshooting/) and the [FAQ](/docs/faq/) to diagnose a problem. Ask usage questions in [Q&A](https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/q-a), propose features in [Ideas](https://github.com/NeonTechSpace/Fluxerly.js/discussions/categories/ideas), and report reproducible SDK problems with the [bug-report form](https://github.com/NeonTechSpace/Fluxerly.js/issues/new?template=bug_report.yml). Public issues cover only Stable releases in the current major. A problem found on a nightly must also reproduce on one of those Stable releases
 
 Report a security vulnerability privately, as the [repository security policy](https://github.com/NeonTechSpace/Fluxerly.js/security/policy) describes, through GitHub's private vulnerability reporting. Do not post vulnerabilities in public issues, pull requests or discussions
 

@@ -26,9 +26,10 @@ import {
 } from "./support/harness.js"
 import { captureEmoji, retainFrame } from "./support/capture-filter.js"
 import { assertScrubbed, createScrubber } from "./support/gateway-scrub.js"
-import { createOutcomeReporter } from "./support/reporting.js"
+import { createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
 import { createRetryingSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const write = process.argv[2] === "--write"
 const rawFetch = globalThis.fetch
@@ -267,7 +268,7 @@ function scrubAndCheck(collected, identity, sandbox) {
 setTimeout(() => {
     report("process_timeout", false)
     process.exit(1)
-}, 220_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(process.argv[2] === undefined || write)
@@ -293,6 +294,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         journal = { guildId }

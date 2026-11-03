@@ -23,6 +23,7 @@ import type {
     ArchivedThreadQuery,
     ForumPost,
     ForumPostCreate,
+    ForumPostData,
     ThreadCreate,
     ThreadEdit,
     ThreadFromMessageCreate,
@@ -32,6 +33,7 @@ import type {
 import type { ClientOwner } from "./client.js"
 import { channelFetch, type ChannelRequest } from "./channels.js"
 import { decodeThread, decodeThreadList, decodeThreadMember } from "./channel-decode.js"
+import { decodeMember } from "./guilds.js"
 import { count, fieldsOnce, identifier, integerInRange, record, snapshotArray } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { timestamp } from "./decode/timestamp.js"
@@ -226,7 +228,8 @@ export function threadPost<M extends MessageCore>(
     if (!record(message)) return inputValidationFailure("message", "type", "Forum post message must be an object")
     const unsupportedMessage = unsupportedKeyFailure(message, postMessageKeys, "message", "the forum post message")
     if (unsupportedMessage) return unsupportedMessage
-    // Reuse the message encoding, with its attachment files, then send the encoded message inside the post
+    // Reuse the message encoding, with its attachment files, then send the encoded message inside the post. The post's
+    // files go inline as multipart, and Fluxer's forum schema reads a first message's waveform like a message's
     const encoded = encodeMessage(channelId, message, "")
     if (encoded instanceof MessageError) {
         const detail = encoded.inputValidation!
@@ -316,7 +319,7 @@ export function threadEdit(threadId: string, input: ThreadEdit): ThreadValidatio
         cache: { channelId: threadId, mutation: true, thread: true },
         decode: (value) => {
             const thread = decodeThread(value)
-            return thread?.id === threadId ? thread : undefined
+            return thread === undefined || thread.id === threadId ? thread : rejectCheck("targetMismatch")
         },
     }
 }
@@ -333,7 +336,8 @@ export function threadActive(guildId: string): ThreadValidationResult<readonly G
         decode: (value) => {
             if (!record(value)) return undefined
             const threads = decodeThreadList(value.threads, value.members)
-            return threads?.every((thread) => thread.guildId === guildId) ? threads : undefined
+            if (threads === undefined) return undefined
+            return threads.every((thread) => thread.guildId === guildId) ? threads : rejectCheck("targetMismatch")
         },
     }
 }
@@ -455,12 +459,18 @@ export function threadSearch<M extends MessageCore>(
         path: `/channels/${channelId}/threads/search${search === "" ? "" : `?${search}`}`,
         method: "GET",
         status: 200,
-        // Fluxer answers 202 with SEARCH_INDEX_NOT_READY while it builds the community's search index, and the SDK does
-        // not retry it. Any other 202 answer is malformed
-        accepted: (value) =>
-            record(value) && value.code === "SEARCH_INDEX_NOT_READY"
-                ? Object.freeze({ indexing: true as const })
-                : undefined,
+        // Fluxer answers 202 with SEARCH_INDEX_NOT_READY and retry_after in seconds while it builds the community's
+        // search index, and the SDK does not retry it. Any other 202 answer is malformed
+        accepted: (value) => {
+            if (!record(value) || value.code !== "SEARCH_INDEX_NOT_READY") return undefined
+            const seconds = value.retry_after
+            return Object.freeze({
+                indexing: true as const,
+                ...(typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+                    ? { retryAfterMs: Math.ceil(seconds * 1000) }
+                    : {}),
+            })
+        },
         decode: (value) => {
             if (!record(value) || typeof value.has_more !== "boolean" || !count(value.total_results)) return undefined
             const threads = decodeThreadList(value.threads, value.members)
@@ -484,6 +494,64 @@ export function threadSearch<M extends MessageCore>(
                 hasMore: value.has_more,
             })
         },
+    }
+}
+
+/** Most post IDs Fluxer accepts in one post data request */
+const maxPostDataIds = 100
+
+/**
+ * Read the creator and first message of each requested forum or media post. Fluxer answers with one entry per distinct
+ * requested ID, each owner and message nullable, so the result lists the requested IDs in order and a missing or extra
+ * entry makes the response malformed. The owner is a community member, decoded with the channel's own community
+ */
+function threadPostData<M extends MessageCore>(
+    channelId: string,
+    threadIds: unknown,
+    decodeMessage: MessageDecoder<M>,
+): MemberRead<readonly ForumPostData<M>[]> | InputValidationFailure {
+    if (!identifier(channelId)) return channelIdFailure()
+    if (!Array.isArray(threadIds)) return inputValidationFailure("threadIds", "type", "Post IDs must be an array")
+    const ids = snapshotArray(threadIds, maxPostDataIds)
+    if (ids === undefined || ids.length === 0)
+        return inputValidationFailure("threadIds", "length", `Send 1 through ${maxPostDataIds} post IDs`)
+    if (!ids.every(identifier))
+        return inputValidationFailure("threadIds[]", "format", "Post IDs must be decimal strings")
+    const requested = ids as readonly string[]
+    const distinct = new Set(requested)
+    return {
+        withMember: true,
+        request: (guildId) => ({
+            majorId: channelId,
+            bucket: "channel:post_data",
+            path: `/channels/${channelId}/post-data`,
+            method: "POST",
+            status: 200,
+            read: true,
+            // Reading post data changes nothing, so a repeated request is safe
+            retryRead: true,
+            json: JSON.stringify({ thread_ids: requested }),
+            decode: (value) => {
+                if (!record(value) || !record(value.threads)) return undefined
+                const threads = value.threads
+                const keys = Object.keys(threads)
+                if (keys.length !== distinct.size || !keys.every((key) => distinct.has(key)))
+                    return rejectCheck("targetMismatch")
+                const entries = new Map<string, ForumPostData<M>>()
+                for (const threadId of distinct) {
+                    const entry = threads[threadId]
+                    if (!record(entry) || entry.owner === undefined || entry.first_message === undefined)
+                        return undefined
+                    const owner = entry.owner === null ? null : decodeMember(entry.owner, guildId!)
+                    const firstMessage = entry.first_message === null ? null : decodeMessage(entry.first_message)
+                    if (owner === undefined || firstMessage === undefined) return undefined
+                    if (firstMessage !== null && firstMessage.channelId !== threadId)
+                        return rejectCheck("targetMismatch")
+                    entries.set(threadId, Object.freeze({ threadId, owner, firstMessage }))
+                }
+                return Object.freeze(requested.map((threadId) => entries.get(threadId)!))
+            },
+        }),
     }
 }
 
@@ -557,7 +625,7 @@ function threadMemberFetch(
             status: 200,
             decode: (value) => {
                 const member = threadMember(value, threadId, guildId)
-                return member?.userId === userId ? member : undefined
+                return member === undefined || member.userId === userId ? member : rejectCheck("targetMismatch")
             },
         }),
     }
@@ -631,13 +699,13 @@ function operationTimeout(value: unknown): { readonly timeoutMs?: number } | Inp
 }
 
 /**
- * Run a thread member read. With withMember, the thread's community comes from the channel cache when the thread is
- * cached there, otherwise from one thread read, and both requests share the caller's deadline. A pagination
- * consumption passes resolved to read the community at most once
+ * Run a read that decodes community members. With withMember, the community of the thread or forum channel comes from
+ * the channel cache when the channel is cached there, otherwise from one channel read, and both requests share the
+ * caller's deadline. A pagination consumption passes resolved to read the community at most once
  */
 export function readThreadMembers<A>(
     owner: ThreadOwner,
-    operation: "threads.fetchMember" | "threads.fetchMembers",
+    operation: "threads.fetchMember" | "threads.fetchMembers" | "threads.fetchPostData",
     threadId: string,
     validate: () => MemberRead<A> | InputValidationFailure,
     options: unknown,
@@ -671,7 +739,7 @@ export function readThreadMembers<A>(
                               new ChannelOperationError({ operation, reason: "timeout", outcome: "notDispatched" }),
                           )
                 })
-            // Thread member payloads carry no community ID, and a thread never moves to another community
+            // Thread member and post data payloads carry no community ID, and a channel never moves to another community
             let guildId = resolved.guildId ?? owner.channelCache?.get(threadId)?.guildId
             if (guildId === undefined) {
                 const thread = yield* owner.channel(operation, () => channelFetch(threadId), yield* remaining())
@@ -695,3 +763,17 @@ export const fetchThreadMember = (
 
 export const fetchThreadMembers = (owner: ThreadOwner, threadId: string, query: unknown, options: unknown) =>
     readThreadMembers(owner, "threads.fetchMembers", threadId, () => threadMemberPage(threadId, query), options)
+
+export const fetchThreadPostData = <M extends MessageCore>(
+    owner: ThreadOwner & { readonly decodeMessage: MessageDecoder<M> },
+    channelId: string,
+    threadIds: readonly string[],
+    options: unknown,
+) =>
+    readThreadMembers(
+        owner,
+        "threads.fetchPostData",
+        channelId,
+        () => threadPostData(channelId, threadIds, owner.decodeMessage),
+        options,
+    )

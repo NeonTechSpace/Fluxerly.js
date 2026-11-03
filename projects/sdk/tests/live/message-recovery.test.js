@@ -154,3 +154,29 @@ test.each(owners)("$name rejects changed ownership before saving or deleting", a
     expect(state.deletes).toEqual([])
     expect(owner.id(JSON.parse(state.durable))).toBeUndefined()
 })
+
+// Catches: Cleanup of a recorded main channel that read the channel list and the channel twice before deleting it,
+// spending two paced requests a mode that proved nothing the remaining reads do not
+test("main channel cleanup with a recorded ID reads it once, deletes it and proves the removal", async () => {
+    const requests = []
+    const journal = { guildId: "20", name: "fluxerly-sdk-test-0123456789abcdef0123456789abcdef", channelId: "45" }
+    let present = true
+    const api = async (method, path) => {
+        requests.push(`${method} ${path}`)
+        if (method === "DELETE") {
+            present = false
+            return { status: 204, data: null }
+        }
+        if (path === "/channels/45")
+            return present
+                ? { status: 200, data: { id: "45", name: journal.name, guild_id: "20", type: 0 } }
+                : { status: 404, data: null }
+        return { status: 200, data: present ? [{ id: "45", name: journal.name }] : [] }
+    }
+    await cleanupMainTestChannel(api, journal, () => {})
+    expect(requests).toEqual(["GET /channels/45", "DELETE /channels/45", "GET /channels/45", "GET /guilds/20/channels"])
+    // A recorded channel that is already gone is not deleted again, and the list still proves its absence
+    requests.length = 0
+    await cleanupMainTestChannel(api, journal, () => {})
+    expect(requests).toEqual(["GET /channels/45", "GET /guilds/20/channels"])
+})

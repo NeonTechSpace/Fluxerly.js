@@ -238,17 +238,37 @@ const opener = document.querySelector<HTMLButtonElement>("[data-side-open]")
 const courseScroll = document.querySelector<HTMLElement>("[data-course-scroll]")
 const shownPart = () => document.querySelector<HTMLElement>("[data-part]:not([hidden])")
 
+// While the sheet is open, the page behind it is out of reach, so keyboard focus stays in the sheet. The scrim behind it
+// still takes a tap to close it. Search opens its dialog from inside the sheet, so it keeps working
+let behindSheet: Element[] = []
+function holdPageBehindSheet(sheet: Element, hold: boolean) {
+    for (const element of behindSheet) element.removeAttribute("inert")
+    behindSheet = []
+    if (!hold) return
+    for (let at = sheet; at.parentElement && at !== document.body; at = at.parentElement) {
+        behindSheet.push(...[...at.parentElement.children].filter((other) => other !== at && !other.hasAttribute("inert") && !other.hasAttribute("data-side-close")))
+    }
+    for (const element of behindSheet) element.setAttribute("inert", "")
+}
+
 function setSide(open: boolean) {
     if (!side || !opener) return
     side.toggleAttribute("data-open", open)
     root.toggleAttribute("data-side-open", open)
     opener.setAttribute("aria-expanded", String(open))
+    holdPageBehindSheet(side, open)
     if (open) (shownPart()?.querySelector<HTMLElement>("a[aria-current='page']") ?? side.querySelector<HTMLElement>("input, button"))?.focus({ preventScroll: true })
     else opener.focus()
 }
 opener?.addEventListener("click", () => setSide(true))
 for (const closer of document.querySelectorAll("[data-side-close]")) closer.addEventListener("click", () => setSide(false))
+// A window that grows past the sheet's width shows the sidebar in the page, so the sheet ends and the page is back in reach
+matchMedia("(max-width: 899px)").addEventListener("change", (event) => {
+    if (!event.matches && side?.hasAttribute("data-open")) setSide(false)
+})
+// Escape that search already used to close its dialog leaves the sheet open
 document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return
     if (event.key === "Escape" && side?.hasAttribute("data-open") && !document.querySelector("dialog[open]")) setSide(false)
 })
 

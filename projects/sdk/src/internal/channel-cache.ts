@@ -367,7 +367,7 @@ export class ChannelCache {
 
     /**
      * Keep in-flight reads for the affected guilds from storing their responses after the gateway connection was lost,
-     * while retained channels stay. A successful Resume replays every missed dispatch, which keeps them current
+     * while retained channels stay. A successful Resume replays every missed dispatch that changes them, which keeps them current
      */
     pause(affects: (guildId: string | null | undefined) => boolean) {
         for (const guard of this.#requests)

@@ -39,6 +39,10 @@ const faceSides = [
 ].map((side) => ({ ...side, originStyle: `transform-origin: ${share(side.origin[0]! - side.box.left, side.box.width)} ${share(side.origin[1]! - side.box.top, side.box.height)}` }))
 const holeOrigin = `transform-origin: ${share(1050 - lens.left, lens.width)} ${share(1466.5 - lens.top, lens.height)}`
 const holeRing = { left: 1050 - 92, top: 1466.5 - 92, width: 184, height: 184 }
+// Where WebGL runs, the hero's own shader draws the glass and its black hole over the plain layers, see src/scene/ending-face.ts.
+// It fades into the dark below as the body does, which ends from 85% to 96% of the conductor's height
+const glassFade = (at: number) => share(at * mascotBox.height - faceArt.slot.top, faceArt.slot.height)
+const holeFace = `${placed(faceArt.glass)}; --fade-from: ${glassFade(0.85)}; --fade-to: ${glassFade(0.96)}`
 
 // A beam is a picture of a soft wedge, drawn once. Its point lies under the floor, and its light starts from nothing at the floor
 // and ends in nothing near the top, so no edge shows and the browser has no mask to redraw while the beam turns
@@ -91,10 +95,11 @@ const bubbles = columns.map((x, index) => ({
                 <!-- The living parts, asked for only when the site is moving and this nears the screen -->
                 <div class="alive" data-ending-alive>
                     <img class="body" data-src={mascotArt.endingBase} alt="" />
-                    <img class="part" data-src={lens.src} alt="" style={placed(lens)} />
-                    <img class="part hole-flow" data-src={flow.src} alt="" style={`${placed(flow)}; ${holeOrigin}`} />
-                    <span class="hole-rim" style={placed(holeRing)}><span class="hole-ring"></span></span>
-                    <img class="part hole-violet" data-src={violet.src} alt="" style={`${placed(violet)}; ${holeOrigin}`} />
+                    <img class="part hole" data-src={lens.src} alt="" style={placed(lens)} />
+                    <img class="part hole hole-flow" data-src={flow.src} alt="" style={`${placed(flow)}; ${holeOrigin}`} />
+                    <span class="hole hole-rim" style={placed(holeRing)}><span class="hole-ring"></span></span>
+                    <img class="part hole hole-violet" data-src={violet.src} alt="" style={`${placed(violet)}; ${holeOrigin}`} />
+                    <div class="hole-face" style={holeFace} data-ending-face-slot></div>
                     <div class="looks">
                         {
                             faceSides.filter((side) => side.kind.startsWith("eye")).map((side) => (
@@ -112,7 +117,8 @@ const bubbles = columns.map((x, index) => ({
                         ))
                     }
                     <img class="part" data-src={waves.src} alt="" style={placed(waves)} />
-                    <!-- The mouth charging: light that fills the strokes from left to right, kept to their shape -->
+                    <!-- The mouth charging: a soft glow round the strokes, and light that runs through them from left to right, kept to their shape -->
+                    <img class="charge-glow" data-src={mascotArt.wavesSmall} alt="" />
                     <span class="charge" style={placed(waves)} data-mask={waves.src}><i></i></span>
                 </div>
                 <!-- The whole cap fills like a balloon from where it sits on the head, and its fan and fold swell further still -->
@@ -129,7 +135,6 @@ const bubbles = columns.map((x, index) => ({
         <div class="brand">
             <a class="name" href="/">Fluxerly<span class="js">.js</span></a>
             <p class="tagline">A Fluxer-native bot SDK for JavaScript, TypeScript and Effect</p>
-            <p class="credit">Open source by <a href="https://github.com/NeonTechSpace" target="_blank" rel="noopener">NeonTechSpace</a></p>
         </div>
         <nav class="links" aria-label="Footer">
             <a href={links.docs}>Docs</a>
@@ -140,7 +145,10 @@ const bubbles = columns.map((x, index) => ({
             <a href={links.license} target="_blank" rel="noopener">Apache-2.0</a>
         </nav>
     </div>
-    <p class="independent">Fluxerly.js is an independent project. It is not affiliated with, endorsed by or sponsored by Fluxer</p>
+    <div class="fine">
+        <p class="credit">Open source by <a href="https://github.com/NeonTechSpace" target="_blank" rel="noopener">NeonTechSpace</a></p>
+        <p class="independent">Fluxerly.js is an independent project. It is not affiliated with, endorsed by or sponsored by Fluxer</p>
+    </div>
 </footer>
 
 <script>
@@ -148,15 +156,53 @@ const bubbles = columns.map((x, index) => ({
 
     // The conductor's living parts come when the site is moving and the end of the page is near, and show once they're all decoded
     const endingBox = document.querySelector<HTMLElement>("[data-ending-alive]")
-    if (endingBox) {
+    const faceSlot = endingBox?.querySelector<HTMLElement>("[data-ending-face-slot]")
+    if (endingBox && faceSlot) {
+        // Then the hero's shader takes over the black hole, and data-hole says "live". Where it can't, the plain layers move it as
+        // before, and it says "layers"
+        type EndingFace = import("../../scene/ending-face").EndingFace
+        let face: EndingFace | null = null
+        const backToLayers = () => {
+            face = null
+            endingBox.dataset.hole = "layers"
+        }
+        const wakeHole = () => {
+            if (face || endingBox.dataset.hole === "layers" || endingBox.dataset.live === undefined || getExperience() === "still") return
+            let made: EndingFace | null = null
+            import("../../scene/ending-face")
+                .then(async ({ createEndingFace }) => {
+                    if (face || getExperience() === "still") return
+                    made = createEndingFace(faceSlot, backToLayers)
+                    if (!made) return backToLayers()
+                    face = made
+                    await made.load()
+                    if (face !== made) return
+                    const canvas = made.canvas
+                    faceSlot.append(canvas)
+                    // Once it covers them, the layers it replaces stop costing the page
+                    canvas.addEventListener("transitionend", () => face === made && (endingBox.dataset.hole = "live"), { once: true })
+                    requestAnimationFrame(() => (canvas.dataset.on = ""))
+                })
+                .catch((reason) => {
+                    // Let go by Still while it loaded, which is no failure
+                    if (made && face !== made) return
+                    console.warn("The black hole at the end of the page moves as plain layers:", reason)
+                    made?.release()
+                    backToLayers()
+                })
+        }
         const wake = () => {
-            if (endingBox.dataset.loading !== undefined || getExperience() === "still") return
+            if (getExperience() === "still") return
+            if (endingBox.dataset.loading !== undefined) return wakeHole()
             endingBox.dataset.loading = ""
             const pictures = [...endingBox.querySelectorAll<HTMLImageElement>("img[data-src]")]
             for (const picture of pictures) picture.src = picture.dataset.src ?? ""
             for (const masked of endingBox.querySelectorAll<HTMLElement>("[data-mask]")) masked.style.maskImage = `url(${masked.dataset.mask})`
             Promise.all(pictures.map((picture) => picture.decode()))
-                .then(() => endingBox.toggleAttribute("data-live", true))
+                .then(() => {
+                    endingBox.toggleAttribute("data-live", true)
+                    if (near) wakeHole()
+                })
                 .catch((reason) => console.warn("The conductor at the end of the page stays as painted:", reason))
         }
         let near = false
@@ -167,8 +213,13 @@ const bubbles = columns.map((x, index) => ({
             },
             { rootMargin: "60% 0px" },
         ).observe(endingBox)
-        subscribeExperience(() => {
-            if (near) wake()
+        subscribeExperience((mode) => {
+            // Still lets it go, and it starts again from the painted glass when the site moves once more
+            if (mode === "still") {
+                face?.release()
+                face = null
+                delete endingBox.dataset.hole
+            } else if (near) wake()
         })
     }
 
@@ -416,6 +467,10 @@ const bubbles = columns.map((x, index) => ({
         opacity: 0;
     }
 
+    .charge-glow {
+        opacity: 0;
+    }
+
     .charge i {
         position: absolute;
         inset: 0 auto 0 0;
@@ -438,6 +493,29 @@ const bubbles = columns.map((x, index) => ({
         background: conic-gradient(rgb(190 245 255 / 0) 0deg, rgb(190 245 255 / 0) 250deg, rgb(200 245 255 / 0.72) 340deg, rgb(190 245 255 / 0) 360deg);
         mask-image: radial-gradient(closest-side, transparent 80%, #000 86%, #000 94%, transparent 100%);
         opacity: 0;
+    }
+
+    /* The black hole drawn by the hero's shader, under the face's own layers. It fades in over the plain layers, which then go */
+    .hole-face {
+        position: absolute;
+    }
+
+    .hole-face :global(canvas) {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        mask-image: linear-gradient(to bottom, #000 var(--fade-from), transparent var(--fade-to));
+        transition: opacity 700ms ease-out;
+    }
+
+    .hole-face :global(canvas[data-on]) {
+        opacity: 1;
+    }
+
+    .alive[data-hole="live"] .hole {
+        display: none;
     }
 
     /* The cap sits on the head. The air comes in from the band, so it grows upward and outward from there */
@@ -475,8 +553,9 @@ const bubbles = columns.map((x, index) => ({
         animation: cap-fold-fill 3.7s ease-in-out infinite alternate paused;
     }
 
+    /* The eyes rest on a place, then glide to the next in about a third of a second, starting and landing softly as the hero's do */
     :global(html:not([data-still])) .alive[data-live] .looks {
-        animation: ending-look 11s steps(1) infinite paused;
+        animation: ending-look 11s cubic-bezier(0.45, 0, 0.2, 1) infinite paused;
     }
 
     :global(html:not([data-still])) .alive[data-live] .eye {
@@ -518,12 +597,16 @@ const bubbles = columns.map((x, index) => ({
         animation: ending-charge-show 8s linear infinite paused;
     }
 
+    :global(html:not([data-still])) .alive[data-live] .charge-glow {
+        animation: ending-charge-glow 8s ease-in-out infinite paused;
+    }
+
     :global(html:not([data-still])) .alive[data-live] .charge i {
         animation: ending-charge-run 8s cubic-bezier(0.3, 0.1, 0.4, 1) infinite paused;
     }
 
     /* Only while it can be seen */
-    :global(html:not([data-still])) .ending[data-on] :is(.afloat, .cap, .fan, .fold, .looks, .eye, .brow, .cheek, .hole-flow, .hole-violet, .hole-ring, .charge, .charge i) {
+    :global(html:not([data-still])) .ending[data-on] :is(.afloat, .cap, .fan, .fold, .looks, .eye, .brow, .cheek, .hole-flow, .hole-violet, .hole-ring, .charge, .charge-glow, .charge i) {
         animation-play-state: running;
         will-change: transform;
     }
@@ -557,19 +640,22 @@ const bubbles = columns.map((x, index) => ({
 
     @keyframes ending-look {
         0%,
+        22%,
+        66%,
+        81%,
         100% {
             transform: none;
         }
-        22% {
+        25%,
+        41% {
             transform: translate3d(-1.5%, -0.4%, 0);
         }
-        41% {
+        44%,
+        63% {
             transform: translate3d(1.2%, 0.5%, 0);
         }
-        63% {
-            transform: none;
-        }
-        81% {
+        84%,
+        97% {
             transform: translate3d(1.5%, -0.5%, 0);
         }
     }
@@ -636,6 +722,18 @@ const bubbles = columns.map((x, index) => ({
         }
     }
 
+    @keyframes ending-charge-glow {
+        0%,
+        62%,
+        100% {
+            opacity: 0;
+        }
+        74%,
+        84% {
+            opacity: 1;
+        }
+    }
+
     @keyframes ending-charge-run {
         0%,
         62% {
@@ -690,28 +788,39 @@ const bubbles = columns.map((x, index) => ({
     }
 
     .row,
-    .independent {
+    .fine {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
         margin-inline: var(--frame-inline);
     }
 
     .row {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 20px 40px;
-        padding-block: 36px 20px;
+        gap: 8px 40px;
+        padding-block: 20px 8px;
         /* A rule that fades out at both ends rather than stopping square */
         border-top: 1px solid transparent;
         border-image: linear-gradient(90deg, transparent, rgb(160 190 255 / 0.16) 18%, rgb(160 190 255 / 0.16) 82%, transparent) 1;
     }
 
-    /* Whose project this is not, for anyone who takes the name for Fluxer's own */
-    .independent {
-        margin-block: 0;
-        padding-bottom: 36px;
+    .fine {
+        gap: 4px 40px;
+        padding-bottom: 20px;
         font-size: var(--type-small);
         line-height: 1.5;
+    }
+
+    .brand {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 2px 16px;
+    }
+
+    /* Whose project this is not, for anyone who takes the name for Fluxer's own */
+    .independent {
+        margin: 0;
         color: rgb(195 200 230 / 0.72);
     }
 
@@ -730,15 +839,14 @@ const bubbles = columns.map((x, index) => ({
     }
 
     .tagline {
-        margin: 6px 0 0;
+        margin: 0;
         font-size: var(--type-body);
         color: rgb(195 200 230 / 0.78);
     }
 
     /* The org behind the SDK, quieter than the tagline. Its gold is the badge on the conductor's cap, the maker's mark */
     .credit {
-        margin: 4px 0 0;
-        font-size: var(--type-small);
+        margin: 0;
         color: rgb(195 200 230 / 0.62);
     }
 
@@ -754,18 +862,6 @@ const bubbles = columns.map((x, index) => ({
 
     .credit a:hover {
         text-decoration-color: rgb(236 196 110 / 0.8);
-    }
-
-    /* In the docs gold marks one thing, the reader's page in the course, so the credit speaks in the footer's own
-       quiet voice there */
-    :global(.docs) .credit a {
-        color: rgb(195 200 230 / 0.8);
-        text-decoration-color: rgb(195 200 230 / 0.3);
-    }
-
-    :global(.docs) .credit a:hover {
-        color: var(--color-ink);
-        text-decoration-color: rgb(238 240 255 / 0.6);
     }
 
     .links {

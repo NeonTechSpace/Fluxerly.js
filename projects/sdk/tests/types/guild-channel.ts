@@ -40,6 +40,14 @@ export function voiceBitrate(channel: GuildChannel): number | null | undefined {
     return undefined
 }
 
+// Fluxer sends a voice channel's text-chat topic and last pin time, so both compile after narrowing
+export function voiceTopic(
+    channel: NativeGuildChannel,
+): readonly [string | null | undefined, string | null | undefined] {
+    if (channel.type !== NativeChannelType.Voice) return [undefined, undefined]
+    return [channel.topic, channel.lastPinTimestamp]
+}
+
 export function textTopic(channel: GuildChannel): string | null | undefined {
     if (channel.type !== ChannelType.Text) return undefined
     const text: GuildTextChannel = channel

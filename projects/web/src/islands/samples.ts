@@ -47,7 +47,7 @@ await runBot({
     },
     {
         label: "Effect",
-        filename: "bot-effect.ts",
+        filename: "bot.ts",
         code: `import { Effect } from "effect"
 import { runBot } from "@neontechspace/fluxerly/effect"
 
@@ -99,6 +99,7 @@ client.on("messageCreate", (message, signal) => {
 const result = await client.run({ signal: stop.signal })
 if (result.isErr() && result.error._tag !== "CancelledError") {
     console.error(result.error.message)
+    process.exitCode = 1
 }`
 
 // The FluxerClient example from the SDK's declarations, with shorter lines

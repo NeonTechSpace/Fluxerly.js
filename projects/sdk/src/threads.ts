@@ -1,6 +1,7 @@
 import type { ChannelType, GuildPublicThreadChannel, GuildThreadChannel } from "./channels.js"
+import type { GuildMember } from "./guilds.js"
 import type { Message, MessageBody, MessageCore, MessageInput } from "./messages.js"
-import type { UserIterationQuery } from "./pagination.js"
+import type { PaginationQuery, UserIterationQuery } from "./pagination.js"
 
 /** Settings for a new thread in a text or announcement channel, created with threads.create.
  * Use threads.createFromMessage to start a thread on an existing message, and threads.createPost in a forum or media
@@ -20,7 +21,8 @@ export interface ThreadCreate {
     readonly type?:
         typeof ChannelType.PublicThread | typeof ChannelType.PrivateThread | typeof ChannelType.AnnouncementThread
     /** Inactivity period in minutes after which Fluxer archives the thread, one of the ThreadAutoArchiveMinutes values,
-     * default ThreadAutoArchiveMinutes.ThreeDays
+     * default ThreadAutoArchiveMinutes.ThreeDays.
+     * Fluxer names it auto_archive_duration
      */
     readonly autoArchiveMinutes?: number
     /** Slowmode delay in seconds, an integer from 0 through 21,600. Omission copies the parent channel's
@@ -44,7 +46,8 @@ export interface ThreadFromMessageCreate {
      */
     readonly name: string
     /** Inactivity period in minutes after which Fluxer archives the thread, one of the ThreadAutoArchiveMinutes values,
-     * default ThreadAutoArchiveMinutes.ThreeDays
+     * default ThreadAutoArchiveMinutes.ThreeDays.
+     * Fluxer names it auto_archive_duration
      */
     readonly autoArchiveMinutes?: number
     /** Slowmode delay in seconds, an integer from 0 through 21,600. Omission copies the parent channel's
@@ -54,8 +57,8 @@ export interface ThreadFromMessageCreate {
 }
 
 /** The first message of a forum or media post: The content, embeds, files and stickers of messages.send, with
- * allowedMentions and flags. A post's first message cannot reply to another message, and has no nonce or
- * text-to-speech setting
+ * allowedMentions and flags. It can be a voice note with MessageFlags.VoiceMessage, under the same rules as
+ * messages.send. A post's first message cannot reply to another message, and has no nonce or text-to-speech setting
  *
  * @category Channels
  */
@@ -74,11 +77,13 @@ export interface ForumPostCreate {
     /** The post's first message. Its files are uploaded in the same request as multipart form data */
     readonly message: ForumPostMessage
     /** IDs of the channel's forum tags to apply, at most 5 decimal strings. A channel with ChannelFlags.RequireTag
-     * needs at least one, and a moderated tag needs Manage Threads
+     * needs at least one, and a moderated tag needs Manage Threads.
+     * Fluxer names it applied_tags
      */
     readonly appliedTagIds?: readonly string[]
     /** Inactivity period in minutes after which Fluxer archives the post, one of the ThreadAutoArchiveMinutes values,
-     * default ThreadAutoArchiveMinutes.ThreeDays
+     * default ThreadAutoArchiveMinutes.ThreeDays.
+     * Fluxer names it auto_archive_duration
      */
     readonly autoArchiveMinutes?: number
     /** Slowmode delay in seconds, an integer from 0 through 21,600. Omission copies the channel's
@@ -116,7 +121,8 @@ export interface ThreadEdit {
     /** Whether only members who can manage threads may act in the thread */
     readonly locked?: boolean
     /** Inactivity period in minutes after which Fluxer archives the thread, one of the ThreadAutoArchiveMinutes values.
-     * A change restarts the period at archiveTimestamp
+     * A change restarts the period at archiveTimestamp.
+     * Fluxer names it auto_archive_duration
      */
     readonly autoArchiveMinutes?: number
     /** Slowmode delay in seconds, an integer from 0 through 21,600. Zero disables slowmode */
@@ -130,7 +136,8 @@ export interface ThreadEdit {
      */
     readonly pinned?: boolean
     /** Replace the tags of a forum or media post with these tag IDs, at most 5 decimal strings, with [] removing every
-     * tag. Fluxer rejects it on a public thread in a text channel and ignores it on private and announcement threads
+     * tag. Fluxer rejects it on a public thread in a text channel and ignores it on private and announcement threads.
+     * Fluxer names it applied_tags
      */
     readonly appliedTagIds?: readonly string[]
 }
@@ -172,6 +179,27 @@ export interface ArchivedThreadPage {
     readonly hasMore: boolean
 }
 
+/** Scope, limits and starting point for threads.iterateArchived, reading archived threads of a channel page by page.
+ * Scopes "public" and "private" read the most recently archived first, and "joinedPrivate" the newest threads first.
+ * The pageSize option defaults to 50 with a range of 2 through 100, and a page is never asked for fewer than 2 threads.
+ * Each thread ID is delivered at most once per consumption. Threads archived in the same millisecond are all read
+ * unless more of them than a full page share it, and then the rest of that millisecond is skipped. Unknown keys fail
+ * locally
+ *
+ * @category Channels
+ */
+export interface ArchivedThreadIterationQuery extends PaginationQuery {
+    /** Threads to read, default "public". The scopes "private" and "joinedPrivate" work only in a text channel, and
+     * "private" needs Manage Threads
+     */
+    readonly scope?: ArchivedThreadScope
+    /** Start before this cursor, excluding it, as in ArchivedThreadQuery: An ISO 8601 timestamp with a timezone for
+     * "public" and "private", compared with the archive time, or a decimal thread ID for "joinedPrivate". Omit it to
+     * start with the most recent threads
+     */
+    readonly before?: string
+}
+
 /** Filters and paging for one threads.search request in a text, announcement, forum or media channel.
  * Fluxer searches an index that can lag behind recent changes. The bot sees public threads, private threads it joined
  * and, with Manage Threads, every private thread. Unknown keys and invalid values fail locally
@@ -203,14 +231,20 @@ export interface ThreadSearchQuery {
     readonly minId?: string
 }
 
-/** Successful search response while Fluxer still builds the community's search index. Fluxer answers HTTP 202 and starts
- * building it. Retry later with another explicit search, which the SDK never sends by itself
+/** Successful search response while Fluxer still builds the community's search index. Fluxer answers HTTP 202, starts
+ * building it and suggests how long to wait, in retryAfterMs. Retry after that wait with another explicit search, which the
+ * SDK never sends by itself
  *
  * @category Channels
  */
 export interface ThreadSearchIndexingPage {
     /** True distinguishes this response from a ThreadSearchResultsPage */
     readonly indexing: true
+    /**
+     * Suggested wait in milliseconds before searching again. The SDK does not retry by itself. Absent when Fluxer
+     * suggests no wait
+     */
+    readonly retryAfterMs?: number
 }
 
 /** Search results once Fluxer's index can answer. The page and its threads and messages are frozen
@@ -226,7 +260,9 @@ export interface ThreadSearchResultsPage<M extends MessageCore = Message> {
      * Its channelId is the post's ID, and a post whose first message is gone has none. Empty in other channels
      */
     readonly firstMessages: readonly M[]
-    /** Number of matching threads Fluxer reported with this response, which can change between requests */
+    /** Number of matching threads Fluxer reported with this response, which can change between requests.
+     * Fluxer names it total_results
+     */
     readonly total: number
     /** Whether more matching threads follow this page, read by raising offset */
     readonly hasMore: boolean
@@ -271,4 +307,22 @@ export interface ThreadMemberIterationQuery extends UserIterationQuery {
      * resolved once per consumption, from the channel cache or with one extra channel request on the first page
      */
     readonly withMember?: boolean
+}
+
+/** The creator and first message of one forum or media post, read with threads.fetchPostData. The entry and its values
+ * are frozen
+ *
+ * @category Channels
+ */
+export interface ForumPostData<M extends MessageCore = Message> {
+    /** The decimal post ID this entry describes, as requested */
+    readonly threadId: string
+    /** The post creator's community membership. Null when a webhook created the post, the creator left the community,
+     * or the ID is not a post in the channel
+     */
+    readonly owner: GuildMember | null
+    /** The post's first message, using the client's messageFields selection. Null when it was deleted, or the ID is
+     * not a post in the channel
+     */
+    readonly firstMessage: M | null
 }

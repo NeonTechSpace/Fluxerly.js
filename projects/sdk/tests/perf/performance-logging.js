@@ -252,6 +252,8 @@ if (!child) {
                 )
     }
 } else {
+    // Each variant sets its own logging. The shell's debugging variables would add categories or warnings to all of them
+    for (const name of ["FLUXERLY_DEBUG", "FLUXERLY_LOG_FORMAT", "FLUXERLY_LOG_COLOR"]) delete process.env[name]
     const childIndex = process.argv.indexOf("--child")
     const mode = process.argv[childIndex + 1]
     const variant = process.argv[childIndex + 2]
@@ -271,8 +273,8 @@ if (!child) {
     const originalFetch = globalThis.fetch
     globalThis.fetch = withHostedDiscovery(async (input, init) => {
         const url = new URL(input)
-        assert.equal(url.origin, "https://api.fluxer.app")
-        assert.equal(url.pathname, `/v1/channels/${channelId}/messages/2000000000000000000`)
+        assert.equal(url.origin, "https://fluxer.com")
+        assert.equal(url.pathname, `/api/v1/channels/${channelId}/messages/2000000000000000000`)
         assert.equal(init?.method, "GET")
         if (countRequests) requests++
         return Response.json({

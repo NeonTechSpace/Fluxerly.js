@@ -38,7 +38,7 @@ const searchText = (route: EndpointRoute) =>
             <strong>{counts.withMethod}</strong> of {counts.routes} routes have a Fluxerly method. <strong>{counts.rest}</strong> more work through{" "}
             <a href={rest.url}><Code text={rest.name} /></a>
         </p>
-        <p class="ep-note">The Effect API uses the same method names. Routes a bot cannot send, such as sign-in and billing, are left out</p>
+        <p class="ep-note">The Effect API uses the same method names. The map shows routes that Fluxerly methods call, routes that accept the bot token and a few noted exceptions. Routes that need no token, such as sign-in, are left out, though client.rest.request can still send them</p>
 
         <form class="ep-tools" role="search" aria-label="Filter the routes" hidden data-ep-tools data-pagefind-ignore>
             <label class="ep-field ep-find">
@@ -97,10 +97,16 @@ const searchText = (route: EndpointRoute) =>
                                                 </ul>
                                             ) : (
                                                 <span class="ep-fallback">
-                                                    Use{" "}
-                                                    <a href={rest.url}>
-                                                        <Code text={rest.name} />
-                                                    </a>
+                                                    {(route.note ?? `Use ${rest.name}`).split(rest.name).map((words, index) => (
+                                                        <>
+                                                            {index > 0 && (
+                                                                <a href={rest.url}>
+                                                                    <Code text={rest.name} />
+                                                                </a>
+                                                            )}
+                                                            {words}
+                                                        </>
+                                                    ))}
                                                 </span>
                                             )}
                                         </td>
@@ -118,7 +124,7 @@ const searchText = (route: EndpointRoute) =>
 
 <script>
     // Filters the rows as the reader types or picks an area. A pasted request URL or path, such as
-    // https://api.fluxer.app/v1/channels/123/messages, finds the route template it calls. The filter lives in the
+    // https://fluxer.com/api/v1/channels/123/messages, finds the route template it calls. The filter lives in the
     // address, so a filtered view can be shared and survives a reload
     const tools = document.querySelector<HTMLFormElement>("[data-ep-tools]")
     const query = document.querySelector<HTMLInputElement>("[data-ep-query]")
@@ -143,7 +149,7 @@ const searchText = (route: EndpointRoute) =>
         const asRoute = (value: string) => {
             const match = /^(get|post|put|patch|delete)?\s*(?:https?:\/\/[^/\s]+)?(\/\S*)$/i.exec(value)
             if (!match) return undefined
-            const path = match[2]!.split(/[?#]/)[0]!.replace(/^\/v1(?=\/|$)/, "")
+            const path = match[2]!.split(/[?#]/)[0]!.replace(/^(?:\/api)?\/v1(?=\/|$)/, "")
             // A trailing slash asks for the routes below the path
             return { method: match[1]?.toUpperCase(), segments: path.split("/").filter(Boolean), below: path.endsWith("/") }
         }

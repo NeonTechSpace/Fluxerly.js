@@ -17,13 +17,13 @@ interface Item {
 const items: Item[] = [
     {
         title: "Never Blocked by a Missing Method",
-        text: "If a bot token can do it on Fluxer, you can do it today. Most routes have a named method, and a raw request on the same client reaches the rest, with the same rate limit handling and readable failures. The endpoint map lists every route and how to reach it",
+        text: "Most bot routes have a named method, and a raw request on the same client reaches the others, with the same rate limit handling and readable failures. The endpoint map lists every route a bot can use and how to reach it",
         href: endpointsUrl,
         link: "See Every Route",
     },
     {
         title: "Fixes Don't Wait for a Release",
-        text: "A dependable SDK can move when it needs to. Twice a day, if the SDK changed on the main branch and passed the check, the newest code goes to npm as a nightly build, so you can use a fix without waiting for a release. Another daily check compares Fluxer's API documents with the ones the SDK was built against",
+        text: "A dependable SDK can move when it needs to. Twice a day, if the SDK changed on the main branch and passed the check, the newest code goes to npm as a nightly build, so you can use a fix without waiting for a release. A weekly check compares Fluxer's API documents with the ones the SDK was built against. Nightly builds can include breaking changes, so pin the version and test the bot before upgrading",
         // Exact, because a nightly can change between installs
         command: "npm install --save-exact @neontechspace/fluxerly@nightly",
     },

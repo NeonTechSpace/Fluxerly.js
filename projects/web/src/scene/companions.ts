@@ -12,11 +12,11 @@
 // as the hero scrolls away they rise a little faster than the page, left behind on the surface.
 
 import { LinearFilter, LinearMipmapLinearFilter, Mesh, NormalBlending, ShaderMaterial, Vector3, type Camera, type PlaneGeometry, type Texture, type TextureLoader } from "three"
-import { iconSrc, type IconName } from "../lib/art"
-import iconParts from "../lib/icon-parts.json"
-import { looks, specs, type CompanionDepth, type Spec } from "./companion-specs"
-import { stackedQuery, type HeroLayout } from "./layout"
-import { companionShader } from "./shaders"
+import { iconSrc, type IconName } from "../lib/art.ts"
+import iconParts from "../lib/icon-parts.json" with { type: "json" }
+import { looks, specs, type CompanionDepth, type Spec } from "./companion-specs.ts"
+import { stackedQuery, type HeroLayout } from "./layout.ts"
+import { companionShader } from "./shaders.ts"
 
 const tau = Math.PI * 2
 const degrees = Math.PI / 180
@@ -134,6 +134,9 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
     // The icons' load held back on a stacked layout, and the last placing to repeat once they arrive
     let waiting: (() => Promise<unknown>) | null = null
     let lastPlace: (() => void) | null = null
+    // After dispose, such as when Still is chosen, nothing more loads and a late texture is freed instead of attached
+    let disposed = false
+    let stopWaiting: (() => void) | null = null
     const under: Under = { index: -1, x: 0, y: 0 }
     const screen = new Vector3()
     let heroWidth = 1
@@ -145,6 +148,7 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
         under,
 
         async load(loader, heroHeight, pixelRatio) {
+            if (disposed) return []
             // A stacked layout shows none of them, so it doesn't pay for them
             if (window.matchMedia(stackedQuery).matches) {
                 waiting = () => this.load(loader, heroHeight, pixelRatio).then(() => lastPlace?.())
@@ -154,6 +158,10 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
                 items.map(async (item) => {
                     const needed = item.spec.size * heroHeight * pixelRatio * 1.15
                     const texture = await loader.loadAsync(iconSrc(item.spec.slug, needed > smallArt ? 640 : 320))
+                    if (disposed) {
+                        texture.dispose()
+                        return texture
+                    }
                     texture.premultiplyAlpha = true
                     texture.minFilter = LinearMipmapLinearFilter
                     texture.magFilter = LinearFilter
@@ -165,22 +173,42 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
         },
 
         async loadParts(loader) {
+            if (disposed) return
             // On a screen with no room for them now, the icons and their parts come if it ever has room, such as a window widened
             const query = window.matchMedia(stackedQuery)
             if (query.matches) {
                 const unstacked = () => {
                     if (query.matches) return
-                    query.removeEventListener("change", unstacked)
+                    stopWaiting?.()
                     const whole = waiting
                     waiting = null
-                    void whole?.().then(() => this.loadParts(loader))
+                    // Nothing awaits this late load, so its failure is reported here, as the first load's is by its caller.
+                    // A failed icon leaves the icons unplaced, so they can stay hidden, while failed parts leave them whole
+                    void whole?.().then(
+                        () =>
+                            this.loadParts(loader).catch((reason: unknown) => {
+                                if (!disposed) console.warn("The sky's icons stay whole:", reason)
+                            }),
+                        (reason: unknown) => {
+                            if (!disposed) console.warn("The sky's icons could not load and can stay hidden:", reason)
+                        },
+                    )
                 }
+                stopWaiting?.()
                 query.addEventListener("change", unstacked)
+                stopWaiting = () => {
+                    query.removeEventListener("change", unstacked)
+                    stopWaiting = null
+                }
                 return
             }
             for (const [index, parts] of partsOf.entries()) {
                 if (!parts.length) continue
                 const textures = await Promise.all(parts.map((part) => loader.loadAsync(part.spec.src)))
+                if (disposed) {
+                    for (const texture of textures) texture.dispose()
+                    return
+                }
                 textures.forEach((texture, order) => {
                     texture.premultiplyAlpha = true
                     texture.minFilter = LinearMipmapLinearFilter
@@ -310,6 +338,10 @@ export function createCompanions(plane: PlaneGeometry, ratios: Record<CompanionD
         },
 
         dispose() {
+            disposed = true
+            stopWaiting?.()
+            waiting = null
+            lastPlace = null
             for (const { mesh } of partsOf.flat()) {
                 const texture = mesh.material.uniforms.uMap!.value as Texture | null
                 texture?.dispose()

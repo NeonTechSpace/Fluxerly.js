@@ -137,6 +137,8 @@ export class ReactionCollector {
     #drain: ReturnType<typeof setImmediate> | undefined
     #release: (() => void) | undefined
     #settings: Settings | undefined
+    /** The collected message, which its drop and failure records name so that several collectors stay apart */
+    #fields: { readonly channelId: string; readonly messageId: string } | undefined
     readonly #deadline: number
     #idleDeadline: number
     #current: MessageReaction[] = []
@@ -231,6 +233,7 @@ export class ReactionCollector {
     }
 
     start<M extends MessageCore>(owner: ClientOwner<M>, target: MessageReference) {
+        this.#fields = { channelId: target.channelId, messageId: target.id }
         // Filter failures need these even when no callback worker runs
         this.#logger = owner.logging
         this.#failures = owner.failures
@@ -304,6 +307,7 @@ export class ReactionCollector {
                     category: "collectors",
                     code: "collectors.dropped",
                     message: "A full reaction collector ignored an event while its last callback finished",
+                    fields: this.#fields,
                 },
             )
             return
@@ -422,8 +426,9 @@ export class ReactionCollector {
                     level: "warn",
                     category: "collectors",
                     code: "collectors.failed",
-                    message: `A reaction collector failed: ${error.message}`,
-                    fields: { reason: error.reason },
+                    // The message in the text keeps equal failures of collectors on different messages apart
+                    message: `A reaction collector${this.#fields ? ` on message ${this.#fields.messageId}` : ""} failed: ${error.message}`,
+                    fields: { reason: error.reason, ...this.#fields },
                     error,
                     origin: error.reason === "handler" || error.reason === "filter" ? "application" : "sdk",
                 })

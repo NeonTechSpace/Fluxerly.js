@@ -25,7 +25,7 @@ export class EventOverflowError extends FluxerlyError {
                 : `The event subscription stopped because waiting events exceeded ${capacity} bytes (maxPendingBytes)`,
             {
                 code: "events.overflow",
-                hint: 'Handle events faster, raise maxPendingMessages or maxPendingBytes, or give a subscription overflow "dropOldest" or "dropNewest" so it drops events instead of stopping',
+                hint: 'Handle events faster or raise maxPendingMessages or maxPendingBytes. To drop events instead of stopping, use a handler registered with client.on and set its overflow to "dropOldest" or "dropNewest"',
                 details: { limit, capacity },
             },
         )
@@ -128,6 +128,8 @@ export class MessageError extends FluxerlyError {
         readonly providerCode?: string | null | undefined
         /** Failed response field or check, as in OperationErrorOptions */
         readonly responseField?: string | null | undefined
+        /** Whether a rate-limited send read an attachment from a ReadableStream, as in OperationErrorOptions */
+        readonly streamUsed?: boolean | undefined
         readonly cause?: unknown
     }) {
         const fields = operationErrorFields({ ...options, operation: "send" })

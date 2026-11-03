@@ -213,7 +213,8 @@ if (!child) {
                           "sampledPeakRssBytes",
                           "postShutdownHeapDeltaBytes",
                           "postShutdownRssDeltaBytes",
-                          "cleanupMs",
+                          "shutdownMs",
+                          "collectionWaitMs",
                       ]
             console.log(
                 JSON.stringify({
@@ -298,8 +299,8 @@ if (!child) {
         const originalFetch = globalThis.fetch
         globalThis.fetch = withHostedDiscovery(async (input, init) => {
             const url = new URL(input)
-            assert.equal(url.origin, "https://api.fluxer.app")
-            assert.equal(url.pathname, `/v1/channels/${channelId}/messages`)
+            assert.equal(url.origin, "https://fluxer.com")
+            assert.equal(url.pathname, `/api/v1/channels/${channelId}/messages`)
             assert.equal(url.searchParams.get("limit"), String(pageSize))
             assert.equal(init?.method, "GET")
             requests++
@@ -445,16 +446,20 @@ if (!child) {
             const eventLoopDelayP99Ms = eventLoopDelaySamples === 0 ? 0 : histogram.percentile(99) / 1_000_000
             const eventLoopDelayMaxMs = eventLoopDelaySamples === 0 ? 0 : histogram.max / 1_000_000
 
+            // Shutdown of a client with a full cache, until its promise or Effect, and the Effect API's scope, completes
+            const shutdownStarted = performance.now()
             if (mode === "default") assert.ok((await client.shutdown()).isOk())
             else {
                 await effect.Effect.runPromise(client.shutdown())
                 await effect.Effect.runPromise(effect.Scope.close(scope, effect.Exit.void))
                 scopeClosed = true
             }
+            const shutdownMs = performance.now() - shutdownStarted
             assert.equal(client.state, "Closed")
-            const cleanupStarted = performance.now()
+            // How long garbage collection takes to release a cached message after shutdown, which shows nothing kept it
+            const collectionStarted = performance.now()
             let released = false
-            while (performance.now() - cleanupStarted < cleanupDeadlineMs) {
+            while (performance.now() - collectionStarted < cleanupDeadlineMs) {
                 await gc()
                 if (weak.deref() === undefined) {
                     released = true
@@ -462,7 +467,7 @@ if (!child) {
                 }
                 await sleep(10)
             }
-            const cleanupMs = performance.now() - cleanupStarted
+            const collectionWaitMs = performance.now() - collectionStarted
             assert.ok(released, "A cached public message remained strongly retained after client shutdown")
             const afterShutdown = process.memoryUsage()
             const lookupCpuUserMs = lookupCpu.user / 1_000
@@ -497,7 +502,8 @@ if (!child) {
                     sampledPeakRssBytes: peakRss - baseline.rss,
                     postShutdownHeapDeltaBytes: afterShutdown.heapUsed - baseline.heapUsed,
                     postShutdownRssDeltaBytes: afterShutdown.rss - baseline.rss,
-                    cleanupMs,
+                    shutdownMs,
+                    collectionWaitMs,
                     weakReferenceReleased: released,
                     correctness: true,
                 }),

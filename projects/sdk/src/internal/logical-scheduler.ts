@@ -10,6 +10,7 @@ import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Scope from "effect/Scope"
 import { nowMs } from "./clock.js"
+import { maskedSummary } from "./masking.js"
 
 export type LogicalTimer = object
 
@@ -100,7 +101,7 @@ export class LogicalScheduler {
                                     if (this.onFailure) this.onFailure(entry.owner, cause)
                                     else
                                         process.stderr.write(
-                                            `Fluxerly ${entry.owner} timer callback failed: ${String(Cause.squash(cause))}\n`,
+                                            `Fluxerly ${entry.owner} timer callback failed: ${maskedSummary(Cause.squash(cause))}\n`,
                                         )
                                 }).pipe(
                                     // allow-silent: A failing reporter must not stop the scheduler loop

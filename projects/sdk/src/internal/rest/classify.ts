@@ -34,6 +34,8 @@ export interface RestFailureOptions {
     readonly providerCode?: string | null
     /** For reason response, the response field path or named check that failed */
     readonly responseField?: string | null
+    /** Whether a rate-limited upload read an attachment from a caller's stream, so the same call cannot be repeated */
+    readonly streamUsed?: boolean
     /** Underlying transport failure, kept as the public error's cause */
     readonly cause?: unknown
 }
@@ -49,6 +51,8 @@ export class RestFailure extends Error {
     readonly inputValidation: InputValidationDetail | null
     readonly providerCode: string | null
     readonly responseField: string | null
+    /** Whether a rate-limited operation read a caller's stream, set where the failure is made or once the operation ends */
+    streamUsed: boolean
     override readonly cause?: unknown
     /** Whether the failed request was a GET, set once where the request method is known */
     read = false
@@ -64,6 +68,7 @@ export class RestFailure extends Error {
         this.inputValidation = options.inputValidation ?? null
         this.providerCode = options.providerCode ?? null
         this.responseField = options.responseField ?? null
+        this.streamUsed = options.streamUsed ?? false
         this.cause = options.cause
     }
 
@@ -80,6 +85,7 @@ export class RestFailure extends Error {
                 inputValidation: this.inputValidation,
                 providerCode: this.providerCode,
                 responseField: this.responseField,
+                streamUsed: this.streamUsed,
                 cause: this.cause,
             }),
             this,
@@ -125,6 +131,7 @@ export function operationFailure<Operation extends string, Failure>(
             providerCode: error.providerCode,
             responseField: error.responseField,
             ...(error.read ? { read: true } : {}),
+            ...(error.streamUsed ? { streamUsed: true } : {}),
             ...(error.cause === undefined ? {} : { cause: error.cause }),
         }),
         error,
@@ -223,6 +230,8 @@ type ApiErrorRead = {
     readonly providerCode: string | null
     readonly retryAfterMs: number | null
     readonly global: boolean
+    /** The body is a JSON object with a boolean global member, as Fluxer's own rate-limit rejections send */
+    readonly fluxerLimit: boolean
     /** The retry_after and global members exactly as the body sent them, for rate-limit records */
     readonly sent: Pick<RateLimitDetails, "retryAfterSeconds" | "bodyGlobal">
     readonly cleanupDefect: unknown
@@ -246,10 +255,26 @@ async function readApiError(
         !body ||
         (requireJsonContentType && !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? ""))
     )
-        return { detail: null, providerCode: null, retryAfterMs: null, global: false, sent: {}, cleanupDefect: null }
+        return {
+            detail: null,
+            providerCode: null,
+            retryAfterMs: null,
+            global: false,
+            fluxerLimit: false,
+            sent: {},
+            cleanupDefect: null,
+        }
     const declared = response.headers.get("content-length")
     if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > errorBodyMaxBytes))
-        return { detail: null, providerCode: null, retryAfterMs: null, global: false, sent: {}, cleanupDefect: null }
+        return {
+            detail: null,
+            providerCode: null,
+            retryAfterMs: null,
+            global: false,
+            fluxerLimit: false,
+            sent: {},
+            cleanupDefect: null,
+        }
     const reader = body.getReader()
     const chunks: Uint8Array[] = []
     let size = 0
@@ -267,6 +292,7 @@ async function readApiError(
     let providerCode: string | null = null
     let retryAfterMs: number | null = null
     let global = false
+    let fluxerLimit = false
     let sent: ApiErrorRead["sent"] = {}
     let cleanupDefect: unknown = null
     const recordCleanupDefect = (cause: unknown) => {
@@ -305,7 +331,8 @@ async function readApiError(
                     if (Number.isFinite(data.retry_after)) sent = { retryAfterSeconds: data.retry_after }
                 }
                 global = data.global === true
-                if (typeof data.global === "boolean") sent = { ...sent, bodyGlobal: data.global }
+                fluxerLimit = typeof data.global === "boolean"
+                if (fluxerLimit) sent = { ...sent, bodyGlobal: data.global as boolean }
             }
         }
     } catch {
@@ -328,12 +355,14 @@ async function readApiError(
             recordCleanupDefect(error)
         }
     }
-    return { detail: result, providerCode, retryAfterMs, global, sent, cleanupDefect }
+    return { detail: result, providerCode, retryAfterMs, global, fluxerLimit, sent, cleanupDefect }
 }
 
 /** What classification needs from the attempt that received the response */
 export interface ClassifyContext {
     readonly method: string
+    /** The request retries HTTP 500, 502, 503 and 504 answers, as a GET or a repeatable read POST does */
+    readonly retriesAsRead: boolean
     /** A signed upload PUT, whose destination is external storage rather than the Fluxer API */
     readonly upload: boolean
     /** A preparation step, such as upload planning, that cannot change the operation's outcome */
@@ -346,12 +375,60 @@ export interface ClassifyContext {
     /** Cleanup failures collected for the attempt's release step */
     readonly cleanupDefects: unknown[]
     readonly now: () => number
-    /** Pause every route until the given logical time */
+    /** Pause every route until the given logical time, for a global limit Fluxer declared */
     readonly pauseGlobal: (until: number) => void
+    /**
+     * Pause every route of this client from the given logical time on, for a limit that did not identify itself, and
+     * return the time the pause ends, which repeated unidentified limits make later
+     */
+    readonly pauseClient: (until: number) => number
+    /** Tell admission that a response other than an unidentified 429 arrived, which ends a probe of such a limit */
+    readonly responded: () => void
     /** Pause the learned bucket until the given logical time */
     readonly pauseBucket: (until: number) => void
     /** Tell guarded caches that a GET found no resource */
     readonly notFound: () => void
+}
+
+/**
+ * What a 429 pauses. A global limit Fluxer declared, and a 429 that names no limiter, such as one from a proxy in front
+ * of the API, pause every API request of the client. A limit Fluxer identifies as a route limit pauses its bucket
+ */
+export type RateLimitPause = "client" | "bucket"
+
+/**
+ * Whether a 429 identifies itself as one of Fluxer's route limits: It sends an X-RateLimit-Bucket or a non-global
+ * X-RateLimit-Scope header, or a JSON body with a boolean global member
+ */
+function identifiedRouteLimit(response: Response, apiRead: ApiErrorRead): boolean {
+    return (
+        headerToken(response, "x-ratelimit-bucket") !== undefined ||
+        headerToken(response, "x-ratelimit-scope") !== undefined ||
+        apiRead.fluxerLimit
+    )
+}
+
+/**
+ * Pause what a 429 with a usable wait holds: Every route for a global limit, the client for an unidentified limit, or
+ * the bucket. Returns the wait the retry observes, which repeated unidentified limits make longer than asked
+ */
+function applyRateLimitPause(
+    asked: number,
+    global: boolean,
+    identified: boolean,
+    context: ClassifyContext,
+): { readonly retry: number; readonly pause: RateLimitPause } {
+    const now = context.now()
+    const until = now + asked
+    if (global) {
+        context.pauseGlobal(until)
+        context.responded()
+        return { retry: asked, pause: "client" }
+    }
+    if (!identified) return { retry: Math.ceil(context.pauseClient(until) - now), pause: "client" }
+    context.pauseBucket(until)
+    context.responded()
+    return { retry: asked, pause: "bucket" }
 }
 
 /** A response the attempt continues with, or a rate-limit wait before the same request is sent again */
@@ -361,7 +438,10 @@ export type ResponseClass =
     | {
           readonly kind: "retry"
           readonly retry: number
+          /** Whether Fluxer declared the limit global in its headers or body */
           readonly global: boolean
+          /** What the SDK paused: Every API request of this client, or only the request's rate-limit bucket */
+          readonly pause: RateLimitPause
           readonly apiError: ApiErrorDetail | null
           readonly providerCode: string | undefined
           readonly details: RateLimitDetails
@@ -396,11 +476,12 @@ export async function classifyResponse(response: Response, context: ClassifyCont
         if (context.upload) {
             const apiRead = await readApiError(response, context.signal, "upload", false)
             collect(context, apiRead)
+            // Storage, or a proxy in front of it, may answer with only the header. A signed PUT is never replayed here
             throw new RestFailure({
                 reason: "rateLimit",
                 outcome: progress.outcome,
                 status: 429,
-                retryAfterMs: apiRead.retryAfterMs,
+                retryAfterMs: rejectionRetryAfter(response, apiRead),
                 apiError: apiRead.detail,
             })
         }
@@ -411,7 +492,10 @@ export async function classifyResponse(response: Response, context: ClassifyCont
         if (headerGlobal && Number.isFinite(delay) && delay > 0) context.pauseGlobal(context.now() + Math.ceil(delay))
         const apiRead = await readApiError(response, context.signal, "fluxer", false)
         collect(context, apiRead)
-        if (apiRead.retryAfterMs !== null) delay = apiRead.retryAfterMs
+        // A body never shortens the header's wait. Fluxer rounds its header up from the body, and a proxy in front of
+        // the API may hold requests for longer than a body it passes on
+        if (apiRead.retryAfterMs !== null)
+            delay = Number.isFinite(delay) ? Math.max(delay, apiRead.retryAfterMs) : apiRead.retryAfterMs
         // Mutation resends require a received rate-limit rejection
         if (!context.preparation) progress.outcome = "rejected"
         if (!Number.isFinite(delay) || delay <= 0)
@@ -422,20 +506,24 @@ export async function classifyResponse(response: Response, context: ClassifyCont
                 apiError: apiRead.detail,
                 providerCode: apiRead.providerCode,
             })
-        const retry = Math.ceil(delay)
         const global = headerGlobal || apiRead.global
-        const until = context.now() + retry
-        if (global) context.pauseGlobal(until)
-        else context.pauseBucket(until)
+        const { retry, pause } = applyRateLimitPause(
+            Math.ceil(delay),
+            global,
+            identifiedRouteLimit(response, apiRead),
+            context,
+        )
         return {
             kind: "retry",
             retry,
             global,
+            pause,
             apiError: apiRead.detail,
             providerCode: apiRead.providerCode ?? undefined,
             details: { ...rateLimitHeaders(response), ...apiRead.sent },
         }
     }
+    context.responded()
     if (response.ok) return { kind: "accepted" }
     let apiRead: ApiErrorRead | undefined
     if (response.status === 403 && context.hasFeatureFallback) {
@@ -446,7 +534,7 @@ export async function classifyResponse(response: Response, context: ClassifyCont
     if (response.status === 404 && context.method === "GET") context.notFound()
     const rejected = response.status >= 400 && response.status < 500
     if (rejected && !context.preparation) progress.outcome = "rejected"
-    const retryableRead = context.method === "GET" && [500, 502, 503, 504].includes(response.status)
+    const retryableRead = context.retriesAsRead && [500, 502, 503, 504].includes(response.status)
     apiRead ??= await readApiError(response, context.signal, context.upload ? "upload" : "fluxer")
     collect(context, apiRead)
     const retryAfterMs = rejectionRetryAfter(response, apiRead)

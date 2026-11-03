@@ -5,7 +5,7 @@
 import { LinearFilter, LinearMipmapLinearFilter, Mesh, NoBlending, OrthographicCamera, PlaneGeometry, Scene, ShaderMaterial, Texture, TextureLoader, Vector2, Vector4, WebGLRenderer } from "three"
 import { faceArt, type FacePartName } from "../lib/art"
 import type { FaceState } from "./face-life"
-import { faceShader } from "./shaders"
+import { faceShader } from "./face-shader"
 
 // The picture's sharpest size: past this a phone's screen spends its memory on detail nobody can see
 const maxPixelRatio = 2

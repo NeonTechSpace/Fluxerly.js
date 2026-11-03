@@ -8,3 +8,4 @@
  */
 export { RestOwner } from "./rest/owner.js"
 export type { AttachmentDownloadSource } from "./rest/download.js"
+export { usedAttachmentStream } from "./rest/download.js"

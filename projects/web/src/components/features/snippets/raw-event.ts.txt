@@ -1,0 +1,8 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+export function watchOwnThreadMembership(client: Client) {
+    return client.on("raw", (dispatch) => {
+        if (!dispatch.documented || dispatch.t !== "THREAD_MEMBER_UPDATE") return
+        console.log(`The bot's membership of thread ${dispatch.d.id} in guild ${dispatch.d.guild_id} changed`)
+    })
+}

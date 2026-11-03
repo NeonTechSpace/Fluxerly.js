@@ -2,11 +2,13 @@
 
 A Fluxer bot SDK for JavaScript, TypeScript and Effect
 
-[Docs](https://fluxerly.neontechspace.com/) ·
+[Home](https://fluxerly.neontechspace.com/) ·
+[Docs](https://fluxerly.neontechspace.com/docs/) ·
 [Quick start](https://fluxerly.neontechspace.com/docs/quick-start/) ·
 [API reference](https://fluxerly.neontechspace.com/docs/api/) ·
 [Changelog](https://fluxerly.neontechspace.com/docs/changelog/) ·
 [Examples](https://fluxerly.neontechspace.com/docs/examples/) ·
+[FAQ](https://fluxerly.neontechspace.com/docs/faq/) ·
 [NeonFlux, a bot built with it](https://github.com/NeonTechSpace/NeonFlux)
 
 Fluxerly.js handles HTTP requests and gateway connections for messages, events, community resources and commands.
@@ -29,12 +31,18 @@ Fluxerly is built for developers at every skill level, from a first bot in one f
 - **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
 - **Visible errors:** In the default API, network calls return a Result for expected failures. Check it or return it from a handler so the SDK reports the failure. Logs never contain the token, and `FLUXERLY_DEBUG=1` or the `logging` option changes what they show
 - **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
-- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server
+- **Fluxer's features:** Messages with embeds, attachments and voice notes, reactions, threads and forum posts, communities and permissions, emoji and stickers, webhooks and OAuth2, with paged history and opt-in caches
+- **Typed raw access:** `client.rest.call` reaches every route that accepts a bot token with Fluxer's own field names checked at compile time, `client.rest.request` sends routes newer than the SDK, and raw gateway events carry their documented payload types
+- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server, and a test clock runs timed work such as a ten-minute reminder without waiting
 - **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
 - **Ready to grow:** Automatic sharding, session resume across restarts, a process supervisor, rate limiting that never blindly repeats an uncertain write, and metrics and traces through the `observe` option
 - **Agent-ready:** `fluxerly agents` adds the SDK's rules to a project's `AGENTS.md`, and the docs publish `llms.txt`
 
 The result is less infrastructure to build, with testing and application structure already in place
+
+## Voice
+
+Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it. Until then, voice states, member voice controls such as move, mute, deafen and disconnect, voice notes, and audio or video attachments work
 
 ## Requirements
 
@@ -42,7 +50,7 @@ Fluxerly is tested against Node.js 24.15 or newer.
 JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
 
 Keep the package manager's lockfile for reproducible installs and review the changelog before upgrading.
-Nightly releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API.
+Nightly releases can include breaking changes. Install one with `npm install --save-exact @neontechspace/fluxerly@nightly`, or `bun add --exact @neontechspace/fluxerly@nightly` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API.
 The installed package also contains the changelog as `CHANGELOG.md`
 
 ## Start a bot
@@ -73,7 +81,8 @@ if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot
 ```
 
 The same code works in JavaScript and TypeScript. The file exports the bot's options as `bot`, so the generated test can import them and run the bot without a token or a network. The `defineBot` function returns them unchanged and keeps the types of command arguments.
-Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel where the bot can read and reply
+Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel where the bot can read and reply.
+While changing the bot, `npm run dev` restarts it after each saved change
 
 By default, messages from bots, including the bot's own replies, skip the commands.
 Press Ctrl+C to stop the bot and wait for SDK cleanup.

@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { acquireLock, finalizeOwned, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const totalShards = 2
@@ -198,7 +199,8 @@ function assertConfiguredProofs() {
 }
 
 async function waitForConnected(botId) {
-    const deadline = performance.now() + 50_000
+    // Both children discover the instance and read their user within this wait, sharing the pacer
+    const deadline = performance.now() + pacedDeadlineMs(50_000, 4, { clients: 2 })
     for (;;) {
         const proofs = proofServer.proofs()
         assert.equal(proofs.filter((proof) => proof.kind === "failed").length, 0)
@@ -264,7 +266,7 @@ async function shutdown(Effect) {
 const watchdog = setTimeout(() => {
     report(stage, { passed: false, category: "process_timeout", containmentOnly: true })
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")

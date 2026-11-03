@@ -7,6 +7,12 @@ import WebSocket from "ws"
 import { acquireLock, loadSandboxEnvironment, verifySandboxIdentity } from "./support/harness.js"
 import { createReporter } from "./support/reporting.js"
 import { readSandbox } from "./support/sandbox-api.js"
+import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
+
+/** Connecting starts the client's discovery, whose paced slot comes on top of the 35 s */
+const connectTimeoutMs = pacedDeadlineMs(35_000, 1, { clients: 1 })
+/** One SDK read with its paced slot */
+const readTimeoutMs = pacedDeadlineMs(10_000, 1)
 
 const mode = process.argv[2]
 const report = createReporter({ mode })
@@ -31,7 +37,7 @@ function observeSockets() {
             assert.equal(open.length, 1)
             const url = new URL(open[0].url)
             assert.equal(url.protocol, "wss:")
-            assert.equal(url.host, "gateway.fluxer.app")
+            assert.equal(url.host, "gateway.fluxer.com")
             // This is the SDK-owned socket created by this harness, not a host or service interruption
             open[0].terminate()
             await until(() => client.state === "Recovering", 5000)
@@ -112,11 +118,11 @@ async function checkDefault(token, userId) {
     })
     active = { controller, running }
     try {
-        await until(() => client?.state === "Connected", 35_000)
+        await until(() => client?.state === "Connected", connectTimeoutMs)
         // Setup runs after registration and before the gateway connects
         assert.equal(stateAtSetup, "Disconnected")
         stage = "cancel_recovery_fresh_self_read"
-        const self = await client.users.fetchSelf({ timeoutMs: 10_000 })
+        const self = await client.users.fetchSelf({ timeoutMs: readTimeoutMs })
         assert.ok(self.isOk())
         assert.equal(self.value.id, userId)
         assert.equal(self.value.isBot, true)
@@ -225,11 +231,11 @@ async function checkEffect(token, userId) {
     )
     active = { controller, running }
     try {
-        await until(() => client?.state === "Connected", 35_000)
+        await until(() => client?.state === "Connected", connectTimeoutMs)
         // Setup runs after registration and before the gateway connects
         assert.equal(stateAtSetup, "Disconnected")
         stage = "cancel_recovery_fresh_self_read"
-        const self = await Effect.runPromise(client.users.fetchSelf({ timeoutMs: 10_000 }))
+        const self = await Effect.runPromise(client.users.fetchSelf({ timeoutMs: readTimeoutMs }))
         assert.equal(self.id, userId)
         assert.equal(self.isBot, true)
         report(stage, { passed: true, remoteMutations: false })
@@ -312,13 +318,13 @@ async function checkSimple(token, userId, guildId) {
     active = { controller, running }
     try {
         stage = "simple_sandbox_event"
-        await until(() => client?.state === "Connected", 35_000)
+        await until(() => client?.state === "Connected", connectTimeoutMs)
         report(stage, { passed: true, remoteMutations: false })
         stage = "simple_fresh_self_read"
         const fetched =
             mode === "default"
-                ? await client.users.fetchSelf({ timeoutMs: 10_000 })
-                : await Effect.runPromise(client.users.fetchSelf({ timeoutMs: 10_000 }))
+                ? await client.users.fetchSelf({ timeoutMs: readTimeoutMs })
+                : await Effect.runPromise(client.users.fetchSelf({ timeoutMs: readTimeoutMs }))
         if (mode === "default") assert.ok(fetched.isOk())
         assert.equal((mode === "default" ? fetched.value : fetched).id, userId)
         report(stage, { passed: true, remoteMutations: false })
@@ -340,7 +346,7 @@ async function checkSimple(token, userId, guildId) {
 setTimeout(() => {
     report("process_timeout", { passed: false, cleanExitVerified: false })
     process.exit(1)
-}, 120_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")

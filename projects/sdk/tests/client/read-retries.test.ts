@@ -12,6 +12,7 @@ import { createClient as createNative } from "../../src/effect.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { fakeHostTime, hostTurnsUntil, sdkClock } from "../support/client-clock.js"
+import { createFixtures } from "../../src/testing.js"
 
 const reads = ["fetch", "fetchHistory", "fetchReactionUsers", "fetchHasReaction", "fetchPins"] as const
 const target = { id: "10", channelId: "20" }
@@ -179,6 +180,47 @@ test.each(modes.flatMap((mode) => reads.map((operation) => ({ mode, operation })
 function quarterJitter(api: Awaited<ReturnType<typeof setup>>) {
     ;(api.native ? api.random : vi.mocked(Math.random)).mockReturnValue(0.25)
 }
+
+// threads.fetchPostData sends a POST that only reads, so it retries as a GET does. members.search, a read POST that may
+// queue indexing, keeps the single attempt that member-search.test.ts checks
+test.each(modes)("%s threads.fetchPostData retries transport and server failures at most twice", async (mode) => {
+    const time = retryTime()
+    const fixtures = createFixtures()
+    const forum = fixtures.forumChannel()
+    const post = fixtures.message({ id: "501", channel_id: "501" })
+    // The answers to the POSTs in order, after which every POST is answered with HTTP 503
+    const answers: ("network" | "unavailable" | "data")[] = ["network", "unavailable", "data"]
+    let posts = 0
+    stubFetchWithHostedDiscovery(async (_url: string, init?: RequestInit) => {
+        // The channel read that finds the forum's community
+        if (init?.method !== "POST") return Response.json(forum)
+        posts++
+        const answer = answers.shift() ?? "unavailable"
+        if (answer === "network") throw Error("private network detail")
+        if (answer === "unavailable") return new Response(null, { status: 503 })
+        return Response.json({ threads: { "501": { owner: null, first_message: post } } })
+    })
+    const api = await setup(mode, time.logging)
+    const fetchPostData = async () =>
+        api.defaultApi
+            ? unwrap(await api.defaultApi.threads.fetchPostData(forum.id, ["501"]))
+            : Effect.runPromise(api.native!.threads.fetchPostData(forum.id, ["501"]))
+    const reading = fetchPostData()
+    await time.runRetry(1, 125, () => posts)
+    await time.runRetry(2, 250, () => posts)
+    expect((await reading).map((entry) => entry.firstMessage?.id)).toEqual(["501"])
+    expect(posts).toBe(3)
+    const failing = fetchPostData().catch((error: unknown) => error)
+    await time.runRetry(3, 125, () => posts)
+    await time.runRetry(4, 250, () => posts)
+    expect(await failing).toMatchObject({
+        _tag: "ChannelOperationError",
+        operation: "threads.fetchPostData",
+        reason: "rejected",
+        status: 503,
+    })
+    expect(posts).toBe(6)
+})
 
 // Without jitter, retries wait only their 125 and 250 ms minimums, so clients that fail together retry together
 test.each(modes)("%s spreads first and later read retries by the random source", async (mode) => {

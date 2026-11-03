@@ -1,9 +1,8 @@
-// Meanings of HTTP statuses, gateway close codes and log levels for the docs' hover peeks. The SDK's code catalogue
-// has no table for these, so each meaning comes from the guide or reference text that explains it, and its sources
-// quote that text. tests/peek.test.ts checks that every quote is still there, so a reworded guide shows up here.
-// Codes the site does not explain, such as close code 4003, get no meaning and no peek
+// Meanings of HTTP statuses, gateway close codes and log levels for the docs' hover peeks. Each source names the guide
+// or reference section to review when the behavior changes, and its quote is a note of what that section said, not
+// checked text. Codes the site does not explain, such as close code 4003, get no meaning and no peek
 
-/** A guide section, or a declaration or member of the JavaScript and TypeScript reference, with the sentence that explains the code */
+/** A guide section, a declaration or member of the JavaScript and TypeScript reference, or a reason on the codes page, with a note of the sentence that explains the code */
 export type MeaningSource = { guide: string; anchor: string; quote: string } | { api: string; quote: string } | { codes: string; quote: string }
 
 export interface Meaning {
@@ -38,10 +37,10 @@ export const httpStatuses: (Meaning & { status: number })[] = [
         status: 400,
         title: "HTTP 400",
         kind: "HTTP status",
-        // The site explains 400 for this one case only, so the peek says so
-        meaning: "In these docs, a moderation action refused because the community requires two-factor authentication and the account that owns the bot's application does not have it enabled",
-        action: "Enable two-factor authentication on that account, then try again",
+        meaning: "Fluxer refused the request as invalid or not allowed right now. The error's apiError, details.providerCode and hint say why, such as twoFactorRequired when a community requires two-factor authentication for moderation",
+        action: "Read the error's apiError, details.providerCode and hint, then fix what they name",
         sources: [
+            { guide: "reliability", anchor: "read-an-sdk-error", quote: "Every SDK error extends `FluxerlyError` with a stable `code`, an optional fix `hint`, safe `details` and a standard `cause`" },
             {
                 guide: "troubleshooting",
                 anchor: "a-moderation-action-fails-with-http-400",
@@ -96,9 +95,9 @@ export const httpStatuses: (Meaning & { status: number })[] = [
         status,
         title: `HTTP ${status}`,
         kind: "HTTP status",
-        meaning: "A GET request that fails with it is retried at most twice within its deadline, except OAuth requests, which are never retried. Other requests are not sent again for this status",
+        meaning: "A GET request, or a call to threads.fetchPostData, that fails with it is retried at most twice within its deadline, except OAuth requests, which are never retried. Other requests are not sent again for this status",
         sources: [
-            { guide: "reliability", anchor: "limits-and-retry-rules", quote: "A GET request that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice" },
+            { guide: "reliability", anchor: "limits-and-retry-rules", quote: "A GET request, or a call to `threads.fetchPostData`, that fails with a network error or HTTP 500, 502, 503 or 504 is retried at most twice" },
             { guide: "reliability", anchor: "limits-and-retry-rules", quote: "so a write with an unknown outcome is never repeated automatically" },
         ],
     })),
@@ -228,16 +227,25 @@ export const logLevels: (Meaning & { level: string })[] = [
             { ...glossaryLevels, quote: "Warn for problems the bot survives, such as a dropped event" },
         ],
     },
-    ...(["error", "fatal"] as const).map((level) => ({
-        key: `level-${level}`,
-        level,
-        title: level === "error" ? "Error" : "Fatal",
+    {
+        key: "level-error",
+        level: "error",
+        title: "Error",
         kind: "Log level",
         meaning: "Failures, such as a failed handler",
         examples: "Application errors, failed hooks, connections that cannot go on and failed cleanup",
         sources: [
-            { ...levelsTable, quote: "| `error` and `fatal` | Application errors, failed hooks, connections that cannot continue and cleanup failures |" },
-            { ...glossaryLevels, quote: "Error and Fatal for failures, such as a failed handler" },
+            { ...levelsTable, quote: "| `error` | Application errors, failed hooks, connections that cannot continue and cleanup failures |" },
+            { ...glossaryLevels, quote: "Error for failures, such as a failed handler" },
         ],
-    })),
+    },
+    {
+        key: "level-fatal",
+        level: "fatal",
+        title: "Fatal",
+        kind: "Log level",
+        meaning: "Only Fatal records",
+        examples: "A failed handler, a failed hook and failed cleanup are Error records, so this level hides them",
+        sources: [{ ...levelsTable, quote: "| `fatal` | Only Fatal records. Failed handlers, failed hooks and cleanup failures are Error records, so this level hides them |" }],
+    },
 ]

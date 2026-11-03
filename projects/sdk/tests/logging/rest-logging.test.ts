@@ -186,6 +186,7 @@ test.each(modes)(
         expect(logs.withCode("ratelimit.deadline")[0]!.fields).toEqual({
             method: "GET",
             global: false,
+            pause: "bucket",
             retryAfterSeconds: 5,
             bodyGlobal: false,
         })
@@ -193,7 +194,7 @@ test.each(modes)(
 )
 
 test.each(modes)(
-    "%s a rate-limit wait and a deadline repeat the rate-limit headers and body members Fluxer sent",
+    "%s a rate-limit wait and a deadline repeat the rate-limit headers, body members and error code Fluxer sent",
     async (mode) => {
         const clock = sdkClock()
         const sent = {
@@ -222,7 +223,7 @@ test.each(modes)(
         const logs = captureLogs()
         const observations: Observation[] = []
         const client = await setup(mode, {
-            logging: { ...logs.logging, categories: { ratelimit: "debug" } },
+            logging: { ...logs.logging, categories: { ratelimit: "debug", rest: "debug" } },
             observe: (observation) => void observations.push(observation),
         })
         const fetch = (timeoutMs: number) =>
@@ -234,7 +235,8 @@ test.each(modes)(
                 () => "fetched",
                 () => "failed",
             )
-        expect(await driveSdkTime(clock, fetch(1_000), { stepMs: 20 })).toBe("fetched")
+        // The body asks for 20 ms and the header for one second, so the request waits for the header
+        expect(await driveSdkTime(clock, fetch(5_000), { stepMs: 20 })).toBe("fetched")
         const details = {
             scope: "user",
             bucket: "0123456789abcdef",
@@ -245,16 +247,24 @@ test.each(modes)(
             retryAfterSeconds: 0.02,
             bodyGlobal: false,
         }
+        // The code tells a route limit apart from a limit such as MESSAGE_CROSSPOST_RATE_LIMITED in every record
         expect(logs.withCode("ratelimit.wait")).toEqual([
-            expect.objectContaining({ delayMs: 20, fields: { method: "GET", global: false, ...details } }),
+            expect.objectContaining({
+                delayMs: 1_000,
+                fields: { method: "GET", global: false, pause: "bucket", ...details, apiError: "RATE_LIMITED" },
+            }),
+        ])
+        expect(logs.withCode("rest.request").filter((record) => record.status === 429)).toEqual([
+            expect.objectContaining({ fields: { method: "GET", apiError: "RATE_LIMITED" } }),
         ])
         expect(observations.filter((observation) => observation.type === "rateLimit")).toEqual([
             {
                 type: "rateLimit",
                 method: "GET",
                 route: "/channels/:id/messages/:id",
-                waitMs: 20,
+                waitMs: 1_000,
                 global: false,
+                pause: "bucket",
                 ...details,
             },
         ])
@@ -263,7 +273,14 @@ test.each(modes)(
         expect(logs.withCode("ratelimit.deadline")).toEqual([
             expect.objectContaining({
                 delayMs: 5_000,
-                fields: { method: "GET", global: false, ...details, retryAfterSeconds: 5 },
+                fields: {
+                    method: "GET",
+                    global: false,
+                    pause: "bucket",
+                    ...details,
+                    retryAfterSeconds: 5,
+                    apiError: "RATE_LIMITED",
+                },
             }),
         ])
     },
@@ -312,6 +329,7 @@ test.each(modes)(
         expect(logs.withCode("ratelimit.wait")[0]!.fields).toEqual({
             method: "GET",
             global: false,
+            pause: "bucket",
             bucket: "[redacted]",
             retryAfterSeconds: 0.02,
         })
@@ -321,6 +339,7 @@ test.each(modes)(
             route: "/channels/:id/messages/:id",
             waitMs: 20,
             global: false,
+            pause: "bucket",
             bucket: "[redacted]",
             retryAfterSeconds: 0.02,
         })

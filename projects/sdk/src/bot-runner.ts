@@ -26,8 +26,9 @@ export interface RunBotOptions {
      * A stop is requested by the signal option or, with processSignals enabled, by SIGINT or SIGTERM.
      * The bot then accepts no new events, while running handlers and commands, events already waiting for them and REST
      * requests continue until they finish or the time runs out. Then the bot shuts down as usual.
-     * The default fits within the 10 seconds that common process managers, such as Docker, wait before force-stopping
-     * a process. Pass a larger value when the platform waits longer, or 0 to cancel running handlers at once.
+     * The drain covers only running work. Closing gateway connections, saving sessions and cleanup take extra time
+     * after it, so give the process manager a stop timeout of about 30 seconds, as the deployment guide describes.
+     * Pass a larger value when handlers need longer, or 0 to cancel running handlers at once.
      * A stop caused by a failure does not drain. See ShutdownOptions for the details of a drain.
      * Accepts an integer from 0 through 2,147,483,647, and another value throws ConfigurationError
      */

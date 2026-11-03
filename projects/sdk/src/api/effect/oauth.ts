@@ -5,6 +5,7 @@ import {
     createPkce,
     type OAuthPkce,
     type OAuthAuthorizationInput,
+    type OAuthAuthorization,
     type OAuthConnection,
     type OAuthCodeExchangeInput,
     type OAuthConfig,
@@ -21,6 +22,10 @@ import type { RequestOptions } from "#sdk/client"
  * The scope that creates this client shuts it down
  *
  * The application handles consent, browser callbacks, state checks, token storage and refresh coordination
+ *
+ * The fetchGuilds and fetchConnections methods read the user's communities and connections. Reading one delegated
+ * community, its roles or the fuller current-user profile needs a server-side request with the access token.
+ * The client.rest.request method always sends the bot token. The Webhooks & OAuth guide's section Reading with a user token shows the request
  *
  * The client keeps a copy of the secret until shutdown and runs at most eight operations at once.
  * While eight are running, another operation fails at once with OAuthOperationError reason busy instead of waiting.
@@ -43,6 +48,7 @@ export interface OAuthClient {
      * The application must retain state correlation and the PKCE verifier.
      * Bot community and permission parameters are consent hints, not proof of installation or authorization.
      * This returns the URL without opening it.
+     * Fluxer's prompt parameter is not supported, so the URL always shows the consent page.
      * Network failures retain only sanitized transport facts in cause
      */
     authorizationUrl(
@@ -72,16 +78,20 @@ export interface OAuthClient {
      */
     refresh(refreshToken: string, options?: RequestOptions): Effect.Effect<OAuthTokens, OAuthOperationFailure>
     /**
-     * Revoke an access or refresh token, with an optional token-type hint.
+     * Revoke the supplied token and every access and refresh token for the same user and application.
+     * Other sessions for that user and application stop working too.
      * The token and hint are captured once when execution starts, then validated and transmitted from that snapshot.
-     * A lost response can still mean the token was revoked.
+     * A lost response can still mean the tokens were revoked.
      * Network failures retain only sanitized transport facts in cause
      */
     revoke(
         input: {
             /** Access or refresh token to invalidate. Keep this secret out of logs */
             readonly token: string
-            /** Identify the token as an access token or a refresh token. Omit when the kind is unknown */
+            /** Identify the token as an access token or a refresh token when the kind is known.
+             * When omitted, the request asks Fluxer to check refresh tokens first, then access tokens.
+             * Fluxer does not find a refresh token sent with the access_token hint
+             */
             readonly tokenTypeHint?: "access_token" | "refresh_token"
         },
         options?: RequestOptions,
@@ -94,6 +104,18 @@ export interface OAuthClient {
      * Requests are not retried automatically, and network causes retain only sanitized transport facts
      */
     fetchIdentity(accessToken: string, options?: RequestOptions): Effect.Effect<OAuthIdentity, OAuthOperationFailure>
+    /**
+     * Fetch what the delegated user authorized with an access token: The application, the granted scopes, when the
+     * token expires and, with the identify scope, the user.
+     * Any valid access token works, so this checks a stored token without the client secret that introspect needs.
+     * Fluxer answers a rejected, expired or revoked token with reason rejected and HTTP 401.
+     * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
+     * and network causes retain only sanitized transport facts
+     */
+    fetchAuthorization(
+        accessToken: string,
+        options?: RequestOptions,
+    ): Effect.Effect<OAuthAuthorization, OAuthOperationFailure>
     /**
      * Fetch one bounded page of the delegated user's community memberships.
      * Use an access token with Fluxer's guilds scope.
@@ -150,7 +172,7 @@ export interface OAuthClient {
  *     Effect.gen(function* () {
  *         const client = yield* oauth.create({ clientId: "123", clientSecret: "server-held-secret" })
  *         const pkce = oauth.createPkce()
- *         return yield* client.authorizationUrl({
+ *         const url = yield* client.authorizationUrl({
  *             redirectUri: "https://app.example.test/oauth/callback",
  *             scopes: [OAuthScopes.Identify, OAuthScopes.Bot],
  *             state: "caller-correlated-state",
@@ -158,6 +180,9 @@ export interface OAuthClient {
  *             guildId: "456",
  *             permissions: 0n,
  *         })
+ *         // Store the verifier with the matching state in a one-use server record before redirecting the browser.
+ *         // Use it to exchange the callback code, and keep it out of browser responses and logs
+ *         return { url, codeVerifier: pkce.verifier }
  *     }),
  * )
  * ```
@@ -194,6 +219,8 @@ export const oauth: Readonly<{
                 ) => owner.revoke(input, options),
                 fetchIdentity: (accessToken: string, options?: RequestOptions) =>
                     owner.fetchIdentity(accessToken, options),
+                fetchAuthorization: (accessToken: string, options?: RequestOptions) =>
+                    owner.fetchAuthorization(accessToken, options),
                 fetchGuilds: (accessToken: string, query?: GuildListQuery, options?: RequestOptions) =>
                     owner.fetchGuilds(accessToken, query, options),
                 fetchConnections: (accessToken: string, options?: RequestOptions) =>

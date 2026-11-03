@@ -10,34 +10,45 @@
 // Real timers even when a test fakes the global ones, so idle can count quiet event loop turns
 import { clearTimeout, setTimeout } from "node:timers"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
-import type { LogCategory, LogRecord, LoggingOptions, LogSink, LogThreshold } from "#sdk/logging"
+import type { LogCategory, LogLevel, LogRecord, LoggingOptions, LogSink } from "#sdk/logging"
 import type { TransportOptions } from "#sdk/rest"
 import type { ClientDiagnostics } from "#sdk/client"
 import type { LogCode } from "../code-catalogue.js"
 import { clientServices } from "../client-registry.js"
 import { clientOptionKeys } from "../configuration.js"
 import { normalizeText } from "../field-text.js"
+import { errorInfo, isThenable } from "../logging.js"
+import { maskText } from "../masking.js"
 import { unsupportedKeyHint } from "../suggest.js"
 import { createFixtures, fixtureToken, type Fixtures, type WireMessage } from "./fixtures.js"
 import { TestGateway } from "./gateway.js"
-import { TestHttp } from "./http.js"
+import { TestHttp, type TestRecordInput } from "./http.js"
 import { UnhandledTestFailuresError } from "./errors.js"
 import type { TestSayOptions, TestSettings, TestWaitOptions } from "./types.js"
 import { timedWait, waitTimeout } from "./wait.js"
 
 const defaultHeartbeatIntervalMs = 41_250
-const levels: readonly LogThreshold[] = ["trace", "debug", "info", "warn", "error", "fatal", "silent"]
 /** Consecutive quiet event loop turns after which idle treats the client as settled */
 const idleTurns = 3
+/**
+ * Consecutive quiet event loop turns after which advance treats work that is still running as waiting for the manual
+ * clock, such as a request in a rate limit wait or a handler awaiting waitFor, so the clock can move on. They count
+ * only while every running handler and task run awaits an SDK call, so the turns measure SDK work in memory, never the
+ * application's own I/O or timers
+ */
+const blockedTurns = 10
 
 /**
  * The work in progress that idle waits for: The client's diagnostics, its scheduled task runs in progress and its
- * handler invocations, including received events still waiting for a handler that has not started
+ * handler invocations, including received events still waiting for a handler that has not started. Handler
+ * invocations and task runs whose code is not awaiting an SDK call are counted apart, because only the application can
+ * end that wait
  */
 export interface TestClientWork {
     readonly diagnostics: ClientDiagnostics
     readonly runningTasks: number
     readonly pendingHandlers: number
+    readonly callbacksOutsideSdk: number
 }
 
 /** The client's work in progress that idle and say wait for, including scheduled task runs and queued handler events */
@@ -49,6 +60,8 @@ export function clientWork(client: { diagnostics(): TestClientWork["diagnostics"
             diagnostics: client.diagnostics(),
             runningTasks: services?.tasks.running ?? 0,
             pendingHandlers: handlers === undefined ? 0 : handlers.running + handlers.waiting,
+            callbacksOutsideSdk:
+                (services?.events.callbackRuns.outsideSdk ?? 0) + (services?.tasks.callbackRuns.outsideSdk ?? 0),
         }
     }
 }
@@ -81,19 +94,35 @@ function unhandledFailure(record: LogRecord): boolean {
     return record.error?.origin === "application"
 }
 
-/** Whether a record at this level and category passes the caller's thresholds, as the SDK logger decides */
-function passes(logging: LoggingOptions | undefined, level: LogRecord["level"], category: LogCategory): boolean {
-    const threshold = logging?.categories?.[category] ?? logging?.level ?? "info"
-    return levels.indexOf(level) >= levels.indexOf(threshold)
+/** The parts of a client's logger that the harness uses */
+interface TestLogger {
+    errorTap: ((record: LogRecord) => void) | undefined
+    readonly secrets: readonly string[]
+    enabled(level: LogLevel, category: LogCategory): boolean
+    outputFailure(error: unknown): void
 }
 
 /** Test settings that test clients accept besides the client options */
 const testSettingKeys = ["user", "heartbeatIntervalMs"]
 
+/** The default test client's own test settings, which the native test client does not accept */
+export const defaultTestSettingKeys: readonly string[] = ["clock"]
+
+/**
+ * The controls of a manual test clock that advance drives: The current time, the earliest pending deadline and a move
+ * that resumes every sleep due by the new time
+ */
+export interface TestTime {
+    now(): number
+    nextDeadline(): number | undefined
+    moveTo(time: number): void
+}
+
 /**
  * Reject option keys that a test client does not accept, before any client exists. Transport and instance get their
- * own explanation, because the test client owns them. Any other unknown key gets createClient's closest-name hint,
- * listing the client keys a test client accepts, the test settings and extraKeys, such as the runBot keys of createTestBot
+ * own explanation, because the test client owns them, and so does a clock setting on a native test client. Any other
+ * unknown key gets createClient's closest-name hint, listing the client keys a test client accepts, the test settings
+ * and extraKeys, such as the runBot keys of createTestBot
  */
 export function checkTestOptionKeys(options: object, extraKeys: readonly string[] = []): void {
     const { transport, instance } = options as { transport?: unknown; instance?: unknown }
@@ -103,6 +132,10 @@ export function checkTestOptionKeys(options: object, extraKeys: readonly string[
             "Test clients own the transport and instance options, so neither may be supplied",
             { hint: "Remove transport and instance. Test clients always use hosted Fluxer endpoints in memory" },
         )
+    if (Object.hasOwn(options, "clock") && !extraKeys.includes("clock"))
+        throw new ConfigurationError("configuration", "The native test client has no clock option", {
+            hint: "It follows the Effect Clock it is created with. Provide TestClock from effect/testing and move it with TestClock.adjust",
+        })
     const supported = [
         ...clientOptionKeys.filter((key) => key !== "transport" && key !== "instance"),
         ...testSettingKeys,
@@ -115,6 +148,29 @@ export function checkTestOptionKeys(options: object, extraKeys: readonly string[
         throw new ConfigurationError("configuration", `Unsupported option ${JSON.stringify(unsupported)}`, {
             hint: unsupportedKeyHint(unsupported, supported),
         })
+}
+
+/**
+ * Reject the manual clock for a client that owns more than one shard, because the SDK spaces those shards' Identify
+ * commands on the clock, so ready would wait for an advance. Automatic sharding is rejected too, because its plan can
+ * hold several shards. Malformed sharding settings are left to client creation
+ */
+function checkManualClockShards(sharding: unknown) {
+    let automatic = sharding === "auto"
+    let local = 1
+    if (typeof sharding === "object" && sharding !== null) {
+        const { totalShards, shardIds } = sharding as { totalShards?: unknown; shardIds?: unknown }
+        automatic = totalShards === "auto"
+        local = Array.isArray(shardIds) ? shardIds.length : typeof totalShards === "number" ? totalShards : 1
+    }
+    if (automatic || local > 1)
+        throw new ConfigurationError(
+            "sharding",
+            "The manual test clock supports one local shard and no automatic sharding",
+            {
+                hint: 'Pass one shardId, such as sharding: { totalShards: 2, shardIds: [1] }, or use clock: "real"',
+            },
+        )
 }
 
 /** The in-memory transport, records and fixtures owned by one test client */
@@ -130,14 +186,30 @@ export class TestHarness {
     /** Pending idle waits, failed with ClientClosedError when the harness closes */
     readonly #idleWaits = new Set<(error: unknown) => void>()
     readonly #callerSinks: readonly LogSink[]
-    readonly #logging: LoggingOptions | undefined
+    /** The client's logger, which masks, filters and reports sink failures for test transport records. Set when the
+     * client exists, and no request can come before that
+     */
+    #logger: TestLogger | undefined
     #closed = false
+    /** The manual clock that advance moves, or undefined for a client on real time */
+    readonly #time: TestTime | undefined
+    /** The advance in progress, so a later call starts once it has finished */
+    #advancing: Promise<void> = Promise.resolve()
 
-    constructor(options: object) {
+    /**
+     * Check the test options and build the fake transport. createTime makes the manual clock when the options select
+     * clock "manual", and only the default test client passes it
+     */
+    constructor(options: object, createTime?: () => TestTime) {
         if (typeof options !== "object" || options === null)
             throw new ConfigurationError("configuration", "Test client options must be an object")
-        checkTestOptionKeys(options)
+        checkTestOptionKeys(options, createTime === undefined ? [] : defaultTestSettingKeys)
         const { user, heartbeatIntervalMs = defaultHeartbeatIntervalMs } = options as TestSettings
+        const clock = (options as { clock?: unknown }).clock
+        if (clock !== undefined && clock !== "real" && clock !== "manual")
+            throw new ConfigurationError("configuration", 'Test clock must be "real" or "manual"')
+        if (clock === "manual") checkManualClockShards((options as { sharding?: unknown }).sharding)
+        this.#time = clock === "manual" ? createTime?.() : undefined
         if (
             !Number.isSafeInteger(heartbeatIntervalMs) ||
             heartbeatIntervalMs < 1 ||
@@ -150,8 +222,7 @@ export class TestHarness {
         if (user !== undefined && (typeof user !== "object" || user === null || typeof user.id !== "string"))
             throw new ConfigurationError("configuration", "Test user must be a wire user object with a string id")
         const logging = (options as { logging?: unknown }).logging
-        this.#logging = typeof logging === "object" && logging !== null ? (logging as LoggingOptions) : undefined
-        const sink = this.#logging?.sink
+        const sink = typeof logging === "object" && logging !== null ? (logging as LoggingOptions).sink : undefined
         this.#callerSinks = typeof sink === "function" ? [sink] : Array.isArray(sink) ? (sink as LogSink[]) : []
         const bot = user ?? this.fixtures.botUser()
         this.http = new TestHttp((record) => this.#record(record), { fixtures: this.fixtures, author: bot })
@@ -160,7 +231,12 @@ export class TestHarness {
 
     /** Client options with the fake transport, a default token and log capture added to the caller's settings */
     clientOptions<O extends object>(options: O): O & { readonly token: string; readonly transport: TransportOptions } {
-        const { user: _, heartbeatIntervalMs: __, ...client } = options as O & TestSettings
+        const {
+            user: _,
+            heartbeatIntervalMs: __,
+            clock: ___,
+            ...client
+        } = options as O & TestSettings & { readonly clock?: unknown }
         const logging = (client as { logging?: unknown }).logging
         const capture: LogSink = (record) => {
             this.#records.push(record)
@@ -174,7 +250,7 @@ export class TestHarness {
             logging:
                 logging === undefined
                     ? { sink: capture }
-                    : typeof logging !== "object" || logging === null
+                    : typeof logging !== "object" || logging === null || Array.isArray(logging)
                       ? logging
                       : {
                             ...logging,
@@ -221,31 +297,51 @@ export class TestHarness {
     /**
      * Resolve once the client has no running handler, scheduled task run, REST request or unanswered test request and
      * produced no new log record, request or gateway command for several event loop turns. A scheduled task waiting for
-     * its time does not count, so a test advances its clock to run it
+     * its time does not count, so a test advances the manual clock or waits for its delay before checking its work
      */
     idle(work: () => TestClientWork, options: TestWaitOptions | undefined, signal?: AbortSignal): Promise<void> {
         const timeoutMs = waitTimeout(options)
         if (this.#closed) return Promise.reject(new ClientClosedError())
-        const busy = () => {
+        return this.#settled(work, timeoutMs, signal, false)
+    }
+
+    /**
+     * Wait as idle does. With waiting set, running work that stays quiet for blockedTurns turns, with no test request
+     * awaiting its response and every running handler and task run awaiting an SDK call, also counts as settled,
+     * because only moving the manual clock or the test can let it continue. A run awaiting anything else, such as the
+     * application's own I/O, keeps the wait going as idle's does
+     */
+    #settled(
+        work: () => TestClientWork,
+        timeoutMs: number | undefined,
+        signal: AbortSignal | undefined,
+        waiting: boolean,
+    ): Promise<void> {
+        const state = () => {
             const {
                 diagnostics: { events, rest, gatewayRequests },
                 runningTasks,
                 pendingHandlers,
+                callbacksOutsideSdk,
             } = work()
-            return (
-                events.activeHandlers +
-                    pendingHandlers +
-                    rest.activeRequests +
-                    rest.queuedRequests +
-                    gatewayRequests.activeRequests +
-                    runningTasks >
-                0
-            )
+            return {
+                busy:
+                    events.activeHandlers +
+                        pendingHandlers +
+                        rest.activeRequests +
+                        rest.queuedRequests +
+                        gatewayRequests.activeRequests +
+                        runningTasks >
+                    0,
+                inSdk: callbacksOutsideSdk === 0,
+            }
         }
         const activity = () =>
             `${this.#records.length}:${this.http.requests().length}:${this.gateway.commands().length}`
         return timedWait<void>("idle", timeoutMs, signal, (settle) => {
             let quiet = 0
+            // Quiet turns in which work was still running, counted only by advance
+            let blocked = 0
             let stalled = 0
             let last = activity()
             let timer: ReturnType<typeof setTimeout> | undefined
@@ -259,10 +355,13 @@ export class TestHarness {
             // A zero-delay timer passes a whole event loop turn, including the immediate callbacks Effect fibers run on
             const check = () => {
                 const now = activity()
-                quiet = turned && now === last && this.http.inFlight === 0 && !busy() ? quiet + 1 : 0
+                const still = turned && now === last && this.http.inFlight === 0
+                const { busy, inSdk } = still ? state() : { busy: true, inSdk: false }
+                quiet = still && !busy ? quiet + 1 : 0
+                blocked = waiting && still && inSdk ? blocked + 1 : 0
                 stalled = turned ? 0 : stalled + 1
                 last = now
-                if (quiet >= idleTurns) return settle({ value: undefined })
+                if (quiet >= idleTurns || blocked >= blockedTurns) return settle({ value: undefined })
                 if (stalled >= idleTurns)
                     return fail(
                         new ConfigurationError("configuration", "Test idle cannot settle while setImmediate is faked", {
@@ -283,9 +382,55 @@ export class TestHarness {
         })
     }
 
+    /** The manual clock of this client, or undefined when it runs on real time */
+    get time(): TestTime | undefined {
+        return this.#time
+    }
+
+    /**
+     * Move the manual clock forward by ms. The clock stops at each pending deadline up to the target in order, and
+     * waits there until the client settles as idle does, so work a woken timer starts runs before the next deadline,
+     * including timers it sets on the way. It then moves to the target and settles once more. Work that keeps running
+     * but stays quiet for blockedTurns turns, with no test request awaiting its response and every running handler and
+     * task run awaiting an SDK call, counts as waiting for the clock, so a request in a rate limit wait or a handler
+     * awaiting waitFor cannot hold the clock still, while a handler awaiting its own I/O keeps the clock where it is.
+     * Calls run one after another. Misuse throws synchronously, and a closed harness rejects with ClientClosedError
+     */
+    advance(work: () => TestClientWork, ms: number): Promise<void> {
+        const time = this.#time
+        if (time === undefined)
+            throw new ConfigurationError("configuration", "Test advance needs the manual test clock", {
+                hint: 'Pass clock: "manual" to createTestBot or createTestClient',
+            })
+        if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0)
+            throw new ConfigurationError(
+                "configuration",
+                "Test advance ms must be a finite number of milliseconds, 0 or more",
+            )
+        if (this.#closed) return Promise.reject(new ClientClosedError())
+        const settled = () =>
+            this.#closed ? Promise.reject(new ClientClosedError()) : this.#settled(work, undefined, undefined, true)
+        const run = async () => {
+            const target = time.now() + ms
+            await settled()
+            for (let next = time.nextDeadline(); next !== undefined && next <= target; next = time.nextDeadline()) {
+                time.moveTo(next)
+                await settled()
+            }
+            time.moveTo(target)
+            await settled()
+        }
+        const advanced = this.#advancing.then(run, run)
+        // allow-silent: The caller receives this advance's outcome, and the next advance only waits for it to finish
+        this.#advancing = advanced.then(undefined, () => undefined)
+        return advanced
+    }
+
     /**
      * Deliver a MESSAGE_CREATE from a human author, wait until the client settles as idle does, then return the
-     * messages the client sent meanwhile. Misuse and emitting before ready throw synchronously, as idle and emit do
+     * messages the client sent meanwhile. With the manual clock it settles as advance does at each stop, so work that
+     * can continue only once the clock moves, such as a command awaiting waitFor, does not hold it forever.
+     * Misuse and emitting before ready throw synchronously, as idle and emit do
      */
     say(
         work: () => TestClientWork,
@@ -295,7 +440,7 @@ export class TestHarness {
     ): Promise<readonly WireMessage[]> {
         if (typeof content !== "string")
             throw new ConfigurationError("configuration", "Test say content must be a string")
-        waitTimeout(options)
+        const timeoutMs = waitTimeout(options, ["timeoutMs", "message"])
         const overrides = options?.message
         if (
             overrides !== undefined &&
@@ -307,20 +452,53 @@ export class TestHarness {
         // Fluxer normalizes typed content before delivery, so "!ping " arrives as "!ping"
         const message = this.fixtures.message({ ...overrides, content: normalizeText(content) })
         this.gateway.emit("MESSAGE_CREATE", message, undefined)
-        return this.idle(work, options, signal).then(() => this.http.sentMessages(this.http.requests().slice(before)))
+        return this.#settled(work, timeoutMs, signal, this.#time !== undefined).then(() =>
+            this.http.sentMessages(this.http.requests().slice(before)),
+        )
     }
 
-    /** Record a test transport event in logs() and in caller sinks, at the caller's thresholds */
-    #record(input: Omit<LogRecord, "time">) {
-        if (!passes(this.#logging, input.level, input.category)) return
-        const record: LogRecord = Object.freeze({ time: new Date().toISOString(), ...input })
+    /**
+     * Watch this client logger's Error and Fatal records, and route test transport records through its current
+     * thresholds, credential masking and sink failure handling
+     */
+    attachLogger(logger: TestLogger) {
+        logger.errorTap = this.captureError
+        this.#logger = logger
+    }
+
+    /** Record a test transport event in logs() and in caller sinks, at the client's current thresholds, masked and with
+     * sink failures handled as SDK records are
+     */
+    #record(input: TestRecordInput) {
+        const logger = this.#logger
+        if (logger !== undefined && !logger.enabled(input.level, input.category)) return
+        const secrets = logger?.secrets ?? []
+        const mask = (text: string) => maskText(text, secrets)
+        const { error, ...rest } = input
+        const record: LogRecord = Object.freeze({
+            time: new Date().toISOString(),
+            ...rest,
+            message: mask(input.message),
+            ...(input.fields === undefined
+                ? {}
+                : {
+                      fields: Object.fromEntries(
+                          Object.entries(input.fields).map(([name, value]) => [
+                              name,
+                              typeof value === "string" ? mask(value) : value,
+                          ]),
+                      ),
+                  }),
+            ...(error === undefined ? {} : { error: errorInfo(error, "application", secrets) }),
+        })
         this.#records.push(record)
+        const failed = (error: unknown) => logger?.outputFailure(error)
         for (const sink of this.#callerSinks) {
             try {
-                sink(record)
+                const result: unknown = sink(record)
+                if (isThenable(result)) void Promise.resolve(result).then(undefined, failed)
             } catch (error) {
-                // A failing caller sink stays visible in the test's own output, as it would for SDK records
-                console.error("Fluxerly test log sink failed:", error)
+                failed(error)
             }
         }
     }

@@ -1,6 +1,11 @@
 import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
-import { type GuildMemberJoinSourceType, GuildMemberJoinSourceTypes, createClient } from "../../../src/index.js"
+import {
+    type GuildMemberJoinSourceType,
+    GuildMemberJoinSourceTypes,
+    type GuildOperationError,
+    createClient,
+} from "../../../src/index.js"
 import { createClient as createNative } from "../../../src/effect.js"
 import { modes, type Mode } from "../../support/both-apis.js"
 import { driveSdkTime, sdkClock } from "../../support/client-clock.js"
@@ -137,7 +142,7 @@ test.each(modes)(
         expect(cached).toBeUndefined()
         expect(requests).toEqual([
             {
-                path: "/v1/guilds/20/members-search",
+                path: "/api/v1/guilds/20/members-search",
                 method: "POST",
                 body: {
                     query: "alex",
@@ -165,14 +170,14 @@ test.each(modes)("%s preflights ManageGuild before sending sensitive filters", a
     stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const path = new URL(url).pathname
         requests.push({ path, method: init.method, body: init.body })
-        if (path === "/v1/guilds/20/members/@me") {
+        if (path === "/api/v1/guilds/20/members/@me") {
             joinSourceTypes[0] = GuildMemberJoinSourceTypes.Creator
             sourceInviteCodes[0] = "mutated-invite"
             return Response.json(selfMember)
         }
-        if (path === "/v1/guilds/20") return Response.json(guild)
-        if (path === "/v1/guilds/20/roles") return Response.json(roles("32"))
-        if (path === "/v1/guilds/20/members-search") return Response.json(page())
+        if (path === "/api/v1/guilds/20") return Response.json(guild)
+        if (path === "/api/v1/guilds/20/roles") return Response.json(roles("32"))
+        if (path === "/api/v1/guilds/20/members-search") return Response.json(page())
         throw new Error(`Unexpected fixture route: ${path}`)
     })
 
@@ -180,10 +185,10 @@ test.each(modes)("%s preflights ManageGuild before sending sensitive filters", a
         pageResultCount: 1,
     })
     expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
-        "GET /v1/guilds/20/members/@me",
-        "GET /v1/guilds/20",
-        "GET /v1/guilds/20/roles",
-        "POST /v1/guilds/20/members-search",
+        "GET /api/v1/guilds/20/members/@me",
+        "GET /api/v1/guilds/20",
+        "GET /api/v1/guilds/20/roles",
+        "POST /api/v1/guilds/20/members-search",
     ])
     expect(JSON.parse(String(requests[3]?.body))).toEqual({
         limit: 25,
@@ -191,6 +196,28 @@ test.each(modes)("%s preflights ManageGuild before sending sensitive filters", a
         join_source_type: [GuildMemberJoinSourceTypes.InstantInvite],
         source_invite_code: ["fixture-invite"],
     })
+})
+
+test.each(modes)("%s says a search denied by the local permission check was not sent", async (mode) => {
+    const client = await setup(mode)
+    const requests: string[] = []
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+        const path = new URL(url).pathname
+        requests.push(`${init.method} ${path}`)
+        if (path === "/api/v1/guilds/20/members/@me") return Response.json(selfMember)
+        if (path === "/api/v1/guilds/20") return Response.json(guild)
+        if (path === "/api/v1/guilds/20/roles") return Response.json(roles("0"))
+        throw new Error(`Unexpected fixture route: ${path}`)
+    })
+    const failure = (await settle(client.members.search("20", { sourceInviteCodes: ["fixture"] })).then(
+        () => expect.fail("Expected the search to be denied"),
+        (error: unknown) => error,
+    )) as GuildOperationError
+    expect(failure).toMatchObject({ reason: "rejected", outcome: "notDispatched", status: null, apiError: null })
+    expect(failure.message).toContain("The search was not sent")
+    expect(failure.message).not.toContain("Fluxer rejected")
+    expect(failure.hint).toContain("ManageGuild")
+    expect(requests).not.toContain("POST /api/v1/guilds/20/members-search")
 })
 
 test.each(modes)("%s starts independent sensitive-search preflight reads together before dispatch", async (mode) => {
@@ -263,9 +290,9 @@ test.each(modes)(
         stubFetchWithHostedDiscovery(async (url: string) => {
             const path = new URL(url).pathname
             requests.push(path)
-            if (path === "/v1/guilds/20/members/@me") return Response.json(selfMember)
-            if (path === "/v1/guilds/20") return Response.json(guild)
-            if (path === "/v1/guilds/20/roles") return Response.json(roles("0"))
+            if (path === "/api/v1/guilds/20/members/@me") return Response.json(selfMember)
+            if (path === "/api/v1/guilds/20") return Response.json(guild)
+            if (path === "/api/v1/guilds/20/roles") return Response.json(roles("0"))
             throw new Error(`Unexpected fixture route: ${path}`)
         })
 
@@ -287,7 +314,7 @@ test.each(modes)(
             { operation: "members.search", reason: "input", outcome: "notDispatched" },
             { operation: "members.search", reason: "input", outcome: "notDispatched" },
         ])
-        expect(requests).toEqual(["/v1/guilds/20/members/@me", "/v1/guilds/20", "/v1/guilds/20/roles"])
+        expect(requests).toEqual(["/api/v1/guilds/20/members/@me", "/api/v1/guilds/20", "/api/v1/guilds/20/roles"])
     },
 )
 

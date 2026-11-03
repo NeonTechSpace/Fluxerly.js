@@ -6,9 +6,10 @@
 import { typedResult } from "./support/results.js"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { acquireLock, loadSandboxEnvironment, openJournal, verifySandboxIdentity } from "./support/harness.js"
-import { createOutcomeReporter } from "./support/reporting.js"
+import { acquireLock, loadSandboxEnvironment, openJournal, sandboxBotId } from "./support/harness.js"
+import { createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { createRetryingSandboxApi } from "./support/sandbox-api.js"
+import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
 const rawFetch = globalThis.fetch
@@ -69,7 +70,7 @@ async function observeWrite(method, path, expectedName, operation, loseSuccessfu
     let successfulDispatches = 0
     globalThis.fetch = async (request, options) => {
         const url = new URL(typeof request === "string" || request instanceof URL ? request : request.url)
-        if (options?.method !== method || url.pathname !== `/v1${path}`) return rawFetch(request, options)
+        if (options?.method !== method || url.pathname !== `/api/v1${path}`) return rawFetch(request, options)
         attempts++
         assert.equal(JSON.parse(String(options.body)).name, expectedName)
         const response = await rawFetch(request, options)
@@ -138,7 +139,7 @@ async function cleanup() {
 const watchdog = setTimeout(() => {
     report(stage, false, { reason: "deadline", journalRetained: journal !== undefined, cleanupVerified: false })
     process.exit(1)
-}, 180_000).unref()
+}, harnessWatchdogMs()).unref()
 
 try {
     assert.ok(mode === "default" || mode === "effect")
@@ -151,12 +152,11 @@ try {
     guildId = sandbox.guildId
 
     stage = "sandbox_identity"
-    const identity = await verifySandboxIdentity(async (path) => (await api("GET", path)).data, {
+    botId = await sandboxBotId(async (path) => (await api("GET", path)).data, {
         ...sandbox,
         applicationPath: "/oauth2/applications/@me",
         concurrent: true,
     })
-    botId = identity.botId
     identityVerified = true
     report(stage, true, { clientSecretUsed: false })
 
@@ -165,6 +165,7 @@ try {
         journal = journalFile.read()
         stage = "recovery_only"
         await cleanup()
+        recoveredOnly()
         report(stage)
     } else {
         const marker = `fluxerly-tv-${randomUUID().replaceAll("-", "")}`

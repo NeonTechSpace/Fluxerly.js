@@ -371,23 +371,23 @@ test("applies display, named permissions, decimal serialization, and hosted guil
     })
 
     expect(defaultApi.links.channel(guildChannel)).toBe(
-        `https://fluxer.app/channels/${guildChannel.guildId}/${guildChannel.id}`,
+        `https://fluxer.com/channels/${guildChannel.guildId}/${guildChannel.id}`,
     )
-    expect(defaultApi.links.channel(directMessage)).toBe(`https://fluxer.app/channels/@me/${directMessage.id}`)
+    expect(defaultApi.links.channel(directMessage)).toBe(`https://fluxer.com/channels/@me/${directMessage.id}`)
     expect(defaultApi.links.message(message, guildChannel)).toBe(
-        `https://fluxer.app/channels/${guildChannel.guildId}/${guildChannel.id}/${message.id}`,
+        `https://fluxer.com/channels/${guildChannel.guildId}/${guildChannel.id}/${message.id}`,
     )
     expect(
         thrown(() => defaultApi.links.message({ ...message, channelId: directMessage.id }, guildChannel)),
     ).toMatchObject({ operation: "links.message", reason: "link" })
     expect(defaultApi.links.installation(guildChannel.id)).toBe(
-        `https://api.fluxer.app/v1/oauth2/authorize?client_id=${guildChannel.id}&scope=bot`,
+        `https://fluxer.com/oauth2/authorize?client_id=${guildChannel.id}&scope=bot`,
     )
     expect(defaultApi.links.installation(guildChannel.id, { permissions: 0n })).toBe(
-        `https://api.fluxer.app/v1/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=0`,
+        `https://fluxer.com/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=0`,
     )
     expect(defaultApi.links.installation(guildChannel.id, { permissions: 1n << 63n })).toBe(
-        `https://api.fluxer.app/v1/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=9223372036854775808`,
+        `https://fluxer.com/oauth2/authorize?client_id=${guildChannel.id}&scope=bot&permissions=9223372036854775808`,
     )
 })
 

@@ -1,6 +1,6 @@
 import type { Webhook, CreatedWebhook, WebhookCreate, WebhookEdit, WebhookOperationFailure } from "#sdk/webhooks"
 import type * as Effect from "effect/Effect"
-import type { AuditedRequestOptions } from "#sdk/client"
+import type { AuditedRequestOptions, RequestOptions } from "#sdk/client"
 
 /** Create and manage webhooks with the bot token, without a gateway connection.
  * There is no webhook cache or hidden credential persistence, and no events are synthesized.
@@ -15,7 +15,7 @@ import type { AuditedRequestOptions } from "#sdk/client"
  */
 export interface Webhooks {
     /**
-     * Create an incoming webhook in a text, voice or announcement channel using the bot's permissions.
+     * Create an incoming webhook in a text, voice, announcement, forum or media channel using the bot's permissions.
      * The result separates metadata from redacted credentials, which expose the token only through revealToken.
      * Credentials passed to createWebhookClient must remain private.
      * An unknown outcome may have left the webhook created
@@ -30,28 +30,25 @@ export interface Webhooks {
      * Follower sources are present only while they exist and the original creator can view them.
      * Missing source metadata does not prove deletion. A missing webhook fails with reason notFound
      */
-    fetch(id: string, options?: AuditedRequestOptions): Effect.Effect<Webhook, WebhookOperationFailure>
+    fetch(id: string, options?: RequestOptions): Effect.Effect<Webhook, WebhookOperationFailure>
     /**
      * List the channel's accessible incoming, follower and unknown-kind webhook metadata without pagination.
      * No tokens are retained and no webhook cache is filled
      */
     fetchForChannel(
         channelId: string,
-        options?: AuditedRequestOptions,
+        options?: RequestOptions,
     ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
     /**
      * List the community's accessible incoming, follower and unknown-kind webhook metadata.
      * Fluxer permissions determine visibility.
      * Concurrent changes mean this is not a stable snapshot
      */
-    fetchForGuild(
-        guildId: string,
-        options?: AuditedRequestOptions,
-    ): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
+    fetchForGuild(guildId: string, options?: RequestOptions): Effect.Effect<readonly Webhook[], WebhookOperationFailure>
     /**
      * Change the supplied incoming or follower webhook settings, including its destination channel.
      * Followers can be renamed or moved to a text channel in the same community, but an avatar change fails
-     * with field avatar and Fluxer code INVALID_FORMAT. Incoming webhooks allow text, voice or announcement destinations.
+     * with field avatar and Fluxer code INVALID_FORMAT. Incoming webhooks allow text, voice, announcement, forum or media destinations in the same community.
      * Moving emits Webhooks Update for the old and new channel. The SDK does not synthesize those events.
      * Returned metadata excludes credentials. A failed response does not guarantee the changes were rolled back
      */

@@ -2,13 +2,13 @@
 // Example payloads for the Fluxer response schemas the SDK decodes, generated from the OpenAPI document at the reviewed
 // upstream pin and written to a committed fixture. The OpenAPI conformance test feeds them through public operations,
 // so `pnpm check` stays offline while proving the SDK accepts what Fluxer's API description calls valid.
-// Run from projects/ after moving the pin with `node release/upstream.js --update`: node sdk/scripts/openapi-examples.js
+// Run from projects/ after moving the pin with `node release/upstream.js --update <commit>`: node sdk/scripts/openapi-examples.js
 import { createHash } from "node:crypto"
 import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { format, resolveConfig } from "prettier"
-import { githubSource, validateManifest } from "../../release/upstream.js"
+import { copiesPath, githubSource, keepingCopies, validateManifest } from "../../release/upstream.js"
 
 const manifestPath = fileURLToPath(new URL("../../release/upstream/manifest.json", import.meta.url))
 const fixturePath = fileURLToPath(new URL("../tests/contract/fixtures/openapi-examples.json", import.meta.url))
@@ -462,11 +462,14 @@ function factProbes(spec, facts) {
 }
 
 /**
- * Reads the OpenAPI document at the pinned commit, checks it against the pinned hash and writes the formatted fixture
- * @param {{ source?: import("../../release/upstream.js").Source, manifestFile?: string, factsFile?: string, fixtureFile?: string }} [options]
+ * Reads the OpenAPI document at the pinned commit, checks it against the pinned hash and writes the formatted fixture. The
+ * document comes from the kept upstream copies unless it changed, and those copies are never pruned here, since the drift
+ * check reads more files than this generator
+ * @param {{ source?: import("../../release/upstream.js").Source, copiesFolder?: string, manifestFile?: string, factsFile?: string, fixtureFile?: string }} [options]
  */
 export async function writeExamples({
-    source = githubSource,
+    copiesFolder = copiesPath,
+    source = keepingCopies(githubSource, copiesFolder),
     manifestFile = manifestPath,
     factsFile = factsPath,
     fixtureFile = fixturePath,

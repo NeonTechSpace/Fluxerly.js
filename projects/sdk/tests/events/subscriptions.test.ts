@@ -10,6 +10,7 @@ import {
     type Message,
 } from "../../src/index.js"
 import { createClient as createNative } from "../../src/effect.js"
+import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
 import { defaultApi } from "../support/both-apis.js"
 import { waitUntil } from "../support/clock.js"
 import { startGatewayServer } from "../support/gateway-server.js"
@@ -35,7 +36,7 @@ async function fixture() {
     const replies: Record<string, any>[] = []
     const gateway = await startGatewayServer({ sessionId: "fixture-session" })
     stubFetchWithHostedDiscovery(async (url, init) => {
-        if (url.endsWith("/v1/gateway/bot")) return Response.json({ url: "wss://gateway.fluxer.app" })
+        if (url.endsWith("/v1/gateway/bot")) return Response.json({ url: "wss://gateway.fluxer.com" })
         const body = JSON.parse(String(init.body)) as Record<string, any>
         replies.push({ method: init.method, url, body })
         return Response.json(wire("99", body.content))
@@ -130,12 +131,15 @@ test("explicit default concurrency is bounded and close() signals callbacks with
     const server = await fixture()
     const client = defaultApi({ token })
     const signals: { readonly aborted: boolean }[] = []
+    let ended = 0
+    const pending = Promise.withResolvers<void>()
     const sub = await settle(
         client.on(
             "messageCreate",
             async (_message, signal) => {
                 signals.push(signal)
-                await new Promise<void>(() => {})
+                await pending.promise
+                ended++
             },
             { concurrency: 2 },
         ),
@@ -149,6 +153,25 @@ test("explicit default concurrency is bounded and close() signals callbacks with
     await settle(sub.waitForClose())
     expect(signals.every((signal) => signal.aborted)).toBe(true)
     expect(signals).toHaveLength(2)
+    // Closure settled while both returned promises were still pending, so an application waits for its own cleanup
+    expect(ended).toBe(0)
+    pending.resolve()
+})
+
+test("a native subscribe Stream registers at its first pull, while a scoped on subscription is registered once it succeeds", async () => {
+    await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const test = yield* createNativeTestClient()
+                yield* test.ready()
+                const subscriptions = () => test.client.diagnostics().events.subscriptions
+                yield* Stream.toPull(test.client.subscribe("typingStart")).pipe(Effect.asVoid)
+                expect(subscriptions()).toBe(0)
+                yield* test.client.on("typingStart", () => Effect.void)
+                expect(subscriptions()).toBe(1)
+            }),
+        ),
+    )
 })
 
 test.each(["messages", "bytes"] as const)(

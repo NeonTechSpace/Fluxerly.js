@@ -10,7 +10,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 /** A created or edited message in the addressed channel, keeping an edited message's ID and marking webhook messages */
 function messageWire(path: string) {
-    const [, , resource, owner] = path.split("/")
+    const [, , , resource, owner] = path.split("/")
     return {
         id: /\/messages\/(\d+)$/.exec(path)?.[1] ?? "400",
         channel_id: resource === "channels" ? owner : "300",
@@ -25,7 +25,7 @@ function recordWrites() {
     const writes: { method: string; path: string; body: Record<string, unknown> }[] = []
     const fetch = stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
         const path = new URL(url).pathname
-        if (path === "/v1/users/@me/channels")
+        if (path === "/api/v1/users/@me/channels")
             return Response.json({
                 id: "301",
                 type: 1,
@@ -58,10 +58,10 @@ test.each(modes)("%s sends, replies, edits and direct messages accept a plain st
     await settle(client.directMessages.send("30", "Private"))
 
     expect(writes.map(({ method, path, body }) => [method, path, body.content])).toEqual([
-        ["POST", "/v1/channels/300/messages", "Hello"],
-        ["POST", "/v1/channels/300/messages", "Reply"],
-        ["PATCH", "/v1/channels/300/messages/399", "Edited"],
-        ["POST", "/v1/channels/301/messages", "Private"],
+        ["POST", "/api/v1/channels/300/messages", "Hello"],
+        ["POST", "/api/v1/channels/300/messages", "Reply"],
+        ["PATCH", "/api/v1/channels/300/messages/399", "Edited"],
+        ["POST", "/api/v1/channels/301/messages", "Private"],
     ])
     // The shorthand is a whole message, so the reply keeps its reference and embeds stay unchanged in the edit
     expect(writes[1]!.body.message_reference).toMatchObject({ message_id: "399", channel_id: "300" })
@@ -145,7 +145,7 @@ test("MessageType names the type numbers Fluxer reports, and both APIs export th
 test.each(modes)("%s Message.type compares against MessageType", async (mode) => {
     const client = await setup(mode)
     stubFetchWithHostedDiscovery(async () =>
-        Response.json({ ...messageWire("/v1/channels/300/messages/400"), type: 7 }),
+        Response.json({ ...messageWire("/api/v1/channels/300/messages/400"), type: 7 }),
     )
     const message = await settle(client.messages.fetch({ channelId: "300", id: "400" }))
     expect(message.type).toBe(MessageType.UserJoin)

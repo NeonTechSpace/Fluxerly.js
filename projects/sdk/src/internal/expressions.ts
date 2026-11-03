@@ -14,6 +14,7 @@ import type {
 } from "#sdk/expressions"
 import type { GuildRequest } from "./guilds.js"
 import { identifier, record, snapshotArray } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { normalizedText as text } from "./field-text.js"
@@ -30,6 +31,7 @@ function decodeExpression<K extends ExpressionKind>(
     kind: K,
     value: unknown,
     guildId: string,
+    creators = false,
 ): ExpressionResources[K] | undefined {
     if (
         !record(value) ||
@@ -38,7 +40,15 @@ function decodeExpression<K extends ExpressionKind>(
         typeof value.animated !== "boolean"
     )
         return undefined
-    const base = { guildId, id: value.id, name: value.name, animated: value.animated }
+    // Only list reads include the uploader, as a partial user
+    const creatorId = creators && record(value.user) && identifier(value.user.id) ? value.user.id : undefined
+    const base = {
+        guildId,
+        id: value.id,
+        name: value.name,
+        animated: value.animated,
+        ...(creatorId === undefined ? {} : { creatorId }),
+    }
     if (kind === "emojis") return Object.freeze(base) as ExpressionResources[K]
     if (
         typeof value.description !== "string" ||
@@ -54,13 +64,15 @@ function decodeExpression<K extends ExpressionKind>(
     }) as ExpressionResources[K]
 }
 
-/** Decode a complete guild expression collection, or undefined when any item is malformed or repeated */
-export function expressionItems<K extends ExpressionKind>(kind: K, value: unknown, guildId: string) {
+/** Decode a complete guild expression collection, or undefined when any item is malformed or repeated. Creators are
+ * kept only for a list read, the one source that sends them
+ */
+export function expressionItems<K extends ExpressionKind>(kind: K, value: unknown, guildId: string, creators = false) {
     if (!Array.isArray(value)) return undefined
     const result: ExpressionResources[K][] = []
     const ids = new Set<string>()
     for (const item of value) {
-        const decoded = decodeExpression(kind, item, guildId)
+        const decoded = decodeExpression(kind, item, guildId, creators)
         if (!decoded || ids.has(decoded.id)) return undefined
         ids.add(decoded.id)
         result.push(decoded)
@@ -90,7 +102,7 @@ export function expressionList<K extends ExpressionKind>(
         method: "GET",
         status: 200,
         cache: { selection: { kind, guildId }, replace: true },
-        decode: (value) => expressionItems(kind, value, guildId),
+        decode: (value) => expressionItems(kind, value, guildId, true),
     }
 }
 
@@ -275,7 +287,11 @@ export function expressionBatch<K extends ExpressionKind>(
             if (success.length + value.failed.length !== count) return undefined
             return Object.freeze({
                 success,
-                failed: Object.freeze(value.failed.map((item) => Object.freeze({ name: item.name as string }))),
+                failed: Object.freeze(
+                    value.failed.map((item) =>
+                        Object.freeze({ name: item.name as string, providerMessage: item.error as string }),
+                    ),
+                ),
             })
         },
     }
@@ -302,7 +318,7 @@ export function expressionEdit<K extends ExpressionKind>(
             return inputValidationFailure("input", "required", "Sticker edit requires name, description, and tags")
         const unsupported = unsupportedKeyFailure(
             input,
-            ["name", "description", "tags", "guildId", "id", "animated"],
+            ["name", "description", "tags", "guildId", "id", "animated", "creatorId"],
             "input",
             "the sticker edit",
         )
@@ -335,7 +351,7 @@ export function expressionEdit<K extends ExpressionKind>(
         cache: { selection: { kind, guildId: target.guildId, id: target.id }, mutation: true },
         decode: (value) => {
             const result = decodeExpression(kind, value, guildId)
-            return result?.id === id ? result : undefined
+            return result === undefined || result.id === id ? result : rejectCheck("targetMismatch")
         },
     }
 }

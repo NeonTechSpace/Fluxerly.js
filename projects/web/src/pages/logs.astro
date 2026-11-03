@@ -24,7 +24,7 @@ const accent = "violet"
         <Fragment slot="title">Readable from the First Run</Fragment>
         <Fragment slot="text">
             <p>Every client prints what it is doing without any setup: Startup, each shard becoming ready, lost connections with their close code and next step, long rate-limit waits and shutdown. A shard is one gateway connection, the live link that delivers events</p>
-            <p>On a terminal each record is one line with its level, category, code in brackets, message and facts, and an error's details follow on indented lines. Each line also starts with its time, left out here. Under a process manager the same records print as JSON. The Effect entry point logs through the running program's Effect logger unless a format or sink is set</p>
+            <p>On a terminal each record is one line with its level, category, code in brackets, message and facts, and an error's details follow on indented lines. Each line also starts with its time, left out here. By default, when output goes to a file or a process manager instead of a terminal, the same records print as JSON. The Effect entry point logs through the running program's Effect logger unless a format or sink is set</p>
         </Fragment>
         <LogPanel log={twoShard} label="A two-shard bot that starts, loses one connection and stops" />
     </Scene>
@@ -32,8 +32,8 @@ const accent = "violet"
     <Scene id="handler" step={2} side="right" {accent} guide={guide("logging", "read-the-default-output")} guideLabel="Failed Handlers in the Docs">
         <Fragment slot="title">A Failed Handler, in Full</Fragment>
         <Fragment slot="text">
-            <p>A handler that throws is printed at Error with its message, stack and cause chain, because the error came from the bot's own code</p>
-            <p>Frames inside the SDK collapse into one line, so the bot's own frames stand out. Credentials are masked everywhere in the record, causes included</p>
+            <p>Without an <code class="inline-code">onError</code> hook, a handler that throws is printed at Error with its message, stack and cause chain, because the error came from the bot's own code</p>
+            <p>Frames inside the SDK collapse into one line, so the bot's own frames stand out. Recognized credentials, such as tokens, labelled passwords and cookies, are masked in its message, text fields and stacks, causes included</p>
         </Fragment>
         <LogPanel log={handlerFailed} label="The log record of a handler that threw" />
     </Scene>
@@ -42,7 +42,7 @@ const accent = "violet"
         <Fragment slot="title">Permission Hints</Fragment>
         <Fragment slot="text">
             <p>An expected SDK error, such as a refused request, prints its code, hint and details instead of stack frames</p>
-            <p>For this failed reply, the hint names View channel and Send messages and where to grant them, and <code class="inline-code">requiredPermissions</code> lists them in the details. Fluxer does not say which one is missing, so the SDK names every permission it checks</p>
+            <p>For this failed reply, the hint names View channel and Send messages and where to grant them, and <code class="inline-code">requiredPermissions</code> lists them in the details. Fluxer does not say which one is missing, so the SDK names every permission Fluxer requires for this operation</p>
         </Fragment>
         <Fragment slot="point">The hint names the permissions and where to grant them</Fragment>
         <LogPanel log={failedReply} label="The log record of a reply without permission" />

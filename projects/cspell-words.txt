@@ -30,6 +30,7 @@ crossposts
 instatus
 invitable
 joinability
+libredesk
 llms
 pkce
 preuploaded
@@ -45,6 +46,9 @@ unarchived
 unarchives
 undeafen
 unban
+thumbhash
+UNREADS
+WEBAUTHN
 
 # Effect and JavaScript runtime terms
 econnreset
@@ -82,3 +86,11 @@ unvouched
 pnig
 gsap
 nightlies
+
+# Words in examples that answer in another language
+fehlt
+Ungültig
+noch
+Sekunden
+warten
+помощь

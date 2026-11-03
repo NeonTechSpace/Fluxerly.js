@@ -9,6 +9,9 @@ import { fieldsOnce, identifier, record } from "./decode/primitives.js"
 import { normalizedText } from "./field-text.js"
 
 const attachmentMaxBytes = 52_428_800
+/** Fluxer's attachment flag bits a caller sets: IS_SPOILER and CONTAINS_EXPLICIT_MEDIA (packages/constants/src/ChannelConstants.ts at 5f3fc0b1) */
+const spoilerFlag = 8
+const explicitMediaFlag = 16
 
 export type FileSource =
     | { readonly kind: "bytes"; readonly data: Uint8Array }
@@ -37,6 +40,7 @@ function metadata(
     field: (key: string) => unknown,
     id: number,
     values: Record<string, unknown>[],
+    waveformTarget: WaveformTarget,
 ): string | InputValidationFailure {
     const acceptedFilename = field("filename")
     if (!filename(acceptedFilename))
@@ -65,16 +69,57 @@ function metadata(
     const spoiler = field("spoiler")
     if (spoiler !== undefined && typeof spoiler !== "boolean")
         return inputValidationFailure("attachments[].spoiler", "type", "Attachment spoiler must be a boolean")
+    const explicitMedia = field("explicitMedia")
+    if (explicitMedia !== undefined && typeof explicitMedia !== "boolean")
+        return inputValidationFailure(
+            "attachments[].explicitMedia",
+            "type",
+            "Attachment explicitMedia must be a boolean",
+        )
+    const duration = field("duration")
+    const waveform = field("waveform")
+    // Fluxer reads duration as a 32-bit integer of seconds and waveform as 1 through 4,096 characters after its string
+    // normalization (packages/schema/src/domains/message/AttachmentSchemas.ts at 5f3fc0b1). A negative length is refused here
+    if (
+        duration !== undefined &&
+        (typeof duration !== "number" || !Number.isInteger(duration) || duration < 0 || duration > 2_147_483_647)
+    )
+        return inputValidationFailure(
+            "attachments[].duration",
+            "range",
+            "Attachment duration must be a whole number of seconds from 0 through 2,147,483,647",
+        )
+    if (waveform !== undefined && !normalizedText(waveform, 1, waveformLimits[waveformTarget]))
+        return inputValidationFailure(
+            "attachments[].waveform",
+            "length",
+            waveformTarget === "webhook"
+                ? "Webhook voice notes support a waveform of 1 through 256 UTF-16 code units after Fluxer's normalization. A voiceWaveform result fits for audio up to 19.2 seconds"
+                : "Attachment waveform must be a string of 1 through 4,096 UTF-16 code units after Fluxer's normalization",
+        )
     values.push({
         id,
         filename: acceptedFilename,
         ...(providedContentType === undefined ? {} : { content_type: providedContentType }),
         ...(field("title") === undefined ? {} : { title: field("title") }),
         ...(field("description") === undefined ? {} : { description: field("description") }),
-        flags: spoiler === true ? 8 : 0,
+        flags: (spoiler === true ? spoilerFlag : 0) | (explicitMedia === true ? explicitMediaFlag : 0),
+        ...(duration === undefined ? {} : { duration }),
+        ...(waveform === undefined ? {} : { waveform }),
     })
     return providedContentType ?? "application/octet-stream"
 }
+
+/**
+ * The longest waveform Fluxer reads for a new attachment, by where it is sent. Messages and forum posts use the message
+ * attachment schema (packages/schema/src/domains/message/AttachmentSchemas.ts:29 at 5f3fc0b1). Webhook sends with files
+ * are always multipart, whose attachment schema keeps the default string limit of 256
+ * (packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:79 and primitives/SchemaPrimitives.ts:176)
+ */
+const waveformLimits = { message: 4096, webhook: 256 } as const
+
+/** Where a new attachment is sent, which sets its longest waveform */
+export type WaveformTarget = keyof typeof waveformLimits
 
 /** The validated size of a bounded file source, read once with its method checks, or undefined for another value */
 function fileSourceSize(value: unknown): number | undefined {
@@ -97,9 +142,9 @@ function streamSource(value: unknown): value is AttachmentStreamSource {
 /**
  * Validate attachment structure without reading caller files or streams. Admission later snapshots byte arrays and
  * reserves exact source sizes. The list is read by index and each attachment field at most once, so the validated
- * values are the ones sent
+ * values are the ones sent. The waveform target sets the longest waveform a new attachment may carry
  */
-export function encodeAttachments(value: unknown, edit: boolean) {
+export function encodeAttachments(value: unknown, edit: boolean, waveformTarget: WaveformTarget = "message") {
     if (value === undefined) return { metadata: undefined, files: [] as FilePart[], uploadedFilenames: [] as string[] }
     if (!Array.isArray(value)) return inputValidationFailure("attachments", "type", "Attachments must be an array")
     const metadataValues: Record<string, unknown>[] = []
@@ -120,7 +165,7 @@ export function encodeAttachments(value: unknown, edit: boolean) {
         const id = metadataValues.length
         const selected = encodeAttachmentSource(item, field)
         if (selected instanceof InputValidationFailure) return selected
-        const acceptedContentType = metadata(field, id, metadataValues)
+        const acceptedContentType = metadata(field, id, metadataValues, waveformTarget)
         if (acceptedContentType instanceof InputValidationFailure) return acceptedContentType
         const acceptedFilename = field("filename") as string
         uploadedFilenames.push(acceptedFilename)
@@ -201,7 +246,7 @@ function encodeByteSource(
 ): SizedSource | InputValidationFailure {
     const unsupported = unsupportedKeyFailure(
         item,
-        ["data", "filename", "contentType", "title", "description", "spoiler"],
+        ["data", "filename", "contentType", "title", "description", "spoiler", "explicitMedia", "duration", "waveform"],
         "attachments[]",
         "A byte attachment",
     )
@@ -240,7 +285,7 @@ function encodeFileSource(
 ): SizedSource | InputValidationFailure {
     const unsupported = unsupportedKeyFailure(
         item,
-        ["file", "filename", "contentType", "title", "description", "spoiler"],
+        ["file", "filename", "contentType", "title", "description", "spoiler", "explicitMedia", "duration", "waveform"],
         "attachments[]",
         "A file attachment",
     )
@@ -262,7 +307,18 @@ function encodeStreamSource(
 ): SizedSource | InputValidationFailure {
     const unsupported = unsupportedKeyFailure(
         item,
-        ["stream", "size", "filename", "contentType", "title", "description", "spoiler"],
+        [
+            "stream",
+            "size",
+            "filename",
+            "contentType",
+            "title",
+            "description",
+            "spoiler",
+            "explicitMedia",
+            "duration",
+            "waveform",
+        ],
         "attachments[]",
         "A stream attachment",
     )

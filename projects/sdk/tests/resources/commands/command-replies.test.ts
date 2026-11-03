@@ -108,6 +108,8 @@ describe.each(modes)("%s rejection replies", (mode) => {
                         (call.body as { message_reference?: { message_id?: string } }).message_reference?.message_id,
                 ),
         ).toEqual(["102", "105", "108", "109"])
+        // The record is written before the reply is tried, so it cannot claim that a reply was given
+        for (const record of rejected()) expect(record.message).not.toMatch(/explains why|was answered/)
         // Skipped replies stay observable at Debug with the rejection count
         const skipped = rejected().filter((record) => record.fields?.feedbackSuppressed === true)
         expect(skipped).toHaveLength(5)

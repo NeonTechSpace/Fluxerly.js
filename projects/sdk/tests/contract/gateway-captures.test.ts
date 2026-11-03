@@ -32,13 +32,7 @@ const fixture = JSON.parse(readFileSync(new URL("./fixtures/gateway-captures.jso
 // path covering the fields below it. A field without an entry fails the check, so a new unread field needs a decision
 // here. An entry is removed when the client starts reading its fields or the captures stop carrying them.
 // Entries marked "Dropped" are payload data an application might want, not decisions to leave it out
-const ignoredOnPurpose: Readonly<Record<string, string>> = {
-    "* member.user.avatar": "GuildMember projects the account's username and bot flag only",
-    "* member.user.avatar_color": "GuildMember projects the account's username and bot flag only",
-    "* member.user.discriminator": "GuildMember projects the account's username and bot flag only",
-    "* member.user.flags": "GuildMember projects the account's username and bot flag only",
-    "* member.user.global_name": "GuildMember projects the account's username and bot flag only",
-}
+const ignoredOnPurpose: Readonly<Record<string, string>> = {}
 
 // Fields the check cannot tell apart from an unread one, because the client rejects every replacement the check can
 // build. The client may well read them, but an unread field here would not be reported. Same keys as above. Each entry

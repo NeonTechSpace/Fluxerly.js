@@ -9,6 +9,7 @@ import * as Exit from "effect/Exit"
 import * as Redacted from "effect/Redacted"
 import * as Scope from "effect/Scope"
 import { ConfigurationError } from "#sdk/errors"
+import { auditSettings } from "#sdk/internal/audit"
 import { closedBeforeSend } from "#sdk/internal/rest/closed"
 import { MessageError } from "#sdk/message-errors"
 import type { Message, MessageReference } from "#sdk/messages"
@@ -30,7 +31,15 @@ import {
     type WebhookCredentials,
 } from "#sdk/webhooks"
 import { decodeMessage, encodeForward, encodeMessage, encodeEdit, messageObject, snapshotReference } from "./message.js"
-import { count as nonNegativeInt32, fieldsOnce, identifier, record, snapshotArray } from "./decode/primitives.js"
+import {
+    count as nonNegativeInt32,
+    fieldsOnce,
+    identifier,
+    imageDataUri,
+    record,
+    snapshotArray,
+} from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { suspendInput } from "./defects.js"
 import type { EncodedBody } from "./attachments.js"
 import { RestOwner } from "./rest.js"
@@ -38,6 +47,7 @@ import { loggingConfiguration, type ClientLogger } from "./logging.js"
 import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { normalizedText } from "./field-text.js"
+import { decodeUser } from "./users.js"
 import { type LogicalScheduler, makeLogicalScheduler } from "./logical-scheduler.js"
 import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
 
@@ -97,12 +107,14 @@ function decodeWebhook(value: unknown): Webhook | undefined {
         (value.source_channel !== undefined && sourceChannel === undefined)
     )
         return undefined
+    const creator = value.user === undefined ? undefined : decodeUser(value.user)
     const base = {
         id: value.id,
         guildId: value.guild_id,
         channelId: value.channel_id,
         name: value.name,
         avatar: value.avatar ?? null,
+        ...(creator === undefined ? {} : { creator }),
     }
     if (value.type === WebhookType.Incoming) return Object.freeze({ ...base, type: WebhookType.Incoming })
     const sources = {
@@ -135,11 +147,7 @@ function settings(value: unknown, create: boolean, move: boolean) {
             "Webhook name must contain 1 through 80 UTF-16 code units after Fluxer's normalization",
         )
     const avatar = value.avatar
-    if (
-        avatar !== undefined &&
-        avatar !== null &&
-        (typeof avatar !== "string" || !/^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/]*={0,2}$/.test(avatar))
-    )
+    if (avatar !== undefined && avatar !== null && !imageDataUri(avatar))
         return inputValidationFailure("avatar", "format", "Webhook avatar must be null or a base64 image data URI")
     const channelId = value.channelId
     if (channelId !== undefined && !identifier(channelId))
@@ -156,25 +164,13 @@ function settings(value: unknown, create: boolean, move: boolean) {
     }
 }
 
-function audit(options?: AuditedRequestOptions) {
-    const reason = options?.auditReason
-    if (reason === undefined) return {}
-    if (typeof reason !== "string" || !/^[\x20-\x7e]+$/.test(reason) || !reason.trim() || reason.trim().length > 512)
-        return inputValidationFailure(
-            "options.auditReason",
-            "format",
-            "Audit reason must contain 1 through 512 printable ASCII characters after trimming",
-        )
-    return { auditReason: reason.trim() }
-}
-
 export function webhookCreate(
     channelId: string,
     input: WebhookCreate,
     options?: AuditedRequestOptions,
 ): WebhookValidationResult<CreatedWebhook> {
     const body = settings(input, true, false),
-        extra = audit(options)
+        extra = auditSettings(options)
     if (!identifier(channelId))
         return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
     if (body instanceof InputValidationFailure) return body
@@ -210,7 +206,7 @@ export function webhookFetch(id: string): WebhookValidationResult<Webhook> {
         status: 200,
         decode: (value) => {
             const webhook = decodeWebhook(value)
-            return webhook?.id === id ? webhook : undefined
+            return webhook === undefined || webhook.id === id ? webhook : rejectCheck("targetMismatch")
         },
     }
 }
@@ -254,7 +250,7 @@ export function webhookEdit(
 ): WebhookValidationResult<Webhook> {
     const base = webhookFetch(id),
         body = settings(input, false, true),
-        extra = audit(options)
+        extra = auditSettings(options)
     if (base instanceof InputValidationFailure) return base
     if (body instanceof InputValidationFailure) return body
     if (extra instanceof InputValidationFailure) return extra
@@ -263,7 +259,7 @@ export function webhookEdit(
 
 export function webhookDelete(id: string, options?: AuditedRequestOptions): WebhookValidationResult<void> {
     const base = webhookFetch(id),
-        extra = audit(options)
+        extra = auditSettings(options)
     if (base instanceof InputValidationFailure) return base
     if (extra instanceof InputValidationFailure) return extra
     return { ...base, ...extra, method: "DELETE", status: 204, decode: () => undefined }
@@ -375,6 +371,9 @@ function encodeWebhookForward(message: Record<string, unknown>, source: unknown)
         "0",
         { content: "_", nonce: message.nonce, flags: message.flags, allowedMentions: message.allowedMentions },
         "",
+        undefined,
+        false,
+        false,
     )
     if (forward instanceof MessageError) return new InputValidationFailure(forward.inputValidation!)
     if (options instanceof MessageError) return new InputValidationFailure(options.inputValidation!)
@@ -408,9 +407,19 @@ function encodeWebhookBody(
         reference !== undefined && referenceType === "reply"
             ? webhookReplyTarget(messageReference, reference)
             : undefined
-    if (messageReference === undefined) return encodeMessage("0", message, "")
+    // The SDK always sends webhook files as multipart, and Fluxer's WebhookMultipartMessageRequest reads attachment
+    // waveforms of at most 256 characters (packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:64 to :86 at
+    // 5f3fc0b1), so a webhook voice note has the shorter limit
+    if (messageReference === undefined) return encodeMessage("0", message, "", undefined, false, "webhook")
     if (replyTarget !== undefined)
-        return encodeMessage(replyTarget.channelId, { ...message, messageReference: replyTarget }, "")
+        return encodeMessage(
+            replyTarget.channelId,
+            { ...message, messageReference: replyTarget },
+            "",
+            undefined,
+            false,
+            "webhook",
+        )
     if (
         reference !== undefined &&
         referenceType === "forward" &&
@@ -428,32 +437,31 @@ function encodeWebhookBody(
     )
 }
 
+/** The fields of a webhook send that describe the message itself, encoded as a message send encodes them */
+const webhookMessageKeys = ["content", "nonce", "embeds", "attachments", "stickerIds", "allowedMentions", "flags"]
+
 export function webhookSend(id: string, value: WebhookMessageInput | string): WebhookValidationResult<Message> {
     const input = messageObject(value)
     if (!record(input))
         return inputValidationFailure("input", "type", "Webhook message input must be a string or an object")
     const unsupported = unsupportedKeyFailure(
         input,
-        [
-            "content",
-            "nonce",
-            "embeds",
-            "attachments",
-            "stickerIds",
-            "allowedMentions",
-            "messageReference",
-            "flags",
-            "username",
-            "avatarUrl",
-            "threadId",
-            "threadName",
-            "appliedTagIds",
-        ],
+        [...webhookMessageKeys, "messageReference", "username", "avatarUrl", "threadId", "threadName", "appliedTagIds"],
         "input",
         "the webhook message input",
     )
     if (unsupported) return unsupported
-    const { username, avatarUrl, messageReference, threadId, threadName, appliedTagIds, ...message } = input
+    // Read every field through one reader, as messages.send does, so getter-backed and non-enumerable fields that
+    // passed the key check are not lost by an object rest copy
+    const field = fieldsOnce(input)
+    const message: Record<string, unknown> = {}
+    for (const key of webhookMessageKeys) if (key in input) message[key] = field(key)
+    const username = field("username")
+    const avatarUrl = field("avatarUrl")
+    const messageReference = field("messageReference")
+    const threadId = field("threadId")
+    const threadName = field("threadName")
+    const appliedTagIds = field("appliedTagIds")
     if (threadId !== undefined && !identifier(threadId))
         return inputValidationFailure("threadId", "format", "Webhook threadId must be a decimal string")
     const base = messageRequest(id, undefined, threadId)
@@ -592,6 +600,7 @@ class WebhookOwner {
         this.instance = new InstanceResolver(settings.instance, scope)
         this.rest = new RestOwner<Message>({
             uploadMaxBytes: settings.maxBytes,
+            uploadMaxBytesOption: "uploadMaxBytes",
             resolveInstance: () => this.instance.resolve(),
             decodeMessage,
             logical,

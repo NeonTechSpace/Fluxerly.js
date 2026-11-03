@@ -85,10 +85,15 @@ To release cached data while the bot runs, call `client.cache.clear("messages")`
 <details>
 <summary>Why can a message be missing from the cache?</summary>
 
-The cache stores data only in memory. A message may be missing because it was removed to make room, expired or conflicted with another observation of the same message. A lost gateway connection also clears the messages cached before it, even when the connection recovers, because changes during the gap may have been missed.
-The entry and byte limits do not count runtime overhead or copies held elsewhere in the application. To react to cache changes, register a listener with `client.cache.onChange`, which reports each stored, deleted or cleared entry. A listener that returns a promise has at most 256 unfinished calls, and up to 256 more changes wait for them. Beyond that, the oldest waiting change is dropped and logged as `cache.changesDropped`. Shutdown does not wait for unfinished calls, so changes still waiting then are dropped and logged the same way. Pass `{ concurrency, maxPendingChanges }` as the second argument to change these limits
+The cache stores data only in memory. A message may be missing because it was removed to make room, expired or conflicted with another observation of the same message. A lost gateway connection also clears the messages cached before it, even when the connection recovers, because changes during the gap may have been missed. The entry and byte limits do not count runtime overhead or copies held elsewhere in the application
 
-Deleting a channel or a [thread](/docs/threads/) removes its cached messages. Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no thread deletion for them. A message does not record which channel holds its thread, so the cache then also removes the messages of every channel in that community that the channel cache does not hold. Messages read through REST carry no community, so they count as possibly in that community. Without `cache.channels`, all of these messages go. With it, which also fills from each community's startup snapshot, messages in the channels and threads it still holds stay
+To react to cache changes, register a listener with `client.cache.onChange`, which reports each stored, deleted or cleared entry. A listener that returns a promise has at most 256 unfinished calls, and up to 256 more changes wait for them
+
+Beyond that, the oldest waiting change is dropped and logged as `cache.changesDropped`. Shutdown does not wait for unfinished calls, so changes still waiting then are dropped and logged the same way. Pass `{ concurrency, maxPendingChanges }` as the second argument to change these limits
+
+Deleting a channel or a [thread](/docs/threads/) removes its cached messages. Deleting a text, announcement, forum or media channel also deletes its threads, and Fluxer sends no thread deletion for them. A message does not record which channel holds its thread, so the cache then also removes the messages of every channel in that community that the channel cache does not hold
+
+Messages read through REST carry no community, so they count as possibly in that community. Without `cache.channels`, all of these messages go. With it, which also fills from each community's startup snapshot, messages in the channels and threads it still holds stay
 
 See [`ClientOptions.cache`](/docs/api/js-ts/options/#clientoptions-cache) and [`MessageCacheSettings`](/docs/api/js-ts/caching/#messagecachesettings) for the complete cache contract
 
@@ -115,6 +120,8 @@ A cached copy returns immediately without a request. Otherwise the helper [fetch
 
 The [`get`](/docs/api/js-ts/messages/#messages-get) method returns `undefined` when the client has no usable copy. A cached copy is a [frozen snapshot](/docs/glossary/#frozen-snapshot) of the message as it was when observed, so use `fetch` when the task needs its current state
 
+A cached channel's `lastMessageId` is kept from when the channel was observed. Sending messages or creating posts does not update it, so fetch the channel with `client.channels.fetch` for a current value
+
 ## Check whether the limits fit
 
 Each category in `client.diagnostics().caches` keeps running totals since the client was created. The `hits` and `misses` values count lookups such as `client.messages.get`, including lookups the SDK makes itself. The `evictions` value counts entries the cache removed on its own, with `capacity` for room within `maxEntries` or `maxBytes` and `expiry` for entries older than `maxAgeMs`
@@ -133,7 +140,7 @@ export function messageCacheReport(client: Client) {
 }
 ```
 
-Frequent misses together with many capacity evictions suggest the limits are too small for the messages the bot reads again. Frequent misses with few evictions mean the bot looks up messages it never kept, so larger limits will not help. Counting costs one increment per lookup or eviction, so the totals are always on. A disabled category reports zero
+Frequent misses together with many capacity evictions suggest the limits are too small for the messages the bot reads again. Frequent misses with few evictions usually mean the bot looks up messages it never kept or that a lost connection cleared, so larger limits rarely help. Counting costs one increment per lookup or eviction, so the totals are always on. A disabled category reports zero
 
 ## Wire it up
 

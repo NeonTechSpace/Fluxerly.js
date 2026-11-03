@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { lstat, mkdir, readFile, writeFile, readdir } from "node:fs/promises"
+import { lstat, mkdir, readFile, rename, rm, writeFile, readdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { parseVersion, retainedVersions, snapshotSchema, validateSnapshot } from "./versions.js"
@@ -17,7 +17,7 @@ function authenticatedRead(args) {
             timeout: 60_000,
         })
     } catch {
-        throw new Error("Authenticated GitHub release read failed; no automatic retry was attempted")
+        throw new Error("Authenticated GitHub release read failed. No automatic retry was attempted")
     }
 }
 function parseJson(bytes) {
@@ -28,25 +28,33 @@ function parseJson(bytes) {
     }
 }
 
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex")
+
 /**
- * @param {{ root?: string, gh?: (args: string[]) => Buffer | Promise<Buffer> }} [options]
+ * Reads each retained release's docs.json into released/. A copy of every asset is kept in .cache/releases (gitignored),
+ * named by its sha256, so an asset is downloaded only once. Each copy is used only when it matches the digest and size
+ * that the fresh release metadata names, and a copy that doesn't is downloaded again. With write false, only the cache
+ * is filled, which is how CI keeps the copies that the website workflow restores
+ * @param {{ root?: string, cacheDir?: string, write?: boolean, gh?: (args: string[]) => Buffer | Promise<Buffer> }} [options]
  */
-export async function fetchReleases({ root = webRoot, gh = authenticatedRead } = {}) {
+export async function fetchReleases({ root = webRoot, cacheDir = join(root, ".cache", "releases"), write = true, gh = authenticatedRead } = {}) {
     const read = async (args) => {
         try {
             return await gh([args[0], "--hostname", "github.com", ...args.slice(1)])
         } catch {
-            throw new Error("Authenticated GitHub release read failed; no automatic retry was attempted")
+            throw new Error("Authenticated GitHub release read failed. No automatic retry was attempted")
         }
     }
     // The CLI destination is fixed generated output, never an authored directory
     const directory = resolve(root, "released")
-    await mkdir(directory, { recursive: true })
-    const info = await lstat(directory)
-    if (!info.isDirectory() || info.isSymbolicLink())
-        throw new Error("Release archive must be a real generated directory")
-    if ((await readdir(directory)).length)
-        throw new Error("Release import requires an empty generated archive directory; existing files are preserved")
+    if (write) {
+        await mkdir(directory, { recursive: true })
+        const info = await lstat(directory)
+        if (!info.isDirectory() || info.isSymbolicLink())
+            throw new Error("Release archive must be a real generated directory")
+        if ((await readdir(directory)).length)
+            throw new Error("Release import requires an empty generated archive directory. Existing files are preserved")
+    }
     const pages = parseJson(await read(["api", "--paginate", "--slurp", `repos/${repository}/releases?per_page=100`]))
     if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page)))
         throw new Error("Invalid paginated GitHub release inventory")
@@ -65,6 +73,7 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
         published.set(version, release)
     }
     const archives = new Map()
+    const kept = new Set()
     // Older prerelease snapshots stay on GitHub, but do not add downloads or pages to each build
     for (const version of retainedVersions([...published.keys()])) {
         const release = published.get(version)
@@ -81,18 +90,24 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
             !/^sha256:[a-f0-9]{64}$/.test(asset.digest ?? "")
         )
             throw new Error("Invalid docs asset metadata")
-        const bytes = await read([
-            "api",
-            `repos/${repository}/releases/assets/${asset.id}`,
-            "-H",
-            "Accept: application/octet-stream",
-        ])
-        if (
-            !Buffer.isBuffer(bytes) ||
-            `sha256:${createHash("sha256").update(bytes).digest("hex")}` !== asset.digest ||
-            bytes.length !== asset.size
-        )
-            throw new Error("Docs asset checksum mismatch")
+        const matches = (bytes) => Buffer.isBuffer(bytes) && `sha256:${sha256(bytes)}` === asset.digest && bytes.length === asset.size
+        const cached = join(cacheDir, `${asset.digest.slice("sha256:".length)}.json`)
+        kept.add(cached)
+        let bytes = await readFile(cached).catch(() => undefined)
+        if (!matches(bytes)) {
+            bytes = await read([
+                "api",
+                `repos/${repository}/releases/assets/${asset.id}`,
+                "-H",
+                "Accept: application/octet-stream",
+            ])
+            if (!matches(bytes)) throw new Error("Docs asset checksum mismatch")
+            // Written beside its place and renamed, so a stopped run leaves no partial copy under the digest's name
+            await mkdir(cacheDir, { recursive: true })
+            const partial = `${cached}.${process.pid}.partial`
+            await writeFile(partial, bytes)
+            await rename(partial, cached)
+        }
         let snapshot
         try {
             const parsed = parseJson(bytes)
@@ -110,10 +125,16 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
         if (snapshot.sourceCommit !== commit) throw new Error("Docs snapshot does not match release source")
         archives.set(snapshot.version, bytes)
     }
+    // Only the retained releases' copies are kept
+    for (const name of await readdir(cacheDir).catch(() => [])) {
+        const path = join(cacheDir, name)
+        if (/^[a-f0-9]{64}\.json$/.test(name) && !kept.has(path)) await rm(path, { force: true })
+    }
+    if (!write) return { imported: [...archives.keys()] }
     // Validate remote inputs before writing, but do not claim multi-file atomicity
     // A local write failure preserves the partial archive for explicit reconciliation
     if ((await readdir(directory)).length)
-        throw new Error("Release archive changed during import; existing files are preserved")
+        throw new Error("Release archive changed during import. Existing files are preserved")
     for (const [version, bytes] of archives) {
         const target = join(directory, `${version}.json`)
         try {
@@ -123,7 +144,7 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
             if (!(await readFile(target)).equals(bytes)) throw new Error("Release archive readback mismatch")
         } catch {
             throw new Error(
-                "Release archive write or readback failed; existing and partial files are preserved for reconciliation",
+                "Release archive write or readback failed. Existing and partial files are preserved for reconciliation",
             )
         }
     }
@@ -131,7 +152,9 @@ export async function fetchReleases({ root = webRoot, gh = authenticatedRead } =
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     try {
-        console.log(JSON.stringify(await fetchReleases()))
+        const args = process.argv.slice(2)
+        if (args.some((arg) => arg !== "--cache-only")) throw new Error("The only option is --cache-only, which fills the cache without writing released/")
+        console.log(JSON.stringify(await fetchReleases({ write: !args.includes("--cache-only") })))
     } catch (error) {
         console.error(error.message)
         process.exitCode = 1

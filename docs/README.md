@@ -18,15 +18,17 @@
 <p align="center">
 <a href="https://www.npmjs.com/package/@neontechspace/fluxerly"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=dark"><img src="https://shieldcn.dev/npm/v/@neontechspace/fluxerly/latest.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=npm&amp;labelColor=111827&amp;color=5c1028&amp;labelTextColor=ffffff&amp;valueColor=ffffff&amp;logo=npm&amp;mode=light" alt="npm version"></picture></a>
   <a href="https://ossinsight.io/analyze/NeonTechSpace/Fluxerly.js#overview"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=dark"><img src="https://shieldcn.dev/badge/OSS%20Insight-Analytics-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=OSS%20Insight&amp;labelColor=111827&amp;color=0891b2&amp;logo=github&amp;mode=light" alt="OSS Insight: Repository analytics"></picture></a>
-  <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=dark"><img src="https://shieldcn.dev/badge/Fluxer-Coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Fluxer&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=light" alt="Fluxer: Public community invite coming soon"></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Community-Invite%20coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Community&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=dark"><img src="https://shieldcn.dev/badge/Community-Invite%20coming%20soon-0891b2.svg?variant=branded&amp;split=true&amp;size=sm&amp;label=Community&amp;labelColor=111827&amp;color=0891b2&amp;logo=fluxer&amp;mode=light" alt="Community: Public invite coming soon"></picture>
 </p>
 
 <p align="center">
+  <a href="https://fluxerly.neontechspace.com/">Home</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/">Docs</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/quick-start/">Quick start</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/api/">API reference</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/changelog/">Changelog</a> ·
   <a href="https://fluxerly.neontechspace.com/docs/examples/">Examples</a> ·
+  <a href="https://fluxerly.neontechspace.com/docs/faq/">FAQ</a> ·
   <a href="https://github.com/NeonTechSpace/NeonFlux">NeonFlux</a>
 </p>
 
@@ -59,10 +61,12 @@ Fluxerly is built for developers at every skill level, from a first bot in one f
 - **One-file start:** `runBot` connects, stops cleanly on Ctrl+C and explains a failed startup with a suggested fix
 - **Visible errors:** In the default API, network calls return a Result for expected failures. Check it or return it from a handler so the SDK reports the failure. Logs never contain the token, and `FLUXERLY_DEBUG=1` or the `logging` option changes what they show
 - **Built-in commands:** Prefix commands with typed arguments, guards, cooldowns, command groups and generated help
-- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server
+- **Fluxer's features:** Messages with embeds, attachments and voice notes, reactions, threads and forum posts, communities and permissions, emoji and stickers, webhooks and OAuth2, with paged history and opt-in caches
+- **Typed raw access:** `client.rest.call` reaches every route that accepts a bot token with Fluxer's own field names checked at compile time, `client.rest.request` sends routes newer than the SDK, and raw gateway events carry their documented payload types
+- **Tests without a token:** The `/testing` and `/effect/testing` entry points run a bot against an in-memory gateway and HTTP server, and a test clock runs timed work such as a ten-minute reminder without waiting
 - **Two APIs, one implementation:** Start with async/await, or choose the native Effect API, with the same features and behavior in both
 - **Ready to grow:** Automatic sharding, session resume across restarts, a process supervisor, rate limiting that never blindly repeats an uncertain write, and metrics and traces through the `observe` option
-- **Agent-ready:** `fluxerly agents` adds the SDK's rules to a project's `AGENTS.md`, and the docs publish `llms.txt`
+- **Agent-ready:** `fluxerly agents` adds the SDK's rules to a project's `AGENTS.md`, and the docs publish [llms.txt](https://fluxerly.neontechspace.com/llms.txt)
 
 The result is less infrastructure to build, with testing and application structure already in place
 
@@ -88,7 +92,7 @@ pnpm add @neontechspace/fluxerly
 bun add @neontechspace/fluxerly
 ```
 
-> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly releases can include breaking changes. Install them with `--save-exact`, or `--exact` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API
+> A committed lockfile records the exact installed version and keeps installs reproducible. Nightly releases can include breaking changes. Install one with `npm install --save-exact @neontechspace/fluxerly@nightly`, or `bun add --exact @neontechspace/fluxerly@nightly` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API
 
 ## Getting started
 
@@ -117,7 +121,7 @@ export const bot = defineBot({
 if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 ```
 
-Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel the bot can read
+Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel the bot can read. While changing the bot, `npm run dev` restarts it after each saved change
 
 ## Choosing an API
 
@@ -148,11 +152,12 @@ Fluxerly is tested against the lowest version in that range and against its Effe
 
 </details>
 
-## Bot voice and media are not supported yet
+## Voice: Waiting for Fluxer's new voice system
 
-Bot voice connections and audio/media transport are deferred until after Fluxer's voice update, with SDK implementation and verification still required. Fluxerly does not currently join voice channels or send and receive audio or video
+> [!NOTE]
+> Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it
 
-Voice-state observations in communities and member move, disconnect, community mute and community deafen controls are supported for existing participants
+Fluxerly does not join voice channels or send live audio or video yet. Until then, voice states, member voice controls such as move, mute, deafen and disconnect, voice notes, and audio or video attachments work
 
 ## Repository activity
 

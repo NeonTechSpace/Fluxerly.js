@@ -19,7 +19,7 @@ export const mascotArt = {
 } as const
 
 // The living face: the glass's parts from the PSD, each cut to its own box of the 2048 canvas by scripts/prepare-art.mjs, which
-// src/scene/shaders.ts draws. Stacked as the PSD stacks them they are the painted glass again. Nothing but the live scene asks
+// src/scene/face-shader.ts draws. Stacked as the PSD stacks them they are the painted glass again. Nothing but the live scenes ask
 // for them
 const facePart = (name: string, left: number, top: number, width: number, height: number) => ({ src: `/art/face/${name}.webp`, left, top, width, height })
 export const faceArt = {
@@ -48,6 +48,9 @@ export type FacePartName = keyof typeof faceArt.parts
 // zoom. scripts/prepare-art.mjs writes them
 export const mascotWidths = [584, 876, 1168] as const
 export const mascotSrcset = mascotWidths.map((width) => `/art/mascot-${width}.webp ${width}w`).join(", ")
+// The hero conductor's bow tie and what lies under it, at the same widths, so the browser picks the same size as for the conductor
+export const bowSrcset = mascotWidths.map((width) => `/art/bow-${width}.webp ${width}w`).join(", ")
+export const bowUnderSrcset = mascotWidths.map((width) => `/art/bow-under-${width}.webp ${width}w`).join(", ")
 
 // The conductor's box as Hero.astro lays it out, so the browser picks the picture nearest the size it draws
 // instead of the largest: the room between the eye line, at 38% of the height, and the 84px the hat keeps clear of
@@ -117,6 +120,8 @@ export const docsIcons: Readonly<Record<string, IconName>> = {
     "history-and-cache": "cache-disc",
     "emoji-and-stickers": "emoji-jack",
     "webhooks-and-oauth": "webhook-hook",
+    // The shield with its engraved check, for the list a bot is checked against before it runs unattended
+    "production-checklist": "guard-shield",
     configuration: "config-sliders",
     logging: "logs-scroll",
     reliability: "retry-loop",
@@ -147,4 +152,5 @@ export const featureIcons = {
     testing: "testing-flask",
     production: "production-server",
     data: "data-database",
+    raw: "api-book",
 } as const satisfies Record<string, IconName>

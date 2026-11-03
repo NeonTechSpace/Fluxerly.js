@@ -145,9 +145,7 @@ export interface Channels {
      * thread defaults, and a forum channel also accepts defaultForumLayout. Text and announcement channels accept only
      * the thread defaults defaultAutoArchiveMinutes and defaultThreadRateLimitPerUser. A setting that the channel type
      * does not accept fails locally.
-     * Fluxer rejects forum and media channels in a community where threads are not active, and ignores the two thread
-     * defaults on text and announcement channels there. The result of a forum or media creation lists the stored tags,
-     * whose IDs Fluxer assigns
+     * The result of a forum or media creation lists the stored tags, whose IDs Fluxer assigns
      *
      * @example
      * ```ts
@@ -173,6 +171,8 @@ export interface Channels {
      * An empty input or unknown field fails locally.
      * Use reorder to change a parent or position. Supply type to convert between Text and Announcement, alone or with other settings.
      * Fluxer requires ManageChannels and rejects converting a text channel that receives follows with CHANNEL_HAS_FOLLOWED_CHANNELS.
+     * A thread ID follows Fluxer's thread rules instead, where renaming or archiving another member's thread, changing its
+     * slowmode or flags, or any change in a locked thread needs ManageThreads in the parent channel. Prefer threads.edit for threads.
      * Converting Announcement to Text queues asynchronous follower removal.
      * Fluxer emits a complete Channel Update with the new type, which replaces the cached observation before handlers run.
      * This call does not await gateway delivery or follower removal.

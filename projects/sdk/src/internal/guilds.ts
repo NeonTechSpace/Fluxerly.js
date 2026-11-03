@@ -16,6 +16,7 @@ import type {
     GuildSplashCardAlignment,
     GuildVerificationLevel,
     GuildMfaLevel,
+    GuildNsfwLevel,
     GuildRole,
     RoleCreate,
     RoleEdit,
@@ -25,7 +26,7 @@ import type {
     RoleHoistPosition,
     RoleReference,
 } from "#sdk/guilds"
-import { GuildVerificationLevels } from "#sdk/guilds"
+import { GuildNsfwLevels, GuildVerificationLevels } from "#sdk/guilds"
 import type { GuildCreate, VoiceState, VoiceStateSnapshot } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import {
@@ -42,6 +43,7 @@ import type { ChannelCacheRequest } from "./channel-cache.js"
 import type { InstanceEndpointContext } from "./instance.js"
 import { timestamp } from "./decode/timestamp.js"
 import { memberNickname, normalizedText as text } from "./field-text.js"
+import { decodeUser } from "./users.js"
 
 /** Validated request description. The shared REST owner retains admission, cleanup and rate state */
 export interface GuildRequest<A> {
@@ -87,6 +89,10 @@ const guildMfaLevel = (value: unknown): value is GuildMfaLevel => value === 0 ||
 const guildExplicitContentFilter = (value: unknown): value is GuildExplicitContentFilter =>
     value === 0 || value === 1 || value === 2
 const guildContentWarningLevel = (value: unknown): value is GuildContentWarningLevel => value === 0 || value === 1
+// Fluxer's own range for this level is 0 and 3, and it normalizes the retired 1 and 2 on load
+const guildNsfwLevel = (value: unknown): value is GuildNsfwLevel | 1 | 2 =>
+    value === 0 || value === 1 || value === 2 || value === 3
+const identifierList = (value: unknown): value is readonly string[] => Array.isArray(value) && value.every(identifier)
 const guildSplashCardAlignment = (value: unknown): value is GuildSplashCardAlignment =>
     value === 0 || value === 1 || value === 2
 
@@ -284,6 +290,12 @@ export function decodeGuild(value: unknown): Guild | undefined {
             value.system_channel_id !== null &&
             !identifier(value.system_channel_id)) ||
         (value.system_channel_flags !== undefined && !nonNegativeInt32(value.system_channel_flags)) ||
+        (value.rules_channel_id !== undefined &&
+            value.rules_channel_id !== null &&
+            !identifier(value.rules_channel_id)) ||
+        !nullableText(value.vanity_url_code) ||
+        (value.nsfw_level !== undefined && !guildNsfwLevel(value.nsfw_level)) ||
+        (value.badge_ids !== undefined && !identifierList(value.badge_ids)) ||
         (value.afk_channel_id !== undefined && value.afk_channel_id !== null && !identifier(value.afk_channel_id)) ||
         (value.afk_timeout !== undefined && !nonNegativeInt32(value.afk_timeout)) ||
         (value.default_message_notifications !== undefined &&
@@ -317,6 +329,8 @@ export function decodeGuild(value: unknown): Guild | undefined {
         ...(value.system_channel_flags === undefined
             ? {}
             : { systemChannelFlags: value.system_channel_flags as number }),
+        ...(value.rules_channel_id === undefined ? {} : { rulesChannelId: value.rules_channel_id as string | null }),
+        ...(value.vanity_url_code === undefined ? {} : { vanityUrlCode: value.vanity_url_code as string | null }),
         ...(value.afk_channel_id === undefined ? {} : { afkChannelId: value.afk_channel_id as string | null }),
         ...(value.afk_timeout === undefined ? {} : { afkTimeoutSeconds: value.afk_timeout as number }),
         ...(value.default_message_notifications === undefined
@@ -334,6 +348,18 @@ export function decodeGuild(value: unknown): Guild | undefined {
               }),
         ...(value.mfa_level === undefined ? {} : { mfaLevel: value.mfa_level as GuildMfaLevel }),
         ...(value.nsfw === undefined ? {} : { nsfw: value.nsfw as boolean }),
+        // Legacy levels 1 and 2 follow Fluxer's stored-guild normalization to AgeRestricted and Safe
+        // https://github.com/fluxerapp/fluxer/blob/5f3fc0b1c66925ab032aa6bb1ef7ab49c1f71c58/packages/constants/src/GuildConstants.ts
+        ...(value.nsfw_level === undefined
+            ? {}
+            : {
+                  nsfwLevel:
+                      value.nsfw_level === 1
+                          ? GuildNsfwLevels.AgeRestricted
+                          : value.nsfw_level === 2
+                            ? GuildNsfwLevels.Safe
+                            : (value.nsfw_level as GuildNsfwLevel),
+              }),
         ...(value.content_warning_level === undefined
             ? {}
             : { contentWarningLevel: value.content_warning_level as GuildContentWarningLevel }),
@@ -346,6 +372,9 @@ export function decodeGuild(value: unknown): Guild | undefined {
         ...(value.message_history_cutoff === undefined
             ? {}
             : { messageHistoryCutoff: value.message_history_cutoff as string | null }),
+        ...(value.badge_ids === undefined
+            ? {}
+            : { badgeIds: Object.freeze([...(value.badge_ids as readonly string[])]) }),
     })
 }
 
@@ -367,9 +396,6 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         !nullableText(value.banner) ||
         (value.accent_color !== undefined && value.accent_color !== null && !color(value.accent_color)) ||
         (value.profile_flags !== undefined && value.profile_flags !== null && !nonNegativeInt32(value.profile_flags)) ||
-        (value.mention_flags !== undefined &&
-            value.mention_flags !== null &&
-            !mentionPreference(value.mention_flags)) ||
         (value.mute !== undefined && typeof value.mute !== "boolean") ||
         (value.deaf !== undefined && typeof value.deaf !== "boolean") ||
         (value.communication_disabled_until !== undefined &&
@@ -377,11 +403,14 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
             !timestamp(value.communication_disabled_until))
     )
         return undefined
+    // A partial account, such as the ID and name a dispatch completes, keeps the member and leaves the account out
+    const user = decodeUser(value.user)
     return Object.freeze({
         guildId,
         userId: value.user.id,
         username: value.user.username,
         isBot: value.user.bot === true,
+        ...(user ? { user } : {}),
         roleIds: Object.freeze([...value.roles] as string[]),
         joinedAt: value.joined_at,
         ...(value.communication_disabled_until === undefined
@@ -392,7 +421,10 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         ...(value.banner === undefined ? {} : { banner: value.banner as string | null }),
         ...(value.accent_color === undefined ? {} : { accentColor: value.accent_color as number | null }),
         ...(value.profile_flags === undefined ? {} : { profileFlags: value.profile_flags as number | null }),
-        ...(value.mention_flags === undefined ? {} : { mentionFlags: value.mention_flags as 0 | 1 | 2 | null }),
+        // A preference this SDK version does not know is left out, so a new Fluxer value cannot fail the read
+        ...(value.mention_flags === null || mentionPreference(value.mention_flags)
+            ? { mentionFlags: value.mention_flags }
+            : {}),
         ...(value.mute === undefined ? {} : { isMuted: value.mute as boolean }),
         ...(value.deaf === undefined ? {} : { isDeafened: value.deaf as boolean }),
     })
@@ -443,10 +475,7 @@ export function decodeDispatchMember(
     if (!target || !record(body) || !record(body.member)) return undefined
     if (type === "MESSAGE_CREATE" || type === "MESSAGE_UPDATE") {
         const author = body.author as Record<string, unknown>
-        return decodeMember(
-            { ...body.member, user: { id: author.id, username: author.username, bot: author.bot } },
-            target.guildId,
-        )
+        return decodeMember({ ...body.member, user: author }, target.guildId)
     }
     let source: Record<string, unknown> = body.member
     const user = source.user
@@ -474,7 +503,7 @@ export function decodeDeletionMember(value: unknown): DeletedMessageMember | und
         return undefined
     const member = decodeMember({ ...value.member, user: { id: value.author_id, username: "" } }, value.guild_id)
     if (!member) return undefined
-    const { username: _username, isBot: _isBot, ...rest } = member
+    const { username: _username, isBot: _isBot, user: _user, ...rest } = member
     return Object.freeze(rest)
 }
 
@@ -489,7 +518,7 @@ export function guildFetch(guildId: string): GuildValidationResult<Guild> {
         status: 200,
         decode: (value) => {
             const guild = decodeGuild(value)
-            return guild?.id === guildId ? guild : undefined
+            return guild === undefined || guild.id === guildId ? guild : rejectCheck("targetMismatch")
         },
     }
 }
@@ -510,7 +539,7 @@ export function memberFetch(target: MemberReference): GuildValidationResult<Guil
         status: 200,
         decode: (value) => {
             const member = decodeMember(value, guildId)
-            return member?.userId === userId ? member : undefined
+            return member === undefined || member.userId === userId ? member : rejectCheck("targetMismatch")
         },
     }
 }
@@ -636,7 +665,7 @@ export function memberNicknameEdit(
         json: JSON.stringify({ nick: nickname }),
         decode: (value) => {
             const member = decodeMember(value, guildId)
-            return member?.userId === userId ? member : undefined
+            return member === undefined || member.userId === userId ? member : rejectCheck("targetMismatch")
         },
     }
 }
@@ -691,7 +720,7 @@ export function memberRolesSet(
         json: JSON.stringify({ roles }),
         decode: (value) => {
             const member = decodeMember(value, guildId)
-            return member?.userId === userId ? member : undefined
+            return member === undefined || member.userId === userId ? member : rejectCheck("targetMismatch")
         },
     }
 }
@@ -953,7 +982,7 @@ export function roleEdit(target: RoleReference, input: RoleEdit): GuildValidatio
         ...(input.permissions === undefined ? {} : { features: ["view_channel_members_permission"] }),
         decode: (value) => {
             const role = decodeRole(value, guildId)
-            return role?.id === id ? role : undefined
+            return role === undefined || role.id === id ? role : rejectCheck("targetMismatch")
         },
     }
 }

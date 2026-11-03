@@ -10,7 +10,7 @@ import type { Message, MessageCore } from "#sdk/messages"
  * @category Caching
  */
 export interface CacheObserver {
-    /** Identifier of this observer, such as cacheChange#3, used in its log records */
+    /** Identifier of this observer, such as cacheChange#3, used in its log records and failure reports */
     readonly id: string
     /** Stop delivering changes, including changes recorded or waiting but not yet delivered, and interrupt running listener work without waiting for it. Repeated calls do nothing */
     close(): Effect.Effect<void>

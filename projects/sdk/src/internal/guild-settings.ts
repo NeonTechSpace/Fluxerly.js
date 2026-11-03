@@ -6,6 +6,7 @@
 import { GuildFeatureToggles, type Guild, type GuildEdit, type GuildFeatureToggle } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
 import { identifier, imageDataUri, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
@@ -125,7 +126,7 @@ export function guildEdit(
             : {}),
         decode: (value) => {
             const guild = decodeGuild(value)
-            return guild?.id === guildId ? guild : undefined
+            return guild === undefined || guild.id === guildId ? guild : rejectCheck("targetMismatch")
         },
     }
 }

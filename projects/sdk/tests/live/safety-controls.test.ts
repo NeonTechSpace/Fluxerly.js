@@ -11,6 +11,7 @@ import {
     openJournal,
     processAuthorized,
     processValue,
+    sandboxLeaveTarget,
     verifySandboxIdentity,
 } from "./support/harness.js"
 import { pendingResolution, rejoinedBaseline } from "./support/voice-state.js"
@@ -262,6 +263,15 @@ test("process-only targets and authorizations ignore stored values", () => {
     vi.stubEnv("FLUXER_TEST_VANITY_MUTATIONS", "true")
     expect(refusal(() => processValue("FLUXER_TEST_VOICE_USER_ID")).check).toBe("configuration")
     expect(processAuthorized("FLUXER_TEST_VANITY_MUTATIONS")).toBe(false)
+})
+
+test("a leave target must be the sandbox server", () => {
+    vi.stubEnv("FLUXER_TEST_LEAVE_GUILD_ID", "401")
+    expect(sandboxLeaveTarget("401")).toBe("401")
+    vi.stubEnv("FLUXER_TEST_LEAVE_GUILD_ID", "402")
+    expect(refusal(() => sandboxLeaveTarget("401")).check).toBe("configuration")
+    vi.stubEnv("FLUXER_TEST_LEAVE_GUILD_ID", undefined)
+    expect(refusal(() => sandboxLeaveTarget("401")).check).toBe("configuration")
 })
 
 function journalIn(root: string, name = "fixture") {

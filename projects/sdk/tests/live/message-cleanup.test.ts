@@ -56,7 +56,7 @@ const fakeSdk = {
 // Runs the real harness. By default a journal retained by an earlier run triggers recovery cleanup before new work,
 // and the journaled moderation target names a different bot than the verified one, so moderation recovery refuses.
 // With `journal: null` the run starts fresh, creating its temporary channel before the stand-in SDK client
-function fixture(journal: { guildId?: string; channelId?: string | null } | null = {}) {
+function fixture(journal: { guildId?: string; channelId?: string | null } | null = {}, storedLines = "") {
     const root = mkdtempSync(join(temporaryParent, "fluxerly-message-cleanup-"))
     temporaryRoots.push(root)
     mkdirSync(join(root, "tests/live"), { recursive: true })
@@ -83,7 +83,7 @@ function fixture(journal: { guildId?: string; channelId?: string | null } | null
     for (const [file, content] of Object.entries(fakeSdk)) writeFileSync(join(sdk, file), content)
     writeFileSync(
         join(root, ".env.test.local"),
-        `FLUXER_TEST_GUILD_ID=100\nFLUXER_TEST_APPLICATION_ID=200\nFLUXER_TEST_BOT_TOKEN=${fixtureToken}\n`,
+        `FLUXER_TEST_GUILD_ID=100\nFLUXER_TEST_APPLICATION_ID=200\nFLUXER_TEST_BOT_TOKEN=${fixtureToken}\n${storedLines}`,
     )
     if (journal)
         writeFileSync(
@@ -105,16 +105,17 @@ function fixture(journal: { guildId?: string; channelId?: string | null } | null
             globalThis.fetch = async (url, options = {}) => {
                 const path = new URL(url).pathname
                 const method = options.method ?? "GET"
-                if (method === "GET" && path === "/v1/applications/@me") return Response.json({ id: "200", bot: { id: "300" } })
-                if (method === "GET" && path === "/v1/users/@me") return Response.json({ id: "300", bot: true })
-                if (method === "GET" && path === "/v1/guilds/100") return Response.json({ id: "100" })
-                if (method === "POST" && path === "/v1/guilds/100/channels") {
+                console.log(JSON.stringify({ fixture: "remote_request", method, path }))
+                if (method === "GET" && path === "/api/v1/applications/@me") return Response.json({ id: "200", bot: { id: "300" } })
+                if (method === "GET" && path === "/api/v1/users/@me") return Response.json({ id: "300", bot: true })
+                if (method === "GET" && path === "/api/v1/guilds/100") return Response.json({ id: "100" })
+                if (method === "POST" && path === "/api/v1/guilds/100/channels") {
                     const channel = { id: "310", ...JSON.parse(options.body), guild_id: "100" }
                     created.push(channel)
                     console.log(JSON.stringify({ fixture: "temporary_channel_created" }))
                     return Response.json(channel)
                 }
-                if (path === "/v1/channels/310") {
+                if (path === "/api/v1/channels/310") {
                     if (method === "DELETE") {
                         created.splice(0)
                         console.log(JSON.stringify({ fixture: "temporary_channel_deleted" }))
@@ -122,20 +123,20 @@ function fixture(journal: { guildId?: string; channelId?: string | null } | null
                     }
                     return created.length ? Response.json(created[0]) : Response.json(null, { status: 404 })
                 }
-                if (method === "GET" && path === "/v1/guilds/100/channels")
+                if (method === "GET" && path === "/api/v1/guilds/100/channels")
                     return Response.json([
                         ...(channelPresent ? [{ id: ownershipConflict ? "301" : "300", name, guild_id: "100", type: 0 }] : []),
                         ...created,
                     ])
-                if (method === "GET" && path === "/v1/channels/300")
+                if (method === "GET" && path === "/api/v1/channels/300")
                     return channelPresent
                         ? Response.json({ id: "300", name: ownershipConflict ? "renamed-owned-channel" : name, guild_id: "100", type: 0 })
                         : Response.json(null, { status: 404 })
-                if (method === "GET" && path === "/v1/channels/301")
+                if (method === "GET" && path === "/api/v1/channels/301")
                     return channelPresent
                         ? Response.json({ id: "301", name, guild_id: "100", type: 0 })
                         : Response.json(null, { status: 404 })
-                if (method === "DELETE" && (path === "/v1/channels/300" || path === "/v1/channels/301")) {
+                if (method === "DELETE" && (path === "/api/v1/channels/300" || path === "/api/v1/channels/301")) {
                     channelPresent = false
                     return Response.json({})
                 }
@@ -148,10 +149,16 @@ function fixture(journal: { guildId?: string; channelId?: string | null } | null
     return root
 }
 
-function spawn(root: string, args: readonly string[], environment: Record<string, string>) {
+// An `undefined` value removes that variable from the child's environment
+function spawn(root: string, args: readonly string[], environment: Record<string, string | undefined>) {
+    const env = Object.fromEntries(
+        Object.entries({ ...process.env, FLUXER_TEST_MODERATION_USER_ID: "400", ...environment }).filter(
+            ([, value]) => value !== undefined,
+        ),
+    )
     const child = spawnSync(process.execPath, ["--import", "./trap.mjs", "tests/live/messages.mjs", ...args], {
         cwd: root,
-        env: { ...process.env, FLUXER_TEST_MODERATION_USER_ID: "400", ...environment },
+        env,
         encoding: "utf8",
         timeout: childTimeoutMs,
         windowsHide: true,
@@ -232,4 +239,13 @@ test("message live cleanup retains the journal and channel when the journal guil
     const lines = run(fixture({ guildId: "999" }))
     expect(lines).not.toContainEqual(expect.objectContaining(channelRemoved))
     expect(lines).toContainEqual({ fixture: "channel_present", channelPresent: true })
+})
+
+test("a moderation run refuses a target ID stored only in the env file before any request", () => {
+    const root = fixture(null, "FLUXER_TEST_MODERATION_USER_ID=400\n")
+    const lines = spawn(root, ["default", "--moderation"], { FLUXER_TEST_MODERATION_USER_ID: undefined })
+    expect(lines).toContainEqual(expect.objectContaining({ check: "configuration", passed: false }))
+    expect(fixtureEvents(lines)).not.toContain("remote_request")
+    expect(existsSync(join(root, ".env.test.messages-moderation.local"))).toBe(false)
+    expect(lockFiles(root)).toEqual([])
 })

@@ -12,6 +12,7 @@ const fixtureKeys = new Set([
     "threadParent",
     "forum",
     "deletedParent",
+    "voiceNotes",
 ])
 
 const markerMatches = (entry, channel) =>
@@ -120,34 +121,33 @@ export async function createMainTestChannel(api, journal, { create, save }) {
 
 /**
  * Deletes the main test channel only while it matches the journaled server, type, unique name and any returned ID.
- * Without a returned ID, exactly one listed channel must carry the name, so absent or ambiguous intent fails closed
+ * Without a returned ID, exactly one listed channel must carry the name, so absent or ambiguous intent fails closed.
+ * One fresh read of the channel precedes its deletion, a 404 read proves the deletion and a final channel list proves
+ * that no channel carries the name
  */
 export async function cleanupMainTestChannel(api, journal, save) {
     const { guildId } = journal
     assert.match(guildId ?? "", /^\d+$/)
     assert.match(journal.name ?? "", testChannelPattern)
-    const listed = await api("GET", `/guilds/${guildId}/channels`)
-    assert.ok(Array.isArray(listed.data))
-    // A returned ID is authoritative. Marker lookup is only safe while creation never returned an ID
-    const matches =
-        journal.channelId === undefined ? listed.data.filter((channel) => channel.name === journal.name) : []
-    assert.ok(matches.length <= 1)
-    let channel = matches[0]
-    if (journal.channelId !== undefined) {
-        const recorded = await api("GET", `/channels/${journal.channelId}`)
-        if (recorded.status !== 404) channel = recorded.data
+    let channelId = journal.channelId
+    if (channelId === undefined) {
+        // A returned ID is authoritative. Marker lookup is only safe while creation never returned an ID
+        const listed = await api("GET", `/guilds/${guildId}/channels`)
+        assert.ok(Array.isArray(listed.data))
+        const matches = listed.data.filter((channel) => channel.name === journal.name)
+        assert.ok(matches.length <= 1)
+        assert.ok(matches[0], "Unresolved channel creation retains its journal")
+        channelId = matches[0].id
+        assert.match(channelId, /^\d+$/)
     }
-    if (journal.channelId === undefined) assert.ok(channel, "Unresolved channel creation retains its journal")
-    if (channel) {
-        assert.match(channel.id, /^\d+$/)
-        if (journal.channelId !== undefined) assert.equal(channel.id, journal.channelId)
+    const current = await api("GET", `/channels/${channelId}`)
+    // A recorded channel that is already gone needs no deletion. A listed one must still be readable
+    if (current.status !== 404 || journal.channelId === undefined) {
+        const channel = current.data
+        assert.equal(channel?.id, channelId)
         assert.equal(channel.guild_id, guildId)
         assert.equal(channel.type, 0)
         assert.equal(channel.name, journal.name)
-        const current = await api("GET", `/channels/${channel.id}`)
-        assert.equal(current.data?.id, channel.id)
-        assert.equal(current.data?.name, journal.name)
-        assert.equal(current.data?.guild_id, guildId)
         journal.channelId = channel.id
         save()
         await api("DELETE", `/channels/${channel.id}`)

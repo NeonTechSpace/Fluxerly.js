@@ -50,6 +50,9 @@ type Exceptions = {
     Collector: "close"
     Messages: "collect" | "collectReactions" | "keepTyping"
     ReactionCollector: "close"
+    // Generic over routes with a conditional rest parameter, which the signal normalization cannot map. Both APIs take
+    // the same per-route input apart from the default signal, which tests/types/rest-call.ts checks route by route
+    RestRequests: "call"
     Subscription: "close"
 }
 

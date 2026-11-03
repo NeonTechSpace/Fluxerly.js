@@ -97,6 +97,21 @@ function mentionedMessage(type: string, payload: unknown, userId: string): boole
     )
 }
 
+/** Dispatches whose payload names the community in id rather than guild_id, as Fluxer routes them */
+const guildPayloadTypes: ReadonlySet<string> = new Set(["GUILD_CREATE", "GUILD_UPDATE", "GUILD_DELETE", "GUILD_SYNC"])
+
+/**
+ * The shard Fluxer delivers a dispatch to: The community's shard for a payload with a guild_id, or for a guild create,
+ * update, delete or sync payload with an id, and shard 0, which receives direct-message traffic, for anything else.
+ * Pinned to session_dispatch at fluxerapp/fluxer commit 5f3fc0b1, which reads id as the community for those four events
+ */
+function routedShard(type: string, payload: unknown, totalShards: number): number {
+    const fields =
+        typeof payload === "object" && payload !== null ? (payload as { guild_id?: unknown; id?: unknown }) : {}
+    const guildId = fields.guild_id ?? (guildPayloadTypes.has(type) ? fields.id : undefined)
+    return typeof guildId === "string" && /^[0-9]+$/.test(guildId) ? guildShardId(guildId, totalShards) : 0
+}
+
 /** The scripted gateway shared by one test client's shards */
 export class TestGateway {
     readonly #sockets = new Set<FakeSocket>()
@@ -247,10 +262,7 @@ export class TestGateway {
         const requested = options?.shardId
         if (requested !== undefined && (!Number.isSafeInteger(requested) || requested < 0))
             throw new ConfigurationError("shardIds", "Emit shardId must be a non-negative integer")
-        const guildId = (payload as { guild_id?: unknown } | null)?.guild_id
-        const shardId =
-            requested ??
-            (typeof guildId === "string" && /^[0-9]+$/.test(guildId) ? guildShardId(guildId, this.#totalShards) : 0)
+        const shardId = requested ?? routedShard(type, payload, this.#totalShards)
         let text: string | undefined
         try {
             text = JSON.stringify(payload)
@@ -273,6 +285,23 @@ export class TestGateway {
             ...(text === undefined ? {} : { d: payload }),
         }
         session.socket.deliver(frame)
+    }
+
+    /** Deliver one opcode 12 Gateway Error frame synchronously to a connected shard, shard 0 by default. It has no sequence */
+    emitGatewayError(payload: unknown, options: TestEmitOptions | undefined) {
+        if (options !== undefined && (typeof options !== "object" || options === null))
+            throw new ConfigurationError("event", "Emit options must be an object")
+        const requested = options?.shardId
+        if (requested !== undefined && (!Number.isSafeInteger(requested) || requested < 0))
+            throw new ConfigurationError("shardIds", "Emit shardId must be a non-negative integer")
+        let text: string | undefined
+        try {
+            text = JSON.stringify(payload)
+        } catch (cause) {
+            throw new ConfigurationError("event", "Gateway Error data must be JSON-serializable wire data", { cause })
+        }
+        const session = this.#connected(requested ?? 0, "emitGatewayError")
+        session.socket.deliver({ op: Opcode.gatewayError, ...(text === undefined ? {} : { d: payload }) })
     }
 
     /** Close one shard's current connection from the server side with a close code */

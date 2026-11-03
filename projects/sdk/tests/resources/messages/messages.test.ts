@@ -63,7 +63,7 @@ async function fixture() {
     })
     stubFetchWithHostedDiscovery((url: string, init: RequestInit) => {
         fetched.push({ url, redirect: init.redirect })
-        return realFetch(url.replace("https://api.fluxer.app", rest.origin), init)
+        return realFetch(url.replace("https://fluxer.com/api", rest.origin), init)
     })
     return { requests, fetched, rest, control }
 }
@@ -99,7 +99,7 @@ test("text send and reply retain caller nonces, preserve payloads, suppress ment
         server.rest.requests.map((request) => [request.method, request.path, request.headers.authorization]),
     ).toEqual(Array.from({ length: 3 }, () => ["POST", "/v1/channels/20/messages", `Bot ${token}`]))
     expect(server.fetched).toEqual(
-        Array.from({ length: 3 }, () => ({ url: "https://api.fluxer.app/v1/channels/20/messages", redirect: "error" })),
+        Array.from({ length: 3 }, () => ({ url: "https://fluxer.com/api/v1/channels/20/messages", redirect: "error" })),
     )
 })
 

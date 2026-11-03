@@ -36,7 +36,7 @@ export type MemberChunkQuery = (
       }
     | {
           /** Case-insensitive prefix of nickname, global name or username, at most 4,096 UTF-16 code units and well-formed Unicode.
-           * The complete encoded request must also fit the 4,096-byte gateway payload budget.
+           * The complete encoded request must also fit the 16,384-byte gateway payload limit.
            * Empty selects an initial bounded list, not full-list mode
            */
           readonly query: string
@@ -61,9 +61,13 @@ export type MemberChunkQuery = (
 export interface MemberChunk {
     /** Requested guild ID as a positive decimal string with no leading zeroes, no greater than 9223372036854775807 */
     readonly guildId: string
-    /** Zero-based batch index, delivered in provider order without gaps or duplicate indices */
+    /** Zero-based batch index, delivered in provider order without gaps or duplicate indices.
+     * Fluxer names it chunk_index
+     */
     readonly index: number
-    /** Number of batches advertised for this response, from 1 through 100. It does not prove a complete community roster */
+    /** Number of batches advertised for this response, from 1 through 100. It does not prove a complete community roster.
+     * Fluxer names it chunk_count
+     */
     readonly count: number
     /** Up to 1,000 frozen member observations. An empty response is one batch with an empty array */
     readonly members: readonly GuildMember[]
@@ -87,7 +91,8 @@ export interface MemberChunk {
  * @category Guilds and members
  */
 export interface MemberChunkOptions {
-    /** Total milliseconds from dispatch until the final batch arrives, integer 1–2,147,483,647, default 30,000.
+    /** Total milliseconds from the call until the final batch arrives, including waits for gateway pacing, integer
+     * 1–2,147,483,647, default 30,000.
      * Pausing consumption does not pause this deadline or the provider. No timeout applies after the full response arrives
      */
     readonly timeoutMs?: number

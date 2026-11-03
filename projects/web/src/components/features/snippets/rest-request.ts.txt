@@ -1,0 +1,9 @@
+import type { Client } from "@neontechspace/fluxerly"
+
+export async function applicationName(client: Client, applicationId: string) {
+    const result = await client.rest.request<{ name?: unknown }>({
+        method: "GET",
+        path: `/oauth2/applications/${applicationId}/public`,
+    })
+    return result.map((response) => (typeof response.body.name === "string" ? response.body.name : undefined))
+}

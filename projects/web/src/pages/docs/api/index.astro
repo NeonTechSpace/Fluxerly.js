@@ -34,8 +34,8 @@ const entryIcons: Record<string, IconName> = { "js-ts": "sdk-package", effect: "
                             Import from <Code text={entry.importPath} />
                         </p>
                     )}
-                    <Md md={entry.doc.summary} class="ref-summary" />
-                    <Md md={entry.doc.examples?.[0]} class="ref-example" />
+                    <Md md={entry.doc.summary} entry={entry.key} class="ref-summary" />
+                    <Md md={entry.doc.examples?.[0]} entry={entry.key} class="ref-example" />
                     <p class="ref-more">
                         <a class="prose-link go-link" href={entry.url}>
                             Browse {entry.title}

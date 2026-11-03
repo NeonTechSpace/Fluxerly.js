@@ -94,7 +94,7 @@ export interface ClientOptions<E = never, R = never, F extends MessageFields | u
     }
     /**
      * Configure what the SDK logs, with the same settings as the default entry point.
-     * Without sink or format, records go through the caller's Effect logger with Effect.logWithLevel, the real Cause
+     * Without sink or format, records go through the caller's Effect logger with Effect.logWithLevel, a Cause holding masked copies of each failure and defect
      * and fluxerly.* annotations such as fluxerly.code and fluxerly.category, so any Effect Logger, span and tracer applies.
      * Debug and Trace records enabled by these settings bypass the Effect minimum log level, while Info and higher records respect it.
      * Connection records use connect or run's services, handler records use registration services and shutdown records use shutdown's services.
@@ -120,14 +120,18 @@ export interface ClientOptions<E = never, R = never, F extends MessageFields | u
      * A subscription's own onError takes precedence. Without a hook the SDK logs each failure at Error with its full Cause.
      * A failing hook is logged with the original failure and never retried.
      * Shutdown interrupts a running hook and waits at most one second for its cleanup, so a hook that ignores
-     * interruption cannot hold shutdown open. The interrupted report and any queued ones are logged at Error, with
+     * interruption cannot hold shutdown open. A defect in that cleanup fails shutdown as a cleanup fault, logged and
+     * counted like the other cleanup steps. The interrupted report and any queued ones are logged at Error, with
      * fields.reportOutcome "interrupted" for the report being handled and "clientClosed" for queued or later reports.
      * A hook that interrupts itself also logs its report with "interrupted", and later reports still reach the hook
      */
     readonly onError?: (report: FailureReport) => Effect.Effect<unknown, E, R>
     /** Optionally keep resource snapshots in memory. Omission keeps none.
      * Every configured budget applies across this client's locally owned shards.
-     * A gateway gap invalidates known-scope snapshots from its affected shard. Unknown community scope invalidates conservatively because the SDK keeps no channel-to-community index
+     * A lost gateway connection clears the affected shard's messages, all cached users and, on shard zero, direct messages.
+     * A message whose community is unknown is also cleared, because the SDK keeps no channel-to-community index.
+     * Community, member, role, emoji, sticker and channel snapshots stay while the connection can still resume, and are cleared once a new session is needed.
+     * Cached threads are cleared after a Resume
      */
     readonly cache?: Omit<NonNullable<SharedClientOptions<F>["cache"]>, "messages"> & {
         /**
@@ -156,10 +160,12 @@ export interface ClientOptions<E = never, R = never, F extends MessageFields | u
  * A valid global indicator takes priority over conflicting route-specific metadata. Malformed scope values are ignored.
  * A global header with a valid Retry-After starts the pause before body inspection, including when
  * the body is missing, malformed, oversized or too slow. Body inspection stays bounded to 8 KiB and 100 ms before awaited cleanup.
- * Without global metadata, only requests in the same rate-limit group wait. Without a usable delay, the call fails rather than guessing how long to wait.
+ * Without global metadata, an identified route limit pauses only its rate-limit group. A 429 that identifies no limiter pauses all API routes on this client, and repeated unidentified limits can lengthen the pause.
+ * Without a usable delay, the call fails rather than guessing how long to wait.
  * Rate-limit waits count toward each call's original deadline. Interruption removes only that call from the queue, not the shared pause.
  * A call whose known pause outlasts its deadline fails at once with reason rateLimit and the remaining wait as retryAfterMs instead of waiting.
- * Separate clients do not coordinate these waits. Attachment downloads do not wait for API rate limits.
+ * Clients under one supervisor share pauses Fluxer declares global. Other clients do not coordinate these waits, and an unidentified limit pauses only its own client.
+ * Attachment downloads do not wait for API rate limits.
  * Writes retry only confirmed rate-limit rejection, never an uncertain outcome
  *
  * Valid X-RateLimit-Bucket metadata updates how this client groups rate-limited routes, without application configuration.
@@ -398,7 +404,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * The task is an Effect that runs again for each run, with the services available when this Effect executes and a
      * Scope of its own for each run, closed when the run ends. The task does not belong to the executing Scope, so a
      * handler that schedules it can end first. A failed run reports its complete Cause, and a run that interrupts itself
-     * ends the task without a report. Shutdown interrupts a run in progress and awaits its finalizers.
+     * ends the task without a report. Shutdown interrupts a run in progress and awaits its finalizers. A defect in those
+     * finalizers, such as a failed release, is a cleanup fault: It fails shutdown and is logged as lifecycle.cleanupFailed.
      * A task that is not an Effect and invalid options are defects carrying ConfigurationError, and scheduling after
      * shutdown began is a defect carrying ClientClosedError
      *
@@ -429,7 +436,31 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Consumers choose stream concurrency and supervision.
      * Registration misuse is a defect carrying ConfigurationError.
      * A Stream run after shutdown began is not misuse: It ends at once without events and writes a Warn log record with
-     * code events.registeredAfterShutdown
+     * code events.registeredAfterShutdown.
+     * Registration happens when the Stream's first pull runs. Building the Stream, running Stream.toPull or forking its
+     * consumer does not confirm it, so an event sent right after can be missed. Before triggering an action, run a scoped
+     * on subscription or register a collector instead, as the example does
+     *
+     * @example
+     * ```ts
+     * import { Deferred, Effect } from "effect"
+     * import type { Client, Message } from "@neontechspace/fluxerly/effect"
+     * export const announceAndWait = (client: Client, channelId: string, userId: string) =>
+     *     Effect.scoped(
+     *         Effect.gen(function* () {
+     *             const next = yield* Deferred.make<Message>()
+     *             // The subscription exists once on succeeds, so the send below cannot outrun it. It sees every message,
+     *             // including the bot's own prompt, so it keeps only the user's reply in this channel
+     *             yield* client.on("messageCreate", (message) =>
+     *                 message.channelId === channelId && message.author.id === userId
+     *                     ? Deferred.succeed(next, message)
+     *                     : Effect.void,
+     *             )
+     *             yield* client.messages.send(channelId, "Say something")
+     *             return yield* Deferred.await(next)
+     *         }),
+     *     )
+     * ```
      */
     subscribe<K extends EventName>(
         event: K,
@@ -440,8 +471,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      * Observation starts without connecting the client, reading history or cache, or making a remote request
      *
      * The default timeout is 30,000 ms from registration.
-     * A timeout or invalid or throwing filter fails with EventWaitError without input or exception text.
-     * Inspect a filter exception inside the filter before rethrowing if needed.
+     * A timeout, a throwing filter or a non-boolean filter result fails with EventWaitError.
+     * A thrown value is kept as the error's cause and can contain application data, while a non-boolean result is not kept.
      * Buffer limits match subscribe.
      * Reconnection can miss events and does not reset the deadline.
      * Overflow, invalid configuration and client closure remain distinct failures
@@ -452,7 +483,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
      *
      * @remarks
      * Each execution owns a separate bounded subscription in its executing fiber, with no separate SDK runtime.
-     * Creating or forking this Effect is not a registration barrier.
+     * Creating or forking this Effect is not a registration barrier, and neither is building or pulling a subscribe Stream
+     * in another fiber, so confirm registration with a scoped on subscription or a collector.
      * SDK and cleanup defects remain in the Cause
      *
      * @example
@@ -473,7 +505,7 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
     /**
      * Read a frozen local report of active work, queues and cache occupancy.
      * No request, telemetry or persistent record is created.
-     * The report excludes tokens, routes, resource IDs and payloads.
+     * The report excludes tokens, raw request paths, resource IDs and payloads. A rate-limit hold may name a method and route template with IDs replaced, such as "POST /channels/:id/messages".
      * Counts cover only this client's assigned shards and local work.
      * Event counts include open sources, message and reaction collectors and executing subscription handlers, not an enforced client-wide admission quota.
      * Accounted cache and queue bytes are not heap memory, process memory or remote storage.
@@ -547,7 +579,8 @@ export interface Client<M extends MessageCore = Message> extends ClientState {
     waitForClose(): Effect.Effect<void, ConnectionFailure>
     /**
      * Permanently close this client and wait for startup, recovery, sockets and request cleanup.
-     * Credentials, cached references, presence intent and expiry timers are released.
+     * Shutdown stops credential use and releases cached references, presence intent and expiry timers.
+     * Keeping the client or a failure report keeps the token string used to mask logs in memory.
      * Active handlers and message and reaction collector callbacks are cancelled.
      * Pass drainMs to first stop accepting events and let running handlers and REST requests finish for up to that many
      * milliseconds, as runBot does when asked to stop. See ShutdownOptions.
@@ -621,7 +654,7 @@ export interface ScheduledTask {
  * Calling `createClient` does not create a client yet. Each execution creates a separate client in the caller's Scope and validates configuration locally, without authenticating the token
  *
  * Creation starts no networking or background work. HTTP operations work without `connect`.
- * Closing the scope permanently shuts down the client and releases its credential reference.
+ * Closing the scope permanently shuts down the client and stops credential use.
  * Cache-error callbacks capture the Effect services available when creation executes.
  * The Effect Clock supplied at creation controls this client's REST queue and deadlines, cache expiry, collectors,
  * presence pacing, scheduled task timing and gateway lifetime. Supplying a different Clock for a later operation does not replace it.
@@ -637,7 +670,9 @@ export interface ScheduledTask {
  *
  * **Connection and sharding**
  *
- * Connection settings default to a 30,000 ms overall startup budget and three total attempts per assigned shard.
+ * Gateway startup defaults to 30,000 ms, plus one second for each additional local shard when the SDK spaces Identify commands.
+ * Automatic sharding first counts communities under a separate deadline of the same length.
+ * Each assigned shard allows up to three startup attempts within that budget.
  * An explicit sharding plan fixes this client's local IDs for its lifetime, while automatic sharding and a client
  * without sharding settings may move to a larger plan when Fluxer asks for more shards.
  * Shard zero receives direct-message gateway traffic.

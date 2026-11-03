@@ -7,7 +7,8 @@ import type { GatewaySendFailure } from "#sdk/gateway"
  * Send gateway commands that have no SDK method, on this client's ready shards.
  * This is an advanced escape hatch: The SDK validates the frame locally but does not know the command's meaning,
  * and Fluxer closes the connection, ending the client, for commands it rejects.
- * Observe replies to these commands through the raw event, subscribing before sending
+ * Observe dispatch replies to these commands through the raw event, subscribing before sending.
+ * The raw event receives only opcode 0 dispatches. An opcode 12 Gateway Error reply needs a custom transport.webSocket that observes incoming frames
  *
  * @category Client and lifecycle
  */
@@ -15,11 +16,14 @@ export interface GatewayCommands {
     /**
      * Send one command frame { op, d } on a Connected local shard.
      * The data is copied through JSON encoding when the operation starts, so later changes to it have no effect, and the
-     * encoded frame must be at most 4,096 UTF-8 bytes, Fluxer's message limit. Undefined data is invalid. Pass null instead.
+     * encoded frame must be at most 16,384 UTF-8 bytes. Fluxer instances older than October 2026 allow 4,096 bytes and close the
+     * connection for a larger frame with 4002, which stops the shard. Undefined data is invalid. Pass null instead.
      * Data JSON cannot encode, such as a cycle or a BigInt, fails with reason input.
-     * Heartbeat, Identify, Resume and server-only opcodes fail with reason reserved.
+     * Heartbeat, Identify, Resume, reserved and server-only opcodes fail with reason reserved.
      * Commands share the shard's outbound pacing with presence and request commands: At most 500 paced commands per
-     * rolling 60 seconds per session, retained across Resume and reset for a fresh Identify, sent in call order.
+     * rolling 60 seconds per session, sent in call order. The send history is kept across a Resume in the same running
+     * client and cleared for a fresh Identify. A session loaded from a SessionStore after a restart starts with an
+     * empty history.
      * Heartbeats, Identify and Resume are never delayed. At most 500 gateway.send commands may wait per shard, and
      * further submissions fail with reason busy until transmission or cancellation releases queue capacity.
      * Completion means the frame was handed to the connection, not that Fluxer received or accepted it.
@@ -28,7 +32,9 @@ export interface GatewayCommands {
      * for that limit.
      * Fluxer answers an opcode it does not define, missing data or invalid command fields with close code 4001 or 4002.
      * The SDK treats both as permanent, so the client ends. Data must match Fluxer's command schema exactly.
-     * Observe any reply through the raw event, which receives every dispatch the session accepts.
+     * Observe dispatch replies through the raw event, which receives every opcode 0 dispatch the session accepts.
+     * Other replies, such as an opcode 12 Gateway Error, never reach it. Observe those through a custom transport.webSocket,
+     * without logging credentials or complete payloads.
      * A shard that loses its connection before sending fails a waiting command with reason notReady, and the SDK never
      * replays it after reconnecting. Each sent command is logged at Debug with code gateway.commandSent
      *

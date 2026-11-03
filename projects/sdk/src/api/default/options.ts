@@ -23,9 +23,9 @@ export interface RequestOptions extends OperationOptions {
  * @category Options
  */
 export interface AuditedRequestOptions extends RequestOptions {
-    /** Optional audit-log reason, 1–512 printable ASCII characters after trimming.
-     * Sent only as the raw X-Audit-Log-Reason header, without URL escaping, because Fluxer does not decode escapes.
-     * Non-ASCII and control characters fail before dispatch. Omission sends no header. Never included in SDK errors or diagnostics.
+    /** Optional audit-log reason, 1–512 UTF-16 code units after trimming, in any language.
+     * Sent only as the X-Audit-Log-Reason header carrying the reason's UTF-8 bytes, which Fluxer decodes, without URL escaping.
+     * Control characters, line separators and lone surrogates fail before dispatch. Omission sends no header. Never included in SDK errors or diagnostics.
      * Header delivery does not guarantee that Fluxer stores the reason in an audit entry. Methods name the known paths that do not
      */
     readonly auditReason?: string

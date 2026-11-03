@@ -213,7 +213,9 @@ export type PrefixCommandRejectionFeedback<E = never, R = never, M extends Messa
     | ((context: PrefixCommandContext<M>, rejection: PrefixCommandRejection) => Effect.Effect<unknown, E, R>)
 
 /**
- * Prefix and parser configuration with optional Effect feedback when no executable command is selected
+ * Prefix and parser configuration with optional Effect feedback when no executable command is selected.
+ * `E` names the failures and `R` the services every callback may have. The type parameters after `M` can set them per
+ * callback instead, as commands.create does when it infers them
  *
  * @category Commands
  */
@@ -221,22 +223,30 @@ export interface PrefixCommandsOptions<
     E = never,
     R = never,
     M extends MessageCore = Message,
+    PrefixServices = R,
+    RejectServices = R,
+    UseServices = R,
+    UnmatchedServices = R,
+    RejectErrors = E,
+    UseErrors = E,
+    UnmatchedErrors = E,
 > extends PrefixCommandParsing<M> {
     /**
      * Prefix text, accepted-prefix list or per-message resolver, which may return an Effect. If several prefixes match,
-     * the longest wins. Return undefined to ignore the message. A resolver failure is reported without a command name
+     * the longest wins. Return undefined to ignore the message. A resolver failure is reported without a command name.
+     * A resolver Effect uses the services provided when the router is attached
      */
     readonly prefix:
         | string
         | readonly string[]
-        | ((message: M) => PrefixCommandPrefixValue | Effect.Effect<PrefixCommandPrefixValue, unknown>)
+        | ((message: M) => PrefixCommandPrefixValue | Effect.Effect<PrefixCommandPrefixValue, unknown, PrefixServices>)
     /**
      * Rejection feedback for commands that do not set their own `onReject`. Omit it to give no feedback, except in
      * runBot, which replies by default. Guards returning false never send an automatic reply
      */
-    readonly onReject?: PrefixCommandRejectionFeedback<E, R, M>
+    readonly onReject?: PrefixCommandRejectionFeedback<RejectErrors, RejectServices, M>
     /** Middleware run around every matched command, in order. See PrefixCommandMiddleware */
-    readonly use?: readonly PrefixCommandMiddleware<E, R, M>[]
+    readonly use?: readonly PrefixCommandMiddleware<UseErrors, UseServices, M>[]
     /**
      * Return an Effect that handles a parser decline, unknown name or group without a subcommand.
      * An unknown name carries a `suggestion` when a registered name is close, and a parser decline carries a `reason` and the command `name` when the parser explained a syntax mistake, such as an unclosed quote from `commands.parseQuoted`.
@@ -249,7 +259,7 @@ export interface PrefixCommandsOptions<
     readonly onUnmatched?: (
         context: PrefixCommandUnmatchedContext<M>,
         unmatched: PrefixCommandUnmatched,
-    ) => Effect.Effect<unknown, E, R>
+    ) => Effect.Effect<unknown, UnmatchedErrors, UnmatchedServices>
 }
 
 /**
@@ -304,7 +314,10 @@ export interface PrefixCommandCooldown<
  * Dispatch evaluates its guard, converts arguments, claims any cooldown and runs the execution Effect.
  * Callbacks use the attachment's captured services and interruption, without a detached runtime.
  * Registration copies metadata and arguments while retaining callbacks and the cooldown store.
- * `E` describes callback failures and `R` describes required services. Callback failures are reported by the subscription, not by a completed `attach`
+ * `E` describes the failures and `R` the services of execute, and of every other callback by default.
+ * The type parameters after `M` can set the services and then the failures of the guards, onReject and the cooldown
+ * store separately, as register does when it infers them. Callback failures are reported by the subscription, not by a
+ * completed `attach`
  *
  * @category Commands
  */
@@ -313,6 +326,12 @@ export interface PrefixCommand<
     R = never,
     S extends CommandArgumentSchema = {},
     M extends MessageCore = Message,
+    GuardServices = R,
+    RejectServices = R,
+    CooldownServices = R,
+    GuardErrors = E,
+    RejectErrors = E,
+    CooldownErrors = E,
 > extends PrefixCommandDefinition {
     /** Named positional conversions in property order. Omitted leaves parsed `args` unrestricted and converted `values` empty */
     readonly arguments?: S
@@ -322,16 +341,17 @@ export interface PrefixCommand<
      * Non-Effect returns and invalid verdicts fail with ConfigurationError.
      * Failures and defects use subscription error reporting rather than rejection feedback
      */
-    readonly guard?: PrefixCommandGuard<E, R, M> | readonly PrefixCommandGuard<E, R, M>[]
+    readonly guard?:
+        PrefixCommandGuard<GuardErrors, GuardServices, M> | readonly PrefixCommandGuard<GuardErrors, GuardServices, M>[]
     /**
      * Feedback after a denied guard, rejected arguments or a denied cooldown, overriding the router's `onReject`.
      * A function receives raw context and a safe rejection classification, never partially converted values.
      * Its success value is discarded. Failures and defects use attachment error reporting, without retry.
      * Non-Effect returns fail with ConfigurationError
      */
-    readonly onReject?: PrefixCommandRejectionFeedback<E, R, M>
+    readonly onReject?: PrefixCommandRejectionFeedback<RejectErrors, RejectServices, M>
     /** Optional cooldown claim required after the guard and arguments succeed. Denied claims skip execution */
-    readonly cooldown?: PrefixCommandCooldown<E, R, S, M>
+    readonly cooldown?: PrefixCommandCooldown<CooldownErrors, CooldownServices, S, M>
     /**
      * Return the Effect that performs work for this allowed command with fully converted arguments.
      * The subscription runs it in the attachment's context and discards its success value, rather than sending it as a reply.
@@ -372,47 +392,37 @@ export type EffectRequirements<F> = F extends (...arguments_: any[]) => Effect.E
     : never
 
 /**
- * The services required by one command's execute, guard, onReject and cooldown claim callbacks
+ * The services required by one command's execute, guard, onReject and cooldown claim callbacks.
+ * Each callback is read by key, so a callback in an optional property, such as `guard?:` in an interface or one
+ * spread in conditionally, still adds its services, and each member of a union of commands is read on its own
  *
  * @category Commands
  */
-export type CommandRequirements<C> =
-    | (C extends {
-          /** Command callback */
-          readonly execute: infer F
-      }
-          ? EffectRequirements<F>
-          : never)
-    | (C extends {
-          /** Optional access check or list of checks */
-          readonly guard: infer F
-      }
-          ? F extends readonly (infer G)[]
-              ? EffectRequirements<G>
-              : EffectRequirements<F>
-          : never)
-    | (C extends {
-          /** Optional argument rejection callback */
-          readonly onReject: infer F
-      }
-          ? EffectRequirements<F>
-          : never)
-    | (C extends {
-          /** Optional cooldown settings */
-          readonly cooldown: {
-              /** Store that reserves cooldown keys */
-              readonly store: {
-                  /** Reservation method, whose returned Effect may require services */
-                  readonly claim: infer F
-              }
-          }
-      }
-          ? F extends (...arguments_: any[]) => infer A
-              ? A extends Effect.Effect<unknown, unknown, infer R>
-                  ? R
-                  : never
-              : never
-          : never)
+export type CommandRequirements<C> = C extends unknown
+    ? | EffectRequirements<C[keyof C & "execute"]>
+      // A guard, or each guard in a list
+      | (C[keyof C & "guard"] extends infer Guard
+            ? Guard extends readonly (infer Each)[]
+                ? EffectRequirements<Each>
+                : EffectRequirements<Guard>
+            : never)
+      | EffectRequirements<C[keyof C & "onReject"]>
+      // The Effect a cooldown store's claim may return, read from each member of a union such as a claim or an Effect of one
+      | (C[keyof C & "cooldown"] extends infer Cooldown
+            ? Cooldown extends unknown
+                ? Cooldown[keyof Cooldown & "store"] extends infer Store
+                    ? Store extends {
+                          /** Reservation method, whose returned Effect may require services */
+                          readonly claim: (...arguments_: any[]) => infer Claim
+                      }
+                        ? Claim extends Effect.Effect<unknown, unknown, infer R>
+                            ? R
+                            : never
+                        : never
+                    : never
+                : never
+            : never)
+    : never
 
 /**
  * The services required by every command in a registerMany batch, recorded on the returned router
@@ -485,15 +495,40 @@ export interface PrefixCommandRouter<R = never, M extends MessageCore = Message>
     /**
      * Validate and add a command to a new router, at root or an existing canonical `options.group` path.
      * Copies metadata and arguments, retaining callbacks and the cooldown store without invoking them.
-     * The resulting router requires this command's services `R2` in addition to existing `R` when attached.
+     * The resulting router requires the services of this command's execute, guards, onReject and cooldown store in
+     * addition to existing `R` when attached. Each of these may need different services and fail with different errors,
+     * and the router requires all of the services.
+     * Passing `E` and `R2` explicitly, such as `register<AuthError | DbError, Auth | Database>(...)`, instead limits every
+     * callback to the failures in `E` and the services in `R2`.
      * Names and aliases must not collide with sibling commands or groups under the router's case policy.
      * Invalid definitions, collisions and missing or alias-only parent paths throw ConfigurationError.
      * A throwing getter throws SdkDefect for `commands` with code `application.defect`, while another unexpected fault uses `sdk.defect`. Earlier routers and active attachments remain unchanged
      */
-    register<E, R2, const S extends CommandArgumentSchema = {}>(
-        command: PrefixCommand<E, R2, S, M>,
+    register<
+        E,
+        R2,
+        const S extends CommandArgumentSchema = {},
+        GuardServices = never,
+        RejectServices = never,
+        CooldownServices = never,
+        GuardErrors = never,
+        RejectErrors = never,
+        CooldownErrors = never,
+    >(
+        command: PrefixCommand<
+            E,
+            R2,
+            S,
+            M,
+            NoInfer<R2> | GuardServices,
+            NoInfer<R2> | RejectServices,
+            NoInfer<R2> | CooldownServices,
+            NoInfer<E> | GuardErrors,
+            NoInfer<E> | RejectErrors,
+            NoInfer<E> | CooldownErrors
+        >,
         options?: PrefixCommandRegistrationOptions,
-    ): PrefixCommandRouter<R | R2, M>
+    ): PrefixCommandRouter<R | R2 | GuardServices | RejectServices | CooldownServices, M>
     /**
      * Validate and add a nonempty keyed command object to one new router, in JavaScript own enumerable string-key order and under one optional parent.
      * Each object key supplies its command name. Set `arguments: {}` to reject positional arguments, or `arguments: undefined` to leave raw args unrestricted.
@@ -580,13 +615,39 @@ export interface Commands {
      * Validate options and create an empty local router, without connecting or subscribing a client.
      * Defaults to full Message typing. Supply MessageCore or the client's SelectedMessage type as `M` for fewer selected fields.
      * Prefix resolvers, parsers, command callbacks and the context client keep the same message type.
-     * The router records services `R` required by optional unmatched feedback, but does not require them until attachment.
+     * The router records the services required by its prefix resolver, `onReject`, `use` middleware and `onUnmatched`, but does not require them until attachment.
+     * Each of these may need different services and fail with different errors, and the router requires all of the
+     * services. All middleware in `use` share one inferred set of services and failures.
+     * Passing `E` or `R` explicitly, such as `commands.create<never, Database | Metrics>(...)`, instead limits every
+     * callback to the failures in `E` and the services in `R`.
      * Invalid options throw ConfigurationError. A throwing getter throws SdkDefect for `commands` with code `application.defect`, while another unexpected fault uses `sdk.defect`.
      * No prefix resolver, parser or feedback callback runs during creation
      */
-    create<E = never, R = never, M extends MessageCore = Message>(
-        options: PrefixCommandsOptions<E, R, M>,
-    ): PrefixCommandRouter<R, M>
+    create<
+        E = never,
+        R = never,
+        M extends MessageCore = Message,
+        PrefixServices = never,
+        RejectServices = never,
+        UseServices = never,
+        UnmatchedServices = never,
+        RejectErrors = never,
+        UseErrors = never,
+        UnmatchedErrors = never,
+    >(
+        options: PrefixCommandsOptions<
+            E,
+            R,
+            M,
+            NoInfer<R> | PrefixServices,
+            NoInfer<R> | RejectServices,
+            NoInfer<R> | UseServices,
+            NoInfer<R> | UnmatchedServices,
+            NoInfer<E> | RejectErrors,
+            NoInfer<E> | UseErrors,
+            NoInfer<E> | UnmatchedErrors
+        >,
+    ): PrefixCommandRouter<R | PrefixServices | RejectServices | UseServices | UnmatchedServices, M>
     /**
      * Synchronously split a suffix with single or double quotes and backslash escapes, preserving original argument text in `rawArgs`.
      * Select with `create({ prefix: "!", parse: commands.parseQuoted })`, since the default splits only on whitespace.
@@ -636,15 +697,16 @@ export interface Commands {
 
 /** Native tools behind the public `commands` namespace, with synchronous local setup and lazy attachment */
 export const nativeCommands: Commands = Object.freeze({
-    create: <E, R, M extends MessageCore = Message>(options: PrefixCommandsOptions<E, R, M>) =>
+    // The router's services are only a type, so one implementation serves every inferred or explicit set of them
+    create: (<M extends MessageCore = Message>(options: PrefixCommandsOptions<unknown, unknown, M>) =>
         localSetup(() =>
             freezeRouter(
-                new NativePrefixCommandRouterOwner<R, M>(
+                new NativePrefixCommandRouterOwner<unknown, M>(
                     new PrefixCommandRegistry<StoredNativeCommand<M>, M>(options, routerAdapterKeys),
                     readCaller(() => snapshotNativeSettings(options)),
                 ),
             ),
-        ),
+        )) as Commands["create"],
     parseQuoted: parseQuotedPrefixCommand,
     suggest: (name: string, candidates: Iterable<string>) => localSetup(() => suggestName(name, candidates)),
     parseArgument: <const D extends Exclude<CommandArgumentDescriptor, CommandArgumentCustom>>(
@@ -691,13 +753,34 @@ class NativePrefixCommandRouterOwner<R = never, M extends MessageCore = Message>
         return localSetup(() => commandHelp(this.#registry.visibleEntries, options))
     }
 
-    register<E, R2, const S extends CommandArgumentSchema = {}>(
-        command: PrefixCommand<E, R2, S, M>,
+    register<
+        E,
+        R2,
+        const S extends CommandArgumentSchema = {},
+        GuardServices = never,
+        RejectServices = never,
+        CooldownServices = never,
+        GuardErrors = never,
+        RejectErrors = never,
+        CooldownErrors = never,
+    >(
+        command: PrefixCommand<
+            E,
+            R2,
+            S,
+            M,
+            NoInfer<R2> | GuardServices,
+            NoInfer<R2> | RejectServices,
+            NoInfer<R2> | CooldownServices,
+            NoInfer<E> | GuardErrors,
+            NoInfer<E> | RejectErrors,
+            NoInfer<E> | CooldownErrors
+        >,
         options?: PrefixCommandRegistrationOptions,
-    ): PrefixCommandRouter<R | R2, M> {
+    ): PrefixCommandRouter<R | R2 | GuardServices | RejectServices | CooldownServices, M> {
         return localSetup(() =>
             freezeRouter(
-                new NativePrefixCommandRouterOwner<R | R2, M>(
+                new NativePrefixCommandRouterOwner<R | R2 | GuardServices | RejectServices | CooldownServices, M>(
                     this.#registry.register(
                         readCaller(() => snapshotNativeCommand(command)),
                         options,
@@ -1071,7 +1154,7 @@ function settleNativeAround(
 }
 
 function snapshotNativeCommand<E, R, S extends CommandArgumentSchema, M extends MessageCore>(
-    command: PrefixCommand<E, R, S, M>,
+    command: PrefixCommand<E, R, S, M, unknown, unknown, unknown, unknown, unknown, unknown>,
     keyedName?: string,
 ): StoredNativeCommand<M> {
     validateCommandShape(command, [
@@ -1094,7 +1177,7 @@ function snapshotNativeCommand<E, R, S extends CommandArgumentSchema, M extends 
             ? Object.freeze([])
             : typeof guard === "function"
               ? Object.freeze([guard])
-              : snapshotFunctions<PrefixCommandGuard<E, R, M>>(
+              : snapshotFunctions<PrefixCommandGuard<E, unknown, M>>(
                     guard,
                     'The option "guard" must be a function or an array of functions',
                 )

@@ -21,6 +21,7 @@ import {
     type ConnectError,
     type ConnectionFailure,
 } from "#sdk/errors"
+import { cleanupOwner } from "../cleanup-owner.js"
 import { nowMs } from "../clock.js"
 import { failures, holdsReason, mapFailureCause, withDeadline } from "../effect-failures.js"
 import type { ClientLogger } from "../logging.js"
@@ -152,19 +153,22 @@ export function logShutdownEnd(
         const faults = services.cause.reasons.filter((reason) => reason._tag !== "Interrupt")
         failedSteps = Math.max(1, faults.length)
         logging.count("cleanupFailures", failedSteps)
-        faults.forEach((reason, index) =>
+        faults.forEach((reason, index) => {
+            const owner = cleanupOwner(reason)
             logging.log(
                 {
                     level: "error",
                     category: "lifecycle",
                     code: "lifecycle.cleanupFailed",
-                    message: `Cleanup step ${index + 1} of ${faults.length} failed during shutdown`,
+                    message: `Cleanup step ${index + 1} of ${faults.length} failed during shutdown${owner === undefined ? "" : ` in ${owner.subject}`}`,
                     error: reason._tag === "Fail" ? reason.error : reason._tag === "Die" ? reason.defect : undefined,
                     cause: Cause.fromReasons([reason]),
+                    // Undefined fields are omitted from the record
+                    fields: { task: owner?.task },
                 },
                 context,
-            ),
-        )
+            )
+        })
     }
     logging.flush(context)
     if (!everStarted) return

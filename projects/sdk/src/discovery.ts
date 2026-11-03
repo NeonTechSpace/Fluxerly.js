@@ -81,7 +81,7 @@ export interface DiscoveryCategory {
 export interface DiscoveryApplicationInput {
     /** Listing description, 10–300 UTF-16 code units. Fluxer may reject moderated content */
     readonly description: string
-    /** Integer 0–8, selected using DiscoveryCategories or fetchCategories */
+    /** Integer 0–8, selected using DiscoveryCategories or fetchCategories. Fluxer names it category_type */
     readonly categoryId: number
     /** Primary language tag such as en-US, using the provider's case-sensitive supported BCP-47 codes.
      * Defaults to en-US on apply, with the supported set checked by Fluxer
@@ -91,7 +91,8 @@ export interface DiscoveryApplicationInput {
      * Entries are copied by index when the operation starts.
      * Start each tag with a letter or digit, followed by letters, digits, spaces, hyphens, underscores, plus or ampersand.
      * The SDK trims and lowercases tags, collapses whitespace and removes duplicates like Fluxer.
-     * Omission on apply means an empty tag list
+     * Omission on apply means an empty tag list.
+     * Fluxer names it custom_tags
      */
     readonly tags?: readonly string[]
 }
@@ -118,11 +119,11 @@ export interface DiscoveryApplication {
     readonly status: string
     /** Observed directory description */
     readonly description: string
-    /** Observed provider category ID */
+    /** Observed provider category ID. Fluxer names it category_type */
     readonly categoryId: number
     /** Observed primary language, null if absent */
     readonly primaryLanguage: string | null
-    /** Frozen provider tags, not a mutable copy of submitted input */
+    /** Frozen provider tags, not a mutable copy of submitted input. Fluxer names it custom_tags */
     readonly tags: readonly string[]
     /** ISO 8601 application time */
     readonly appliedAt: string
@@ -156,7 +157,8 @@ export interface DiscoveryStatus {
 
 /** Public community listing returned by discovery.search.
  * It contains directory-visible details and approximate counts, not the full Guild object or an invitation to join.
- * The SDK does not retain this result in the guild cache
+ * The SDK does not retain this result in the guild cache. Fluxer's visits_enabled is not kept, because it is an
+ * experiment field that only applies to signed-in users
  *
  * @category Guilds and members
  */
@@ -171,11 +173,11 @@ export interface DiscoveryGuild {
     readonly banner: string | null
     /** Directory description, or null when absent */
     readonly description: string | null
-    /** Provider directory category ID */
+    /** Provider directory category ID. Fluxer names it category_type */
     readonly categoryId: number
     /** Provider primary language, or null when absent */
     readonly primaryLanguage: string | null
-    /** Frozen provider directory tags */
+    /** Frozen provider directory tags. Fluxer names it custom_tags */
     readonly tags: readonly string[]
     /** Approximate directory member count */
     readonly memberCount: number
@@ -185,6 +187,10 @@ export interface DiscoveryGuild {
     readonly features: readonly string[]
     /** Provider verification level */
     readonly verificationLevel: number
+    /** Decimal IDs of the custom badges assigned to the community, omission means unavailable.
+     * Read their names and images with client.instance.fetchBadges
+     */
+    readonly badgeIds?: readonly string[]
 }
 
 /** Filter and choose one page of public community listings with discovery.search.
@@ -196,13 +202,13 @@ export interface DiscoveryGuild {
 export interface DiscoverySearchQuery {
     /** Free-text query of at most 100 UTF-16 code units */
     readonly query?: string
-    /** Provider category ID from 0 through 8 */
+    /** Provider category ID from 0 through 8. Fluxer names it category_type */
     readonly categoryId?: number
     /** Case-sensitive language tag such as en-US, 2–35 UTF-16 code units in the accepted BCP-47-style format */
     readonly primaryLanguage?: string
     /** Directory tag of at most 30 UTF-16 code units */
     readonly tag?: string
-    /** Provider ordering. Omission uses Fluxer's default ordering */
+    /** Provider ordering. Omission uses Fluxer's default ordering. Fluxer may use member-count ordering for onlineCount, so ordering by online presence is not guaranteed */
     readonly sortBy?: "memberCount" | "onlineCount" | "relevance"
     /** Results per page from 1 through 48, defaulting to 24 */
     readonly limit?: number
@@ -216,7 +222,7 @@ export interface DiscoverySearchQuery {
  * @category Guilds and members
  */
 export interface DiscoveryCategoryCount {
-    /** Provider category ID */
+    /** Provider category ID. Fluxer names it category_type */
     readonly categoryId: number
     /** Current matching community count */
     readonly count: number

@@ -7,7 +7,8 @@
  * URLs must use HTTP/HTTPS and contain at most 2048 characters, except image and thumbnail URLs may use attachment://filename.
  * An attachment URL must exactly and case-sensitively match one new upload filename in the same send, reply or edit.
  * Its extension must map to an image or video MIME type in Fluxer's filename lookup, such as PNG, AVIF, MP4 or WebM.
- * Its filename may contain letters, marks, numbers, underscores, dots and hyphens only
+ * Its filename may contain letters, marks, numbers, underscores, dots and hyphens only. Fluxer renames a file with two dots
+ * in a row or a Windows device name such as CON, AUX or NUL before its first dot, so such a file cannot be referenced
  *
  * The SDK does not look up existing attachments, so an existing attachment ID cannot supply an attachment URL.
  * Fluxer moves referenced uploads into embed media, so they are not returned in the message's attachment list
@@ -184,7 +185,7 @@ export interface EmbedMedia {
     readonly placeholder?: string
     /** Duration in seconds */
     readonly duration?: number
-    /** Numeric Fluxer media flags, kept as received, including flags unknown to this SDK */
+    /** Platform media bits: Explicit media is `1 << 4` and animated media is `1 << 5`. Unknown bits are kept as received */
     readonly flags: number
 }
 

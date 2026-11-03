@@ -1,15 +1,15 @@
 import assert from "node:assert/strict"
 
-export const hostedDiscoveryUrl = "https://fluxer.app/.well-known/fluxer"
+export const hostedDiscoveryUrl = "https://fluxer.com/.well-known/fluxer"
 
 export const hostedDiscoveryDocument = Object.freeze({
     api_code_version: 1,
     endpoints: Object.freeze({
-        api_public: "https://api.fluxer.app",
-        gateway: "wss://gateway.fluxer.app",
+        api_public: "https://fluxer.com/api",
+        gateway: "wss://gateway.fluxer.com",
         media: "https://fluxerusercontent.com",
         static_cdn: "https://fluxerstatic.com",
-        webapp: "https://fluxer.app",
+        webapp: "https://fluxer.com",
         invite: "https://fluxer.gg",
     }),
     features: Object.freeze({ presigned_attachment_uploads: true }),

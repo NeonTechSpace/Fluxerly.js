@@ -8,9 +8,12 @@ import { packageName, type NpmHistory } from "../src/lib/npm-history.ts"
 
 const hourMs = 3_600_000
 const dayMs = 24 * hourMs
-const weekMs = 7 * dayMs
-// Noon on 9 October 2026, so the history ends with 8 October
+// Noon UTC on 9 October 2026, so the history ends with 8 October
 const start = Date.parse("2026-10-09T12:00:00Z")
+// The first 04:00 UTC after the start, when a copy fetched since the start stops being fresh
+const nextRefresh = Date.parse("2026-10-10T04:00:00Z")
+// A copy fetched before the last 04:00 UTC, which is stale at the start
+const staleAt = start - dayMs
 const created = "2026-09-14T09:30:00.000Z"
 
 // What npm counts on a day, the same wherever the fake needs it
@@ -158,19 +161,20 @@ describe("a fresh copy in KV", () => {
         assert.equal(kv.writes.length, 0)
     })
 
-    for (const [age, left] of [
-        [2 * hourMs, 166 * 3600],
-        [5 * hourMs, 163 * 3600],
-        [weekMs - 90_000, 90],
-        [weekMs - 5_000, 60],
+    for (const [now, left] of [
+        [start, 16 * 3600],
+        [nextRefresh - 90_000, 90],
+        [nextRefresh - 5_000, 60],
     ] as const) {
-        test(`is cached at the edge for the time left of its week, ${age / 1000} s old`, async () => {
-            kv.seed(older, start - age)
+        test(`is cached at the edge until the next 04:00 UTC, ${(nextRefresh - now) / 1000} s ahead, and for a minute at least`, async () => {
+            kv.seed(older, start - hourMs)
+            mock.timers.setTime(now)
             await ask()
             await settle()
 
             assert.equal(cache.lifetime(), left)
             assert.deepEqual(JSON.parse(cache.entry()!.body), older)
+            assert.deepEqual(npm.calls, [])
         })
     }
 
@@ -190,7 +194,7 @@ describe("a fresh copy in KV", () => {
 
 describe("a stale copy in KV", () => {
     test("is served at once and replaced in the background", async () => {
-        kv.seed(older, start - weekMs - hourMs)
+        kv.seed(older, staleAt)
         npm.hold()
         const response = await ask()
 
@@ -203,14 +207,14 @@ describe("a stale copy in KV", () => {
         assert.equal(npm.calls.length, 2, "the registry and one year of downloads")
         assert.equal(kv.writes.length, 1)
         assert.deepEqual(kv.stored(), { fetchedAt: start, history: current })
-        // This location now holds the new copy for a full day, and the next visitor sees it
-        assert.equal(cache.lifetime(), 7 * 24 * 3600)
+        // This location now holds the new copy until the next 04:00 UTC, and the next visitor sees it
+        assert.equal(cache.lifetime(), 16 * 3600)
         assert.deepEqual(await bodyOf(await ask()), current)
         assert.equal(npm.calls.length, 2)
     })
 
     test("is cached for only a minute while the refresh runs, so one location does not ask npm twice", async () => {
-        kv.seed(older, start - weekMs - hourMs)
+        kv.seed(older, staleAt)
         npm.hold()
         await ask()
         await new Promise((resolve) => setImmediate(resolve))
@@ -225,7 +229,7 @@ describe("a stale copy in KV", () => {
     })
 
     test("stays what the visitors get when npm cannot be reached, and is cached for 15 minutes", async () => {
-        kv.seed(older, start - weekMs - hourMs)
+        kv.seed(older, staleAt)
         npm = fakeNpm({ failing: true })
         const response = await ask()
         await settle()
@@ -233,13 +237,13 @@ describe("a stale copy in KV", () => {
         assert.equal(response.status, 200)
         assert.deepEqual(await bodyOf(response), older)
         assert.equal(kv.writes.length, 0)
-        assert.deepEqual(kv.stored(), { fetchedAt: start - weekMs - hourMs, history: older })
+        assert.deepEqual(kv.stored(), { fetchedAt: staleAt, history: older })
         assert.equal(cache.lifetime(), 15 * 60)
         assert.deepEqual(JSON.parse(cache.entry()!.body), older)
     })
 
     test("is not overwritten with a malformed answer from npm", async () => {
-        kv.seed(older, start - weekMs - hourMs)
+        kv.seed(older, staleAt)
         npm = fakeNpm({ countOf: (day) => (day === "2026-10-01" ? "many" : 1) })
         const response = await ask()
         await settle()
@@ -262,7 +266,7 @@ describe("no copy anywhere", () => {
         assert.match(npm.calls[1], /^https:\/\/api\.npmjs\.org\/downloads\/range\/2026-09-14:2026-10-08\/@neontechspace\/fluxerly$/)
         assert.equal(npm.calls.length, 2)
         assert.deepEqual(kv.stored(), { fetchedAt: start, history: current })
-        assert.equal(cache.lifetime(), 7 * 24 * 3600)
+        assert.equal(cache.lifetime(), 16 * 3600)
     })
 
     test("is asked of npm once for any number of later visitors", async () => {
@@ -315,13 +319,13 @@ describe("no copy anywhere", () => {
 })
 
 describe("without the KV binding", () => {
-    test("the edge cache alone keeps the copy for a week and npm is asked once", async () => {
+    test("the edge cache alone keeps the copy until the next 04:00 UTC and npm is asked once", async () => {
         const response = await ask({ binding: false })
         await settle()
 
         assert.equal(response.status, 200)
         assert.deepEqual(await bodyOf(response), current)
-        assert.equal(cache.lifetime(), 7 * 24 * 3600)
+        assert.equal(cache.lifetime(), 16 * 3600)
 
         assert.deepEqual(await bodyOf(await ask({ binding: false })), current)
         assert.equal(npm.calls.length, 2)
@@ -372,7 +376,7 @@ describe("the request", () => {
 
 describe("a new deployment", () => {
     test("serves the counts it fetched, ahead of an older copy and any earlier edge answer, without asking npm", async () => {
-        kv.seed(older, start - dayMs)
+        kv.seed(older, start - hourMs)
         await ask()
         await settle()
         assert.deepEqual(JSON.parse(cache.entry()!.body), older)
@@ -383,24 +387,104 @@ describe("a new deployment", () => {
         assert.deepEqual(npm.calls, [])
     })
 
-    test("is good for a week from the deploy, then asks npm again", async () => {
-        const built = { fetchedAt: start - weekMs + hourMs, history: older }
+    test("is good until the first 04:00 UTC after the build, then asks npm again", async () => {
+        const built = { fetchedAt: start - hourMs, history: older }
+        await ask({ built })
+        await settle()
+        mock.timers.setTime(nextRefresh - 1)
+        cache.entries.clear()
         await ask({ built })
         await settle()
         assert.deepEqual(npm.calls, [])
 
-        mock.timers.setTime(start + 2 * hourMs)
+        mock.timers.setTime(nextRefresh)
         cache.entries.clear()
         await ask({ built })
         await settle()
         assert.equal(npm.calls.length > 0, true)
-        assert.equal(kv.stored().fetchedAt, start + 2 * hourMs)
+        assert.equal(kv.stored().fetchedAt, nextRefresh)
     })
 
-    test("gives way to a newer weekly copy in KV", async () => {
+    test("gives way to a newer copy in KV", async () => {
         kv.seed(current, start - hourMs)
         const response = await ask({ built: { fetchedAt: start - dayMs, history: older } })
         await settle()
         assert.deepEqual(await bodyOf(response), current)
+    })
+})
+
+// Visits one Cloudflare location with an empty edge cache at the given moment, with a copy in KV fetched at the given
+// time, and tells whether npm was asked and how long the edge cache keeps the answer
+async function visit(now: number, fetchedAt: number) {
+    mock.timers.setTime(now)
+    kv = new FakeKv()
+    cache = new FakeCache()
+    npm = fakeNpm()
+    Reflect.set(globalThis, "caches", { default: cache })
+    kv.seed(older, fetchedAt)
+    await ask()
+    await settle()
+    return { asked: npm.calls.length > 0, lifetime: cache.lifetime() }
+}
+
+const at = (time: string) => Date.parse(time)
+
+describe("the daily refresh at 04:00 UTC", () => {
+    test("a copy fetched just before 04:00 is refreshed once 04:00 has passed that same day", async () => {
+        const fetchedAt = at("2026-10-09T03:50:00Z")
+        assert.deepEqual(await visit(fetchedAt, fetchedAt), { asked: false, lifetime: 600 })
+        assert.equal((await visit(at("2026-10-09T03:59:59.999Z"), fetchedAt)).asked, false)
+        assert.deepEqual(await visit(at("2026-10-09T04:00:00Z"), fetchedAt), { asked: true, lifetime: 24 * 3600 })
+    })
+
+    test("a copy fetched after 04:00 is refreshed after 04:00 the next day", async () => {
+        const fetchedAt = at("2026-10-09T04:30:00Z")
+        assert.deepEqual(await visit(at("2026-10-09T23:59:00Z"), fetchedAt), { asked: false, lifetime: 4 * 3600 + 60 })
+        assert.equal((await visit(at("2026-10-10T03:59:59.999Z"), fetchedAt)).asked, false)
+        assert.equal((await visit(at("2026-10-10T04:00:00Z"), fetchedAt)).asked, true)
+    })
+
+    test("a copy fetched exactly at 04:00 lasts until 04:00 the next day", async () => {
+        const fetchedAt = at("2026-10-09T04:00:00Z")
+        assert.deepEqual(await visit(fetchedAt, fetchedAt), { asked: false, lifetime: 24 * 3600 })
+    })
+
+    test("a local clock change does not move the refresh", async () => {
+        // Summer time ends in Europe on 25 October 2026, and the refresh stays at 04:00 UTC
+        const saturday = at("2026-10-24T04:30:00Z")
+        assert.deepEqual(await visit(saturday, saturday), { asked: false, lifetime: 23.5 * 3600 })
+        assert.equal((await visit(at("2026-10-25T03:59:59.999Z"), saturday)).asked, false)
+        assert.equal((await visit(at("2026-10-25T04:00:00Z"), saturday)).asked, true)
+    })
+
+    // The next 04:00 UTC, found by walking the UTC days
+    function refreshAfter(time: number) {
+        for (let day = Math.floor(time / dayMs); ; day++) {
+            const refresh = day * dayMs + 4 * hourMs
+            if (refresh > time) return refresh
+        }
+    }
+
+    test("the edge cache never keeps an answer past the next 04:00, beyond its one-minute floor", async () => {
+        const step = 37 * 60 * 1000
+        const seenBranches = { fresh: 0, refreshed: 0 }
+        for (let fetchedAt = at("2026-10-20T00:00:00Z"); fetchedAt < at("2026-11-01T00:00:00Z"); fetchedAt += step) {
+            const now = fetchedAt + 7 * 60 * 1000
+            const refresh = refreshAfter(fetchedAt)
+            const seen = await visit(now, fetchedAt)
+            const moment = new Date(fetchedAt).toISOString()
+            if (now < refresh) {
+                seenBranches.fresh++
+                assert.equal(seen.asked, false, moment)
+                assert.equal(seen.lifetime, Math.max(60, Math.floor((refresh - now) / 1000)), moment)
+                if (refresh - now >= 60_000) assert.ok(seen.lifetime * 1000 <= refresh - now, moment)
+            } else {
+                // Refreshed, and the new copy is kept until the 04:00 after now
+                seenBranches.refreshed++
+                assert.equal(seen.asked, true, moment)
+                assert.equal(seen.lifetime, Math.floor((refreshAfter(now) - now) / 1000), moment)
+            }
+        }
+        assert.ok(seenBranches.fresh > 400 && seenBranches.refreshed > 0, JSON.stringify(seenBranches))
     })
 })

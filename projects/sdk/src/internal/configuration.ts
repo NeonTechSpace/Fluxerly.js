@@ -223,7 +223,7 @@ export const childClientOptionKeys: readonly string[] = clientOptionKeys.filter(
 
 /**
  * Check the keys of supervisor.child.run clientOptions before they are copied, so a misspelled or unsupported key is
- * reported instead of dropped. Sharding may carry only sessions, because the parent assigns the shards and paces
+ * reported instead of dropped. Sharding may carry only sessions and refillCaches, because the parent assigns the shards and paces
  * Identify. Reading the keys is application input, so the caller runs this under a defect boundary
  */
 export function childClientOptionsError(clientOptions: unknown): ConfigurationError | undefined {
@@ -236,18 +236,18 @@ export function childClientOptionsError(clientOptions: unknown): ConfigurationEr
         const plan = !record(sharding)
             ? "sharding"
             : (["totalShards", "shardIds", "identify"].find((key) => key in sharding) ??
-              Object.keys(sharding).find((key) => key !== "sessions"))
+              Object.keys(sharding).find((key) => key !== "sessions" && key !== "refillCaches"))
         if (plan !== undefined)
             return new ConfigurationError(
                 "sharding",
                 plan === "sharding"
-                    ? 'The supervisor child option "clientOptions.sharding" must be an object with only sessions'
+                    ? 'The supervisor child option "clientOptions.sharding" must be an object with only sessions and refillCaches'
                     : `Unsupported option ${JSON.stringify(`sharding.${plan}`)} in the supervisor child option "clientOptions"`,
                 {
                     hint:
                         plan === "identify"
                             ? "Set the coordinator in the supervisor's identify.coordinator option, where the parent paces every child's Identify"
-                            : "The supervisor assigns each child its shards. Only sharding.sessions is available in a child",
+                            : "The supervisor assigns each child its shards. Only sharding.sessions and sharding.refillCaches are available in a child",
                 },
             )
     }

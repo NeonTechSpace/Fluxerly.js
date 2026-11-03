@@ -11,6 +11,7 @@ An Effect application can provide the SDK client as a service, beside its own se
 Keep the handler separate from the services it calls. In the running bot, the reply service uses the SDK client. In tests, replace that service without changing `handlePing`
 
 ```ts
+// bot.ts
 import { Config, Context, Effect, Layer } from "effect";
 import { FluxerClient, type Message } from "@neontechspace/fluxerly/effect";
 
@@ -165,35 +166,13 @@ If a subscription closes unexpectedly without an error, report `CriticalWorkerSt
 This test supplies fake database and reply services to the unchanged handler. `TestClock` advances only the application-owned `Effect.sleep` in `handlePing`
 
 ```ts
-import { Context, Effect, Fiber, Layer } from "effect";
+// bot.test.ts
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import type { Message } from "@neontechspace/fluxerly/effect";
-
-class GreetingStore extends Context.Service<
-    GreetingStore,
-    { readonly greetingFor: (userId: string) => Effect.Effect<string> }
->()("example-test/GreetingStore") {}
-class BotReplies extends Context.Service<
-    BotReplies,
-    {
-        readonly reply: (
-            message: Message,
-            content: string,
-        ) => Effect.Effect<void>;
-    }
->()("example-test/BotReplies") {}
-
-const handlePing = (message: Message) =>
-    Effect.gen(function* () {
-        if (message.author.isBot || message.content !== "!ping") return;
-        const store = yield* GreetingStore;
-        const replies = yield* BotReplies;
-        yield* Effect.sleep("100 millis");
-        yield* replies.reply(
-            message,
-            yield* store.greetingFor(message.author.id),
-        );
-    });
+import { BotReplies, GreetingStore, handlePing } from "./bot.ts";
 
 export function testPing(message: Message, replies: Array<string>) {
     const fakes = Layer.mergeAll(
@@ -215,7 +194,20 @@ export function testPing(message: Message, replies: Array<string>) {
         yield* Fiber.join(fiber);
     }).pipe(Effect.provide(TestClock.layer()));
 }
+
+test("!ping replies with the stored greeting", async () => {
+    const replies: Array<string> = [];
+    const message = {
+        content: "!ping",
+        author: { id: "42", isBot: false },
+    } as unknown as Message;
+
+    await Effect.runPromise(testPing(message, replies));
+    assert.deepEqual(replies, ["Hello 42"]);
+});
 ```
+
+Save it as `bot.test.ts` beside `bot.ts` and run `node --test --test-timeout=10000 --test-force-exit`. The test runs the Effect and checks the result, so a missing reply fails
 
 The test does not open a gateway or replace SDK internals. It replaces the application services used by the handler
 
@@ -224,6 +216,8 @@ The test does not open a gateway or replace SDK internals. It replaces the appli
 To check the requests a bot really sends, pass its native `runBot` options to `createTestBot` from `@neontechspace/fluxerly/effect/testing`. It creates a real native client connected to an in-memory Fluxer, owned by the test's Scope, and registers the bot's events, commands and setup as `runBot` would. The unset token falls back to a test token. For a bot file that exports its options with `defineBot`, such as the one `fluxerly init --template effect` writes, pass the imported `bot`
 
 ```ts
+import assert from "node:assert/strict"
+import { test } from "node:test"
 import { Effect } from "effect"
 import { createTestBot } from "@neontechspace/fluxerly/effect/testing"
 
@@ -243,13 +237,21 @@ export const pingTest = Effect.scoped(
         return { replies: replies.map((message) => message.content), ignored: ignored.length }
     }),
 )
+
+test("!ping replies Pong! and other messages get no reply", async () => {
+    assert.deepEqual(await Effect.runPromise(pingTest), { replies: ["Pong!"], ignored: 0 })
+})
 ```
 
-Running `pingTest` with `Effect.runPromise` succeeds with the replies `["Pong!"]` and no reply to `hello`. The `say` Effect delivers a message from a fake user as Fluxer would send it, waits until the bot has stopped working and returns the messages the bot sent meanwhile. The fake Fluxer API answers each message the bot sends with that message, so no response needs registering. For other events, `emit` delivers a gateway event, `idle()` waits until the bot has stopped working, and `rest.respond` controls how the fake Fluxer API answers a request. These waits have no deadline unless `timeoutMs` is passed, so the test runner's timeout ends a test that hangs
+The `say` Effect delivers a message from a fake user as Fluxer would send it, waits until the bot has stopped working and returns the messages the bot sent meanwhile. The fake Fluxer API answers each message the bot sends with that message, so no response needs registering. The list shows what the bot tried to send, even when `rest.respond` rejected the request, and a failure that an `onError` hook handled does not appear in `failures()`
+
+For other events, `emit` delivers a gateway event, `idle()` waits until the bot has stopped working, and `rest.respond` controls how the fake Fluxer API answers a request. These waits have no deadline unless `timeoutMs` is passed, so run tests with `node --test --test-timeout=10000 --test-force-exit` to fail a bot that never settles
 
 The test gateway enforces the Identify session's `gateway.ignoredEvents`: The `emit` Effect dies with `ConfigurationError` when Fluxer would suppress that dispatch, without consuming a sequence number. With automatic filtering, register handlers before running `ready()` so Identify sees them. Resume keeps the list, while a new Identify recomputes it. Suppressed message mentions and generated reaction batches follow Fluxer's exceptions, described in [Match gateway event filtering](/docs/testing/#match-gateway-event-filtering)
 
-The `failures()` method returns handler and command failures that no `onError` hook received, including a failed SDK call such as a rejected reply, whatever the logging level. Closing the Scope dies with `UnhandledTestFailuresError` when such a failure happened and the test did not read it from `failures()`, so a broken handler fails the test. For code that registers handlers with `client.on`, `createTestClient` creates the same test client without bot options. See [Test a bot without Fluxer](/docs/testing/) and the [Effect testing reference](/docs/api/effect-testing/)
+The `failures()` method returns handler and command failures that no `onError` hook received, including a failed SDK call such as a rejected reply, whatever the logging level
+
+Closing the Scope dies with `UnhandledTestFailuresError` when such a failure happened and the test did not read it from `failures()`, so a broken handler fails the test. For code that registers handlers with `client.on`, `createTestClient` creates the same test client without bot options. See [Test a bot without Fluxer](/docs/testing/) and the [Effect testing reference](/docs/api/effect-testing/)
 
 <details>
 <summary>Control SDK time with TestClock</summary>
@@ -262,11 +264,76 @@ Fake timers from a test runner, such as Vitest's `vi.useFakeTimers()`, work diff
 
 </details>
 
+## Test a conversation that waits for a reply
+
+A command that asks a question and waits for the answer, such as the collector in [Collect replies and clean up](/docs/effect-workflows/#collect-replies-and-clean-up), keeps `say` waiting, because `say` waits for the command to finish and the command waits for the answer. Register a route for the question, deliver the first message with `emit`, and wait for the question with the route's `next()`. Then `say` can send the answer
+
+```ts
+import assert from "node:assert/strict"
+import { test } from "node:test"
+import { Effect } from "effect"
+import { createTestBot } from "@neontechspace/fluxerly/effect/testing"
+
+export const conversationTest = Effect.scoped(
+    Effect.gen(function* () {
+        const bot = yield* createTestBot({
+            token: process.env.FLUXER_BOT_TOKEN,
+            commands: {
+                prefix: "!",
+                commands: {
+                    name: {
+                        execute: ({ client, message, reply }) =>
+                            Effect.scoped(
+                                Effect.gen(function* () {
+                                    const collector = yield* client.messages.collect(message.channelId, {
+                                        filter: (answer) => answer.author.id === message.author.id,
+                                        maxMessages: 1,
+                                        timeoutMs: 30_000,
+                                    })
+                                    yield* reply("What name should the bot use?")
+                                    const answer = (yield* collector.result()).messages[0]
+                                    return yield* reply(answer ? `Hello, ${answer.content}!` : "No answer in time")
+                                }),
+                            ),
+                    },
+                },
+            },
+        })
+        const questions = bot.rest.respond("POST /channels/:id/messages", (request) => ({
+            body: bot.fixtures.message({
+                author: bot.fixtures.botUser(),
+                content: String((request.body as { content?: unknown }).content),
+            }),
+        }))
+        yield* bot.ready()
+
+        yield* bot.emit("MESSAGE_CREATE", bot.fixtures.message({ content: "!name" }))
+        const question = yield* questions.next()
+        const replies = yield* bot.say("Ada")
+        return {
+            question: (question.body as { content?: unknown }).content,
+            replies: replies.map((message) => message.content),
+        }
+    }),
+)
+
+test("!name asks for a name and greets the answer", async () => {
+    assert.deepEqual(await Effect.runPromise(conversationTest), {
+        question: "What name should the bot use?",
+        replies: ["Hello, Ada!"],
+    })
+})
+```
+
+To test the timeout instead, create the bot under `TestClock`, as described in Control SDK time with TestClock above, advance it past `timeoutMs` after the question arrives, and call `idle()`. The default API's `say` returns early while a command waits on its manual clock, but a native client under `TestClock` has no such shortcut
+
 ## Provide the test client as the FluxerClient service
 
 Code that reads its client from the `FluxerClient` service, like `repliesLayer` in the first section, runs against the in-memory Fluxer unchanged. `FluxerTestClient.layer()` from `@neontechspace/fluxerly/effect/testing` creates a test client and provides its client as `FluxerClient`. The same Layer provides the whole test client as `FluxerTestClient`, whose controls drive the test
 
 ```ts
+import assert from "node:assert/strict"
+import { test } from "node:test"
 import { Effect } from "effect"
 import { FluxerClient } from "@neontechspace/fluxerly/effect"
 import { FluxerTestClient } from "@neontechspace/fluxerly/effect/testing"
@@ -280,14 +347,19 @@ const registerPing = Effect.gen(function* () {
 
 export const serviceTest = Effect.gen(function* () {
     yield* registerPing
-    const test = yield* FluxerTestClient
-    const replies = test.rest.respond("POST /channels/:id/messages", {
-        body: test.fixtures.message({ content: "Pong!" }),
+    const testClient = yield* FluxerTestClient
+    const replies = testClient.rest.respond("POST /channels/:id/messages", {
+        body: testClient.fixtures.message({ content: "Pong!" }),
     })
-    yield* test.ready()
-    yield* test.emit("MESSAGE_CREATE", test.fixtures.message({ content: "!ping" }))
+    yield* testClient.ready()
+    yield* testClient.emit("MESSAGE_CREATE", testClient.fixtures.message({ content: "!ping" }))
     return yield* replies.next()
 }).pipe(Effect.scoped, Effect.provide(FluxerTestClient.layer()))
+
+test("registerPing sends the reply", async () => {
+    const request = await Effect.runPromise(serviceTest)
+    assert.equal((request.body as { content?: unknown }).content, "Pong!")
+})
 ```
 
-Running `serviceTest` succeeds with the reply request that `registerPing` sent. The `FluxerTestClient.layer(options)` method accepts the options of `createTestClient` except `messageFields`, because `FluxerClient` holds full messages. Closing the Layer's scope shuts the client down, as the live Layer does, and dies with `UnhandledTestFailuresError` for a handler failure the test did not read from `failures()`
+The `FluxerTestClient.layer(options)` method accepts the options of `createTestClient` except `messageFields`, because `FluxerClient` holds full messages. Closing the Layer's scope shuts the client down, as the live Layer does, and dies with `UnhandledTestFailuresError` for a handler failure the test did not read from `failures()`

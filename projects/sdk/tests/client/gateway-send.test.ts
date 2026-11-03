@@ -61,6 +61,10 @@ describeBothApis("gateway.send", (mode) => {
             Opcode.invalidSession,
             Opcode.hello,
             Opcode.heartbeatAck,
+            // Gateway Error, server to client only (fluxer_gateway/src/utils/constants.erl:47)
+            12,
+            // Voice Server Ping, reserved, and Fluxer closes a client that sends it
+            5,
         ]) {
             const error = await expectErr(send(client, 0, op, null))
             expect(error).toBeInstanceOf(GatewaySendError)
@@ -74,7 +78,7 @@ describeBothApis("gateway.send", (mode) => {
         { name: "a negative opcode", shardId: 0, op: -1, d: null, path: "op" },
         { name: "undefined data", shardId: 0, op: 15, d: undefined, path: "d" },
         { name: "data JSON cannot encode", shardId: 0, op: 15, d: { count: 1n }, path: "d" },
-        { name: "a frame above 4,096 bytes", shardId: 0, op: 15, d: "x".repeat(4_081), path: "d" },
+        { name: "a frame above 16,384 bytes", shardId: 0, op: 15, d: "x".repeat(16_369), path: "d" },
     ])("rejects $name as input", async ({ shardId, op, d, path }) => {
         const { client } = await connected(mode)
         const error = await expectErr(send(client, shardId, op, d))
@@ -82,10 +86,10 @@ describeBothApis("gateway.send", (mode) => {
         expect(Object.isFrozen((error as GatewaySendError).details)).toBe(true)
     })
 
-    test("accepts a frame of exactly 4,096 bytes", async () => {
+    test("accepts a frame of exactly 16,384 bytes", async () => {
         const { server, client } = await connected(mode)
         const overhead = Buffer.byteLength(JSON.stringify({ op: 15, d: "" }))
-        await settle(send(client, 0, 15, "x".repeat(4_096 - overhead)))
+        await settle(send(client, 0, 15, "x".repeat(16_384 - overhead)))
         await vi.waitFor(() => expect(server.commandsWithOp(15)).toHaveLength(1))
     })
 

@@ -35,7 +35,14 @@ test("a project without AGENTS.md gets one with the rules, the installed version
     const text = read(project)
     expect(text).toContain("@neontechspace/fluxerly 1000.0.0-rc.9")
     expect(text).toContain("node_modules/@neontechspace/fluxerly/agents/AGENTS.md")
-    expect(text).toContain("Check `result.isErr()` before reading `result.value`")
+    // The rules are the guide's own block, copied whole, so rewording the guide changes no assertion here
+    const guide = readFileSync(join(sdk, "agents/AGENTS.md"), "utf8")
+    const rules = guide.slice(
+        guide.indexOf("<!-- fluxerly-rules:start -->") + "<!-- fluxerly-rules:start -->".length,
+        guide.indexOf("<!-- fluxerly-rules:end -->"),
+    )
+    expect(rules.trim().length).toBeGreaterThan(0)
+    expect(text).toContain(rules.trim())
     expect(text).toContain("run `npx --no fluxerly agents` to refresh")
 })
 

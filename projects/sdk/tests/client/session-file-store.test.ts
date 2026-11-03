@@ -71,7 +71,7 @@ async function temporaryDirectory(): Promise<string> {
 const snapshot: SessionSnapshot = Object.freeze({
     sessionId: "synthetic-session-id",
     sequence: 7,
-    resumeUrl: "wss://gateway.fluxer.app/?v=1&encoding=json",
+    resumeUrl: "wss://gateway.fluxer.com/?v=1&encoding=json",
     savedAt: 1_700_000_000_000,
     totalShards: 2,
 })

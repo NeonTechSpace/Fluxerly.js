@@ -215,7 +215,7 @@ export interface AuditLogOptions {
     readonly type?: number
     /** Decimal ID of an invite creator */
     readonly inviterId?: string
-    /** Configured invite lifetime in seconds */
+    /** Configured invite lifetime in seconds. Fluxer names it max_age */
     readonly maxAgeSeconds?: number
     /** Configured maximum invite uses */
     readonly maxUses?: number
@@ -275,7 +275,7 @@ export interface AuditLogWebhook {
  * @category Guilds and members
  */
 export interface AuditLogPage {
-    /** Entries in descending entry-ID order for filtered requests */
+    /** Entries in descending entry-ID order for filtered requests. Fluxer names it audit_log_entries */
     readonly entries: readonly AuditLogEntry[]
     /** Public user snapshots referenced by this page, without a user-cache write */
     readonly users: readonly User[]

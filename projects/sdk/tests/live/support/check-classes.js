@@ -13,7 +13,7 @@
 // Levels: `sdk-work` scenarios may run during authorized SDK work. `manual` scenarios need per-run authorization or
 // a present person, and the runner refuses them
 
-const sdkWork = (lockClass) => Object.freeze({ lockClass, level: "sdk-work" })
+const sdkWork = (lockClass, options = {}) => Object.freeze({ lockClass, level: "sdk-work", ...options })
 const manual = (lockClass) => Object.freeze({ lockClass, level: "manual" })
 
 /** Declarations by harness file, then by scenario arguments in sorted order joined with spaces */
@@ -21,6 +21,8 @@ export const checkClasses = Object.freeze({
     "administration.js": { "": sdkWork("shared-state") },
     "announcements.js": { "": sdkWork("test-owned") },
     "bot-runner.js": { "": sdkWork("read-only") },
+    // Spends the address's whole request budget while it measures a faster pace, so nothing else may run beside it
+    "calibrate-pace.js": { "": manual("shared-state") },
     "command-conveniences.js": {
         waits: sdkWork("test-owned"),
         arguments: sdkWork("test-owned"),
@@ -55,10 +57,11 @@ export const checkClasses = Object.freeze({
     "messages.js": {
         "": sdkWork("test-owned"),
         "--attachment-sources": sdkWork("test-owned"),
-        "--attachments": sdkWork("test-owned"),
-        "--attachments-small": sdkWork("test-owned"),
+        // Without channel caching, another check deleting a thread parent evicts unplaced messages across the guild
+        "--attachments": sdkWork("shared-state"),
+        "--attachments-small": sdkWork("shared-state"),
         "--batch-delete": sdkWork("test-owned"),
-        "--cache": sdkWork("test-owned"),
+        "--cache": sdkWork("shared-state"),
         // Compares the whole guild channel list, which other checks' temporary channels change
         "--channels": sdkWork("shared-state"),
         "--cleanup": sdkWork("test-owned"),
@@ -82,7 +85,12 @@ export const checkClasses = Object.freeze({
     "oauth.js": { "": manual("shared-state"), "--no-consent": sdkWork("read-only") },
     "own-history.js": { "": sdkWork("test-owned"), "--guild": manual("shared-state") },
     "presence.js": { "": manual("shared-state") },
-    "recovery-window.js": { "": sdkWork("read-only"), "--session-restart": sdkWork("read-only") },
+    // Each API mode keeps all its state in its own process and sockets, so both modes may run at once under their own
+    // locks. That keeps the 165-second observation windows of both modes inside one short category
+    "recovery-window.js": {
+        "": sdkWork("read-only", { parallelModes: true }),
+        "--session-restart": sdkWork("read-only"),
+    },
     "role-display-reset.js": { "": manual("shared-state") },
     "sandbox.js": { "": sdkWork("read-only") },
     "sdk.js": {
@@ -100,6 +108,8 @@ export const checkClasses = Object.freeze({
     "text-validation.js": { "": sdkWork("test-owned") },
     // Guild-wide reads are filtered to its own channels, and only this check creates threads
     "threads.js": { "": sdkWork("test-owned") },
+    // Sends and reads back only in its own temporary channel, and keeps only that channel's raw dispatches
+    "typed-raw.js": { "": sdkWork("test-owned") },
     "typing-interactive.js": { "": manual("shared-state") },
     "users.js": {
         "": manual("shared-state"),
@@ -107,6 +117,8 @@ export const checkClasses = Object.freeze({
         "--without-group": manual("shared-state"),
     },
     "vanity-url.js": { "": sdkWork("read-only"), "--mutate": manual("shared-state") },
+    // Reads back only its own channels, post and webhook
+    "voice-notes.js": { "": sdkWork("test-owned") },
     "voice-controls.js": {
         "": manual("shared-state"),
         "--flags-only": manual("shared-state"),
@@ -124,7 +136,8 @@ export function strongestClass(classes) {
 
 /**
  * The declaration for a harness file and its process arguments, with `key` naming the scenario's shared lock, or
- * undefined when the scenario is undeclared. A copied harness keeps its declaration under the `.mjs` extension
+ * undefined when the scenario is undeclared. A scenario declared with `parallelModes` has one lock per API mode. A
+ * copied harness keeps its declaration under the `.mjs` extension
  */
 export function declaredCheck(harness, args) {
     const file = harness.replace(/\.mjs$/, ".js")
@@ -132,6 +145,9 @@ export function declaredCheck(harness, args) {
     const rest = args.filter((argument) => argument !== "default" && argument !== "effect").sort()
     const scenario = rest.join(" ")
     if (!scenarios || !Object.hasOwn(scenarios, scenario)) return undefined
-    const key = [file.replace(/\.js$/, ""), ...rest.map((argument) => argument.replace(/^--/, ""))].join("-")
+    const mode = scenarios[scenario].parallelModes
+        ? args.filter((argument) => argument === "default" || argument === "effect")
+        : []
+    const key = [file.replace(/\.js$/, ""), ...rest.map((argument) => argument.replace(/^--/, "")), ...mode].join("-")
     return Object.freeze({ ...scenarios[scenario], key })
 }

@@ -1,4 +1,10 @@
 import assert from "node:assert/strict"
+import { activateLivePacing, installLivePacing } from "./support/live-pacing.js"
+import { pacedDeadlineMs } from "./support/watchdogs.js"
+
+// A supervised child is its own process, so it joins the shared live pacer before its SDK sends anything
+installLivePacing()
+activateLivePacing()
 
 const mode = process.env.FLUXERLY_SUPERVISOR_LIVE_MODE
 const proofUrl = process.env.FLUXERLY_SUPERVISOR_LIVE_PROOF_URL
@@ -45,10 +51,11 @@ async function postSafely(proof) {
 
 class ChildSettings {
     get connection() {
-        return { startupTimeoutMs: 35_000, maxStartupAttempts: 1 }
+        // Startup includes the child's discovery, paced with its sibling's requests
+        return { startupTimeoutMs: pacedDeadlineMs(35_000, 1, { clients: 1 }), maxStartupAttempts: 1 }
     }
     get instance() {
-        return { url: "https://fluxer.app" }
+        return { url: "https://fluxer.com" }
     }
 }
 

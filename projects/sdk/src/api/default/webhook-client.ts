@@ -51,7 +51,7 @@ export interface WebhookClient extends AsyncDisposable {
     /**
      * Resolve this webhook client's selected instance and get pure URL helpers for it
      */
-    readonly instance: Instance
+    readonly instance: Pick<Instance, "resolve">
     /**
      * Fetch this incoming webhook's current metadata using its token, not bot authentication.
      * Creator and private fields are not retained
@@ -80,7 +80,7 @@ export interface WebhookClient extends AsyncDisposable {
      * Send a webhook message and return the created message after Fluxer's HTTP response.
      * A plain string sends only that text, as shorthand for `{ content }`.
      * The SDK uses wait=true, and mentions are disabled by default.
-     * A supplied nonce requests best-effort duplicate suppression for five minutes, not exactly-once delivery.
+     * A supplied nonce requests best-effort duplicate suppression for five minutes, not exactly-once delivery. It is shared across all channels for this webhook, and repeating it with threadName fails, as WebhookForumPostOptions explains.
      * Without a nonce, none is sent unless a forward source supplies one, and a nonce on both the message and its forward source fails before dispatch.
      * Reply references can include files.
      * Forward references preserve only the source snapshot and reject new content or uploads
@@ -96,9 +96,10 @@ export interface WebhookClient extends AsyncDisposable {
      * Cleanup cancels unfinished readers and awaits lock release, without closing caller paths or FileHandles.
      * Multipart file uploads are streamed with a maximum of 50 MiB per file and share the configured upload-byte budget.
      * An attachment:// image or thumbnail URL must match one new upload whose filename maps to an image or video MIME type.
-     * The flags input accepts only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
-     * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed.
-     * Those bits and VoiceMessage fail locally before dispatch
+     * The flags input accepts MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and MessageFlags.VoiceMessage.
+     * A voice note needs one new attachment with duration and waveform and no content, embeds or stickers, and its waveform may hold at most 256 characters, the limit of Fluxer's multipart webhook schema.
+     * A forward accepts only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
+     * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed and fail locally before dispatch
      *
      * A failure with an unknown outcome can leave the message posted and is never replayed automatically.
      * A confirmed inline HTTP 429 can replay copied data bytes, but file and stream inputs fail with rateLimit without being reopened or reread
@@ -121,7 +122,8 @@ export interface WebhookClient extends AsyncDisposable {
      * A plain string replaces only the text, as shorthand for `{ content }`.
      * Omitted fields stay unchanged.
      * Mentions default off and attachments cannot be replaced.
-     * A flags-only edit replaces only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications, and 0 clears them.
+     * Supplied flags, including 0, replace the writable flags MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications
+     * and clear MessageFlags.VoiceMessage, which an edit cannot set again. Omit flags to preserve an existing voice note.
      * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed.
      * Those bits and VoiceMessage fail locally before dispatch.
      * Embed input cannot resolve existing file references.
@@ -144,7 +146,8 @@ export interface WebhookClient extends AsyncDisposable {
     ): ResultAsync<void, WebhookOperationFailure | CancelledError | ConfigurationError>
     /**
      * Permanently stop this local client, reject new work, cancel active work and await transport cleanup.
-     * The client's token reference is released, but the remote webhook and caller-held credentials remain.
+     * The client drops its token reference, but its logger keeps a copy to mask it while the client object is reachable.
+     * Drop the client object to release it. The remote webhook and caller-held credentials remain.
      * Concurrent calls wait for the same pending cleanup.
      * No expected failure is returned
      *

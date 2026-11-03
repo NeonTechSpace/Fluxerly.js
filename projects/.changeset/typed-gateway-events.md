@@ -1,0 +1,10 @@
+---
+"@neontechspace/fluxerly": minor
+---
+
+Typed raw gateway events and Gateway Error frames:
+
+- Each `raw` event now has `documented`, which is true when Fluxer's documentation at the SDK's reviewed Fluxer commit describes its dispatch type. After checking it, comparing `t` with a dispatch type such as `"MESSAGE_CREATE"` gives `d` that type's documented payload with Fluxer's own field names, such as `channel_id` and `referenced_message`, so a misspelled field fails to compile. A dispatch type the documentation does not describe still arrives, with `documented: false` and an unknown `d`. The types check nothing at runtime, and `d` is still the body Fluxer sent. Existing `raw` handlers keep compiling, since every raw event is still a `RawDispatch`
+- The new `GatewayDispatchPayloads` type maps each documented dispatch type to its payload, and `GatewayPayloadObjects` holds the objects those payloads carry, keyed by the address of their documentation, such as `"/http-api/messages/#message-object"`. `RawDispatchEvent`, `DocumentedRawDispatch` and `UndocumentedRawDispatch` name the forms of the raw event. The types are generated from the gateway and HTTP API documentation at the pinned Fluxer commit
+- The new `gatewayError` event delivers opcode 12 Gateway Error frames as `{ shardId, d: { code, message } }`. Fluxer sends one when it refuses a voice join the session asked for, such as with `VOICE_CHANNEL_FULL`, so a refused join sent through `client.gateway.send` is now visible without a custom WebSocket transport. The frame is not a dispatch: It never reaches `raw`, has no sequence, is not replayed by Resume and is never suppressed by `gateway.ignoredEvents`. Each frame is logged with the new code `gateway.gatewayError`, at Debug while a subscription receives it and at Warn otherwise. Such frames used to be ignored as an unknown opcode
+- The test clients of both entry points have `emitGatewayError(data, options)`, which delivers a Gateway Error frame to a connected shard, shard 0 by default, so a bot's handling of a refused voice join can be tested offline

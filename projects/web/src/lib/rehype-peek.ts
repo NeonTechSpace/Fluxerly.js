@@ -73,9 +73,10 @@ const classes: Record<MarkKind, string[]> = {
     term: ["peek", "peek-term"],
 }
 
-/** The page a file renders, by its guide slug, such as effect-first-bot */
+/** The page a file renders, by its guide slug, such as effect-first-bot. Guides sit in content/guides in the working tree
+ * and in content/<version>/guides in a published version's snapshot */
 function pageOf(path: string | undefined): string | undefined {
-    return /[\\/]content[\\/]guides[\\/]([\w-]+)\.md$/.exec(path ?? "")?.[1]
+    return /[\\/]guides[\\/]([\w-]+)\.md$/.exec(path ?? "")?.[1]
 }
 
 /** The entry points a page looks names up in. A guide whose slug holds every word of an entry point's key, such as
@@ -271,8 +272,9 @@ const isLabel = (element: Element) => {
 interface File {
     path?: string
     history?: string[]
-    /** A reference comment names the symbol it documents in its render's frontmatter, so it never marks itself */
-    data?: { astro?: { frontmatter?: { peekSelf?: unknown } } }
+    /** A reference comment names the symbol it documents in its render's frontmatter, so it never marks itself, and the
+     * entry point its page belongs to, so its names lead to that entry point */
+    data?: { astro?: { frontmatter?: { peekSelf?: unknown; peekEntry?: unknown } } }
 }
 
 export default function rehypePeek(options: RehypePeekOptions) {
@@ -281,7 +283,8 @@ export default function rehypePeek(options: RehypePeekOptions) {
     return (tree: Node, file?: File) => {
         const page = options.page ?? pageOf(file?.path ?? file?.history?.[0])
         const self = file?.data?.astro?.frontmatter?.peekSelf
-        const entries = preferredEntries(terms.entries, page)
+        const entry = file?.data?.astro?.frontmatter?.peekEntry
+        const entries = preferredEntries(terms.entries, page ?? (typeof entry === "string" ? entry : undefined))
         // The glossary defines its terms, so it does not mark them
         const glossary = !terms.glossary.some((term) => term.key.startsWith(`/docs/${page}/`))
         const marks: Candidate[] = []

@@ -64,7 +64,7 @@ describe.each(modes)("%s prefixes", (mode) => {
     test("mentionPrefix accepts both bot mention forms, reading the bot ID once when READY did not supply it", async () => {
         let selfReads = 0
         const remote = await commandFixture((call: RecordedCall) => {
-            if (call.path !== "/v1/users/@me") return undefined
+            if (call.path !== "/api/v1/users/@me") return undefined
             selfReads += 1
             return Response.json(botUser)
         })

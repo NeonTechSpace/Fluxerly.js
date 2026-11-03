@@ -325,7 +325,7 @@ export const colors: ColorHelpers = Object.freeze({
  */
 export const text: TextHelpers = sharedText
 
-/** Build hosted Fluxer channel, message and bot-installation links from supplied IDs.
+/** Build hosted Fluxer channel, message and bot-installation links on fluxer.com from supplied IDs.
  * Methods return URLs immediately, the same as in the default API, and throw HelperError for invalid input.
  * Such a throw inside Effect code becomes a defect. Building a link does not visit it or check access
  *
@@ -337,7 +337,7 @@ export const links: LinkHelpers = sharedLinks
  * Build image URLs for hosted Fluxer from supplied user, member, community, emoji or sticker data.
  * Methods return URLs immediately, the same as in the default API, and use fixed hosted addresses. Use client.instance.resolve for URLs on a selected self-hosted instance.
  * Invalid targets, IDs, hashes or options throw AssetUrlError, and such a throw inside Effect code becomes a defect.
- * Image format defaults to WebP. Omit size to leave pixel size selection to Fluxer.
+ * The requested image format defaults to WebP. Omit size to leave pixel size selection to Fluxer. A successful download can contain the original image if Fluxer cannot transform it.
  * Options are validated even when the supplied asset is absent.
  * These helpers do not fetch profiles, change caches, download bytes, refresh URLs or change attachment or embed URLs.
  * Custom base addresses are not accepted by this hosted namespace.

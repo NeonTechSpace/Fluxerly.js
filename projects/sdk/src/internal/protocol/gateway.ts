@@ -11,12 +11,14 @@ export const Opcode = Object.freeze({
     heartbeat: 1,
     identify: 2,
     presenceUpdate: 3,
+    voiceServerPing: 5,
     resume: 6,
     reconnect: 7,
     requestGuildMembers: 8,
     invalidSession: 9,
     hello: 10,
     heartbeatAck: 11,
+    gatewayError: 12,
     memberSubscriptions: 14,
     requestGuildCounts: 15,
     requestChannelMemberCounts: 16,
@@ -27,12 +29,14 @@ const opcodeNames = new Map<number, string>([
     [Opcode.heartbeat, "HEARTBEAT"],
     [Opcode.identify, "IDENTIFY"],
     [Opcode.presenceUpdate, "PRESENCE_UPDATE"],
+    [Opcode.voiceServerPing, "VOICE_SERVER_PING"],
     [Opcode.resume, "RESUME"],
     [Opcode.reconnect, "RECONNECT"],
     [Opcode.requestGuildMembers, "REQUEST_GUILD_MEMBERS"],
     [Opcode.invalidSession, "INVALID_SESSION"],
     [Opcode.hello, "HELLO"],
     [Opcode.heartbeatAck, "HEARTBEAT_ACK"],
+    [Opcode.gatewayError, "GATEWAY_ERROR"],
     [Opcode.memberSubscriptions, "MEMBER_SUBSCRIPTIONS"],
     [Opcode.requestGuildCounts, "REQUEST_GUILD_COUNTS"],
     [Opcode.requestChannelMemberCounts, "REQUEST_CHANNEL_MEMBER_COUNTS"],
@@ -46,8 +50,8 @@ export function opcodeName(op: number): string | null {
 /**
  * Opcodes an application may not send through gateway.send.
  * Heartbeat, Identify and Resume belong to the session the SDK manages, and a second Identify or an out-of-band
- * Resume would replace or end it. Server-only opcodes close the connection with 4001 or 4003, which the SDK treats as
- * permanent, so they are rejected locally instead
+ * Resume would replace or end it. Server-only opcodes and the reserved Voice Server Ping close the connection with 4001
+ * or 4003, which the SDK treats as permanent, so they are rejected locally instead
  */
 export const reservedClientOpcodes: ReadonlySet<number> = new Set([
     Opcode.heartbeat,
@@ -58,14 +62,18 @@ export const reservedClientOpcodes: ReadonlySet<number> = new Set([
     Opcode.invalidSession,
     Opcode.hello,
     Opcode.heartbeatAck,
+    Opcode.gatewayError,
+    Opcode.voiceServerPing,
 ])
 
-/** Largest client payload Fluxer accepts, in UTF-8 bytes on the wire. Larger messages close with 4002 */
-export const maxClientPayloadBytes = 4_096
+/**
+ * Maximum encoded client gateway payload, in UTF-8 bytes on the wire and after decompression. Fluxer instances older than
+ * October 2026 allow 4,096 bytes. Larger payloads close with 4002, which stops the shard
+ */
+export const maxClientPayloadBytes = 16_384
 
 /**
- * Identify session flags, pinned against fluxer_docs gateway/commands.md "Session flags" at fluxerapp/fluxer commit
- * 841fb7af4174fc8fc025307776e87e7dba51a669. Bit 0 and every bit above 1 are undefined and ignored by Fluxer
+ * Identify session flags sent by this SDK. Fluxer also defines CHANNEL_THREADS at bit 2 and GUILD_VISITS at bit 3
  */
 export const IdentifyFlag = Object.freeze({
     /** DEBOUNCE_MESSAGE_REACTIONS: Merge runs of direct-message reaction additions into MESSAGE_REACTION_ADD_MANY */
@@ -117,8 +125,9 @@ export const CloseCode = Object.freeze({
 } as const)
 
 /** How the SDK reacts to a gateway close code.
- * The resume action retries and resumes the session when possible, identify retries with a new session,
- * wait retries after the server-required rate-limit wait, and fatal stops without retrying
+ * The resume action retries and resumes when possible. The identify action discards the session if an unfinished Resume
+ * was rejected. Otherwise a retained session may be offered to Resume again. The wait action retries after the rate-limit
+ * wait, and fatal stops retrying
  */
 export type CloseAction = "resume" | "identify" | "wait" | "fatal"
 
@@ -221,7 +230,7 @@ const closeCodes: ReadonlyMap<number, CloseCodeInfo> = new Map<number, CloseCode
         {
             name: "SESSION_TIMEOUT",
             action: "resume",
-            meaning: "The gateway closed after a heartbeat acknowledgement timeout",
+            meaning: "The gateway closed because it received no heartbeat from the bot in time",
         },
     ],
     [

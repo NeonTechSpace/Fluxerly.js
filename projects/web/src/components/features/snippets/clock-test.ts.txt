@@ -1,0 +1,17 @@
+import assert from "node:assert/strict"
+import { test } from "node:test"
+import { createTestBot } from "@neontechspace/fluxerly/testing"
+
+const tenMinutes = 10 * 60_000
+
+test("a reminder runs after ten minutes", async () => {
+    await using bot = createTestBot({ clock: "manual" })
+    await bot.ready()
+    let reminded = false
+    bot.client.schedule(() => (reminded = true), {
+        delayMs: tenMinutes,
+    })
+
+    await bot.advance(tenMinutes)
+    assert.equal(reminded, true)
+})

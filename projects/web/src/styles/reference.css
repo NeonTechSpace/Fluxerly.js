@@ -20,7 +20,7 @@
 
 .ref p {
     max-width: var(--measure, 35em);
-    margin: 0 0 0.75em;
+    margin: 0 0 1.1em;
 }
 
 .ref a {
@@ -105,7 +105,7 @@
 /* The summary is the entry's first sentence, lit a step above the rest */
 .ref-summary {
     font-size: var(--type-lead);
-    color: var(--ink-high);
+    color: var(--ink-soft);
 }
 
 .ref-intro,

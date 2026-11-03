@@ -14,7 +14,9 @@ There are two kinds of release: Nightly and Stable.
 
 Stable can only ship what a nightly already shipped. The tooling compares the two, and stops if the code differs or there's no nightly of that version.
 
-1. Check that the newest nightly has what you want to ship. If `main` has changes the nightly lacks, [run a nightly](/docs/RELEASING.md#nightly-builds) first
+1. Check that the newest nightly has what you want to ship. If `main` has changes the nightly lacks, [run a nightly](/docs/RELEASING.md#nightly-builds) first.
+   Then run the live release run on a checkout of that source, as [release runs](/projects/sdk/tests/live/README.md#release-runs) describes, and fix any failure before going on.
+   It reruns only the categories that have not passed on the same code within 14 days and lists the passes it reuses. Add `--fresh` to rerun everything
 2. Run [Release version PR](/.github/workflows/release-version.yml) with `source_ref: main`.
    It opens a `release/version-VERSION` pull request with the new version and changelog, and starts [Check](/.github/workflows/ci.yml) on it. The version number comes from the release notes, so there's nothing to type
 3. Review the version and changelog, then merge after Check passes
@@ -129,6 +131,12 @@ A new epoch is a deliberate choice. Run Release version PR with `epoch`, such as
 
 Between Stables, the stored version is the last Stable and `projects/.changeset/` holds the notes for the next one. A new epoch target also uses `projects/.changeset/pre/` and `projects/.changeset/pre.json`, which keeps the last Stable as `releaseBase`. Before the Stable version PR, edit or delete notes that later changes replaced, so the changelog never announces something the same release removes.
 
+Also check the notes against the release's whole diff since the last Stable, because these changes are easy to miss:
+
+- A required member added to an interface that callers implement or fake, such as `Threads` or `OAuthClient`, has a breaking note
+- A change to what `errors.isRetryable` returns for a failure has a breaking note
+- A change to the files or commands that `fluxerly init` writes has a note
+
 Source versioning is not atomic. After an interruption, reconcile the manifest, release state, notes and changelog before retrying. Missing or invalid state fails closed
 
 There are no permanent release branches. Occasional other release lines use an explicitly selected source branch
@@ -156,6 +164,7 @@ Each nightly compares against the previous nightly on the same `major.minor` lin
 | [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the website |
 | [Website](/.github/workflows/website.yml) | Called by Release publish, or manual | Always builds `main` from the published versions' snapshots and deploys it to `https://fluxerly.neontechspace.com` |
 | [Effect drift](/.github/workflows/effect-drift.yml) | Daily, or manual | No inputs. Checks the SDK with the newest Effect release in its peer range and fails when the SDK breaks with it. It does not publish |
+| [Upstream drift](/.github/workflows/upstream-drift.yml) | Weekly, or manual | No inputs. Posts Fluxer's document and source changes as the GitHub Actions bot, in its open "Fluxer upstream changes to review" issue or in a new one that explains the review, and goes red only when the check itself breaks. It does not publish |
 
 Only Release publish writes to npm, and no push or tag publishes a package.
 Release publish checks out its own workflow commit, so its tooling never comes from the candidate source.

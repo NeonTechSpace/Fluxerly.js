@@ -3,15 +3,16 @@
 import { readFileSync } from "node:fs"
 import { guideAsMarkdown } from "../../scripts/docs/remark-guides.mjs"
 import inventory from "@content/guides/meta.json"
+import { featurePages } from "./links"
 import { titleCase } from "./title-case"
-import { isReexport, model, type Declaration, type Doc, type Member, type Signature, type Type, type TypeParameter } from "./reference"
-import { typeHtml } from "./reference-format.ts"
+import { model } from "./reference"
+import { checkedText, referenceText as condensedText, referenceTextProblems, tasksMarkdown as tasksText } from "./reference-text.ts"
 
 const raw = import.meta.glob<string>("@content/guides/*.md", { query: "?raw", import: "default", eager: true })
 export const site = "https://fluxerly.neontechspace.com"
 const base = import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"
 const version = process.env.DOCS_VERSION ?? (JSON.parse(readFileSync("../sdk/package.json", "utf8")) as { version: string }).version
-const about = `Fluxerly.js is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect\n\nThese files describe SDK version ${version}`
+const about = `Fluxerly.js is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect\n\nVoice: Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it\n\nThese files describe SDK version ${version}`
 
 export const guides = Object.entries(raw)
     .map(([path, source]) => ({
@@ -36,7 +37,12 @@ function linkOf(url: string): string {
 
 export const guideMarkdown = (source: string) => guideAsMarkdown(source).replace(/\]\((\/docs\/[^)\s]*)\)/g, (_: string, url: string) => `](${linkOf(url)})`)
 
+// One guide read on its own, away from the site, says which SDK version it describes. The combined export says so once, at its top
+export const singleGuideMarkdown = (source: string) => guideMarkdown(source).replace(/^(?:# .*\n\n)?/, (title) => `${title}This guide describes SDK version ${version}\n\n`)
+
 const entryOf = (item: string | { title: string; href: string }) => {
+    // The docs menu links this index itself, which the index doesn't list
+    if (typeof item !== "string" && item.href === "/docs/llms.txt") return undefined
     if (typeof item !== "string") return `- [${item.title}](${linkOf(item.href)})`
     const guide = guides.find((candidate) => candidate.slug === item)
     if (!guide) return undefined
@@ -56,7 +62,10 @@ export function indexText(): string {
         return `## ${group.title}\n\n${entries.join("\n")}`
     })
     const versions = versionLines()
+    // The feature pages describe the site's newest version, so only that version's index lists them
+    const features = base === "/docs/" ? [`## What Fluxerly includes\n\n${featurePages.map((page) => `- [${page.title}](${site}/${page.slug}/): ${page.summary}`).join("\n")}`] : []
     const sections = [
+        ...features,
         ...groups,
         `## Reference\n\n- [Every client method by task](${site}${base}api/tasks.md)\n- [The whole reference, condensed](${site}${base}llms-reference.txt): Every export with its signatures and members`,
         ...(versions.length ? [`## Other versions\n\n${versions.join("\n")}`] : []),
@@ -69,66 +78,6 @@ export function fullText(): string {
     return `# Fluxerly.js guides\n\n> ${about}\n\n${guides.map((guide) => guideMarkdown(guide.source)).join("\n---\n\n")}`
 }
 
-// The reference's text is HTML, and each of its sentences sits on its own line
-const plainText = (html: string) =>
-    html
-        .replace(/<[^>]+>/g, "")
-        .replaceAll("&lt;", "<")
-        .replaceAll("&gt;", ">")
-        .replaceAll("&quot;", '"')
-        .replaceAll("&#39;", "'")
-        .replaceAll("&amp;", "&")
-const firstSentence = (text = "") => plainText(/^[^\n]*?[.!?](?=\s|$)|^[^\n]*/.exec(text.trim())?.[0] ?? "").trim()
+export const tasksMarkdown = () => checkedText(tasksText(model.entries, { about, absolute }), referenceTextProblems(model.entries))
 
-export function tasksMarkdown(): string {
-    const sections = model.entries
-        .filter((entry) => entry.tasks?.length)
-        .map((entry) => {
-            const groups = entry.tasks!.map((group) => `### ${group.name}\n\n${group.rows.map((row) => `- [\`${row.method}\`](${absolute(row.url)}): ${firstSentence(row.task)}`).join("\n")}`)
-            return `## ${entry.title}\n\n${groups.join("\n\n")}`
-        })
-    return `# Every client method by task\n\n> ${about}\n\n${sections.join("\n\n")}\n`
-}
-
-// A type as plain text, cut short when it's too long to be useful on one line
-const typeText = (type: Type): string => {
-    const text = plainText(typeHtml(type, 100_000)).replace(/\s+/g, " ").trim()
-    return text.length > 200 ? `${text.slice(0, 200)}...` : text
-}
-// The generics a signature or a declaration names, so its types aren't left undeclared
-const generics = (parameters: TypeParameter[] = []) =>
-    parameters.length ? `<${parameters.map((parameter) => `${parameter.n}${parameter.c ? ` extends ${typeText(parameter.c)}` : ""}${parameter.d ? ` = ${typeText(parameter.d)}` : ""}`).join(", ")}>` : ""
-const call = (name: string, signature: Signature) =>
-    `${name}${generics(signature.tp)}(${signature.p.map((parameter) => `${parameter.r ? "..." : ""}${parameter.n}${parameter.o ? "?" : ""}: ${typeText(parameter.t)}`).join(", ")}): ${typeText(signature.r)}`
-const summaryOf = (doc?: Doc) => (doc?.summary ? `: ${firstSentence(doc.summary)}` : "")
-
-function memberLines(members: Member[] = []): string[] {
-    return members.flatMap((member) =>
-        member.signatures?.length
-            ? member.signatures.map((signature) => `- \`${call(member.name, signature)}\`${summaryOf(signature.doc ?? member.doc)}`)
-            : [`- \`${member.name}${member.optional ? "?" : ""}: ${member.type ? typeText(member.type) : "unknown"}\`${summaryOf(member.doc)}`],
-    )
-}
-
-function declarationLines(item: Declaration): string[] {
-    const head = `#### ${item.kind} ${item.name}${generics(item.tp)}\n\nPage: ${absolute(item.url)}`
-    // An inherited member is written out only where it's declared, so its owner is named here
-    const inherited = (item.inherited ?? []).map((group) => `- Inherits from \`${group.from}\`: ${group.m.map((member) => `\`${member.n}\``).join(", ")}`)
-    const about = item.doc?.summary ? [firstSentence(item.doc.summary)] : []
-    const signatures = (item.signatures ?? []).map((signature) => `- \`${call(item.name, signature)}\`${summaryOf(signature.doc)}`)
-    const shape = item.type && !item.members?.length ? [`- \`${typeText(item.type)}\``] : []
-    return [head, ...about, [...signatures, ...shape, ...memberLines(item.members), ...inherited].join("\n")].filter(Boolean)
-}
-
-export function referenceText(): string {
-    const sections = model.entries.map((entry) => {
-        const categories = entry.categories.map((category) => {
-            const items = category.items.map((item) =>
-                isReexport(item) ? `#### ${item.name}\n\nPage: ${absolute(item.url)}\n\nThe same as in ${item.home}` : declarationLines(item).join("\n\n"),
-            )
-            return `### ${category.title}\n\n${items.join("\n\n")}`
-        })
-        return `## ${entry.title}\n\nImport from \`${entry.importPath}\`\n\n${categories.join("\n\n")}`
-    })
-    return `# Fluxerly.js reference, condensed\n\n> ${about}\n\n${sections.join("\n\n")}\n`
-}
+export const referenceText = () => checkedText(condensedText(model.entries, { about, absolute }), referenceTextProblems(model.entries))

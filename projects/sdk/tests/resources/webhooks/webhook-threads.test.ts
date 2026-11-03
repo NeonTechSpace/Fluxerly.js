@@ -40,7 +40,7 @@ function recordRequests(respond: (url: URL, init: RequestInit) => Response | Pro
             typeof init.body === "string" ? JSON.parse(init.body) : { allowed_mentions: undefined }
         requests.push({
             method: init.method!,
-            path: target.pathname.replace(`/v1/webhooks/100/${secret}`, ""),
+            path: target.pathname.replace(`/api/v1/webhooks/100/${secret}`, ""),
             query: target.search,
             body: typeof init.body === "string" ? body : undefined,
         })

@@ -11,7 +11,7 @@ import { wsTarget } from "../support/ws-redirect.js"
 import { sdkClock, type SdkClock } from "../support/client-clock.js"
 
 vi.mock("ws", (original) => import("../support/ws-redirect.js").then((ws) => ws.redirectWebSocket(original)))
-const hostedGateway = "wss://gateway.fluxer.app/?v=1&encoding=json"
+const hostedGateway = "wss://gateway.fluxer.com/?v=1&encoding=json"
 afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
@@ -43,7 +43,7 @@ async function fixture(clock: SdkClock) {
     vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string, init: RequestInit) => {
-            expect(url).toBe("https://fluxer.app/.well-known/fluxer")
+            expect(url).toBe("https://fluxer.com/.well-known/fluxer")
             expect(init).toMatchObject({ method: "GET", redirect: "manual" })
             requests.push(clock.now())
             if (options.status === 429)
@@ -267,6 +267,76 @@ for (const budget of [30_000, 60_000])
             released(clock)
         }
     })
+
+/** The failure of one explicit instance discovery call, in either API */
+async function resolveFailure(client: { readonly instance: { resolve(): unknown } }): Promise<unknown> {
+    const operation = client.instance.resolve()
+    if (Effect.isEffect(operation)) {
+        const exit = await Effect.runPromiseExit(operation as Effect.Effect<unknown, unknown>)
+        const reason = Exit.isFailure(exit) ? exit.cause.reasons.find((item) => item._tag === "Fail") : undefined
+        return reason?._tag === "Fail" ? reason.error : undefined
+    }
+    const result = (await operation) as { isErr(): boolean; error?: unknown }
+    return result.isErr() ? result.error : undefined
+}
+
+test.each(modes)("%s startup waits through short discovery limits beyond the attempt limit", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    // The body asks for less than the header, and the header wait wins
+    Object.assign(server.options, { status: 429, retryAfter: 1, header: "5" })
+    const api = await driver(mode)
+    const startup = api.start("connect")
+    for (const count of [1, 2, 3]) {
+        await clock.waiting(5000)
+        if (count === 1) {
+            // A second discovery during the wait is refused locally with the remaining wait, without a request
+            await clock.advance(1000)
+            expect(await resolveFailure(api.client)).toMatchObject({ _tag: "RateLimitError", retryAfterMs: 4000 })
+            await clock.advance(3999)
+        } else await clock.advance(4999)
+        expect(server.requests).toHaveLength(count)
+        if (count === 3) server.options.status = 200
+        await clock.advance(1)
+    }
+    expect(await startup.done).toBe("Success")
+    expect(server.requests).toEqual([0, 5000, 10_000, 15_000])
+    await api.shutdown()
+    released(clock)
+})
+
+test.each(modes)("%s startup stops at its deadline while discovery stays rate-limited", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    Object.assign(server.options, { status: 429, retryAfter: 5, header: "5" })
+    const api = await driver(mode)
+    const startup = api.start("connect")
+    for (let count = 1; count < 6; count++) {
+        await clock.waiting(5000)
+        await clock.advance(5000)
+    }
+    expect(await startup.done).toBe("RateLimitError")
+    expect(await startup.failure).toMatchObject({ _tag: "RateLimitError", retryAfterMs: 5000 })
+    expect(server.requests).toEqual([0, 5000, 10_000, 15_000, 20_000, 25_000])
+    expect(api.client.state).toBe("Disconnected")
+    expect(clock.pending.size).toBe(0)
+    await clock.advance(60_000)
+    expect(server.requests).toHaveLength(6)
+})
+
+test.each(modes)("%s cancelling startup during a discovery limit releases its wait", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    Object.assign(server.options, { status: 429, retryAfter: 5, header: "5" })
+    const api = await driver(mode)
+    const startup = api.start("connect")
+    await clock.waiting(5000)
+    await startup.cancel()
+    expect(await startup.done).toBe(mode === "default" ? "CancelledError" : "Interrupted")
+    expect(clock.pending.size).toBe(0)
+    await clock.advance(60_000)
+    expect(server.requests).toEqual([0])
+})
 
 test.each(modes)("%s owner closure during backoff stops recovery and completes lifetime observers", async (mode) => {
     const clock = sdkClock()

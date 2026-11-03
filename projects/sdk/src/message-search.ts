@@ -5,6 +5,8 @@ import type { PaginationQuery } from "./pagination.js"
 /** Community or channel in which to search messages visible to the bot.
  * Supply at least guildId or channelId, as decimal strings, or both.
  * Search uses the bot's current access permissions, not another account's permissions or access the bot had earlier.
+ * When both IDs are supplied, guildId selects the community and channelId does not narrow the search. Supply only channelId
+ * for a channel search, or use query.channelIds to restrict a community search.
  * The SDK captures the supplied IDs once when the request or traversal starts
  *
  * @category Messages
@@ -31,7 +33,11 @@ export type MessageSearchContext =
 export type MessageSearchAuthorType = "user" | "bot" | "webhook"
 
 /** Kind of content to require or exclude in Fluxer's message search.
- * The kind snapshot identifies copied content in a forwarded message
+ * The kind snapshot identifies copied content in a forwarded message.
+ * The image, sound, video and file categories inspect uploaded attachments, including attachments copied in forwards. The
+ * file category includes every attachment type. The embed category matches generated previews or supplied embeds. The link
+ * category matches URLs in message text, including copied text in forwards. Fluxer accepts the poll category but its index
+ * never marks a message as having a poll, so it matches nothing
  *
  * @category Messages
  */
@@ -39,7 +45,8 @@ export type MessageSearchContentType =
     "image" | "sound" | "video" | "file" | "sticker" | "embed" | "link" | "poll" | "snapshot"
 
 /**
- * Embed category to require or exclude in Fluxer's message search
+ * Embed category to require or exclude in Fluxer's message search.
+ * These categories inspect generated or supplied embeds, not uploaded attachments
  *
  * @category Messages
  */
@@ -110,20 +117,22 @@ export interface MessageSearchQuery {
     readonly attachmentFilenames?: readonly string[]
     /** Attached file names to exclude, at most 100 strings of 1 through 1,024 UTF-16 code units each */
     readonly excludeAttachmentFilenames?: readonly string[]
-    /** Attached file extensions to match, at most 50 strings of 1 through 32 UTF-16 code units each */
+    /** Attached file extensions to match, at most 50 strings of 1 through 32 UTF-16 code units each. Use lowercase and leave out the dot, such as png. Fluxer's search index omits extensions longer than 10 characters, so use attachmentFilenames for those files */
     readonly attachmentExtensions?: readonly string[]
-    /** Attached file extensions to exclude, at most 50 strings of 1 through 32 UTF-16 code units each */
+    /** Attached file extensions to exclude, at most 50 strings of 1 through 32 UTF-16 code units each. Use lowercase and leave out the dot, such as png. Fluxer's search index omits extensions longer than 10 characters, so use attachmentFilenames for those files */
     readonly excludeAttachmentExtensions?: readonly string[]
-    /** Rank results by timestamp or relevance, default timestamp */
+    /** Request timestamp or relevance order, default timestamp. On Fluxer's default Elasticsearch search engine, relevance currently returns the newest message IDs first instead of ranking matches */
     readonly sortBy?: "timestamp" | "relevance"
-    /** Ascending or descending result order, default desc */
+    /** Ascending or descending timestamp order, default desc. Fluxer ignores this setting when sortBy is relevance */
     readonly sortOrder?: "asc" | "desc"
     /** Request results from channels Fluxer marks NSFW, default false. In an age-restricted community, guild search includes NSFW results for eligible callers, including bots, even when omitted or false. Channel access checks still apply */
     readonly includeNsfw?: boolean
 }
 
 /** Channel information supplied beside message search results.
- * This frozen snapshot is not a complete channel, cached channel or permission check
+ * This frozen snapshot is not a complete channel, cached channel or permission check. It keeps only id, guild_id,
+ * name and type of the channel Fluxer sends. Use channels.fetch for the whole channel, or a raw client.rest.request
+ * POST to /search/messages for Fluxer's complete search body
  *
  * @category Messages
  */
@@ -151,7 +160,9 @@ export interface MessageSearchIndexingPage {
 
 /** Search results returned once Fluxer's index can answer the request.
  * The page and its nested results are frozen. Later index updates can change later pages and totals.
- * Check indexing before reading results, since search can instead return MessageSearchIndexingPage
+ * Check indexing before reading results, since search can instead return MessageSearchIndexingPage.
+ * Fluxer's cursor field is not kept, because the SDK pages by number with page and does not send cursors. A raw
+ * client.rest.request POST to /search/messages returns the cursor, for paging past page 400
  *
  * @category Messages
  */

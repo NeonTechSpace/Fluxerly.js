@@ -62,7 +62,13 @@ import {
     type InternalReport,
 } from "./failures.js"
 import { metrics } from "./metrics.js"
-import { RejectionScope, fiberRejectionScope, withRejectionScope } from "./rejection-scope.js"
+import {
+    CallbackRuns,
+    RejectionScope,
+    fiberRejectionScope,
+    inRejectionScope,
+    withRejectionScope,
+} from "./rejection-scope.js"
 import { emitObservation, failureFacts, observing } from "./observer.js"
 import { editDistance, unsupportedKeyHint } from "./suggest.js"
 
@@ -209,7 +215,12 @@ export function defaultMiddleware(
                     new Promise<unknown>((resolve) => {
                         const runNext = () =>
                             Effect.runPromiseExitWith(services)(next, { signal }).then(() => undefined)
-                        resolve(middleware(invocation, runNext, signal))
+                        // The middleware's operations belong to its invocation, as the handler's do
+                        resolve(
+                            inRejectionScope(fiberRejectionScope(services), () =>
+                                middleware(invocation, runNext, signal),
+                            ),
+                        )
                     }).then(throwIfErr),
                 // Keep the thrown or rejected value itself for the failure report
                 catch: (error) => error,
@@ -348,9 +359,35 @@ function eventWaitSettings<K extends EventName, M extends MessageCore = Message>
     }
 }
 
-function limits(event: EventName, options: unknown, defaultOverflow: Limits["overflow"]): Limits | ConfigurationError {
+/** Options a subscription or collector accepts */
+const subscriptionOptionKeys: readonly string[] = ["maxPendingMessages", "maxPendingBytes"]
+
+/** Options a handler registration accepts, including the hooks client.on reads before the bus opens its source */
+const handlerOptionKeys: readonly string[] = [
+    "concurrency",
+    "partition",
+    "overflow",
+    "maxPendingMessages",
+    "maxPendingBytes",
+    "onError",
+    "partitionReady",
+]
+
+function limits(
+    event: EventName,
+    options: unknown,
+    defaultOverflow: Limits["overflow"],
+    supported: readonly string[],
+): Limits | ConfigurationError {
     if (options === undefined) options = {}
     if (!record(options)) return new ConfigurationError("eventOptions", "Event options must be an object")
+    // A misspelled option would otherwise use its default without a word. The object itself is kept, not copied,
+    // because a command router finds its report queue by this object's identity
+    const unsupported = Object.keys(options).find((key) => !supported.includes(key))
+    if (unsupported !== undefined)
+        return new ConfigurationError("eventOptions", `Unsupported event option ${JSON.stringify(unsupported)}`, {
+            hint: unsupportedKeyHint(unsupported, supported),
+        })
     const partition = options.partition
     if (partition !== undefined && partition !== "guild" && partition !== "channel" && typeof partition !== "function")
         return new ConfigurationError(
@@ -997,6 +1034,7 @@ export class EventBus<M extends MessageCore = Message> {
         callUpdate: new Set(),
         callDelete: new Set(),
         raw: new Set(),
+        gatewayError: new Set(),
     }
     /** Registered middleware in registration order. Replaced rather than mutated, so an invocation keeps the list it started with */
     #middleware: readonly InternalMiddleware[] = []
@@ -1043,6 +1081,8 @@ export class EventBus<M extends MessageCore = Message> {
     #progress = Deferred.makeUnsafe<void>()
     #closingSources: Pick<EventSource, "stop" | "closed">[] = []
     #handlerFibers = new Set<number>()
+    /** Handler invocations in progress as callback runs, so a manual test clock can see which await an SDK call */
+    readonly callbackRuns = new CallbackRuns()
     ownsHandler(fiberId: number) {
         return this.#handlerFibers.has(fiberId)
     }
@@ -1097,6 +1137,8 @@ export class EventBus<M extends MessageCore = Message> {
             readonly defaultOverflow?: Limits["overflow"]
             /** A partitionReady hook to check against the partition, before the closed check like other misuse */
             readonly partitionReady?: unknown
+            /** Accept handler options rather than only the queue limits of a subscription */
+            readonly handler?: boolean
         } = {},
     ): Effect.Effect<EventSource<EventMap<M>[K]>, RegistrationError> {
         const { managed = false, whenClosed = "closed", defaultOverflow = "stop" } = behavior
@@ -1105,7 +1147,12 @@ export class EventBus<M extends MessageCore = Message> {
                 return Effect.fail(unknownEventError(event, Object.keys(this.#sources)))
             let settings: Limits | ConfigurationError
             try {
-                settings = limits(event, options, defaultOverflow)
+                settings = limits(
+                    event,
+                    options,
+                    defaultOverflow,
+                    behavior.handler === true ? handlerOptionKeys : subscriptionOptionKeys,
+                )
             } catch (error) {
                 return Effect.failCause(inputDefect(error))
             }
@@ -1284,6 +1331,7 @@ export class EventBus<M extends MessageCore = Message> {
                     managed: true,
                     defaultOverflow: "dropOldest",
                     partitionReady,
+                    handler: true,
                 })
                 // A registration after shutdown began gets an already-closed subscription with no worker or hook queue
                 if (!source.active) return source
@@ -1496,8 +1544,10 @@ export class EventBus<M extends MessageCore = Message> {
                         // Rejection records of this invocation wait for its outcome, so a failure is logged once
                         const rejections = new RejectionScope()
                         invocationOutcomes.set(rejections, outcome)
+                        let untrack: (() => void) | undefined
                         const invocation = Effect.gen(function* () {
                             bus.#handlerFibers.add(fiber.id)
+                            untrack = bus.callbackRuns.track(rejections)
                             yield* Effect.scoped(Effect.suspend(() => invoke(message, context, outcome))).pipe(
                                 Effect.withSpan(
                                     command === undefined ? "fluxerly.event.handle" : "fluxerly.command.execute",
@@ -1526,7 +1576,12 @@ export class EventBus<M extends MessageCore = Message> {
                             )
                         })
                         return withRejectionScope(invocation, rejections).pipe(
-                            Effect.ensuring(Effect.sync(() => rejections.end())),
+                            Effect.ensuring(
+                                Effect.sync(() => {
+                                    untrack?.()
+                                    rejections.end()
+                                }),
+                            ),
                             Effect.onExit((exit) =>
                                 Effect.sync(() => {
                                     invocationOutcomes.delete(rejections)

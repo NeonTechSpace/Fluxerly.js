@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import { readFile, stat } from "node:fs/promises"
-import { extname, join, resolve } from "node:path"
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { chromium } from "playwright"
 
 // What the UI checks share: the built site on a local server, and a browser. CHECK_BROWSER names a browser to run with the GPU. Otherwise
@@ -21,7 +21,22 @@ const mime = {
 export function serveSite(root = resolve("dist")) {
     return new Promise((done) => {
         const server = createServer(async (request, response) => {
-            let file = join(root, decodeURIComponent(new URL(request.url, "http://site").pathname))
+            let path
+            try {
+                path = decodeURIComponent(new URL(request.url, "http://site").pathname)
+            } catch {
+                response.statusCode = 400
+                response.end()
+                return
+            }
+            // An encoded slash survives URL parsing, so `..%2f` only becomes a step out of the site after decoding
+            let file = resolve(root, `.${path}`)
+            const inside = relative(root, file)
+            if (inside.split(sep)[0] === ".." || isAbsolute(inside)) {
+                response.statusCode = 404
+                response.end()
+                return
+            }
             try {
                 if ((await stat(file)).isDirectory()) file = join(file, "index.html")
             } catch {

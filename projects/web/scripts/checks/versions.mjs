@@ -22,8 +22,15 @@ for (const entry of await readdir(content, { recursive: true, withFileTypes: tru
 const nightly = "1000.0.0-nightly.20261101.1"
 const stable = "1000.1.0"
 const older = "1000.0.0"
+// Each version names the Fluxer commit its own snapshot was checked against: The older one gets another pin, and the newest keeps the generated one
+const endpointsFile = files.find((file) => file.path === "reference/endpoints.json")
+const generatedPin = JSON.parse(endpointsFile.content).source.fluxer.commit
+const olderPin = "b".repeat(40)
+const olderEndpoints = JSON.parse(endpointsFile.content)
+olderEndpoints.source.fluxer.commit = olderPin
+const filesOf = (version) => (version === older ? files.map((file) => (file === endpointsFile ? { ...file, content: JSON.stringify(olderEndpoints) } : file)) : files)
 await mkdir(released, { recursive: true })
-for (const version of [stable, older, nightly]) await writeFile(join(released, `${version}.json`), JSON.stringify({ schemaVersion: 3, version, sourceCommit, files }))
+for (const version of [stable, older, nightly]) await writeFile(join(released, `${version}.json`), JSON.stringify({ schemaVersion: 3, version, sourceCommit, files: filesOf(version) }))
 
 const problems = []
 const expect = (ok, message) => ok || problems.push(message)
@@ -44,6 +51,13 @@ try {
     expect(olderPage.includes(`href="/docs/${older}/quick-start/"`), "an older version's links must stay in that version")
     expect((await read(`docs/${older}/quick-start/index.html`)).includes(`@neontechspace/fluxerly@${older}`), "an older version's pages must install that version")
     expect(/<summary[^>]*>\s*<span class="version-label"[^>]*>[\s\S]*?1000\.0\.0/.test(olderPage), "an older version's pages must say which version they show")
+    // The pin shows in the sidebar of every page and at the end of the overview, from the version's own snapshot
+    const pinLink = (commit) => new RegExp(`<a href="https://github\\.com/fluxerapp/fluxer/commit/${commit}"[^>]*data-fluxer-pin="${commit}"[^>]*>\\s*${commit.slice(0, 7)}\\s*</a>`, "g")
+    const pinCount = (page, commit) => page.match(pinLink(commit))?.length ?? 0
+    expect(pinCount(newest, generatedPin) === 1 && pinCount(other, generatedPin) === 1, "the newest and nightly pages must name their snapshot's Fluxer commit once")
+    expect(pinCount(olderPage, olderPin) === 1 && !olderPage.includes(generatedPin), "an older version's pages must name the Fluxer commit from its own snapshot, not today's")
+    expect(pinCount(await read(`docs/${older}/index.html`), olderPin) === 2, "an older version's overview must name its Fluxer commit in the sidebar and in the page")
+    expect(pinCount(await read("docs/index.html"), generatedPin) === 2, "the overview must name its Fluxer commit in the sidebar and in the page")
     expect(/version-list[\s\S]*Older Versions/.test(newest) && newest.includes(`data-docs-version="/docs/${older}/"`), "the newest pages must offer the older versions")
     expect(other.includes(`"https://fluxerly.neontechspace.com/docs/nightly/commands/`) && !other.includes(`"https://fluxerly.neontechspace.com/docs/commands/`), "another version's share address and structured data must name that version")
     expect((await read("docs/nightly/quick-start.md")).includes("https://fluxerly.neontechspace.com/docs/nightly/"), "another version's Markdown links must stay in that version")
@@ -62,6 +76,13 @@ try {
     expect(newest.includes('<link rel="alternate" type="text/markdown" href="/docs/commands.md"'), "the newest version's guides must name their Markdown")
     expect(other.includes('<link rel="alternate" type="text/markdown" href="/docs/nightly/commands.md"'), "another version's guides must name their own Markdown")
     expect(!(await read("docs/changelog/index.html")).includes("data-copy-markdown"), "a page with no Markdown must not offer to copy it")
+    // Every docs page leads to its version's index for AI tools, in its head for tools and in its menu for anyone reading the page as text
+    for (const [name, page] of [["another version's guide", other], ["another version's reference page", await read("docs/nightly/api/index.html")]]) {
+        expect(/<link rel="alternate" type="text\/plain" href="\/docs\/nightly\/llms\.txt"/.test(page), `${name} must name its version's llms.txt in its head`)
+        expect(/<a [^>]*href="\/docs\/nightly\/llms\.txt"/.test(page), `${name} must link its version's llms.txt in its menu`)
+    }
+    expect(!index.includes("nightly/llms.txt"), "a version's llms.txt must not list itself")
+    expect(!index.includes("## What Fluxerly includes") && (await read("llms.txt")).includes("https://fluxerly.neontechspace.com/raw/"), "only the newest version's llms.txt must list the feature pages")
     // Apps that show link previews skip a share picture they find too heavy
     const shareImage = /property="og:image" content="https:\/\/fluxerly\.neontechspace\.com\/([^"]+)"/.exec(newest)?.[1] ?? ""
     expect(shareImage && (await readFile(join(out, shareImage))).length < 300_000, "the share picture must exist and stay under 300 KB")
@@ -160,7 +181,7 @@ try {
     await writeFile(join(nightlyOnly, `${nightly}.json`), JSON.stringify({ schemaVersion: 3, version: nightly, sourceCommit, files }))
     execFileSync(process.execPath, ["scripts/docs/build-public.mjs", "--released", nightlyOnly, "--out", nightlyOut], { stdio: ["ignore", "pipe", "inherit"] })
     const home = await readFile(join(nightlyOut, "index.html"), "utf8")
-    expect(home.includes("npm install @neontechspace/fluxerly@nightly") && home.includes("npx @neontechspace/fluxerly@nightly init"), "with no Stable yet, the homepage must install the nightly")
+    expect(home.includes("npm install --save-exact @neontechspace/fluxerly@nightly") && home.includes("npx @neontechspace/fluxerly@nightly init"), "with no Stable yet, the homepage must install the nightly")
     for (const path of ["index.html", "first-reply/index.html"]) {
         const words = (await readFile(join(nightlyOut, path), "utf8")).replace(/<[^>]+>/g, "")
         expect(!/@neontechspace\/fluxerly (?:init|$)/m.test(words), `with no Stable yet, ${path} must not offer an untagged command`)

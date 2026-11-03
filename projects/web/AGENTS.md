@@ -40,10 +40,11 @@ They are named once, at the top of `src/styles/global.css`
 | Command | When |
 | --- | --- |
 | `node scripts/checks/look.mjs <path> <out.png> <width>x<height> <selectors>` | After each change, a few seconds, with a site already running at `LOOK_URL` or `http://localhost:4321` |
+| `pnpm check:ui --changed` | During work, after a round of changes. Checks only the parts and pages the changed files can reach |
 | `pnpm check:ui` | Once a round of changes is done. Must pass |
 | `pnpm check:ui --quick` | A shorter run on a few screens of each kind, when you want one. Nothing runs by itself |
 
-`pnpm check:ui` builds from a clean cache, then runs the type check, tests and every screen.
+`pnpm check:ui` clears Astro's content cache, then runs the type check, a build, the tests and every screen
 
 ## Motion
 

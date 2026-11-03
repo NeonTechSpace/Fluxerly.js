@@ -44,8 +44,12 @@ export interface FailureReport {
     readonly event?: EventName
     /** Prefix command name, when a command callback failed */
     readonly command?: string
-    /** Identifier of the subscription that owns the failed work, matching Subscription.id and log records */
+    /** Identifier of the subscription that owns the failed work, matching Subscription.id and log records. For a failed
+     * cache.onChange listener it is that listener's CacheObserver.id
+     */
     readonly subscriptionId?: string
+    /** Name of the scheduled task whose run failed, when client.schedule was given one in its name option */
+    readonly taskName?: string
     /** IDs of the message being handled, when there was one */
     readonly message?: FailureMessageReference
     /** Readable multi-line summary with the error's name, application code, message, stack and cause chain.

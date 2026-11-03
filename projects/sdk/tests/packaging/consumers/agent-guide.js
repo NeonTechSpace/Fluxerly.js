@@ -5,7 +5,7 @@ import { sendOnce } from "./out/agent-guide.js"
 let requests = 0
 let fail = false
 globalThis.fetch = withHostedDiscovery(async (url, options) => {
-    assert.equal(url, "https://api.fluxer.app/v1/channels/20/messages")
+    assert.equal(url, "https://fluxer.com/api/v1/channels/20/messages")
     assert.equal(options.method, "POST")
     assert.equal(new Headers(options.headers).get("authorization"), "Bot fixture-only")
     assert.equal(JSON.parse(options.body).content, "guide fixture")

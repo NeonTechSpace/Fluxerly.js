@@ -5,9 +5,10 @@ import { describeBothApis, modes, setup, type Mode } from "../support/both-apis.
 import { creationField } from "../support/client-creation.js"
 import { hostedDiscoveryDocument } from "../support/hosted-discovery.js"
 import { expectErr, settle } from "../support/settle.js"
+import { errors } from "../../src/index.js"
 import { fakeHostTime, hostTurnsUntil } from "../support/client-clock.js"
 
-const discoveryUrl = "https://fluxer.app/.well-known/fluxer"
+const discoveryUrl = "https://fluxer.com/.well-known/fluxer"
 
 afterEach(() => {
     vi.unstubAllGlobals()
@@ -54,7 +55,7 @@ async function scheduled(
     mode: Mode,
     rest: RestOptions | undefined,
     handler: (url: string, init: RequestInit) => Promise<Response>,
-    options: Pick<ClientOptions, "sharding" | "logging"> = {},
+    options: Pick<ClientOptions, "sharding" | "logging" | "uploads"> = {},
 ) {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("The platform fetch must not be used")))
     const client = await setup(mode, {
@@ -125,6 +126,7 @@ describeBothApis("REST scheduling options", (mode) => {
             queuedCapacity: 7,
             queuedJsonBytes: 0,
             queuedJsonByteCapacity: 70_000,
+            rateLimitHold: null,
         })
         await vi.waitFor(() => {
             held.release()
@@ -206,17 +208,55 @@ describeBothApis("REST scheduling options", (mode) => {
         await Promise.all([running, queued])
     })
 
-    test("queuedJsonMaxBytes fails a JSON body larger than the queue budget", async () => {
-        const calls: string[] = []
-        const { request } = await scheduled(mode, { queuedJsonMaxBytes: 65_536 }, async (url) => {
-            calls.push(url)
-            return Response.json({})
-        })
-        await settle(request({ method: "POST", path: "/channels/1/x", body: { text: "x".repeat(60_000) } }))
+    test("queuedJsonMaxBytes fails a JSON body that does not fit beside the bodies already waiting", async () => {
+        const held = gate()
+        const { request } = await scheduled(mode, { concurrency: 1, queuedJsonMaxBytes: 65_536 }, held.handler)
+        const running = settle(request({ method: "GET", path: "/channels/1/x" }))
+        await vi.waitFor(() => expect(held.active).toBe(1))
+        const queued = settle(request({ method: "POST", path: "/channels/2/x", body: { text: "x".repeat(60_000) } }))
+        // This body fits the budget alone, but not beside the waiting one
         expect(
-            await expectErr(request({ method: "POST", path: "/channels/1/x", body: { text: "x".repeat(70_000) } })),
+            await expectErr(request({ method: "POST", path: "/channels/3/x", body: { text: "x".repeat(10_000) } })),
         ).toMatchObject({ reason: "busy", outcome: "notDispatched" })
-        expect(calls).toHaveLength(1)
+        await vi.waitFor(() => {
+            held.release()
+            expect(held.completed).toBe(2)
+        })
+        await Promise.all([running, queued])
+    })
+
+    test("a request larger than a whole budget fails as input that retrying cannot fix, not as congestion", async () => {
+        const logs = captureLogs()
+        const calls: string[] = []
+        const { request } = await scheduled(
+            mode,
+            { queuedJsonMaxBytes: 65_536 },
+            async (url) => {
+                calls.push(url)
+                return Response.json({})
+            },
+            { logging: logs.logging, uploads: { maxBytes: 1_000 } },
+        )
+        const oversized = [
+            await expectErr(request({ method: "POST", path: "/channels/1/x", body: { text: "x".repeat(70_000) } })),
+            await expectErr(
+                request({
+                    method: "POST",
+                    path: "/channels/1/messages",
+                    files: [{ data: new Uint8Array(2_000), filename: "large.bin" }],
+                }),
+            ),
+        ]
+        expect(oversized).toMatchObject([
+            { reason: "input", outcome: "notDispatched", inputValidation: { path: "body", constraint: "size" } },
+            { reason: "input", outcome: "notDispatched", inputValidation: { path: "files", constraint: "size" } },
+        ])
+        expect(oversized[0]!.message).toContain("rest.queuedJsonMaxBytes")
+        expect(oversized[1]!.message).toContain("uploads.maxBytes")
+        expect(oversized.map((error) => errors.isRetryable(error))).toEqual([false, false])
+        // Nothing waits, so no budget is congested and no request was sent
+        expect(logs.withCode("rest.busy")).toEqual([])
+        expect(calls).toEqual([])
     })
 
     test("defaultTimeoutMs is the deadline of a request without timeoutMs", async () => {

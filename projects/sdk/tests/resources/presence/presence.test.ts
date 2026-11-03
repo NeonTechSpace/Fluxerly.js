@@ -409,13 +409,16 @@ test("member presence validates identifier, per-client capacity and the complete
     const frameBytes = (members: readonly string[]) =>
         Buffer.byteLength(JSON.stringify({ op: 14, d: { subscriptions: { "40": { members } } } }))
     let largest = 0
-    while (frameBytes(Array.from({ length: largest + 1 }, (_, index) => id(index))) <= 4_096) largest += 1
+    while (frameBytes(Array.from({ length: largest + 1 }, (_, index) => id(index))) <= 16_384) largest += 1
+    // The presence docs state about 740 members with 19-digit IDs
+    expect(largest).toBeGreaterThanOrEqual(735)
+    expect(largest).toBeLessThanOrEqual(745)
     const fitting = Array.from({ length: largest }, (_, index) => id(index))
     // A shorter final ID fills the byte budget without exceeding the gateway snowflake bound
-    fitting.push("1".repeat(4_096 - frameBytes(fitting) - 3))
+    fitting.push("1".repeat(16_384 - frameBytes(fitting) - 3))
     const exceeding = [...fitting.slice(0, -1), fitting.at(-1)! + "1"]
-    expect(frameBytes(fitting)).toBe(4_096)
-    expect(frameBytes(exceeding)).toBe(4_097)
+    expect(frameBytes(fitting)).toBe(16_384)
+    expect(frameBytes(exceeding)).toBe(16_385)
     expect(owner.setMembers("40", fitting)).toBeUndefined()
     expect(owner.setMembers("40", exceeding)).toBe("limit")
     owner.attach(
@@ -433,6 +436,24 @@ test("member presence validates identifier, per-client capacity and the complete
     const hundred = Array.from({ length: 100 }, (_, index) => String(index + 1))
     for (let guild = 1; guild <= 100; guild += 1) expect(totalOwner.setMembers(String(guild), hundred)).toBeUndefined()
     expect(totalOwner.setMembers("100", [...hundred, "101"])).toBe("limit")
+})
+
+test("clearing a sent selection frees member capacity but no community slot, as the limit hint says", () => {
+    const clock = timers()
+    const owner = new PresenceOwner(clock.timer)
+    const noPresence = () => undefined
+    owner.attach(noPresence, () => undefined)
+    for (let guild = 1; guild <= 100; guild += 1) {
+        expect(owner.setMembers(String(guild), ["30"])).toBeUndefined()
+        clock.advance(125)
+        expect(owner.setMembers(String(guild), [])).toBeUndefined()
+        clock.advance(125)
+    }
+    expect(owner.setMembers("101", ["30"])).toBe("limit")
+    owner.attach(noPresence, () => undefined, "resume")
+    expect(owner.setMembers("101", ["30"])).toBe("limit")
+    owner.attach(noPresence, () => undefined, "identify")
+    expect(owner.setMembers("101", ["30"])).toBeUndefined()
 })
 
 test("an expiry that elapsed while disconnected is not restored", () => {
@@ -472,6 +493,8 @@ test.each(modes)(
                 "limit",
             )
             expect(limit).toMatchObject({ inputValidation: null })
+            // Clearing a sent selection frees no community slot, so the hint must not offer it as the way to free one
+            expect((limit as { readonly hint: string }).hint).not.toContain("clear the selection")
             expect(wsTarget.sockets).toEqual([])
             await api.shutdown()
             expect(api.state()).toBe("Closed")

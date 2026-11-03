@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import ts from "typescript"
+import { installCommandFor } from "./install-command.mjs"
 
 // Bundled into the build's server chunks, this module no longer sits in scripts/docs, so the project root, where every
 // build and test runs, finds the examples then
@@ -25,7 +26,7 @@ function command(metadata, manager) {
     const forms = managers[manager]
     switch (metadata.kind) {
         case "install":
-            return `${forms.add} ${packageSpec}`
+            return installCommandFor(manager, packageSpec)
         case "init":
             return `${forms.create} ${packageSpec} init`
         case "add":
@@ -197,6 +198,9 @@ export default function remarkGuides() {
                 if (replacement) {
                     parent.children.splice(index, 1, ...replacement)
                     index += replacement.length - 1
+                } else if (node.type === "paragraph" && node.children[0]?.value?.startsWith("Explained in: ")) {
+                    // A row of the guide sections that explain the list above it, set as a quiet note under the list
+                    node.data = { ...node.data, hProperties: { ...node.data?.hProperties, className: ["explained"] } }
                 } else visit(node)
             }
         }
