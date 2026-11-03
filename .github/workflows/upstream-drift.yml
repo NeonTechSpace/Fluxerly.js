@@ -167,6 +167,8 @@ jobs:
         run: |
           comment="$RUNNER_TEMP/upstream-current/comment.md"
           [[ -f "$comment" ]] || exit 0
+          # The jq filter reads $ENV itself, so the single quotes are meant
+          # shellcheck disable=SC2016
           issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
             --jq '[.[] | select(.pull_request == null and .title == $ENV.TITLE)][0].number // empty')
           if [[ -n "$issue" ]]; then
@@ -175,6 +177,8 @@ jobs:
           fi
           body="$RUNNER_TEMP/upstream-current/issue.md"
           repository="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          # The backticks are Markdown code spans, so the single quotes are meant
+          # shellcheck disable=SC2016
           {
             printf 'This issue collects the reports of the weekly [upstream drift check](%s/actions/workflows/upstream-drift.yml). Each report lists what changed in Fluxer since the last one: its API description, its gateway event docs, its rate limit docs, its voice docs and code, new folders that may hold voice work and the Fluxer commits that touched the paths the SDK watches\n\n' "$repository"
             printf 'A listed change is something to review, not proof that bots are affected. To finish a review, update the SDK where needed and move the review pin as [Repository](%s/blob/main/docs/REPOSITORY.md) describes for `node release/upstream.js`, then close this issue. The next report opens a new one\n\n' "$repository"

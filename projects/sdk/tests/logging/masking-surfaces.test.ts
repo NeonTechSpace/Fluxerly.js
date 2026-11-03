@@ -600,17 +600,22 @@ test("the generated matrix covers every credential kind in every value shape tha
 
 // One test per output keeps each well under the default timeout. Each also checks that describing a value ran no getter
 // or proxy read
-test.each(modes)("%s records and report descriptions mask the generated matrix", async (mode) => {
-    reads.count = 0
-    // A test bot queues at most 256 events, so the values are emitted in smaller batches
-    for (let start = 0; start < cells.length; start += 200) {
-        const batch = cells.slice(start, start + 200)
-        const values = batch.map((cell) => cell.value)
-        expectGeneratedMasked(`${mode} records`, await handlerOutputs(mode, false, values), batch)
-        expectGeneratedMasked(`${mode} describe()`, await handlerOutputs(mode, true, values), batch)
-    }
-    expect(reads.count, "getters or proxy reads that describing a value ran").toBe(0)
-})
+test.each(modes)(
+    "%s records and report descriptions mask the generated matrix",
+    async (mode) => {
+        reads.count = 0
+        // A test bot queues at most 256 events, so the values are emitted in smaller batches
+        for (let start = 0; start < cells.length; start += 200) {
+            const batch = cells.slice(start, start + 200)
+            const values = batch.map((cell) => cell.value)
+            expectGeneratedMasked(`${mode} records`, await handlerOutputs(mode, false, values), batch)
+            expectGeneratedMasked(`${mode} describe()`, await handlerOutputs(mode, true, values), batch)
+        }
+        expect(reads.count, "getters or proxy reads that describing a value ran").toBe(0)
+        // A hang guard sized for the whole generated matrix on a busy runner. The test checks masking, not speed
+    },
+    30_000,
+)
 
 test.each(Object.entries(valueSurfaces))("%s masks the generated matrix", async (surface, output) => {
     reads.count = 0
