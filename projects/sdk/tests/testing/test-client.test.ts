@@ -398,15 +398,15 @@ describe.each(modes)("%s test client", (mode) => {
         // With the jitter at 0.5, the first recovery waits 500 ms
         await clock.waiting(500)
         await clock.advance(500)
-        await expect.poll(() => driver.test.client.state, { timeout: 10_000 }).toBe("Connected")
-        await expect.poll(() => driver.test.counters().resumes, { timeout: 10_000 }).toBe(1)
+        await vi.waitFor(() => expect(driver.test.client.state).toBe("Connected"))
+        await vi.waitFor(() => expect(driver.test.counters().resumes).toBe(1))
         const resume = driver.test.commands().find((command) => command.op === 6)
         // READY is sequence 1, so the two dispatches left shard 1 at sequence 3 and shard 0 untouched
         expect(resume).toMatchObject({ shardId: 1, d: { seq: 3, token: "[redacted]" } })
         expect(await misuse(() => driver.emit("TYPING_START", typing, { shardId: 2 }))).toBeInstanceOf(
             ConfigurationError,
         )
-    }, 20_000)
+    })
 
     test("idle and next reject an unknown wait option, so a misspelled timeoutMs cannot remove the deadline", async () => {
         const driver = await open(mode)
@@ -436,7 +436,7 @@ describe.each(modes)("%s test client", (mode) => {
         await driver.emit("GUILD_CREATE", fixtures.guildCreate({ guild: { id: guildId } }))
         await driver.emit("GUILD_UPDATE", fixtures.guild({ id: guildId, name: "Renamed" }))
         await driver.emit("GUILD_DELETE", { id: guildId, unavailable: true })
-        await expect.poll(() => shards).toEqual({ guildCreate: [1], guildUpdate: [1], guildDelete: [1] })
+        await vi.waitFor(() => expect(shards).toEqual({ guildCreate: [1], guildUpdate: [1], guildDelete: [1] }))
     })
 
     test("a disconnect resumes the same session, even with 4007, while endSession identifies a new one", async () => {
@@ -459,12 +459,12 @@ describe.each(modes)("%s test client", (mode) => {
             )
             await clock.waiting(delay)
             await clock.advance(delay)
-            await expect.poll(handshake, { timeout: 10_000 }).toBe(true)
-            if (connected) await expect.poll(() => driver.test.client.state, { timeout: 10_000 }).toBe("Connected")
+            await vi.waitFor(() => expect(handshake()).toBe(true))
+            if (connected) await vi.waitFor(() => expect(driver.test.client.state).toBe("Connected"))
         }
         const received = async (count: number) => {
             await driver.emit("TYPING_START", wire)
-            await expect.poll(() => contexts.length, { timeout: 10_000 }).toBe(count)
+            await vi.waitFor(() => expect(contexts).toHaveLength(count))
         }
 
         await received(1)
@@ -485,7 +485,7 @@ describe.each(modes)("%s test client", (mode) => {
         expect(handshakes(6)).toBe(3)
         expect(contexts[3]!.sessionEpoch).toBeGreaterThan(contexts[2]!.sessionEpoch)
         expect(driver.test.client.shards[0]!.sessionEpoch).toBe(contexts[3]!.sessionEpoch)
-    }, 20_000)
+    })
 
     test("disconnect rejects an endSession that is not a boolean without closing the connection", async () => {
         const driver = await open(mode)
@@ -507,7 +507,7 @@ describe.each(modes)("%s test client", (mode) => {
         await driver.ready()
         await driver.emit("GUILD_CREATE", driver.test.fixtures.guildCreate())
         await driver.emit("TYPING_START", { channel_id: "20", user_id: "30", timestamp: 1_767_225_600 })
-        await expect.poll(() => seen.length, { timeout: 10_000 }).toBe(3)
+        await vi.waitFor(() => expect(seen).toHaveLength(3))
         expect(seen.toSorted(([, left], [, right]) => left - right)).toEqual([
             ["guildCreate", 1],
             ["voiceStateSnapshot", 2],

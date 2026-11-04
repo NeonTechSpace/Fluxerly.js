@@ -1052,44 +1052,40 @@ test.each(modes)("%s connects from READY across paired cache and hydration state
     }
 })
 
-test.each(modes)(
-    "%s classifies joined replay and fresh Identify guild availability",
-    async (mode) => {
-        const dispatch = await gateway({
-            rejectResume: (attempt) => attempt === 2,
-            beforeResume: async (replay, attempt) => {
-                if (attempt === 1) replay("GUILD_CREATE", guildCreate("21"))
-            },
-        })
-        rest(async () => Response.json(guild))
-        const api = await setup(mode)
-        const seen: EventMap["guildCreate"][] = []
-        await api.on("guildCreate", (value) => seen.push(value))
-        const random = vi.spyOn(Math, "random").mockReturnValue(0)
-        try {
-            await api.connect()
-            dispatch("GUILD_CREATE", guildCreate("20", false))
-            await vi.waitFor(() => expect(seen).toHaveLength(1))
+test.each(modes)("%s classifies joined replay and fresh Identify guild availability", async (mode) => {
+    const dispatch = await gateway({
+        rejectResume: (attempt) => attempt === 2,
+        beforeResume: async (replay, attempt) => {
+            if (attempt === 1) replay("GUILD_CREATE", guildCreate("21"))
+        },
+    })
+    rest(async () => Response.json(guild))
+    const api = await setup(mode)
+    const seen: EventMap["guildCreate"][] = []
+    await api.on("guildCreate", (value) => seen.push(value))
+    const random = vi.spyOn(Math, "random").mockReturnValue(0)
+    try {
+        await api.connect()
+        dispatch("GUILD_CREATE", guildCreate("20", false))
+        await vi.waitFor(() => expect(seen).toHaveLength(1))
 
-            wsTarget.sockets[0]!.terminate()
-            await vi.waitFor(() => expect(seen).toHaveLength(2))
-            await vi.waitFor(() => expect(api.state()).toBe("Connected"))
+        wsTarget.sockets[0]!.terminate()
+        await vi.waitFor(() => expect(seen).toHaveLength(2))
+        await vi.waitFor(() => expect(api.state()).toBe("Connected"))
 
-            wsTarget.sockets.at(-1)!.terminate()
-            await vi.waitFor(() =>
-                expect(dispatch.authenticationModes).toEqual(["identify", "resume", "resume", "identify"]),
-            )
-            await vi.waitFor(() => expect(api.state()).toBe("Connected"))
+        wsTarget.sockets.at(-1)!.terminate()
+        await vi.waitFor(() =>
+            expect(dispatch.authenticationModes).toEqual(["identify", "resume", "resume", "identify"]),
+        )
+        await vi.waitFor(() => expect(api.state()).toBe("Connected"))
 
-            dispatch("GUILD_CREATE", guildCreate("22", false))
-            await vi.waitFor(() => expect(seen).toHaveLength(3))
-            expect(seen.map((value) => value.isNewJoin)).toEqual([false, true, false])
-        } finally {
-            random.mockRestore()
-        }
-    },
-    12_000,
-)
+        dispatch("GUILD_CREATE", guildCreate("22", false))
+        await vi.waitFor(() => expect(seen).toHaveLength(3))
+        expect(seen.map((value) => value.isNewJoin)).toEqual([false, true, false])
+    } finally {
+        random.mockRestore()
+    }
+})
 
 test.each(modes)(
     "%s rejects malformed guild lifecycle payloads with a protocol close before delivery",

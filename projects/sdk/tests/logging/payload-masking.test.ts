@@ -470,8 +470,6 @@ test.each(modes)(
         expect(shallow.text).not.toContain("deep-canary-password")
         expect(shallow.text).toContain("deep-canary-note")
     },
-    // A hang guard sized for its megabyte bodies on a busy runner. The test checks masking, not speed
-    30_000,
 )
 
 test("unsafe gateway payload records hide invite codes in invite dispatches and invite audit entries", async () => {

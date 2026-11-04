@@ -274,7 +274,7 @@ describe.each(modes)("%s test client failures", (mode) => {
         }
         expect(expecting.failures()).toEqual([expect.objectContaining({ code: "events.handlerFailed" })])
         await expecting.shutdown()
-        await expect.poll(() => handled).toHaveLength(1)
+        await vi.waitFor(() => expect(handled).toHaveLength(1))
         expect(hooked.failures()).toEqual([])
         await hooked.shutdown()
     })

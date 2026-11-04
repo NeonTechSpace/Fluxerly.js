@@ -243,49 +243,45 @@ test.each(
     modes.flatMap((mode) =>
         (["ordinary", "inherited", "non-enumerable"] as const).map((variant) => [mode, variant] as const),
     ),
-)(
-    "%s public child helper retains %s selected instance settings",
-    async (mode, variant) => {
-        const fixture = await selectedInstanceFixture()
-        let owner: Managed | undefined
-        let cleaned = false
-        const cleanup = async () => {
-            if (cleaned) return
-            cleaned = true
-            try {
-                await owner?.shutdown()
-            } finally {
-                await fixture.close()
-            }
-        }
-        onTestFinished(cleanup)
+)("%s public child helper retains %s selected instance settings", async (mode, variant) => {
+    const fixture = await selectedInstanceFixture()
+    let owner: Managed | undefined
+    let cleaned = false
+    const cleanup = async () => {
+        if (cleaned) return
+        cleaned = true
         try {
-            owner = await managed(mode, fixture.origin, variant)
-            const active = owner
-            const starting = active.start().catch(() => undefined)
-            await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1))
-            expect({ discoveries: fixture.discoveries, proofs: fixture.proofs }).toEqual({
-                discoveries: [`${fixture.origin}/.well-known/fluxer`],
-                proofs: [
-                    {
-                        mode,
-                        variant,
-                        outcome: "resolved",
-                        apiPublic: `${fixture.origin}/selected-api`,
-                        gateway: `${fixture.origin.replace("http:", "ws:")}/selected-gateway`,
-                    },
-                ],
-            })
-            await active.shutdown()
-            await active.waitForClose()
-            await starting
-            expect(active.status()).toMatchObject({
-                state: "closed",
-                children: [{ id: "selected-instance", pid: null, state: "closed" }],
-            })
+            await owner?.shutdown()
         } finally {
-            await cleanup()
+            await fixture.close()
         }
-    },
-    30_000,
-)
+    }
+    onTestFinished(cleanup)
+    try {
+        owner = await managed(mode, fixture.origin, variant)
+        const active = owner
+        const starting = active.start().catch(() => undefined)
+        await vi.waitFor(() => expect(fixture.proofs).toHaveLength(1))
+        expect({ discoveries: fixture.discoveries, proofs: fixture.proofs }).toEqual({
+            discoveries: [`${fixture.origin}/.well-known/fluxer`],
+            proofs: [
+                {
+                    mode,
+                    variant,
+                    outcome: "resolved",
+                    apiPublic: `${fixture.origin}/selected-api`,
+                    gateway: `${fixture.origin.replace("http:", "ws:")}/selected-gateway`,
+                },
+            ],
+        })
+        await active.shutdown()
+        await active.waitForClose()
+        await starting
+        expect(active.status()).toMatchObject({
+            state: "closed",
+            children: [{ id: "selected-instance", pid: null, state: "closed" }],
+        })
+    } finally {
+        await cleanup()
+    }
+})

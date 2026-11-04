@@ -9,7 +9,8 @@ requireBuiltSdk()
 test("built resource caches bound dense member pages and release snapshots without lookups", async () => {
     // The child asserts every mode and case and exits non-zero on any failure, which rejects here
     await promisify(execFile)(process.execPath, ["--expose-gc", "tests/resources/cache/resource-cache-runtime.js"], {
-        timeout: 25_000,
+        // Ends a hung child before the test timeout does, so the child never outlives the test
+        timeout: 50_000,
         windowsHide: true,
     })
-}, 30_000)
+})

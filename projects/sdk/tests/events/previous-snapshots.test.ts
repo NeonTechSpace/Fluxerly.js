@@ -1,5 +1,5 @@
 import { Effect, Exit, Scope } from "effect"
-import { expect, onTestFinished, test } from "vitest"
+import { expect, onTestFinished, test, vi } from "vitest"
 import type { Client, EventContext, EventName } from "../../src/index.js"
 import { createTestClient as createDefaultTestClient, type TestClientOptions } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
@@ -275,7 +275,7 @@ test.each(modes)("%s a queued event keeps the snapshot from when the client acce
     await api.emit("MESSAGE_CREATE", message)
     await api.emit("MESSAGE_UPDATE", { ...message, content: "second" })
     await api.emit("MESSAGE_UPDATE", { ...message, content: "third" })
-    await expect.poll(() => updates.length).toBe(1)
+    await vi.waitFor(() => expect(updates).toHaveLength(1))
     // The cache already holds the newest edit while the second update still waits
     expect(await api.lookup.message(message.id, message.channel_id)).toMatchObject({ content: "third" })
     gate.resolve()

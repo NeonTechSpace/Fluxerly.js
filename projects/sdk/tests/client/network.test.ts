@@ -749,7 +749,7 @@ test("shutdown waits five seconds for an uncooperative peer, then terminates and
     expect(wsTarget.sockets[0]!.readyState).toBe(WebSocket.CLOSED)
     expect(client.state).toBe("Closed")
     vi.useRealTimers()
-}, 10_000)
+})
 
 test("server-requested heartbeats are immediate, and missing ACKs trigger recovery that shutdown stops", async () => {
     const clock = sdkClock()

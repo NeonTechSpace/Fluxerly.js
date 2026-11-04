@@ -430,41 +430,36 @@ test.each(modes)(
         await owner.shutdown()
         await owner.waitForClose()
     },
-    12_000,
 )
 
-test.each(modes)(
-    "%s child helper sends its client diagnostics, which status exposes",
-    async (mode) => {
-        const fixture = await loopbackGateway({ totalShards: 1 })
-        const owner = await managed(mode, {
-            ...options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000),
-            diagnosticsIntervalMs: 1_000,
-        })
-        onTestFinished(async () => {
-            await owner.shutdown()
-            await fixture.close()
-        })
-        await owner.start()
-        // The first snapshot arrives when configuration finishes, before the gateway session is ready
-        await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics).not.toBeNull())
-        expect(owner.status().children[0]!.diagnostics!.client.state).not.toBe("Connected")
-        fixture.releaseReady()
-        await owner.waitForReady()
-        // A later periodic snapshot reflects the connected client
-        await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics!.client.state).toBe("Connected"))
-        const diagnostics = owner.status().children[0]!.diagnostics!
-        expect(diagnostics.receivedAt).toBeGreaterThan(0)
-        expect(diagnostics.client).toMatchObject({
-            rest: { activeRequests: expect.any(Number), queuedRequests: expect.any(Number) },
-            counters: { handlerFailures: 0 },
-            caches: expect.any(Object),
-        })
+test.each(modes)("%s child helper sends its client diagnostics, which status exposes", async (mode) => {
+    const fixture = await loopbackGateway({ totalShards: 1 })
+    const owner = await managed(mode, {
+        ...options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000),
+        diagnosticsIntervalMs: 1_000,
+    })
+    onTestFinished(async () => {
         await owner.shutdown()
-        expect(owner.status().children[0]!.diagnostics).toBeNull()
-    },
-    12_000,
-)
+        await fixture.close()
+    })
+    await owner.start()
+    // The first snapshot arrives when configuration finishes, before the gateway session is ready
+    await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics).not.toBeNull())
+    expect(owner.status().children[0]!.diagnostics!.client.state).not.toBe("Connected")
+    fixture.releaseReady()
+    await owner.waitForReady()
+    // A later periodic snapshot reflects the connected client
+    await vi.waitFor(() => expect(owner.status().children[0]!.diagnostics!.client.state).toBe("Connected"))
+    const diagnostics = owner.status().children[0]!.diagnostics!
+    expect(diagnostics.receivedAt).toBeGreaterThan(0)
+    expect(diagnostics.client).toMatchObject({
+        rest: { activeRequests: expect.any(Number), queuedRequests: expect.any(Number) },
+        counters: { handlerFailures: 0 },
+        caches: expect.any(Object),
+    })
+    await owner.shutdown()
+    expect(owner.status().children[0]!.diagnostics).toBeNull()
+})
 
 test("default readiness gives an already-aborted observer cancellation precedence after the supervisor is ready", async () => {
     const fixture = await loopbackGateway({ totalShards: 1 })
@@ -487,7 +482,7 @@ test("default readiness gives an already-aborted observer cancellation precedenc
     const cancelled = await owner.waitForReady({ signal: alreadyAborted.signal })
     expect(cancelled.isErr() && cancelled.error._tag).toBe("CancelledError")
     expect(owner.status()).toMatchObject({ state: "running", children: [{ connectionState: "Connected" }] })
-}, 12_000)
+})
 
 test("default parent stop aborts held configure work without a late managed run", async () => {
     const mode = "default" as const
@@ -522,7 +517,7 @@ test("default parent stop aborts held configure work without a late managed run"
         ),
     )
     expect(fixture.identifies).toEqual([])
-}, 12_000)
+})
 
 test.each(modes)(
     "%s ignores pre-configuration and stale-generation Connected state before current readiness",
@@ -567,7 +562,6 @@ test.each(modes)(
         expect(owner.status().children[0]!.connectionState).toBe("Connected")
         await Effect.runPromise(owner.shutdown())
     },
-    12_000,
 )
 
 test("default clears a current-generation connection observation as soon as owned child IPC disconnects", async () => {
@@ -605,7 +599,7 @@ test("default clears a current-generation connection observation as soon as owne
             }),
         { interval: 5 },
     )
-}, 12_000)
+})
 
 test.each(modes)(
     "%s supervisor fails after the configured IPC-disconnect observation window and waits for every owned exit",
@@ -677,7 +671,6 @@ test.each(modes)(
         expect(processRunning(siblingPid)).toBe(false)
         await barrier.close()
     },
-    12_000,
 )
 
 test.each(modes)(
@@ -717,7 +710,6 @@ test.each(modes)(
         })
         await barrier.close()
     },
-    12_000,
 )
 
 test.each(modes)(
@@ -785,52 +777,47 @@ test.each(modes)(
         expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
         await barrier.close()
     },
-    12_000,
 )
 
-test.each(modes)(
-    "%s IPC loss freezes a queued Identify without replacing the observation failure",
-    async (mode) => {
-        const minimumSpacingMs = 1_000
-        const shutdownTimeoutMs = 1_500
-        const barrier = await disconnectBarrier("queued")
-        const worker = new URL("./workers/supervisor-disconnect-coordination-worker.js", import.meta.url)
-        const owner = await managed(mode, {
-            entry: mode === "default" ? fileURLToPath(worker) : worker,
-            totalShards: 1,
-            assignments: [{ id: "queued", shardIds: [0] }],
-            identify: { minimumSpacingMs },
-            startupTimeoutMs: 5_000,
-            shutdownTimeoutMs,
-            childEnvironment: {
-                FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
-                FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "queued",
-            },
-        })
-        // The parent's clock moves only when the test advances it, so the spacing and the observation window cannot
-        // pass at a time that depends on how fast real children start and disconnect
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] })
-        onTestFinished(() => stopWithFakeTimers(owner, barrier))
-        await owner.start()
-        await owner.waitForReady()
-        await barrier.entered
-        barrier.release()
-        await realTimeUntil(() => owner.status().children[0]!.connectionState === null)
-        // The spacing ends before the window, so a queued Identify that stayed granted would reach the lost channel
-        await vi.advanceTimersByTimeAsync(minimumSpacingMs)
-        for (let index = 0; index < 20; index++) await turn()
-        expect(owner.status()).toMatchObject({ state: "running", children: [{ state: "running" }] })
-        await vi.advanceTimersByTimeAsync(shutdownTimeoutMs - minimumSpacingMs)
-        await expect(owner.waitForClose()).rejects.toMatchObject({
-            _tag: "SupervisorError",
-            childId: "queued",
-            reason: "closed",
-        })
-        expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
-        await barrier.close()
-    },
-    12_000,
-)
+test.each(modes)("%s IPC loss freezes a queued Identify without replacing the observation failure", async (mode) => {
+    const minimumSpacingMs = 1_000
+    const shutdownTimeoutMs = 1_500
+    const barrier = await disconnectBarrier("queued")
+    const worker = new URL("./workers/supervisor-disconnect-coordination-worker.js", import.meta.url)
+    const owner = await managed(mode, {
+        entry: mode === "default" ? fileURLToPath(worker) : worker,
+        totalShards: 1,
+        assignments: [{ id: "queued", shardIds: [0] }],
+        identify: { minimumSpacingMs },
+        startupTimeoutMs: 5_000,
+        shutdownTimeoutMs,
+        childEnvironment: {
+            FLUXERLY_SUPERVISOR_DISCONNECT_CONTROL: barrier.origin,
+            FLUXERLY_SUPERVISOR_DISCONNECT_COORDINATION: "queued",
+        },
+    })
+    // The parent's clock moves only when the test advances it, so the spacing and the observation window cannot
+    // pass at a time that depends on how fast real children start and disconnect
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] })
+    onTestFinished(() => stopWithFakeTimers(owner, barrier))
+    await owner.start()
+    await owner.waitForReady()
+    await barrier.entered
+    barrier.release()
+    await realTimeUntil(() => owner.status().children[0]!.connectionState === null)
+    // The spacing ends before the window, so a queued Identify that stayed granted would reach the lost channel
+    await vi.advanceTimersByTimeAsync(minimumSpacingMs)
+    for (let index = 0; index < 20; index++) await turn()
+    expect(owner.status()).toMatchObject({ state: "running", children: [{ state: "running" }] })
+    await vi.advanceTimersByTimeAsync(shutdownTimeoutMs - minimumSpacingMs)
+    await expect(owner.waitForClose()).rejects.toMatchObject({
+        _tag: "SupervisorError",
+        childId: "queued",
+        reason: "closed",
+    })
+    expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
+    await barrier.close()
+})
 
 test.each(modes)(
     "%s IPC loss freezes an outstanding Identify acknowledgement without replacing the observation failure",
@@ -871,62 +858,53 @@ test.each(modes)(
         expect(owner.status()).toMatchObject({ state: "failed", children: [{ pid: null, state: "failed" }] })
         await barrier.close()
     },
-    15_000,
 )
 
-test.each(modes)(
-    "%s readiness observer cancellation leaves the configured supervisor running",
-    async (mode) => {
-        const fixture = await loopbackGateway({ totalShards: 1 })
-        const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
-        // Observer cancellation must not race the unrelated real child's cold startup.
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
-        onTestFinished(async () => {
-            try {
-                const closing = owner.shutdown()
-                if (vi.isFakeTimers()) await vi.runAllTimersAsync()
-                await closing
-                await fixture.close()
-            } finally {
-                vi.useRealTimers()
-            }
-        })
-        await owner.start()
-        expect(await owner.cancelReadiness()).toBe(true)
-        expect(owner.status()).toMatchObject({ state: "running", children: [{ id: "only", pid: expect.any(Number) }] })
-        fixture.releaseReady()
-        await owner.waitForReady()
-        vi.useRealTimers()
-        await owner.shutdown()
-        await owner.waitForClose()
-    },
-    12_000,
-)
-
-test.each(modes)(
-    "%s child helper succeeds when the parent stops it while gateway READY is held",
-    async (mode) => {
-        const fixture = await loopbackGateway({ totalShards: 1 })
-        const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
-        onTestFinished(async () => {
-            await owner.shutdown()
+test.each(modes)("%s readiness observer cancellation leaves the configured supervisor running", async (mode) => {
+    const fixture = await loopbackGateway({ totalShards: 1 })
+    const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+    // Observer cancellation must not race the unrelated real child's cold startup.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    onTestFinished(async () => {
+        try {
+            const closing = owner.shutdown()
+            if (vi.isFakeTimers()) await vi.runAllTimersAsync()
+            await closing
             await fixture.close()
-        })
-        await owner.start()
-        // The child's client has sent Identify and waits for the READY packet the gateway never releases
-        await realTimeUntil(() => fixture.identifies.length === 1)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+    await owner.start()
+    expect(await owner.cancelReadiness()).toBe(true)
+    expect(owner.status()).toMatchObject({ state: "running", children: [{ id: "only", pid: expect.any(Number) }] })
+    fixture.releaseReady()
+    await owner.waitForReady()
+    vi.useRealTimers()
+    await owner.shutdown()
+    await owner.waitForClose()
+})
+
+test.each(modes)("%s child helper succeeds when the parent stops it while gateway READY is held", async (mode) => {
+    const fixture = await loopbackGateway({ totalShards: 1 })
+    const owner = await managed(mode, options(mode, fixture.origin, 1, [{ id: "only", shardIds: [0] }], 1_000))
+    onTestFinished(async () => {
         await owner.shutdown()
-        await owner.waitForClose()
-        expect(fixture.readySends()).toBe(0)
-        // The child posts this proof only after its helper succeeded, and before it exits
-        expect(fixture.proofs).toContainEqual(expect.objectContaining({ mode, state: "Closed" }))
-        expect(owner.status()).toMatchObject({
-            state: "closed",
-            children: [{ id: "only", pid: null, state: "closed" }],
-        })
-    },
-    12_000,
-)
+        await fixture.close()
+    })
+    await owner.start()
+    // The child's client has sent Identify and waits for the READY packet the gateway never releases
+    await realTimeUntil(() => fixture.identifies.length === 1)
+    await owner.shutdown()
+    await owner.waitForClose()
+    expect(fixture.readySends()).toBe(0)
+    // The child posts this proof only after its helper succeeded, and before it exits
+    expect(fixture.proofs).toContainEqual(expect.objectContaining({ mode, state: "Closed" }))
+    expect(owner.status()).toMatchObject({
+        state: "closed",
+        children: [{ id: "only", pid: null, state: "closed" }],
+    })
+})
 
 function options(
     mode: Mode,
@@ -1043,7 +1021,6 @@ test.each(modes)(
             await cleanup()
         }
     },
-    15_000,
 )
 
 test.each(modes)(
@@ -1121,7 +1098,6 @@ test.each(modes)(
             await cleanup()
         }
     },
-    15_000,
 )
 
 test.each(modes)(
@@ -1225,5 +1201,4 @@ test.each(modes)(
             await cleanup()
         }
     },
-    20_000,
 )

@@ -127,7 +127,7 @@ test("a delayed child grant cannot compress actual cross-process Identify sends"
     } finally {
         await cleanup()
     }
-}, 12_000)
+})
 
 test("a canceled in-flight grant is benign and releases the next child permit", async () => {
     const { url, identifies } = await childGateway()
@@ -160,7 +160,7 @@ test("a canceled in-flight grant is benign and releases the next child permit", 
     } finally {
         await cleanup()
     }
-}, 20_000)
+})
 
 test.each(["default", "native"] as const)(
     "%s child receives a coordinator refusal as a retryable failure and the next grant",
@@ -200,7 +200,6 @@ test.each(["default", "native"] as const)(
         }
         expect(permits).toEqual([0, 0])
     },
-    10_000,
 )
 
 test.each(["default", "native"] as const)(
@@ -231,7 +230,6 @@ test.each(["default", "native"] as const)(
             await Effect.runPromise(managed.shutdown())
         }
     },
-    10_000,
 )
 
 test("a child that loses the parent's answer to a member request falls back and frees the slot", async () => {
@@ -250,7 +248,7 @@ test("a child that loses the parent's answer to a member request falls back and 
     expect((await managed.start()).isOk()).toBe(true)
     expect((await managed.waitForReady()).isOk()).toBe(true)
     expect((await managed.shutdown()).isOk()).toBe(true)
-}, 10_000)
+})
 
 test("partial assignments snapshot status without retaining launch configuration", async () => {
     const created = supervisor.create({
@@ -292,7 +290,7 @@ test("a child that never acknowledges startup fails within the configured budget
     expect(closed.isErr() && closed.error).toMatchObject({ _tag: "SupervisorError", reason: "startupTimeout" })
     expect((await managed.shutdown()).isOk()).toBe(true)
     expect(managed.status().children[0]).toMatchObject({ pid: null, state: "failed" })
-}, 5_000)
+})
 
 test("a startup failure keeps terminal observers pending until the owned child exits", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
@@ -329,7 +327,7 @@ test("a startup failure keeps terminal observers pending until the owned child e
         reason: "startupTimeout",
     })
     expect(managed.status().children[0]).toMatchObject({ pid: null, state: "failed" })
-}, 5_000)
+})
 
 test("shutdown force-terminates only an unresponsive owned child and waits for verified exit", async () => {
     const managed = supervisor.create({
@@ -349,7 +347,7 @@ test("shutdown force-terminates only an unresponsive owned child and waits for v
     expect(managed.status().children[0]).toMatchObject({ pid: null, state: "closed" })
     const restarted = await managed.start()
     expect(restarted.isErr() && restarted.error).toMatchObject({ childId: null, reason: "closed" })
-}, 5_000)
+})
 
 test("a canceled native terminal observer detaches without stopping its supervisor", async () => {
     const managed = await Effect.runPromise(
@@ -369,7 +367,7 @@ test("a canceled native terminal observer detaches without stopping its supervis
     await Effect.runPromise(managed.waitForClose())
     const stopped = await Effect.runPromiseExit(managed.start())
     expect(stopped._tag).toBe("Failure")
-}, 5_000)
+})
 
 test("a replacement that misses its own startup budget fails after a successful initial start", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
@@ -399,7 +397,7 @@ test("a replacement that misses its own startup budget fails after a successful 
     const closed = await managed.waitForClose()
     expect(closed.isErr() && closed.error).toMatchObject({ childId: "replacement", reason: "startupTimeout" })
     expect(managed.status().children[0]).toMatchObject({ generation: 2, restarts: 1, pid: null, state: "failed" })
-}, 5_000)
+})
 
 test.each(["default", "native"] as const)(
     "%s supervisor restarts a crashed child by default, and restart false stops at the first crash",
@@ -467,7 +465,6 @@ test.each(["default", "native"] as const)(
         await started
         expect(stopping.status().children[0]).toMatchObject({ generation: 1, restarts: 0, state: "failed" })
     },
-    10_000,
 )
 
 test("a supplied restart budget is bounded", async () => {
@@ -482,4 +479,4 @@ test("a supplied restart budget is bounded", async () => {
     expect(closed.isErr() && closed.error).toMatchObject({ childId: "restart", reason: "restartLimit" })
     await start
     expect(managed.status().children[0]).toMatchObject({ restarts: 1, state: "failed" })
-}, 8_000)
+})

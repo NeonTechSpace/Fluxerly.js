@@ -87,5 +87,4 @@ test.each(["default", "native", "default-pending", "native-pending", "default-fo
             await server.close()
         }
     },
-    12_000,
 )

@@ -148,7 +148,6 @@ test.each(modes)(
         expect(logged("subscriptionClosed")).toEqual(Array.from({ length: 64 }, (_, index) => `fail-${index + 2}`))
         expect(failures).toHaveLength(70)
     },
-    15_000,
 )
 
 test("a native client hook that interrupts itself logs that report and keeps delivering later ones", async () => {

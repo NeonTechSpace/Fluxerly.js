@@ -39,6 +39,11 @@ export default {
                 ? ["default", ["github-actions", { jobSummary: { title: `SDK ${testSet}: Vitest results` } }]]
                 : undefined,
         maxWorkers: workers,
+        // Hang guards that end a stuck test or hook, never a measure of speed, so a slow or busy machine can't fail a test.
+        // A vi.waitFor poll without its own timeout ends with this one too, through tests/support/wait-deadline.ts. A test
+        // whose subject is timing uses a controlled clock instead
+        testTimeout: 60_000,
+        hookTimeout: 60_000,
         // The examples' tests use node:test, as a bot project's own tests do, and run in the test:examples script
         exclude: ["**/node_modules/**", "**/.git/**", "examples/**"],
         // SDK log output is captured per test and printed only when that test fails. A vi.waitFor poll without its own

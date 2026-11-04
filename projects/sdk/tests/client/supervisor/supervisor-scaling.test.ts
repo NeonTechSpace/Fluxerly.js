@@ -264,38 +264,34 @@ test.each(modes)(
     },
 )
 
-test.each(modes)(
-    "%s shutdown during the automatic count stops it without starting a child",
-    async (mode) => {
-        try {
-            let entered!: () => void
-            const counting = new Promise<void>((resolve) => (entered = resolve))
-            const { instance } = await startInstance({
-                routes: {
-                    // The page never answers, so only shutdown can end the count
-                    "GET /v1/users/@me/guilds": () => entered(),
-                },
-            })
-            const owner = await managed(mode, {
-                ...base,
-                totalShards: "auto",
-                processes: 1,
-                token: "fixture-only-not-a-credential",
-                instance: { url: instance, allowInsecure: true },
-                logging: { level: "silent" },
-            })
-            const starting = owner.start()
-            await counting
-            await owner.shutdown()
-            expect(await starting).toMatchObject({ _tag: "SupervisorError", reason: "closed" })
-            expect(owner.status()).toMatchObject({ state: "closed", children: [] })
-            expect(fork).not.toHaveBeenCalled()
-        } finally {
-            fork.mockReset()
-        }
-    },
-    10_000,
-)
+test.each(modes)("%s shutdown during the automatic count stops it without starting a child", async (mode) => {
+    try {
+        let entered!: () => void
+        const counting = new Promise<void>((resolve) => (entered = resolve))
+        const { instance } = await startInstance({
+            routes: {
+                // The page never answers, so only shutdown can end the count
+                "GET /v1/users/@me/guilds": () => entered(),
+            },
+        })
+        const owner = await managed(mode, {
+            ...base,
+            totalShards: "auto",
+            processes: 1,
+            token: "fixture-only-not-a-credential",
+            instance: { url: instance, allowInsecure: true },
+            logging: { level: "silent" },
+        })
+        const starting = owner.start()
+        await counting
+        await owner.shutdown()
+        expect(await starting).toMatchObject({ _tag: "SupervisorError", reason: "closed" })
+        expect(owner.status()).toMatchObject({ state: "closed", children: [] })
+        expect(fork).not.toHaveBeenCalled()
+    } finally {
+        fork.mockReset()
+    }
+})
 
 test.each(modes)(
     "%s identify coordinator gates every grant, replaces spacing and turns a refusal into a retryable denial",
@@ -541,7 +537,6 @@ test.each(modes)(
             fork.mockReset()
         }
     },
-    15_000,
 )
 
 test.each(modes)("%s a 4011 report under a numeric totalShards restarts only that child", async (mode) => {
@@ -755,5 +750,4 @@ test.each(modes)(
             fork.mockReset()
         }
     },
-    10_000,
 )

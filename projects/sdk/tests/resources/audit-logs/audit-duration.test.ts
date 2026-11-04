@@ -46,23 +46,19 @@ test.each(modes)("%s rejects unsafe audit milliseconds without projecting partia
     }
 })
 
-test.each(modes)(
-    "%s treats unsafe gateway audit milliseconds as a malformed dispatch",
-    async (mode) => {
-        const gateway = await startSynchronousGateway({ heartbeatIntervalMs: 600_000 })
-        const client = await setup(mode, {
-            gateway: { onMalformedDispatch: "terminate" },
-            transport: {
-                fetch: async (url) =>
-                    url.endsWith("/.well-known/fluxer")
-                        ? Response.json(hostedDiscoveryDocument)
-                        : Response.json({ url: "wss://gateway.fluxer.com" }),
-            },
-        })
-        await settle(client.connect())
-        gateway.deliverNow("GUILD_AUDIT_LOG_ENTRY_CREATE", { ...entry(1e308), guild_id: "20" })
-        expect(await expectErr(client.waitForClose())).toMatchObject({ reason: "protocol" })
-        expect(client.state).toBe("Closed")
-    },
-    1000,
-)
+test.each(modes)("%s treats unsafe gateway audit milliseconds as a malformed dispatch", async (mode) => {
+    const gateway = await startSynchronousGateway({ heartbeatIntervalMs: 600_000 })
+    const client = await setup(mode, {
+        gateway: { onMalformedDispatch: "terminate" },
+        transport: {
+            fetch: async (url) =>
+                url.endsWith("/.well-known/fluxer")
+                    ? Response.json(hostedDiscoveryDocument)
+                    : Response.json({ url: "wss://gateway.fluxer.com" }),
+        },
+    })
+    await settle(client.connect())
+    gateway.deliverNow("GUILD_AUDIT_LOG_ENTRY_CREATE", { ...entry(1e308), guild_id: "20" })
+    expect(await expectErr(client.waitForClose())).toMatchObject({ reason: "protocol" })
+    expect(client.state).toBe("Closed")
+})

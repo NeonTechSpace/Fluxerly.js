@@ -181,5 +181,4 @@ test.each(modes)(
             await cleanup()
         }
     },
-    30_000,
 )
