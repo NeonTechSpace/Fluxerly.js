@@ -99,8 +99,8 @@ jobs:
         id: browser
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
-        # Only the build that holds every released docs version, as CI's browser job checks it. Website tests every screen
-        # before each deploy, so the full screen check doesn't gate a package
+        # Only the build that holds every released docs version, as CI's browser job checks it. The Screens workflow tests
+        # every screen after pushes to main, so the full screen check doesn't gate a package
         run: pnpm --filter fluxerly-docs test:versions
       - name: Build fresh artifacts from the CI-checked source
         id: build

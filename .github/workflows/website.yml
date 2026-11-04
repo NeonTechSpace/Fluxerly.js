@@ -12,7 +12,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     environment:
       name: website
       url: https://fluxerly.neontechspace.com
@@ -68,33 +68,6 @@ jobs:
         env:
           CHECK_RESULTS_FILE: ${{ runner.temp }}/public-checks.json
         run: pnpm --filter fluxerly-docs check:public
-        working-directory: projects
-      - name: Read the locked Playwright version
-        id: playwright
-        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/playwright/package.json").version')" >> "$GITHUB_OUTPUT"
-        working-directory: projects
-      - name: Restore Playwright browsers
-        id: browser_cache
-        # Restore only, so this workflow still never saves a cache. CI's Check workflow saves this cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
-      - name: Install browser and system dependencies
-        id: browser_install
-        env:
-          BROWSER_CACHED: ${{ steps.browser_cache.outputs.cache-hit }}
-        run: |
-          if [ "$BROWSER_CACHED" = true ]; then
-            pnpm --filter fluxerly-docs exec playwright install-deps chromium
-          else
-            pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
-          fi
-        working-directory: projects
-      - name: Check every screen of the site about to be deployed
-        id: browser
-        # The only full screen check. CI tests just the screens a change reaches
-        run: pnpm --filter fluxerly-docs test:browser
         working-directory: projects
       - name: Require successful Check for the exact checkout
         id: ci

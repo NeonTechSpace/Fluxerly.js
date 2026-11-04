@@ -204,7 +204,7 @@ test("Dependency notes execute only reviewed base code and treat the PR branch a
 })
 
 // Catches: A pull request or push that tested no screen because its checkout compared HEAD with itself, or a CI run that
-// still ran the full screen check, which belongs to the website deploy
+// still ran the full screen check, which belongs to the Screens workflow
 test("CI tests only the screens the changed files reach, compared with the pull request base or the push's start", () => {
     const steps = workflows["ci.yml"].jobs["browser"].steps
     assert.equal(steps.find((step) => String(step.uses).startsWith("actions/checkout@")).with["fetch-depth"], 0)
@@ -233,11 +233,36 @@ test("CI tests only the screens the changed files reach, compared with the pull 
 })
 
 // Catches: A release preparation without a reusable Check that still ran the full screen check, which belongs to the
-// website deploy, or that dropped the multi-version documentation check the package's docs snapshot depends on
+// Screens workflow, or that dropped the multi-version documentation check the package's docs snapshot depends on
 test("Release preparation without a reusable Check runs only the multi-version documentation browser check", () => {
     const browser = workflows["release-prepare.yml"].jobs.prepare.steps.find((step) => step.id === "browser")
     assert.equal(browser.run.trim(), "pnpm --filter fluxerly-docs test:versions")
     assert.equal(browser.if, "steps.ci.outputs.reused == 'false'")
+})
+
+// Catches: A deploy delayed by the full screen check, or a push to main that changes what the website builds from
+// without any run testing every screen
+test("Screens tests every screen after pushes to main that change the website's inputs, and Website deploys without it", () => {
+    const screens = workflows["screens.yml"]
+    assert.deepEqual(screens.on.push.branches, ["main"])
+    for (const input of [
+        "projects/web/**",
+        "projects/sdk/src/**",
+        "projects/sdk/examples/**",
+        "projects/sdk/package.json",
+        "projects/sdk/CHANGELOG.md",
+        "projects/release/upstream/**",
+        "projects/pnpm-lock.yaml",
+    ])
+        assert.ok(screens.on.push.paths.includes(input), input)
+    assert.ok(Object.hasOwn(screens.on, "workflow_dispatch"))
+    const runs = Object.values(screens.jobs).flatMap((job) => job.steps.map((step) => step.run ?? ""))
+    assert.ok(runs.includes("pnpm build"), "Screens tests the site built from this commit")
+    assert.ok(runs.includes("pnpm --filter fluxerly-docs test:browser"), "Screens tests every screen")
+    for (const { where, step } of steps())
+        if (where.startsWith("website.yml/"))
+            assert.doesNotMatch(String(step.run ?? "") + String(step.uses ?? ""), /test:browser|playwright/i, `${where} runs no screen check`)
+    assert.equal(workflows["website.yml"].jobs.deploy["timeout-minutes"], 30)
 })
 
 test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped nightly candidate", () => {
@@ -318,7 +343,7 @@ test("Version pull requests have no channel input and derive readiness from the 
 
 
 test("Release and website work is serialized with read-only caches and never cancelled mid-run", () => {
-    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml"])
+    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml", "screens.yml"])
         assert.equal(workflows[file]["cache-mode"], "read", `${file} cache access`)
     for (const file of ["release-prepare.yml", "release-version.yml", "website.yml"])
         assert.equal(workflows[file].concurrency["cancel-in-progress"], false, file)
@@ -333,11 +358,11 @@ test("Release and website workflows only restore Fluxer's pinned files that CI s
     assert.ok(saved.length >= 1)
     const key = saved[0].step.with.key
     assert.equal(key, "fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}")
-    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml"])
+    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml", "screens.yml"])
         for (const { where, step } of steps())
             if (where.startsWith(`${file}/`) && String(step.uses).startsWith("actions/cache"))
                 assert.match(step.uses, /^actions\/cache\/restore@/, `${where} may restore a cache but never save one`)
-    for (const file of ["release-prepare.yml", "website.yml"]) {
+    for (const file of ["release-prepare.yml", "website.yml", "screens.yml"]) {
         const restored = [...steps()].filter(({ where, step }) => where.startsWith(`${file}/`) && fluxerCache(step))
         assert.equal(restored.length, 1, file)
         assert.equal(restored[0].step.with.key, key, `${file} restores what CI saves`)

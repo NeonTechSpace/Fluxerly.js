@@ -265,8 +265,8 @@ jobs:
       - name: Check documentation in a browser
         id: browser
         env:
-          # Every run tests only what the changed files reach on every screen size. The Website workflow tests everything
-          # before each deploy
+          # Every run tests only what the changed files reach on every screen size. The Screens workflow tests every
+          # screen after each push to main that changes the website's inputs
           EVENT_NAME: ${{ github.event_name }}
           PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE: ${{ github.event.before }}

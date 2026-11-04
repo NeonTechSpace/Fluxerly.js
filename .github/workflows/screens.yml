@@ -1,0 +1,93 @@
+name: Screens
+# The full screen check, on every screen size, for each push to main that changes what the website builds from. Check
+# tests only the screens a change reaches, and Website deploys without waiting for this run
+on:
+  push:
+    branches: [main]
+    paths:
+      - projects/web/**
+      - projects/sdk/src/**
+      - projects/sdk/examples/**
+      - projects/sdk/package.json
+      - projects/sdk/CHANGELOG.md
+      - projects/release/upstream/**
+      - projects/package.json
+      - projects/pnpm-lock.yaml
+      - projects/pnpm-workspace.yaml
+      - .github/workflows/screens.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+cache-mode: read
+concurrency:
+  # A newer push to main holds every change of the older one, so its run replaces the older run
+  group: screens-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  screens:
+    name: Full screen check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+      - name: Restore Fluxer's pinned OpenAPI document and docs source
+        id: fluxer_source_cache
+        # Restore only, so this workflow never saves a cache. The endpoint map checks every file against the hash in
+        # projects/release/upstream/manifest.json, so the key only saves downloads. CI's Check workflow saves this cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: projects/web/.cache/fluxer
+          key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
+      - name: Build the SDK and documentation
+        id: build
+        run: pnpm build
+        working-directory: projects
+      - name: Read the locked Playwright version
+        id: playwright
+        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/playwright/package.json").version')" >> "$GITHUB_OUTPUT"
+        working-directory: projects
+      - name: Restore Playwright browsers
+        id: browser_cache
+        # Restore only, so this workflow never saves a cache. CI's Check workflow saves the browser under the same key
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install browser and system dependencies
+        id: browser_install
+        env:
+          BROWSER_CACHED: ${{ steps.browser_cache.outputs.cache-hit }}
+        run: |
+          if [ "$BROWSER_CACHED" = true ]; then
+            pnpm --filter fluxerly-docs exec playwright install-deps chromium
+          else
+            pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+          fi
+        working-directory: projects
+      - name: Check every screen of the site
+        id: browser
+        run: pnpm --filter fluxerly-docs test:browser
+        working-directory: projects
+      - name: Summarize the screen check
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Full screen check
+          steps: ${{ toJSON(steps) }}
+          checks: '{"SDK and documentation build": "build", "Every screen in Chromium": "browser"}'
+          details: >-
+            {"Checked commit": ${{ toJSON(github.sha) }}}
+          next: Nothing to fix here. Website deploys main without waiting for this run
+          failure: Fix the failed screens named in the browser step log and push the fix to main. Website doesn't wait for this check, so a deploy before the fix ships these screens
+          reproduce: |-
+            cd projects
+            pnpm --filter fluxerly-docs check:ui
