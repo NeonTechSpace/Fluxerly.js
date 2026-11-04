@@ -1,5 +1,362 @@
 # @neontechspace/fluxerly
 
+## 1001.0.0
+
+### Major Changes
+
+- 37106cd: Breaking changes, each with the code it affects and how to migrate:
+
+    - Effect 4.1.2 or a later Effect 4 release is required. The `effect` peer range is now `^4.1.2`, so bot projects get at least the Effect version with the fix for Node.js-only type checks. With Effect 4.1.0, a TypeScript project that imports Effect or `@neontechspace/fluxerly/effect` with `@types/node` 22 or 24, no `DOM` library and `skipLibCheck` off fails to compile, because Effect's crypto declarations name global `CryptoKey` and `JsonWebKey` types that only the `DOM` library declares. Effect 4.1.1 fixed this. Projects that include the `DOM` library, such as those from `fluxerly init`, which use TypeScript's default libraries, or that enable `skipLibCheck` were not affected by that error
+      Affected: Projects on Effect 4.1.0 or 4.1.1, which now get a peer dependency conflict on install that npm 7 and later treat as an error
+      Migration: Update Effect to 4.1.2 or a later Effect 4 release, for example with `npm install effect@4`, `pnpm add effect@4` or `bun add effect@4`. No code changes are needed
+
+    - The `client.on`, `client.subscribe` and command router `attach` methods now reject an option they do not support, such as a misspelled `maxPendingMesages`, with `ConfigurationError` for field `eventOptions` and a hint that names the closest supported option, as `runBot` and `waitFor` already did. An unsupported option used to fall back to its default without a word. A subscription accepts only `maxPendingMessages` and `maxPendingBytes`, and no longer honors `overflow` or `partition`
+      Affected: Options objects passed in from JavaScript or held in a variable, such as `client.subscribe("typingStart", { overflow: "dropOldest" })`
+      Migration: Remove unsupported keys, and pass `overflow`, `partition` and `concurrency` to a handler registered with `client.on`
+
+    - The test kit's `next`, `idle` and `say` waits now reject an option they do not support with `ConfigurationError` and a hint that names the closest option. A misspelled `timeOutMs` used to leave the wait without a deadline
+      Affected: Tests that pass a misspelled or unsupported wait option
+      Migration: Use only `timeoutMs`, plus `message` for `say`
+
+    - A failed `messages.cleanup` is no longer retryable. The `errors.isRetryable` helper returns false for it, because a preview plan works only once, and a cleanup stopped by a full queue, a rate limit, a network failure or its deadline now says to preview again for the rest instead of to retry
+      Affected: Retry wrappers around `messages.cleanup` that rely on `errors.isRetryable`
+      Migration: Call `messages.previewCleanup` again and clean up the new plan
+
+    - A message send, reply, webhook message or upload that read an attachment from a `ReadableStream` and was then rate-limited is no longer retryable. Its error sets `details.streamUsed`, and `errors.isRetryable` returns false for it, because repeating the call would send the used stream. A Blob, a File and a stream the upload never read stay retryable
+      Affected: Retry wrappers that rely on `errors.isRetryable` around sends with stream attachments
+      Migration: Wait the reported delay, then send again with a new stream or with the file as bytes
+
+    - Network failures and timeouts from `directMessages.fetchLatestMessages` and `messages.previewCleanup` now make `errors.isRetryable` return true after dispatch, because both operations only read data
+      Affected: Retry wrappers that use `errors.isRetryable`, which may now repeat these calls where they previously stopped
+      Migration: Check the wrapper's retry count and total deadline for these reads. The SDK does not add automatic network retries to the latest-message POST
+
+    - Using one attachment stream a second time now fails with reason `input` and `inputValidation.path` `stream`, which is not retryable, instead of reason `busy`. Overlapping `next` calls on one default API stream still fail with `busy`
+      Affected: Code that matches reason `busy` around a second read of the same stream
+      Migration: Call `attachments.stream` again for a new stream, and match reason `input`
+
+    - A REST request whose JSON body is larger than `rest.queuedJsonMaxBytes`, or whose attachments are larger than `uploads.maxBytes`, now fails with reason `input` and `inputValidation.path` `body` or `files` instead of `busy`. It can never be sent, so `errors.isRetryable` returns false for it, and its message names the limit, `uploadMaxBytes` for a webhook client. Reason `busy` again means only that the request queue or upload budget is full for now, so a later retry can succeed
+      Affected: Code that treats reason `busy` as a full queue and retries later
+      Migration: Match reason `input`, and make the body or files smaller or raise the limit
+
+    - Fluxer codes a bot can reach now have their own `apiError.code` and a hint instead of being called a code the SDK does not describe: `userNotInVoice` for a move or disconnect of a member who is not in voice, `nsfwContentAgeRestricted` for a forward of age-restricted content into a channel that is not age-restricted, `singleCommunityCannotLeave` for leaving the community of a single-community instance, and `discoveryDisabled`, `discoveryInsufficientMembers`, `discoveryAlreadyApplied`, `discoveryApplicationNotFound` and `discoveryApplicationAlreadyReviewed` for discovery applications. These codes now appear in `apiError` and `details.apiError` and leave `details.providerCode` unset
+      Affected: Code that matches these codes in `details.providerCode`, such as `error.details.providerCode === "USER_NOT_IN_VOICE"`
+      Migration: Match `error.apiError?.code` instead, such as `"userNotInVoice"`
+
+    - An HTTP 429 that does not identify its limit, with no `X-RateLimit-Bucket` or `X-RateLimit-Scope` header and no JSON body with a boolean `global` member, as when a proxy in front of the API answers, now pauses every API request of the client for its wait instead of only that route's bucket. After that pause one request goes first, and only that request's own answer ends the pause. Repeated unidentified 429s on it double the asked wait, up to a minute, with up to one second of jitter
+      Affected: Requests on other routes whose deadline is shorter than the pause, such as `guilds.fetch(id, { timeoutMs: 5_000 })` while a proxy rate-limits a member read for 60 seconds, which now fail with reason `rateLimit`
+      Migration: Allow for client-wide pauses in deadlines, or have the proxy send a header that names the limit
+
+    - A 429 whose body asks for less time than its `Retry-After` header now waits for the header. Fluxer rounds that header up to whole seconds, so an ordinary Fluxer 429 can wait up to about one second longer than its body's `retry_after`
+      Affected: Rate-limited calls with a short deadline, such as `messages.fetch(target, { timeoutMs: 1_000 })`, which can now fail without waiting
+      Migration: Give rate-limited calls at least the header's whole-second wait in `timeoutMs`
+
+    - The `RateLimitObservation` type gains the required `pause` field. It is `"client"` for a global limit or a client-wide pause after an unidentified 429, and `"bucket"` for a limit Fluxer identifies as a route limit. An unidentified 429 keeps `global: false`. The `ratelimit.wait`, `ratelimit.deadline` and `ratelimit.notResent` records produced from a received 429 carry the same `pause`, while a queued request rejected against an already known pause may omit it. The `rest` part of `ClientDiagnostics` gains the required `rateLimitHold` field in both APIs
+      Affected: Code that builds these objects by hand, such as a test of an `observe` callback or a health check fed fake diagnostics
+      Migration: Add `pause: "client"` to global-limit observations and observations of unidentified limits, or `pause: "bucket"` to route-limit observations. Add `rateLimitHold: null` to fake REST diagnostics when no request is held
+
+    - The gateway payload limit is now 16,384 bytes, as Fluxer allows, instead of 4,096. The `gateway.send` method, `members.iterateChunks` and presence member selections accept larger requests, and a presence selection with 19-digit IDs now holds about 740 members instead of about 180. Fluxer instances older than October 2026 still allow only 4,096 bytes and close the connection with 4002 for a larger message, which stops the shard
+      Affected: Bots on such older self-hosted instances that relied on the SDK refusing a larger request before sending it
+      Migration: Keep each gateway request at 4,096 bytes or less until every target instance is updated
+
+    - The Effect `CommandRequirements` and `registerMany` now count the services of a guard, `onReject` or cooldown store in an optional property, such as a guard that a command factory adds only when it is given. The Effect `runBot`, `defineBot` and `createTestBot` count them too. Such a command used to compile without its services and fail with "Service not found" when used
+      Affected: Effect code that runs such commands without providing those services, which no longer compiles
+      Migration: Provide the named services, such as with `Effect.provide(AuthLive)`
+
+    - The `webhooks.fetch`, `webhooks.fetchForChannel` and `webhooks.fetchForGuild` methods take `RequestOptions` instead of `AuditedRequestOptions`, so an `auditReason`, which these reads always rejected at runtime, no longer compiles
+      Affected: Only calls that already failed at runtime
+      Migration: Remove `auditReason` from webhook reads
+
+    - The `Instance` interface gains the required `fetchBadges` method, and a webhook client's `instance` is now typed as `Pick<Instance, "resolve">`, in both APIs
+      Affected: Code that passes a webhook client's `instance` where an `Instance` is expected, and hand-written `Instance` fakes
+      Migration: Type such parameters as `Pick<Instance, "resolve">`, and add `fetchBadges` to fakes
+
+    - The `Threads` interface gains the required `iterateArchived` and `fetchPostData` methods, and the `OAuthClient` interface gains the required `fetchAuthorization` method, in both APIs
+      Affected: Hand-written `Threads` or `OAuthClient` fakes and wrapper classes that implement these interfaces
+      Migration: Add the new methods, or type code that uses only some methods with `Pick`, such as `Pick<Threads, "create">`
+
+    - The default test kit's `TestClient` and `TestBot` interfaces gain the required `advance(ms)` method of the new manual clock
+      Affected: Hand-written test doubles or wrapper classes that implement these interfaces
+      Migration: Add `advance`, or derive the double from `createTestClient`
+
+    - The test kit records request URLs on the hosted API address `https://fluxer.com/api/v1/...` instead of `https://api.fluxer.app/v1/...`, since hosted Fluxer moved its API there. Request paths are unchanged
+      Affected: Tests that compare the full URL of a recorded request
+      Migration: Compare the request path, or expect `https://fluxer.com/api/v1/...`
+
+    May affect some code:
+
+    - Closed unions that the SDK returns gain members: `ApiErrorCode`, `ApiProviderCode` and `ApiValidationCode` for the new Fluxer codes, `ChannelOperation`, `GuildOperation`, `OAuthOperation` and `PaginationOperation` for the new methods, the `operation` and `reason` of `HelperError` for `voiceWaveform`, and `ConfigurationError.field` for a scheduled task's `name`. An exhaustive check such as `const unreachable: never = error.apiError.code` no longer compiles
+      Migration: Handle the new members or add a default branch
+
+    - The hosted `links` helpers now build `https://fluxer.com` URLs, since hosted Fluxer moved its web app there. The `links.channel` and `links.message` helpers return `https://fluxer.com/channels/...`, and `links.installation` returns `https://fluxer.com/oauth2/authorize?...`, the installation page itself. The previous `fluxer.app` and `api.fluxer.app` URLs only reached these pages through a redirect. Links from `client.instance.resolve()` still use the instance's own web app
+      Migration: Update code or tests that compare the exact URL string
+
+    - The SDK reads hosted Fluxer's instance information from `https://fluxer.com/.well-known/fluxer` instead of `https://fluxer.app/.well-known/fluxer`, which now only redirects. Startup needs one request fewer, and the startup log line and its `instance` field name `fluxer.com`. Saved sessions keep working
+      Migration: Update log filters or network allowlists that name `fluxer.app`
+
+### Minor Changes
+
+- 37106cd: Errors classify failures more precisely and give better hints:
+
+    - A failed `directMessages.fetchLatestMessages` call is now reported as a read. A network failure or timeout no longer says the change may have been applied, `details.read` is true, and `errors.isRetryable` returns true for it. The SDK still does not send it again automatically
+    - A failed `messages.previewCleanup` now counts as a read. Its error no longer warns that a change may have applied, and `errors.isRetryable` returns true when a network failure or timeout interrupted it. A failed cleanup batch keeps its warning. A `members.fetchCanManage` whose answers cannot be evaluated, such as a member with a role missing from the role list, now also fails as a read without that warning
+    - A message send, reply, webhook message or upload that read an attachment from a `ReadableStream` and was then rate-limited now sets `details.streamUsed`, so `errors.isRetryable` returns false, because repeating the call would send the used stream. Its hint says to wait and send again with a new stream or with the file as bytes. This covers inline uploads and presigned uploads, whose stream is read before the message request. A stream the upload never read, such as an inline upload rate-limited while an earlier file was still being sent, and a Blob or File stay retryable. The `MessageError` constructor accepts `streamUsed` like the other operation errors
+    - A webhook message, or a message on an instance without direct uploads, that carries a Blob, File or stream attachment and is rate-limited now logs a Warn record with the new code `ratelimit.notResent` before it fails with reason `rateLimit`. Its body cannot be sent twice, so the SDK cannot wait and send it again
+    - Shutdown during an attachment download now fails it with `ClientClosedError`, as documented, instead of a retryable network failure. This covers opening the download in both APIs and reading a buffered download
+    - A response that describes another resource than the one requested, such as a member read that returns a different user, now fails with `details.responseField` `targetMismatch`. This covers reads of users, communities, channels and members, edits of communities, channels and threads, active thread lists, created invites and opened direct messages. The error no longer names an unrelated field, such as `Field flags is missing or has the wrong type`
+    - A success status other than the one an operation expects now fails with `details.responseField` `status`, and its `rest.responseRejected` record names that check in `fields.field`. An attachment upload plan or completion answer of the wrong shape names `attachments` or `uploads`
+    - An `OAuthOperationError` with reason `response` now names the field Fluxer's answer got wrong in `details.responseField` and in its message, such as `expires_in`, as REST errors already do. The value itself is never kept. The constructor accepts the new `responseField` option
+    - A Fluxer validation entry that names a field without a code, such as an invalid badge cursor for `instance.fetchBadges`, is now kept in `apiError.validationErrors` with its `path` and an empty `providerCode`. It used to be dropped, which left an empty list
+    - An error's `toJSON` now follows an ordinary `Error` cause's own cause, such as the DNS failure inside a `TypeError: fetch failed`, as an optional nested `cause`, with the same masking and nesting limit as SDK causes
+    - A defect in the cleanup of an Effect scheduled task that shutdown interrupted, such as a scoped resource whose release fails, now fails shutdown and is logged as `lifecycle.cleanupFailed`, so `runBot` ends with a failure and the process exits with code 1. It used to be logged as a task failure while shutdown succeeded
+    - A defect raised in the cleanup of a native `onError` hook that shutdown interrupted now fails shutdown as a cleanup fault and is logged as `lifecycle.cleanupFailed` and counted, as other cleanup faults are. It used to be dropped, so shutdown reported success
+    - A wrong or deleted webhook token, which Fluxer answers with `UNKNOWN_WEBHOOK` and HTTP 404, now logs the promised `rest.rejected` Warn and gets the hint to check the webhook ID and token, instead of a hint about bot access. Other 404s, and a bot looking up a missing webhook, are unchanged
+    - A download that the media server refuses with a non-2xx status now says the media server refused it and suggests fetching the message again for a current URL, instead of saying the answer had the wrong format and pointing at test fixtures
+    - A rejection with HTTP 423, which Fluxer sends while another change holds a role order, channel order or community settings lock, now has a hint to wait `retryAfterMs` and send again
+
+    These messages and hints change:
+
+    - A refused send or typing request names Send messages in threads for threads, and a refused channel deletion names Manage threads for threads
+    - A refused `channels.edit` on a thread explains Fluxer's thread rules: Renaming or archiving another member's thread, changing its slowmode or flags, unlocking it or changing a locked thread needs Manage threads in the parent channel
+    - Timed-out bots and text blocked by an instance's content filter get their own hints instead of the permission and role hint
+    - The `CONTENT_BLOCKED` hint says that text, a link or a file can be blocked, since Fluxer also blocks uploads by file hash
+    - The hint for `featureTemporarilyDisabled` no longer says to retry later. Fluxer sends it when instance staff turned the operation off for the community or the instance, so it says that retrying does not help
+    - The `explicitContentCannotBeSent` code has a hint that names the community's explicit content filter and a direct message recipient's media setting
+    - The `DIRECT_MESSAGES_DISABLED` code now says the Fluxer instance turned off direct messages, not that the recipient refuses them
+    - The `CANNOT_MODIFY_SYSTEM_WEBHOOK` code now says Fluxer does not allow editing, pinning or starting a thread from a system message, and gets a hint
+    - The missing-access hint covers private threads the bot was not added to
+    - The `rest.rejected` hint names Send messages only for sending a message, and role order only for actions on one member, so clearing reactions or reading bans no longer gets the wrong fix
+    - The `rest.rejected` Warn for a refused message send also names Send messages in threads for threads, matching the operation error
+    - The `rest.rejected` Warn for a refused unban names Ban members and no longer asks to move the bot's role, because Fluxer checks no role order for an unban
+    - A refused `members.addRole` or `members.removeRole` logs a hint that names Manage roles and a bot role above the role, instead of a role above the member's
+    - A webhook refused when it reads, edits or deletes a message it did not send is told to use its own message, instead of being told to grant the bot's role a permission
+    - A rejected OAuth user access token also says that a closed or temporarily banned account is refused even with a fresh token
+    - The `invalid_grant` hint for a code exchange names the PKCE verifier, which Fluxer also answers with that error
+    - A `members.search` denied by the SDK's own ManageGuild check says the search was not sent and how to fix it
+    - The presence limit hint no longer offers clearing as a way to free a community slot
+    - The invalid message flags error explains what a voice message also needs
+    - The malformed-answer hint names `details.responseField` only when the error has it
+    - The `gateway.ignoredEventRegistered` Warn says that `messageCreate` still receives messages that mention the bot directly, with @here or with @everyone
+    - The 4009 close diagnostic says the gateway received no heartbeat from the bot in time, instead of blaming a missing acknowledgement
+    - Calling `waitForReady` before `start` says the supervisor is not running and to call `start` first, and a supervisor `spawn` failure covers a failed message to a running child
+
+- 37106cd: Logs and diagnostics say more and merge fewer distinct failures:
+
+    - When rate limits hold queued REST requests for a second, the client logs one `ratelimit.queueHeld` record with how many requests wait, why, for how long and, for route limits, the route with the most waiting requests. A global limit or a client pause after a 429 that named no limit is a Warn, and used-up route limits are a Debug. Each reason is logged at most once a minute. The new `diagnostics().rest.rateLimitHold` field shows the same summary at any moment, or null when no queued request waits for a rate limit
+    - The `ratelimit.wait`, `ratelimit.deadline` and `rest.request` records of a waited-out 429 carry Fluxer's code for the limit in `fields.apiError`, which tells a limit such as `MESSAGE_CROSSPOST_RATE_LIMITED` apart from a route limit
+    - OAuth clients log one `rest.request` Debug record for each request, with its method, route, status and duration, like bot clients. The record never contains the query, the form, the body or an `Authorization` value
+    - Connection logs include the reason text Fluxer sends when it closes the gateway connection, such as which limit a 4008 close hit, cleaned to one line. Retrying still depends only on the close code
+    - The `ScheduleOptions` type gains an optional `name`, 1 through 100 characters. A failed run's `lifecycle.taskFailed` record names it in its message and `fields.task`, and its `FailureReport` in the new `taskName`, so failures of different tasks are no longer merged into one record. The `describe()` method masks the client's credentials and credential patterns in its whole text, task name included, while `taskName` keeps the name as given. Other values fail with `ConfigurationError` for field `name`
+    - A `lifecycle.cleanupFailed` record for a scheduled task names the task in its message and in `fields.task`, and one for an `onError` hook says so
+    - The `LogRecord` type gains `otherErrors`, which lists the other failures and defects of the same Effect `Cause` after the one in `error`, with credentials masked. A scheduled task or handler that fails and whose cleanup then also fails shows both failures in sinks, JSON and pretty output, and `report.describe()` adds an `Also failed:` line for each. Records with a single failure are unchanged
+    - Log records and `describeError` show the errors inside an `AggregateError`, such as each rejection of `Promise.any`, with the same masking as a cause. The `ErrorInfo` type gains `errors`, which holds the first 10 members, and native log records receive an `AggregateError` copy with masked members. Two aggregates with different members are no longer counted as repeats
+    - The native Effect default output prints each member of an `AggregateError` with its masked name and message, its code, its cause chain and its nested members, such as the `ECONNREFUSED` behind each `fetch failed`
+    - A handler that fails because Fluxer rejected a permission names the community or channel of that request in its Error record's `fields.guildId` or `fields.channelId`, since the `rest.rejected` Warn that named it is not logged separately. That Warn now carries the same field. A rejection for another community or channel than the one the failure already names is still logged as its own Warn
+    - A failed `cache.onChange` listener is reported with its `CacheObserver.id` as `subscriptionId`, so two listeners that fail the same way log two Error records instead of one
+    - The `collectors.failed` and `collectors.dropped` records name the collected channel in `fields.channelId`, and a reaction collector's message in `fields.messageId`. Callback and filter failures of collectors name the message and channel in their log message, so equal failures in different collectors are no longer collapsed into one record and a repeat count
+    - Deduplication compares the cause chain of an error, so a failure with the same outer error and a new cause is shown at once instead of as a repeat of an earlier one. It compares masked messages, so failures that print the same after masking, such as two that differ only in a hidden credential, count as repeats
+    - A supervisor that stops reports how often each collapsed record repeated since it was last shown, as the `dedupe` logging option promises for shutdown. Clients already did this, but a supervisor dropped those counts
+    - The first log sink or observer failure reads `Fluxerly diagnostics output failed` and names what to check
+    - In the Effect API, gateway records such as `gateway.dispatch`, `gateway.send` and gateway payload records go to the Effect logger of the fiber that runs the client, like its lifecycle records, instead of the logger it was created under
+    - Command rejection and unmatched-command Debug records say that the bot will try to reply, or that the `onReject` or `onUnmatched` callback runs next, since each record is written before that happens
+
+    Test kit records:
+
+    - Test transport log records mask the client's token and other credentials in their message, fields and error text, as other SDK records do. They also follow log levels changed with `client.logging.configure` and the Debug categories from the `debug` setting and `FLUXERLY_DEBUG`. A caller log sink that throws or rejects on such a record is counted in `sinkFailures` and reported once, as for other records, instead of being printed raw or left as an unhandled rejection
+    - A test request matcher that throws leaves a `testing.responderFailed` record naming the matcher. That record keeps the thrown error's code, cause chain and `AggregateError` members, as other log records do
+
+- 37106cd: Credential masking covers much more. It applies to log records, `describeError`, `FailureReport.describe()`, `toJSON()` and `ApplicationError` messages. Masking covers Fluxer's credential forms and common credential names. A secret of another service under a name or in a link format it does not know may stay readable, so keep such secrets out of error messages. The docs now promise masking for recognized credentials only, and the `LoggingOptions` reference no longer says that records never contain credentials
+
+    Newly masked in error names, messages, stacks and causes:
+
+    - Passwords, cookies and API keys: Values after `password=`, `passwd=`, `api_key=` or a quoted key such as `"password":`, a quoted value after an unquoted key such as `password: 'x'` in an inspected object, and the value of a `Cookie` or `Set-Cookie` header. A quoted value is masked whole, with its spaces, punctuation and escaped quotes. Cookie values are masked in header lines, also when a cookie value is quoted, and in inspected or JSON headers, including a `set-cookie` array, Node's `rawHeaders`, a fetch `Headers` object and a `Map`. These used to appear in full in normal Error records
+    - Headers: `Authorization`, `Proxy-Authorization` and `X-API-Key` headers are masked in every form a `Cookie` header is: Header lines, quoted values, arrays, `Map` entries and header pair lists, whatever the scheme or length of the value. Credential names ignore case, `-` and `_`, so `X-API-Key`, `api-key=` and `"x-api-key":` are masked like `api_key`. Credentials after `bearer`, `BEARER` or `basic` are masked in any letter case
+    - Cookie lists: `cookies` values, such as a parsed cookie object or a list of cookie strings, and Express `signedCookies` values
+    - OAuth: The OAuth code in a `URLSearchParams` value, in a parsed callback query such as Express `req.query` or `querystring.parse` output with a `state` field, and in a token exchange form body that starts with `code=`, and the PKCE `codeVerifier`. A lone `code` such as `ECONNRESET` stays readable
+    - Signed links: The signature and credential of a signed upload URL, such as `X-Amz-Signature=`, without an `upload_url` label, the `hm` signature of a Fluxer attachment link, the signature of an Azure SAS link (`sig`) and of a Google V2 or CloudFront signed link (`Signature`), and any signed JSON token such as a JWT or an upload relay token. These stay hidden after the link is split into an object, a `Map` or a list of entries, such as `Object.fromEntries(url.searchParams)` or a parsed query. The date, expiry, algorithm, permissions and access ID of a signed link, such as `X-Amz-Expires`, `ex` and `is`, stay readable, and a `signature` field outside a signed link, such as an email signature, stays readable
+    - Cloud keys: An AWS `secretAccessKey`, in any spelling such as `AWS_SECRET_ACCESS_KEY`, and a `privateKey` such as a service account's `private_key`. An AWS `sessionToken` was already hidden. The access key ID stays readable
+    - Invite codes: The code of an Error shaped like an invite, invite codes in decoded invite audit entries, such as those from `auditLogs.fetchPage`, as the raw entry already had, an invite link with capital letters, such as `Fluxer.gg/...`, the `sourceInviteCodes` filter name and a labelled URL with several query parameters
+
+    Masking now reaches more kinds of values:
+
+    - A thrown or failed value that is not an Error is masked before it becomes text. Values under credential keys such as `upload_url`, `vanity_url_code` or `password`, invite codes in invite-shaped objects, header values in a `Map` and the value after a header name in Node's `rawHeaders` or a header pair list used to appear in full in normal Error records
+    - An Error, a proxy or an object with its own inspection method, when it is thrown or sits inside a thrown value. Their properties, causes and what their inspection returns follow the same key policy as plain objects, so an invite code, a password or a signed upload URL there is hidden. A `URL` object inside a thrown value prints as its masked text, so an OAuth code in its query is hidden
+    - JSON written into an error message or a thrown string, also inside a JSON string, follows the payload key policy: A credential key hides its whole value, objects included, an escaped key such as `"cookie"` counts as its decoded name, and an invite-shaped object hides its code. Escaped text is masked whatever quotes come before it and however deeply it is escaped
+    - A credential inside escaped quotes is masked, such as a quoted password in a scheduled task name, in a thrown string quoted by an `ApplicationError` message, or in a JSON body written inside a JSON string. Readable text inside escaped quotes stays as written
+    - Text printed by Node's `util.inspect`, whose keys have no quotes, such as `{ hm: 'x' }` or `[Object: null prototype] { code: 'x', state: 'x' }`, gets the same key rules as JSON text, so the `hm` of a Fluxer attachment link, an OAuth code beside `state` and an invite code are hidden there too. The whole value of a credential key is hidden when inspection splits it, such as a PEM `privateKey` written as quoted lines joined by `+`, or writes it in backticks, as it does for text with both quote kinds. Only the first part used to be hidden
+    - A thrown string is masked before an `ApplicationError` message cuts it at 200 characters
+    - Record facts such as `route`, `event`, `command` and `subscriptionId` are masked like other text
+
+    Readable text stays readable:
+
+    - Describing a thrown object no longer calls its getters, so a getter that throws or has side effects cannot change or hide the rest of the description. The same object referenced twice is shown twice instead of as a cycle
+    - A list of header names such as `["Authorization", "Cookie", "X-API-Key"]`, a pair of names such as `["password", "username"]` and prose such as `Missing "Authorization", check the header` stay readable
+    - A header name such as `X-Trace-ID` in a list of missing headers, prose after a header label such as `Cookie: not present`, a dotted name such as `Bot application.commands.update`, and a short numeric query code such as `?code=404` stay readable
+    - Header names in a list whose key names header names, such as `missingHeaders` or `allowedHeaders`, stay readable in logs and `describeError` when they are lowercase, as `Headers` keys are. A value with digits, spaces or other punctuation after a credential header name in such a list is still hidden, and other header pair lists are masked as before
+    - A credential field or header that is missing reads as missing instead of `[redacted]`: An `undefined`, `null`, empty or boolean value under a credential key, and header text such as `Authorization: missing` or `Cookie: invalid`
+
+    Unsafe payload logging now masks:
+
+    - Invite codes in invite audit log entries, in their target ID and code changes, `vanity_url_code` change values in any audit entry, and the code of an `INVITE_DELETE` dispatch, also in a cut off REST body
+    - The signed `upload_url` of attachment upload plans, and the vanity code in the request body that sets it
+    - The community invite codes of member search, in the `source_invite_code` filter that is sent and in each hit's supplemental data, also in a cut off response
+
+    These used to appear in full in gateway and REST payload records
+
+- 37106cd: New methods, helpers and result fields:
+
+    - Voice notes: Message sends, replies and direct message sends can now send a voice note, an uploaded audio file that Fluxer's apps show with a player. It is unrelated to voice channel connections. Set `MessageFlags.VoiceMessage` and give the one attachment its `duration` in whole seconds and its `waveform`. The SDK refuses content, embeds, stickers, a second attachment or a missing duration or waveform before sending, as Fluxer would. Edits and webhook forwards refuse the voice flag before sending. A new upload in an edit keeps its `duration` and `waveform`. Fluxer's voice-note validation codes now have explanations in `apiError.validationErrors`
+    - The new `voiceWaveform(samples, sampleRate)` helper computes a voice note's `duration` and `waveform` the way Fluxer's apps do, so the player's bars match a note recorded in Fluxer. It takes the decoded samples of one channel, in an ordinary decoded PCM scale such as floats or 16-bit integers, and the sample rate in hertz, and returns both values ready to spread into the audio attachment. The SDK decodes no audio file, so decode it first with any decoder, such as ffmpeg. Invalid samples or rates throw `HelperError` with reason `audio`. Both entry points export it
+    - A new attachment's `explicitMedia: true` marks it as explicit media, next to `spoiler`, so Fluxer's apps treat it as sensitive. It works in message, reply, direct message, webhook and forum post sends, and in the files of `rest.request`. The message builder keeps an attachment's `explicitMedia`, `duration` and `waveform` when they come from getters or non-enumerable properties, as it does for the other attachment fields
+    - The new `oauth.fetchAuthorization` method reads what a delegated access token authorizes: The application, the granted scopes, when the token expires and, with the `identify` scope, the user. It is in the default and Effect APIs
+    - The new `threads.iterateArchived(channelId, query)` method reads a channel's archived threads across pages, as an iterator in the default API and a Stream in the Effect API. It takes the `scope` and starting `before` of `threads.fetchArchived` plus the usual `maxItems`, `maxPages` and `pageSize`, which defaults to 50 and accepts 2 through 100. It picks each next cursor itself, the last archive time or, for `joinedPrivate`, the last thread ID, delivers each thread once and keeps threads archived in the same millisecond unless more of them than a full page share it
+    - The new `threads.fetchPostData` method reads the creator and first message of up to 100 forum or media posts in one request, and the new `instance.fetchBadges` method reads the names and images of community badges, such as those in `Guild.badgeIds`, by ID or one page at a time. Both are in the default and Effect APIs
+    - Thread searches from `threads.search` now return `retryAfterMs` with an `indexing` result when Fluxer suggests how long to wait before searching again. The SDK still does not retry by itself
+    - The default test kit has a manual clock. With `createTestClient({ clock: "manual" })` and `createTestBot({ ...bot, clock: "manual" })`, the SDK's timers run on a test clock that starts at 0 and moves only through the new `advance(ms)`, which stops at each SDK deadline on the way and waits until the work it started has settled before it moves on. Work counts as waiting for the clock only while every running handler and scheduled task awaits an SDK call, so a handler that reads a file or a database first is waited for. Under the manual clock, `say` resolves once the bot can continue only when the clock moves, such as a command awaiting `waitFor`, so the test calls `advance` next. Scheduled tasks, `waitFor` and collector timeouts, command cooldowns, cache expiry, member request timeouts, REST and presence pacing, the `keepTyping` refresh, reconnect delays and the heartbeat follow it, so a test of a ten-minute reminder no longer waits ten minutes. The default stays `"real"`. A client that owns more than one shard or uses automatic sharding cannot use the manual clock, and the native test client points to `TestClock` instead
+    - A supervised child now accepts `clientOptions.sharding.refillCaches`, with the same meaning as the client option, so a child that resumes saved sessions can skip the cache refill
+    - Audit-log reasons now accept text in any language, such as `Belästigung` or `規則違反`. The `X-Audit-Log-Reason` header carries the reason's UTF-8 bytes, which Fluxer decodes, and an ASCII reason is sent unchanged. Control characters, line and paragraph separators and lone surrogates still fail before dispatch, and the 1 through 512 limit counts UTF-16 code units after trimming. This applies to every audited operation, including webhook management and `client.rest.request`
+    - A `query` value of `client.rest.request` can now be an array, which sends the parameter once per item in order, so `query: { tag: ["101", "102"] }` sends `tag=101&tag=102` for a route such as thread search that reads a parameter more than once. An empty array sends nothing, and each item has the same checks as a single value. Both entry points accept it
+
+    Effect command callbacks:
+
+    - The Effect `runBot`, `defineBot` and `createTestBot` now accept a commands prefix resolver, `onReject`, `use` middleware, `onUnmatched` and the commands `onError` that require Effect services, and add those services to their own requirements, as they already did for commands and event handlers. A prefix resolver Effect passed to `commands.create` adds its services to the router's requirements too. Bots without such callbacks keep requiring nothing, and the services are read from the context the bot runs in, so callbacks no longer need to capture them in a closure. The new `BotCommandCallbackServices` type names those requirements, also when the commands option is a union type whose members have different callbacks
+    - The Effect `commands.create` now infers the services of its prefix resolver, `onReject`, `use` middleware and `onUnmatched` separately, so these callbacks may need different services, and the router requires all of them. It infers the errors of `onReject`, `use` and `onUnmatched` separately too, so they may fail with different errors. They used to have to share one service type and one error type, so mixing two failed to compile unless the union was written out, as in `commands.create<never, Database | Metrics>(...)`. Explicit type arguments keep working and still limit every callback to the errors and services named. The `PrefixCommandsOptions` type gains optional type parameters for the services of each callback, which default to its `R`, and for the errors of `onReject`, `use` and `onUnmatched`, which default to its `E`
+    - The Effect `register` now infers the services and errors of a command's guards, `onReject`, cooldown store and `execute` separately, so a guard that needs `Auth` and a command that needs `Database` compile without type arguments, and the router requires both. A guard that fails with `AuthError` and a command that fails with `DbError` compile too. Explicit type arguments, as in `register<never, Auth | Database>(...)`, keep limiting every callback to the errors and services named. The `PrefixCommand` type gains six optional type parameters, for the guard, `onReject` and cooldown services, which default to its `R`, and for their errors, which default to its `E`
+
+    Results now keep more of what Fluxer sends, as optional fields that are absent when Fluxer leaves them out:
+
+    - Profiles from `users.fetchProfile` include the public badges as `profileBadges`, in Fluxer's display order, with their labels, images, captions and links. A badge kind this SDK version does not know is kept as Fluxer sent it. The field is absent when the instance does not send the list
+    - The new `GuildMember.user` holds the member's public account as Fluxer sent it with the membership, including the account display name and avatar, from member reads, member events and the members Fluxer attaches to messages, reactions and typing. It is absent when Fluxer sent only part of the account
+    - The `Guild` type now has `rulesChannelId`, `vanityUrlCode`, `nsfwLevel` and `badgeIds` from community reads and community events. The new `GuildNsfwLevels` constant names the NSFW levels, and the retired levels 1 and 2 decode as `AgeRestricted` and `Safe`, as Fluxer normalizes them
+    - Crosspost sources from `messages.fetchCrosspostSource` include the source community's custom badge IDs as `guild.badgeIds` when Fluxer supplies them. Read their names and images with `instance.fetchBadges`
+    - Emoji and stickers read with `emojis.fetchAll` and `stickers.fetchAll` carry the uploader's user ID as `creatorId`, so a bot with only `CreateExpressions` can tell which ones it may rename or delete. Creations, edits and the gateway's community snapshots do not include it, so an emoji or sticker from the cache can lack it. A sticker spread into `stickers.edit` keeps working, because the field is ignored there
+    - Each entry in the `failed` list of `emojis.createMany` and `stickers.createMany` has `providerMessage`, Fluxer's explanation of that failure when it sent one, such as a full community or an unreadable image. It is display text localized for the bot's account, not a stable code, and never appears in SDK errors, logs or diagnostics
+    - Bans from `members.fetchBans` include the banned account as `user`, with its discriminator and display name, so accounts with the same username can be told apart
+    - Group conversations add `nsfw`, and direct messages and groups add `lastPinTimestamp`, from reads and from channel events
+    - The `User` type adds the account-wide reply mention preference as `mentionFlags`, wherever the SDK returns a `User`. A value this SDK version does not know is left out instead of failing the read
+    - Webhook reads, lists and creation by the bot add the creator as `creator`. Reads with the webhook token leave it out
+    - Reaction user pages add each account's `displayName`, `discriminator`, `avatar`, `avatarColor`, `isSystem`, `flags` and `mentionFlags`
+    - Invites add the community's `icon`, `features` and `badgeIds`, and the creator's account as `inviter`
+    - Discovery results add `badgeIds`
+    - The `directMessageRecipientAdd` and `directMessageRecipientRemove` events add the account as `user`
+    - OAuth identities from `fetchIdentity` add `flags`, `avatarColor`, `isBot` and `isSystem`
+    - The `GuildVoiceChannel` type now declares `topic` and `lastPinTimestamp`, which voice channels already carried
+
+    A message author, mention or referenced user with an unknown `mention_flags` value no longer fails the whole message read, and a community member with one no longer fails the member read or event. Its `mentionFlags` is left out instead, and a member's cleared override stays `null`. A user snapshot with missing fields leaves the new `user`, `creator` or `inviter` absent and does not fail the read. The docs now name the Fluxer fields the SDK leaves out on purpose and why
+
+- 37106cd: Voice notes in more places:
+
+    - A forum or media post's first message can now be a voice note. Set `MessageFlags.VoiceMessage` on the message passed to `threads.createPost`, with one audio attachment that has `duration` and `waveform`, under the same rules as `messages.send`
+    - Webhook sends and webhook replies now accept voice notes. Webhook files always go as multipart, where Fluxer reads a waveform of at most 256 characters, so a longer waveform fails locally on `attachments[].waveform` with reason `input`. A `voiceWaveform` result fits for audio up to 19.2 seconds. Webhook forwards still refuse `MessageFlags.VoiceMessage`
+    - A webhook send with `MessageFlags.VoiceMessage` and content now fails on `content`, as `messages.send` does, instead of on `flags`
+
+- 37106cd: Voice notes and webhook edits:
+
+    - `voiceWaveform` takes an optional third argument, `{ maxPoints }`, an integer from 1 through 256. With `{ maxPoints: 192 }` the waveform fits a webhook send or reply for audio of any length. Without it, the result keeps Fluxer's 256 points as before. Other options fail with `HelperError` and reason `limit`. Both entry points export the new `VoiceWaveformOptions` type
+    - The comments of `WebhookMessageEdit.flags` and `WebhookClient.editMessage` now say that supplied flags, including 0, also clear `MessageFlags.VoiceMessage`, so an edit through the webhook that omits `flags` keeps a voice note
+
+- 37106cd: Typed raw gateway events and Gateway Error frames:
+
+    - Each `raw` event now has `documented`, which is true when Fluxer's documentation at the SDK's reviewed Fluxer commit describes its dispatch type. After checking it, comparing `t` with a dispatch type such as `"MESSAGE_CREATE"` gives `d` that type's documented payload with Fluxer's own field names, such as `channel_id` and `referenced_message`, so a misspelled field fails to compile. A dispatch type the documentation does not describe still arrives, with `documented: false` and an unknown `d`. The types check nothing at runtime, and `d` is still the body Fluxer sent. Existing `raw` handlers keep compiling, since every raw event is still a `RawDispatch`
+    - The new `GatewayDispatchPayloads` type maps each documented dispatch type to its payload, and `GatewayPayloadObjects` holds the objects those payloads carry, keyed by the address of their documentation, such as `"/http-api/messages/#message-object"`. `RawDispatchEvent`, `DocumentedRawDispatch` and `UndocumentedRawDispatch` name the forms of the raw event. The types are generated from the gateway and HTTP API documentation at the pinned Fluxer commit
+    - The new `gatewayError` event delivers opcode 12 Gateway Error frames as `{ shardId, d: { code, message } }`. Fluxer sends one when it refuses a voice join the session asked for, such as with `VOICE_CHANNEL_FULL`, so a refused join sent through `client.gateway.send` is now visible without a custom WebSocket transport. The frame is not a dispatch: It never reaches `raw`, has no sequence, is not replayed by Resume and is never suppressed by `gateway.ignoredEvents`. Each frame is logged with the new code `gateway.gatewayError`, at Debug while a subscription receives it and at Warn otherwise. Such frames used to be ignored as an unknown opcode
+    - The test clients of both entry points have `emitGatewayError(data, options)`, which delivers a Gateway Error frame to a connected shard, shard 0 by default, so a bot's handling of a refused voice join can be tested offline
+
+- 37106cd: Typed raw REST requests:
+
+    - The new `client.rest.call(route, input)` method sends a request to a route of Fluxer's API with types checked at compile time, such as `client.rest.call("POST /channels/{channel_id}/messages", { params: { channel_id }, body: { content: "Hello" } })`. The route is written as its method and path template the way Fluxer's documentation writes it, `params`, `query` and `body` take Fluxer's official field names, and the response body has the route's type. A misspelled or missing required field, a wrong field type or a route that is not listed fails to compile. A repeated query parameter takes an array, and the message routes also take `files`. It is in the default and Effect APIs
+    - The types cover the 134 routes that accept a bot token in Fluxer's API description at the Fluxer commit the SDK pins, generated with Fluxer's names and a few reviewed corrections that cite Fluxer's source, such as a thread's channel type, the always present thread fields, query parameters that Fluxer reads as numbers or booleans and `GET /gateway/bot`, which the description lists without its bot token. The new `RestRoutes` type lists them, each with a link to its section of Fluxer's documentation. `RestRoute`, `RestRouteInput`, `RestRouteResponse`, `RestRouteOptions`, `RestCallInput` and `RestCallArguments` name the parts of a call
+    - A typed call sends through the same queue, rate limits, retries, deadline, logging and `RestRequestError` failures as `client.rest.request`, with operation `rest.request`. A missing, extra or empty path parameter fails with reason `input` before anything is sent. The response is not checked at runtime, and `client.rest.request` remains for routes and fields newer than the pinned description
+    - With `files`, `client.rest.request` and `client.rest.call` now accept `body.attachments`. Entries for existing attachments are sent first, so a message edit that adds a file can keep the message's attachments, which Fluxer otherwise replaces with the new files. An entry whose `id` is a file's index may add that file's `title` or `description`. Such a body used to fail with reason `input`
+
+### Patch Changes
+
+- 37106cd: Documentation corrections:
+
+    - Messages: Message sends and replies accept `MessageFlags.VoiceMessage` for a voice note. Flags in an edit of the bot's own message replace Fluxer's sendable set, so they also clear `MessageFlags.VoiceMessage` on a voice note, and an edit cannot set it again. On another author's message, Fluxer changes only `SuppressEmbeds`. New uploads in an edit accept `duration` and `waveform`. Received attachment and embed media flags are explained. Cached channels and direct messages keep `lastMessageId` from when they were observed, since sending does not update it
+    - API reference: Corrections cover reaction moderation permissions, search scope, sort order, media and extension filters, nonce scope, forum webhook retries, own-nickname permissions, webhook destinations, locked threads, malformed events, overflow and concurrency defaults, startup budgets, supervisor startup and process splits, Resume replay and test wait deadlines
+    - Rate limits: The client's rate-limit notes describe route, unidentified and supervisor-shared pauses as they work
+    - Runtime: The `drainMs` option of `runBot` says the drain covers only running work and recommends a stop timeout of about 30 seconds, as the deployment guide does. The `gateway.send` reference says a session loaded from a session store after a restart starts with an empty send history. Client shutdown docs say that a kept client or failure report still holds the token string used to mask logs
+    - Threads: A thread search that waits for Fluxer's index says to try again after a few seconds, and `threadMembersUpdate` says that it leaves out the presence Fluxer sends with joined members
+    - Errors: The `errors.isRetryable` reference says a retryable failure from `run` needs a new client, and the codes reference explains the two meanings of `supervisor.spawn`
+    - Testing and commands: The testing guide names `commands.memoryCooldowns()`, argument schemas say which keys throw, and the Effect `keepTyping` says which Clock times its refresh
+    - Permissions: The Permissions overview gives the write range, 0n through 2^63-1, beside the unsigned 64-bit range that reads and checks accept
+    - OAuth: The OAuth client overviews name `fetchGuilds` and `fetchConnections` for the user's communities and connections, and `authorizationUrl` says that Fluxer's `prompt` parameter is not supported
+    - Agent guide: The packaged agent guide says that the Effect API's `setup` gets only the client, and that a test bot's `say()` includes sends a `rest.respond` fixture rejected
+    - Raw requests: The `client.rest.request` reference and the raw requests guide say that `logging.unsafe` prints masked request and response bodies for the `rest` category. They used to say that logs never contain a body
+    - Messages: The `Message` reference no longer says that every explicit null is kept. The `embeds`, `attachments` and `stickers` arrays are empty when Fluxer sent null, and a member of an attachment or embed that Fluxer sent as null is left out
+    - Field names: Members whose name differs from Fluxer's field name in more than case, such as `User.displayName`, `Message.createdAt`, `Message.mentionRoleIds`, `DiscoveryGuild.categoryId` and the thread `autoArchiveMinutes`, now name Fluxer's field, such as `global_name`, `timestamp`, `mention_roles`, `category_type` and `thread_metadata.auto_archive_duration`, so a search for Fluxer's name finds them
+    - Left-out fields: The references now say which fields Fluxer sends that a result leaves out, why, and how to read them with a raw request or the `raw` event: Emoji and sticker `nsfw`, the message search `cursor` and full search channels, the OAuth user information `sub`, the profile `guild_member`, the reaction `session_id`, the thread member `muted` and `mute_config` and the message `call`
+    - Invites: The `InviteCreate` reference says that the SDK's defaults, a lifetime of 86,400 seconds and `unique: true`, differ from Fluxer's own, no expiry and `unique: false`, and that `maxAgeSeconds: 0` and `unique: false` give Fluxer's behavior
+    - Voice states: The `isE2eeCapable` reference and the communities and permissions guide no longer call the flag end-to-end encrypted voice. It marks a client that supports Fluxer's encrypted call media, and Fluxer's server issues that key, so it is not end-to-end encryption
+
+- 37106cd: Fixes:
+
+    - The `oauth.revoke` method without `tokenTypeHint` now sends the `refresh_token` hint. Fluxer looks up refresh tokens only for that hint and then falls back to access tokens, so a refresh token revoked without a hint used to stay valid while the call succeeded. A revoke also ends every access and refresh token of the same user and application, which the method's documentation now says
+    - A connection reset while reading an OAuth response body now fails with `OAuthOperationError` reason `network` and outcome `unknown`, keeping the received status, instead of an `SdkDefect` from cancelling the already failed stream. A rejected reply whose body breaks keeps reason `rejected` and its status
+    - Instance discovery has the same fix: A body reset fails with `ConnectionError` reason `network`, and a rate-limited discovery whose body breaks returns `RateLimitError` and holds later discovery for its `Retry-After`, which it used to skip. When Fluxer rate-limits instance discovery during startup with a wait, startup waits at least that long and tries again without using up `connection.maxStartupAttempts`, until the startup deadline, and no further discovery request is sent during the wait
+    - A rate-limited signed upload part now reports the longer wait of its `Retry-After` header and its body in `retryAfterMs`, including a header given as an HTTP date. Storage or a proxy that answered with only the header used to leave `retryAfterMs` null, or shorter than the wait it asked for
+    - Calls to `gateway.send` now fail with reason `reserved` for opcode 12, Gateway Error, which only Fluxer sends, and for opcode 5, Voice Server Ping, which Fluxer reserves. Fluxer used to close the connection with 4001 after such a send, which stopped the client
+    - Webhook sends now keep message fields that come from getters or non-enumerable properties, as `messages.send` does. Such a `content`, `flags` or `allowedMentions` used to be dropped before sending
+    - A webhook avatar now accepts an image data URI with media type parameters, such as `data:image/png;charset=utf-8;base64,...`, like the community and user image fields, and refuses a badly padded Base64 body
+    - An embed image or thumbnail that references an upload with two dots in a row, such as `plot..png`, or a Windows device name such as `CON.png`, now fails with reason `input` before any upload. Fluxer renames such files, so the reference failed after the upload
+    - A supervisor child's `diagnostics` is now null once its IPC channel closes, as documented, instead of keeping its last snapshot
+    - A user update skipped as malformed now also clears cached direct messages, whose recipients it could have changed
+    - The test gateway now sends a `GUILD_CREATE`, `GUILD_UPDATE` or `GUILD_DELETE` payload without a `guild_id` to the shard its `id` routes to, as Fluxer does, instead of to shard 0
+    - The `MessageBuilder` methods `addEmbeds`, `addAttachments` and `addStickers` now declare their arguments as a plain rest tuple, so the reference shows that they take one or more values. Calls compile as before
+    - A channel whose content-warning level this SDK version does not name, such as 2, no longer fails the whole read with reason `response`. Channel reads, channel lists, community snapshots and channel events now accept any 32-bit integer and return it unchanged in `contentWarningLevel`
+
+- 37106cd: The wording of a few log and error texts was tidied, with no change to any code, reason or field:
+
+    - The `ratelimit.wait`, `ratelimit.queueHeld` and `commands.unmatched` descriptions on the codes page start the sentence after a colon with a capital letter or no longer use a colon before a value
+    - The `gateway.send` input error for data that is not a JSON value uses two sentences instead of a semicolon
+
+- 37106cd: Errors, masking and the test kit:
+
+    - Masking now hides a PKCE `code_verifier` and a `set_cookie` value written in text, such as `code_verifier=…` in a form body, `codeVerifier: '…'` or `SET_COOKIE=…`, in every separator and letter case. Payload keys of those names were already hidden
+    - The `EventOverflowError` hint and the `events.overflow` codes no longer suggest an `overflow` option for `client.subscribe`, which refuses it. To drop events instead of stopping, they now point to a handler registered with `client.on` and its `overflow` setting
+    - The codes reference says that `details.responseField` names the failing field or check when the SDK identifies one, since some response failures have none
+    - The test clients now refuse `logging: []` with `ConfigurationError`, as `createClient` does. They used to accept it
+    - The packaged agent guide says that local work returns plain values in the default API, and points native Effect applications to their own section
+
+- 37106cd: Message and thread fixes:
+
+    - The `threads.iterateArchived` method no longer skips a thread archived in the same millisecond as others when `maxItems` leaves fewer threads to read than a page holds. Each later page of the `public` and `private` scopes now asks for a full page, so the last request can return up to `pageSize` minus one threads that the traversal does not deliver. The `joinedPrivate` scope still asks only for the threads that remain
+    - Message flags with a fraction or a bit above 32, such as `8192.5`, now fail locally on `flags` when `MessageFlags.VoiceMessage` is set. They used to pass, because removing the voice-note bit dropped the invalid part
+    - The `voiceWaveform` reference now decodes with `ffmpeg -i note.ogg -af 'pan=mono|c0=c0' -f f32le -`, which keeps only the first channel as Fluxer's apps read it. The earlier `-ac 1` mixed the channels. It also says that exact parity needs the same first-channel samples at the same sample rate, and that ordinary decoded PCM scales work
+    - The flags references say that an edit of the bot's own message replaces its sendable flags and clears `MessageFlags.VoiceMessage`, while on another author's message Fluxer requires Manage Messages in a community and changes only `SuppressEmbeds`
+
+- 37106cd: OAuth redirect URIs:
+
+    - The `redirectUri` of `authorizationUrl` and `exchangeCode` now follows Fluxer at each step. The SDK removes U+000C and U+202E and trims surrounding whitespace, as Fluxer does, and sends that text in the authorization URL, which Fluxer compares exactly with the registered redirect URIs. The code exchange sends the URL's standard form, such as `https://example.test/` for `https://example.test`, because Fluxer stores that form with the code and compares the exchange with it. An exchange for a redirect URI registered without its standard form used to fail with `invalid_grant` after a successful consent
+    - A redirect URI whose standard form is longer than 256 UTF-16 code units now fails locally, since no exchange could match it
+    - HTTP redirect URIs for an IP address, such as `http://192.168.1.20:8080/callback` on a local network, are now accepted, as Fluxer registers them. HTTP still needs a loopback host or an IP address
+
+- 37106cd: Rate-limit and startup fixes:
+
+    - Automatic sharding and a supervisor's `totalShards: "auto"` now wait out a rate-limited instance discovery or community page when the wait ends before the startup deadline, then read the same page again. The wait counts toward the deadline and is not a startup attempt, and shutdown stops it. A longer or unknown wait still fails with `RateLimitError`. Startup used to fail at once with `RateLimitError`
+    - A global pause relayed by a supervisor from another child now fails a queued request at once with `retryAfterMs` when the pause outlasts the request's deadline. The request used to wait out its deadline and time out without the wait
+    - The `ratelimit.queueHeld` log now reports a global or client pause that starts while a route hold is already reported, and reports a hold while every request slot is busy. Each reason is still logged at most once a minute
+    - The `diagnostics()` references say that a rate-limit hold may name a method and route template with IDs replaced, and that the report has no raw request path
+
+- 37106cd: Masking hides more credentials written into error and log text:
+
+    - A cookie list in an assignment, such as `cookies=sid=…; refresh=…`, `Cookie=…` or `set_cookie=…`, is now hidden whole. Only its first cookie used to be hidden. A quoted cookie value, an `Expires` date and a `Set-Cookie` array joined into text with commas are hidden with it, while a query after the list, such as `&state=…`, and the text after it stay readable
+    - A cookie list in an assignment stays hidden when an earlier cookie holds `&`, `'`, `}` or a backtick, which cookie names and values allow. Such a character used to end the hidden part and leave later cookies readable
+    - The `verifier` of an `oauth.createPkce()` result is now hidden in error causes, log records and payloads, also when written into text as `verifier=…`. Its `challenge` stays readable
+
+- 37106cd: Rate-limit recovery and wording:
+
+    - After a 429 that named no limit, such as one from a proxy, only an API request now probes whether the limit has passed. A signed upload PUT to a storage host still waits for the pause, but its answer no longer releases every waiting API request at once or resets the growing pause
+    - The `ratelimit.queueHeld` record for a global or client pause names the longest known wait of the held requests in its own sentence, since one request's route limit can outlast the pause itself
+    - Rate-limit hints and messages no longer say that Fluxer refused the request, because the 429 can come from a storage host or a proxy. They now read, for example, `The request was rate-limited. Wait at least 5000 ms before retrying`, and the upload hint still names a new stream or the file as bytes
+
+- 37106cd: Projects from `fluxerly init` changed. Existing projects are not changed:
+
+    - New projects include a `dev` script, `node --watch --env-file-if-exists=.env bot.js`, or `bot.ts` for the TypeScript and Effect templates. It restarts the bot after each saved change. Each restart stops the running bot as Ctrl+C does, which ends its Fluxer session before the next one starts
+    - New projects stop a test that never settles. The generated test script runs `node --test --test-timeout=30000 --test-force-exit`, because Node.js has no default test timeout and a timed-out test otherwise keeps the process running. The generated JavaScript and TypeScript tests also check `failures()` before the reply, so a command that throws shows its own error instead of only `SuppressedError`
+    - The `fluxerly init` command now adds `.env` or `node_modules` to an existing `.gitignore` when a later negation such as `!.env`, `!\.env` or `!*` would re-include it, or when the rule is written with a leading space, which Git treats as another pattern. A negation of another path, such as `!.env.example`, adds nothing
+    - The refresh command in a new project's `AGENTS.md` now uses the project's package manager, such as `pnpm exec fluxerly agents` for a project made with pnpm. A new project has no lockfile yet, so the command follows the package manager that ran `fluxerly init`. It used to be `npx --no fluxerly agents` in every project without a pnpm or Bun lockfile
+
 ## 1000.0.0
 
 ### Major Changes
