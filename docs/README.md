@@ -72,6 +72,11 @@ The result is less infrastructure to build, with testing and application structu
 
 ## Install
 
+Fluxer moves fast, and Fluxerly keeps pace. Choose the channel that fits your bot:
+
+- **Stable:** Releases that passed every check, for bots that value calm
+- **Nightly:** The newest changes as they land, for bots that want them first
+
 Fluxerly is tested against Node.js 24.15 or newer. JavaScript needs no compiler, and TypeScript typechecking or compilation requires TypeScript 7 and `@types/node` as a development dependency
 
 **npm**

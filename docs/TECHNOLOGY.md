@@ -243,7 +243,7 @@ The SDK build and test tools are installed and configured.
 The workspace's `allowBuilds` policy enables the `esbuild` and `workerd` install scripts and explicitly disables the optional transitive `msgpackr-extract` script.
 Unreviewed dependency builds still fail installation rather than being enabled globally
 
-Check, version PR, candidate preparation, publication, Website, weekly upstream drift and daily Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
+Check, version PR, candidate preparation, publication, Website, upstream drift three times a week and daily Effect drift workflows are configured under [.github/workflows](/.github/workflows/).
 Check on `main` dispatches candidate preparation after a passing run that changed the SDK to an unpublished version, and a schedule twice a day prepares a nightly build and publishes it when the SDK changed since the most recent nightly or release of that source.
 [Releasing](/docs/RELEASING.md) describes each trigger and when a nightly is skipped.
 Nightlies are published to npm.

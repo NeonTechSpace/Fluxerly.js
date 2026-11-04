@@ -58,22 +58,22 @@ class FakeKv {
 // A cache that works the way Cloudflare's does for what the endpoint uses: GET keys only, and an entry's own
 // Cache-Control says how long it lives
 class FakeCache {
-    entries = new Map<string, { body: string; cacheControl: string | null }>()
+    entries = new Map<string, { body: string; headers: [string, string][] }>()
     puts = 0
     async match(request: Request) {
         const entry = this.entries.get(request.url)
-        return entry && new Response(entry.body, { headers: { "content-type": "application/json", "cache-control": entry.cacheControl ?? "" } })
+        return entry && new Response(entry.body, { headers: entry.headers })
     }
     async put(request: Request, response: Response) {
         if (request.method !== "GET") throw new TypeError("Cache.put only takes GET requests")
         this.puts++
-        this.entries.set(request.url, { body: await response.text(), cacheControl: response.headers.get("cache-control") })
+        this.entries.set(request.url, { body: await response.text(), headers: [...response.headers] })
     }
     entry() {
         return [...this.entries.values()].at(0)
     }
     lifetime() {
-        return Number(/max-age=(\d+)/.exec(this.entry()?.cacheControl ?? "")?.[1])
+        return maxAge(new Headers(this.entry()?.headers))
     }
 }
 
@@ -147,6 +147,13 @@ async function settle() {
 
 const bodyOf = async (response: Response) => JSON.parse(await response.text())
 
+// The seconds an answer or a cache entry may be kept
+function maxAge(headers: Headers) {
+    return Number(/^public, max-age=(\d+)$/.exec(headers.get("cache-control") ?? "")?.[1])
+}
+// Until the next 04:00 UTC, when a copy fetched since the start goes stale
+const untilRefresh = 16 * 3600
+
 describe("a fresh copy in KV", () => {
     test("is served without asking npm, with the headers the browser needs", async () => {
         kv.seed(older, start - 2 * hourMs)
@@ -155,7 +162,8 @@ describe("a fresh copy in KV", () => {
 
         assert.equal(response.status, 200)
         assert.equal(response.headers.get("content-type"), "application/json")
-        assert.equal(response.headers.get("cache-control"), "public, max-age=300")
+        // Browsers keep it until the copy goes stale, as the edge does
+        assert.equal(maxAge(response.headers), untilRefresh)
         assert.deepEqual(await bodyOf(response), older)
         assert.deepEqual(npm.calls, [])
         assert.equal(kv.writes.length, 0)
@@ -166,13 +174,16 @@ describe("a fresh copy in KV", () => {
         [nextRefresh - 90_000, 90],
         [nextRefresh - 5_000, 60],
     ] as const) {
-        test(`is cached at the edge until the next 04:00 UTC, ${(nextRefresh - now) / 1000} s ahead, and for a minute at least`, async () => {
+        test(`is cached at the edge and in browsers until the next 04:00 UTC, ${(nextRefresh - now) / 1000} s ahead, and for a minute at least`, async () => {
             kv.seed(older, start - hourMs)
             mock.timers.setTime(now)
-            await ask()
+            const response = await ask()
             await settle()
 
+            assert.equal(maxAge(response.headers), left)
             assert.equal(cache.lifetime(), left)
+            // An answer from the edge cache tells browsers the same
+            assert.equal(maxAge((await ask()).headers), left)
             assert.deepEqual(JSON.parse(cache.entry()!.body), older)
             assert.deepEqual(npm.calls, [])
         })
@@ -186,7 +197,7 @@ describe("a fresh copy in KV", () => {
 
         const second = await ask()
         assert.deepEqual(await bodyOf(second), older)
-        assert.equal(second.headers.get("cache-control"), "public, max-age=300")
+        assert.equal(maxAge(second.headers), untilRefresh)
         assert.equal(kv.reads, reads)
         assert.deepEqual(npm.calls, [])
     })
@@ -198,9 +209,9 @@ describe("a stale copy in KV", () => {
         npm.hold()
         const response = await ask()
 
-        // The answer is here while npm has not answered yet
+        // The answer is here while npm has not answered yet, and browsers ask again after a minute
         assert.deepEqual(await bodyOf(response), older)
-        assert.equal(response.headers.get("cache-control"), "public, max-age=300")
+        assert.equal(maxAge(response.headers), 60)
 
         npm.release()
         await settle()
@@ -208,8 +219,10 @@ describe("a stale copy in KV", () => {
         assert.equal(kv.writes.length, 1)
         assert.deepEqual(kv.stored(), { fetchedAt: start, history: current })
         // This location now holds the new copy until the next 04:00 UTC, and the next visitor sees it
-        assert.equal(cache.lifetime(), 16 * 3600)
-        assert.deepEqual(await bodyOf(await ask()), current)
+        assert.equal(cache.lifetime(), untilRefresh)
+        const next = await ask()
+        assert.deepEqual(await bodyOf(next), current)
+        assert.equal(maxAge(next.headers), untilRefresh)
         assert.equal(npm.calls.length, 2)
     })
 
@@ -222,6 +235,8 @@ describe("a stale copy in KV", () => {
         assert.equal(cache.lifetime(), 60)
         const again = await ask()
         assert.deepEqual(await bodyOf(again), older)
+        // The stale copy from the edge is kept in browsers for a minute too, not until the next 04:00 UTC
+        assert.equal(maxAge(again.headers), 60)
         assert.equal(npm.calls.length, 1, "only the first request started a refresh")
 
         npm.release()
@@ -260,7 +275,7 @@ describe("no copy anywhere", () => {
         await settle()
 
         assert.equal(response.status, 200)
-        assert.equal(response.headers.get("cache-control"), "public, max-age=300")
+        assert.equal(maxAge(response.headers), untilRefresh)
         assert.deepEqual(await bodyOf(response), current)
         assert.match(npm.calls[0], /^https:\/\/registry\.npmjs\.org\/@neontechspace\/fluxerly$/)
         assert.match(npm.calls[1], /^https:\/\/api\.npmjs\.org\/downloads\/range\/2026-09-14:2026-10-08\/@neontechspace\/fluxerly$/)
@@ -348,7 +363,7 @@ describe("the request", () => {
         await settle()
         assert.equal(head.status, 200)
         assert.equal(head.headers.get("content-type"), "application/json")
-        assert.equal(head.headers.get("cache-control"), "public, max-age=300")
+        assert.equal(maxAge(head.headers), untilRefresh)
         assert.equal(await head.text(), "")
 
         const get = await ask({ path: "/api/npm-downloads?cache=skip" })

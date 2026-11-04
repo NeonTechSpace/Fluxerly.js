@@ -17,7 +17,7 @@ problem does not automatically approve a proposed solution
 
 ## Your first contribution
 
-1. Find or open an issue. Those labeled `good first issue` are a good place to start
+1. Find or open an issue
 2. Say on the issue that you'd like to work on it, and wait for a maintainer to give you permission
 3. Follow the [repository guide](/docs/REPOSITORY.md) to set up, make the change, and run its checks
 4. Open a PR with `Issue: #123` in its body, using your issue's number, and fill in its template

@@ -23,7 +23,7 @@ Stable can only ship what a nightly already shipped. The tooling compares the tw
 4. Check runs again on `main`. When it passes, it starts [Release prepare](/.github/workflows/release-prepare.yml) for that commit.
    Review the version, the release notes and the candidate SHA256 in its summary
 5. Run the `gh workflow run release-publish.yml` command printed in that summary, or start [Release publish](/.github/workflows/release-publish.yml) from `main` with the same preparation run ID and checksum.
-   It publishes the retained package, installs it from npm on both supported Node versions, announces the GitHub release and deploys the website
+   It publishes the retained package, installs it from npm on both supported Node versions, announces the GitHub release and starts the [Website](/.github/workflows/website.yml) deploy on `main` in its own run, which it doesn't wait for, so a website failure never fails the release
 6. Confirm the result in the run summaries.
    For a downloaded candidate, `pnpm release:status` reports whether npm serves the reviewed bytes and the current tags
 
@@ -109,7 +109,7 @@ It creates the public npm package directory and verifies the matching `sdk.tgz` 
 
 The staged npm manifest receives the reviewed release version and retains Effect as a required peer range.
 [The prerequisite check](/projects/release/support.js) requires a caret range of a stable version and an exact stable development dependency in the same major, at or above the range's lowest version, and rejects an exact, prerelease or optional peer.
-Versioning, preparation, publication, verification and status commands enforce it, and the release tooling tests run it in `pnpm check`
+Versioning and preparation commands enforce it, and the release tooling tests run it in `pnpm check`. Publication, verification and status act on a prepared candidate, whose source preparation already checked, so they skip it
 
 Candidate schema 1 binds the package inventory, staged manifest and tarball checksums, source commit and checked documentation snapshot checksum into one reviewed candidate.
 Validation rereads the staged directory and tarball before publication.
@@ -158,13 +158,13 @@ Each nightly compares against the previous nightly on the same `major.minor` lin
 
 | Workflow | Trigger | Inputs and result |
 | --- | --- | --- |
-| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The browser job tests every screen on manual and version-branch dispatches and on any push while the SDK's Stable version isn't on npm yet, and a few screens of each kind on pull requests and other pushes to `main`. The `check` job requires all of them, or reuses an earlier passing run for identical content |
+| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The browser job tests the parts and pages the changed files reach, compared with a pull request's base or the commit a push started from, and Website tests every screen before it deploys. The `check` job requires all of them, or reuses an earlier passing run for identical content |
 | [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref` and optional `line`. Opens the Stable version pull request, or with `epoch`, a pull request that sets a new epoch as the nightly target |
 | [Release prepare](/.github/workflows/release-prepare.yml) | Twice a day for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Prints the publish command, or starts Release publish for a nightly |
-| [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces and deploys the website |
-| [Website](/.github/workflows/website.yml) | Called by Release publish, or manual | Always builds `main` from the published versions' snapshots and deploys it to `https://fluxerly.neontechspace.com` |
+| [Release publish](/.github/workflows/release-publish.yml) | Manual, or started by a nightly Release prepare | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces, then starts Website on `main` without waiting for it |
+| [Website](/.github/workflows/website.yml) | Started on `main` by Release publish after the announcement, or manual | Always builds `main` from the published versions' snapshots and deploys it to `https://fluxerly.neontechspace.com` |
 | [Effect drift](/.github/workflows/effect-drift.yml) | Daily, or manual | No inputs. Checks the SDK with the newest Effect release in its peer range and fails when the SDK breaks with it. It does not publish |
-| [Upstream drift](/.github/workflows/upstream-drift.yml) | Weekly, or manual | No inputs. Posts Fluxer's document and source changes as the GitHub Actions bot, in its open "Fluxer upstream changes to review" issue or in a new one that explains the review, and goes red only when the check itself breaks. It does not publish |
+| [Upstream drift](/.github/workflows/upstream-drift.yml) | Monday, Wednesday and Friday, or manual | No inputs. Posts Fluxer's document and source changes as the GitHub Actions bot, in its open "Fluxer upstream changes to review" issue or in a new one that explains the review, and goes red only when the check itself breaks. It does not publish |
 
 Only Release publish writes to npm, and no push or tag publishes a package.
 Release publish checks out its own workflow commit, so its tooling never comes from the candidate source.
@@ -177,10 +177,10 @@ Identical content needs one full Check. The first job of every Check run compare
 The newest conclusive matching run by completion time decides, regardless of its run ID. When it passed, the check jobs are skipped and the required `check` job passes with a summary that links that run.
 An unfinished matching attempt is awaited for up to 40 minutes only when it started before the current attempt, so matching runs never wait for each other. A failed or uncertain lookup runs the full Check.
 Pull request runs never serve as evidence, because they check a merge commit rather than the recorded branch head.
-A release therefore runs the full Check once, in the Check dispatched on the version branch. Any run that reuses a passing Check, including a manual one, tests nothing new, so a run on content that already passed with a few screens does not test the others. The version pull request run and the `main` push run after merging reuse it while `main` has not moved
+A release therefore runs the full Check once, in the Check dispatched on the version branch. Any run that reuses a passing Check, including a manual one, tests nothing new. Every screen is tested only by Website, before each deploy. The version pull request run and the `main` push run after merging reuse it while `main` has not moved
 
 Release prepare reuses the newest successful main-push Check for the exact source, waiting while it runs. A main-push Check that reused identical content counts as successful.
-Only a verified absence of such a run falls back to full workspace, browser and declared-minimum-Node checks.
+Only a verified absence of such a run falls back to the full workspace check, the multi-version documentation check and the declared-minimum-Node checks. The full screen check stays with Website, before each deploy
 Preparation always builds fresh output, snapshots the documentation and installs the candidate's actual tarball before retaining it
 
 Check on `main` dispatches Release prepare only when its own run passes. A newer push cancels an older Check, so dispatch Release prepare manually if a version change was superseded

@@ -23,7 +23,7 @@ const items: Item[] = [
     },
     {
         title: "Fixes Don't Wait for a Release",
-        text: "A dependable SDK can move when it needs to. Twice a day, if the SDK changed on the main branch and passed the check, the newest code goes to npm as a nightly build, so you can use a fix without waiting for a release. A weekly check compares Fluxer's API documents with the ones the SDK was built against. Nightly builds can include breaking changes, so pin the version and test the bot before upgrading",
+        text: "Fluxer moves fast, and Fluxerly keeps pace with two channels. Stable releases passed every check, for bots that value calm. For bots that want changes first, the newest code goes to npm as a nightly build twice a day if the SDK changed on the main branch and passed the check, so you can use a fix without waiting for a release. Every Monday, Wednesday and Friday, a check compares Fluxer's API documents with the ones the SDK was built against. Nightly builds can include breaking changes, so pin the version and test the bot before upgrading",
         // Exact, because a nightly can change between installs
         command: "npm install --save-exact @neontechspace/fluxerly@nightly",
     },
