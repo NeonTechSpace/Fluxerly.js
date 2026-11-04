@@ -85,8 +85,9 @@ test("Pending CI may appear and complete, but missing evidence has a bounded wai
     assert.equal(f.progress.length, 2)
     const missing = fixture([inventory([])])
     await assert.rejects(requireCheckedSource(source, missing.io), /timed out/)
-    assert.equal(missing.sleeps.reduce((sum, value) => sum + value, 0), 600_000)
-    assert.ok(missing.reads.length <= 32)
+    // Twenty minutes, so a Check started just before still finishes in time
+    assert.equal(missing.sleeps.reduce((sum, value) => sum + value, 0), 1_200_000)
+    assert.ok(missing.reads.length <= 62)
 })
 
 test("Invalid or incomplete inventories and disabled workflows never authorize upload", async () => {
@@ -104,7 +105,7 @@ test("Invalid source and deadline-expired evidence cannot be reused", async () =
     const f = fixture()
     await assert.rejects(requireCheckedSource("main", f.io), /exact checkout/)
     assert.equal(f.reads.length, 0)
-    const slow = fixture(undefined, { readTime: 600_000 })
+    const slow = fixture(undefined, { readTime: 1_200_000 })
     await assert.rejects(requireCheckedSource(source, slow.io), /timed out/)
     assert.deepEqual(slow.sleeps, [])
 })

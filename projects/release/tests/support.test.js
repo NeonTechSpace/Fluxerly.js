@@ -82,7 +82,7 @@ test("Release support permits a newer stable Effect development version within t
     ]) assert.throws(() => validateReleaseSupport(changed), /exact Effect development version/)
 })
 
-test("The support gate leaves local planning, fragment authoring and candidate inspection available", (t) => {
+test("The support gate leaves local planning, fragment authoring and every command on a prepared candidate available", (t) => {
     // An unsupported SDK manifest makes every gated command fail, so only ungated commands can pass
     const readFileSync = fs.readFileSync
     t.mock.method(fs, "readFileSync", (path, ...rest) =>
@@ -95,7 +95,9 @@ test("The support gate leaves local planning, fragment authoring and candidate i
         t.mock.restoreAll()
         syncBuiltinESMExports()
     })
-    for (const action of ["plan", "changeset", "inspect"]) assert.doesNotThrow(() => assertReleaseSupport(action), action)
-    for (const action of ["check-support", "version", "prepare", "verify", "publish", "status"])
+    // A candidate waiting for publication was checked from its own source, so a later main can't block it
+    for (const action of ["plan", "changeset", "inspect", "verify", "publish", "status"])
+        assert.doesNotThrow(() => assertReleaseSupport(action), action)
+    for (const action of ["check-support", "version", "prepare"])
         assert.throws(() => assertReleaseSupport(action), /exact Effect development version/, action)
 })

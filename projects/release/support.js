@@ -3,7 +3,9 @@
 import { readFileSync } from "node:fs"
 import { compareVersions, parseVersion } from "./planning.js"
 
-const releaseCommands = new Set(["check-support", "version", "prepare", "verify", "publish", "status"])
+// Commands that read the checkout's source. verify, publish and status act on a prepared candidate, whose source preparation
+// already checked and whose checksum binds its bytes, while their checkout may be a newer main
+const releaseCommands = new Set(["check-support", "version", "prepare"])
 
 // Development can use a newer stable Effect release without raising the consumer minimum
 export function validateReleaseSupport(sdk) {

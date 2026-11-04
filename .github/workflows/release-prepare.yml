@@ -67,6 +67,8 @@ jobs:
         id: workspace
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
+        env:
+          CHECK_RESULTS_FILE: ${{ runner.temp }}/workspace-checks.json
         run: pnpm check
       - name: Read the locked Playwright version
         id: playwright
@@ -93,18 +95,19 @@ jobs:
           else
             pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
           fi
-      - name: Check the documentation in a browser
+      - name: Check the multi-version documentation build in a browser
         id: browser
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
-        run: |
-          pnpm --filter fluxerly-docs test:browser
-          pnpm --filter fluxerly-docs test:versions
+        # Only the build that holds every released docs version, as CI's browser job checks it. Website tests every screen
+        # before each deploy, so the full screen check doesn't gate a package
+        run: pnpm --filter fluxerly-docs test:versions
       - name: Build fresh artifacts from the CI-checked source
         id: build
         if: steps.ci.outputs.reused == 'true'
         working-directory: projects
-        run: pnpm build
+        # Only the SDK. The docs snapshot generates its own content and nothing here reads the built website
+        run: pnpm --filter @neontechspace/fluxerly build
       - name: Snapshot the checked documentation and prepare an immutable candidate
         id: candidate
         working-directory: projects
@@ -175,6 +178,7 @@ jobs:
         working-directory: projects
         run: |
           pnpm --filter @neontechspace/fluxerly test
+          pnpm --filter @neontechspace/fluxerly test:examples
           pnpm --filter @neontechspace/fluxerly test:package
           pnpm --filter @neontechspace/fluxerly test:npm --candidate "$RUNNER_TEMP/release-candidate"
       - name: Retain the immutable candidate
@@ -193,9 +197,14 @@ jobs:
         with:
           title: Immutable release preparation
           steps: ${{ toJSON(steps) }}
+          # Skipped steps are the validation this run did not need: A reused Check replaces the workspace and browser checks
+          checks: >-
+            {"Workspace checks": "workspace", "Multi-version documentation build": "browser", "Build from the checked source": "build", "Candidate snapshot and preparation": "candidate", "Candidate tarball install": "npm", "Node floor suite and consumers": "floor", "Candidate kept as an artifact": "artifact"}
+          results: '{"workspace": "${{ runner.temp }}/workspace-checks.json"}'
           details: >-
-            {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate artifact": ${{ toJSON(steps.candidate.outputs.name) }}, "Candidate artifact ID": ${{ toJSON(steps.artifact.outputs.artifact-id) }}, "Candidate retention": "90 days after upload", "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
+            {"Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate retention": ${{ toJSON(steps.artifact.outcome == 'success' && '90 days after upload' || '') }}, "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
           next: ${{ (github.event_name == 'schedule' || inputs.nightly) && (steps.candidate.outputs.skipped == 'true' && 'Nothing to publish, the SDK content matches an already published version' || 'The publish job starts Release publish for this nightly candidate') || 'Review the version, release notes and candidate SHA256 externally. Then publish this candidate from main' }}
+          failure: No candidate was prepared, so nothing can be published. Fix the failed check and run Release prepare again for the same source
           command: ${{ !(github.event_name == 'schedule' || inputs.nightly) && steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}
   publish:
     name: Start nightly publication
@@ -232,6 +241,8 @@ jobs:
         with:
           title: Nightly publication start
           steps: ${{ toJSON(steps) }}
+          checks: '{"Release publish dispatched": "dispatch"}'
           details: >-
             {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate SHA256": ${{ toJSON(needs.prepare.outputs.checksum) }}}
-          next: Follow the Release publish run, which publishes, checks registry installs, announces the prerelease and deploys the website, unless a nightly with the same content was published meanwhile
+          next: Follow the Release publish run it started. It publishes, checks registry installs, announces the prerelease and deploys the website, unless a nightly with the same content was published meanwhile
+          failure: Release publish did not start for this nightly. Start it from the Actions tab with the preparation run ID and SHA256 above

@@ -3,8 +3,10 @@
 // Each step starts as soon as the steps it reads from have passed, so independent checks share the machine instead of
 // waiting in line. Without a name it runs every group except public, which checks the deployed site instead of the local
 // one. A named group skips steps of other groups, so the web and public groups expect a built SDK, as their package
-// checks always have
+// checks always have. With CHECK_RESULTS_FILE set, the run also writes each check's result, time and first error line as
+// JSON for the job summary action
 import { spawn } from "node:child_process"
+import { writeFileSync } from "node:fs"
 import { availableParallelism } from "node:os"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -16,6 +18,8 @@ const workspace = fileURLToPath(new URL("../", import.meta.url))
 /** @type {Step[]} */
 const steps = [
     { name: "contributions", group: "contributions", folder: ".", script: "check:contributions" },
+    // The workspace scripts, this runner among them, which no other group lints
+    { name: "scripts lint", group: "contributions", folder: ".", script: "lint:scripts" },
     { name: "release", group: "release", folder: "release", script: "test" },
 
     { name: "sdk format", group: "sdk", folder: "sdk", script: "format:check" },
@@ -75,6 +79,24 @@ function run(script, cwd) {
 /** @param {number} ms */
 const seconds = (ms) => `${Math.round(ms / 1000)}s`
 
+/** The command that runs one step again, from the workspace folder @param {Step} step */
+const commandOf = (step) => `pnpm ${step.folder === "." ? "" : `--dir ${step.folder} `}run ${step.script}`
+
+// Lines that only report that a script exited or that something passed, so they never say what went wrong
+const exitNoise = /^(>|ELIFECYCLE|WARN|Command failed|.*exit code \d+|[✓✔√])|^\s*$/
+const errorLine = /\b(FAIL|not ok|error|Error|ERR_[A-Z_]+|failed)\b|^\s*[✖×✗x]\s/
+
+/**
+ * The first line of a failed step's output that says what went wrong, such as a failing test, a type error or a lint rule
+ * @param {string} output
+ */
+export function failureLine(output) {
+    // oxlint-disable-next-line no-control-regex -- Colors from the tools are removed so the line reads as plain text
+    const lines = output.replace(/\u001b\[[0-9;]*m/g, "").split(/\r?\n/).map((line) => line.trim())
+    const useful = lines.filter((line) => line && !exitNoise.test(line))
+    return (useful.find((line) => errorLine.test(line)) ?? useful.at(-1) ?? "No output").slice(0, 300)
+}
+
 /** @param {string[]} groups */
 async function check(groups) {
     const unknown = groups.filter((group) => !steps.some((step) => step.group === group))
@@ -88,6 +110,8 @@ async function check(groups) {
     const failed = []
     /** @type {string[]} */
     const skipped = []
+    /** @type {Map<string, { name: string, result: string, ms: number, command: string, error?: string, blockedBy?: string }>} */
+    const report = new Map()
     // Heavy steps start their own workers, so more steps than threads would only slow each other down
     // A step that runs alone takes every slot. Waiting steps start in order, so one waiting to run alone is not starved
     const total = Math.max(2, availableParallelism())
@@ -112,13 +136,22 @@ async function check(groups) {
         const passed = await Promise.all(before.map((name) => results.get(name)?.promise))
         if (passed.includes(false)) {
             skipped.push(step.name)
+            report.set(step.name, { name: step.name, result: "skipped", ms: 0, command: commandOf(step), blockedBy: before[passed.indexOf(false)] })
             return false
         }
         const need = step.alone ? total : 1
         await slot(need)
         const from = Date.now()
         const { code, output } = await run(step.script, resolve(workspace, step.folder)).finally(() => release(need))
-        console.log(`${code === 0 ? "passed" : "FAILED"}  ${step.name}  ${seconds(Date.now() - from)}`)
+        const ms = Date.now() - from
+        console.log(`${code === 0 ? "passed" : "FAILED"}  ${step.name}  ${seconds(ms)}`)
+        report.set(step.name, {
+            name: step.name,
+            result: code === 0 ? "passed" : "failed",
+            ms,
+            command: commandOf(step),
+            ...(code === 0 ? {} : { error: failureLine(output) }),
+        })
         if (code !== 0) failed.push({ name: step.name, output })
         return code === 0
     }
@@ -129,6 +162,11 @@ async function check(groups) {
     if (failed.length > 0) summary.push(`Failed: ${failed.map(({ name }) => name).join(", ")}`)
     if (skipped.length > 0) summary.push(`Not run because a step they need failed: ${skipped.join(", ")}`)
     console.log(`\n${summary.join("\n")}`)
+    if (process.env.CHECK_RESULTS_FILE)
+        writeFileSync(
+            process.env.CHECK_RESULTS_FILE,
+            JSON.stringify({ total: Date.now() - started, checks: selected.flatMap((step) => report.get(step.name) ?? []) }) + "\n",
+        )
     return failed.length === 0 && skipped.length === 0
 }
 

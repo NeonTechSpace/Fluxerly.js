@@ -23,13 +23,19 @@ export function readGitHub(path, timeout, run = spawnSync, log = (text) => proce
     }
 }
 
+const waitMs = 20 * 60_000
+const pollMs = 20_000
+// One read at the start and one after each pause, so the reads alone can't end the wait early
+const attempts = waitMs / pollMs + 1
+
 export async function requireCheckedSource(source, io = {}, { allowMissing = false } = {}) {
     if (!/^[a-f0-9]{40}$/.test(source ?? "")) throw new Error("An exact checkout source commit is required")
     const read = io.read ?? readGitHub
     const now = io.now ?? Date.now
     const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
     const progress = io.progress ?? (() => {})
-    const deadline = now() + 600_000
+    // Long enough for a Check started just before this run, which takes over ten minutes when it tests every SDK group
+    const deadline = now() + waitMs
     const timeout = () => Math.max(1, Math.min(30_000, deadline - now()))
     const base = `repos/${repository}/actions/workflows/ci.yml`
     const workflow = await read(base, timeout())
@@ -37,7 +43,7 @@ export async function requireCheckedSource(source, io = {}, { allowMissing = fal
         throw new Error("The required Check workflow identity is not verified")
     // Do not filter for success: A newer failed run must not reuse an older passing result
     const endpoint = `${base}/runs?head_sha=${source}&branch=main&event=push&per_page=100`
-    for (let attempt = 0; attempt < 31 && now() < deadline; attempt++) {
+    for (let attempt = 0; attempt < attempts && now() < deadline; attempt++) {
         const data = await read(endpoint, timeout())
         if (!Array.isArray(data?.workflow_runs) || !Number.isSafeInteger(data.total_count) ||
             data.total_count < 0 || data.total_count > 100 || data.total_count !== data.workflow_runs.length)
@@ -66,7 +72,7 @@ export async function requireCheckedSource(source, io = {}, { allowMissing = fal
             if (allowMissing && now() < deadline) return null
             progress("Waiting for the exact checkout's main push Check run to appear")
         }
-        if (attempt < 30 && now() < deadline) await sleep(Math.min(20_000, deadline - now()))
+        if (attempt < attempts - 1 && now() < deadline) await sleep(Math.min(pollMs, deadline - now()))
     }
     throw new Error("The exact-source Check gate timed out")
 }

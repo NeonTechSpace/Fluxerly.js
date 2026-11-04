@@ -1,8 +1,8 @@
 name: Upstream drift
 on:
-  # Monday at midnight local time through daylight saving changes
+  # Monday, Wednesday and Friday at midnight local time through daylight saving changes
   schedule:
-    - cron: '0 0 * * 1'
+    - cron: '0 0 * * 1,3,5'
       timezone: Europe/Berlin
   workflow_dispatch:
 permissions:
@@ -97,7 +97,7 @@ jobs:
           restore-keys: upstream-source-
       - name: Restore the kept upstream files from the previous reported run
         id: upstream_artifact
-        # The cache drops an entry left unused for seven days, which a weekly run can just miss. The run that set the
+        # The cache drops an entry left unused for seven days or when the cache space fills up. The run that set the
         # baseline also retained its kept files for 90 days. They are checked like cached copies, so they can't change
         # what the comparison reads, and a failed read only means downloading the watched files again
         if: steps.upstream_cache.outputs.cache-matched-key == '' && steps.baseline.outputs.run_id != ''
@@ -166,13 +166,18 @@ jobs:
           TITLE: Fluxer upstream changes to review
         run: |
           comment="$RUNNER_TEMP/upstream-current/comment.md"
-          [[ -f "$comment" ]] || exit 0
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          if [[ ! -f "$comment" ]]; then
+            printf '## Upstream report posting\n\nNothing to post, no watched Fluxer document, voice folder or source commit changed since the last report\n' >> "$summary"
+            exit 0
+          fi
           # The jq filter reads $ENV itself, so the single quotes are meant
           # shellcheck disable=SC2016
           issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
             --jq '[.[] | select(.pull_request == null and .title == $ENV.TITLE)][0].number // empty')
           if [[ -n "$issue" ]]; then
             gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --silent -F "body=@$comment"
+            printf '## Upstream report posting\n\nPosted the report as a comment on [issue #%s](%s/%s/issues/%s)\n\n### Next action\n\nReview each listed change. Update the SDK where needed, move the review pin and close the issue\n' "$issue" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$issue" >> "$summary"
             exit 0
           fi
           body="$RUNNER_TEMP/upstream-current/issue.md"
@@ -180,11 +185,12 @@ jobs:
           # The backticks are Markdown code spans, so the single quotes are meant
           # shellcheck disable=SC2016
           {
-            printf 'This issue collects the reports of the weekly [upstream drift check](%s/actions/workflows/upstream-drift.yml). Each report lists what changed in Fluxer since the last one: its API description, its gateway event docs, its rate limit docs, its voice docs and code, new folders that may hold voice work and the Fluxer commits that touched the paths the SDK watches\n\n' "$repository"
+            printf 'This issue collects the reports of the [upstream drift check](%s/actions/workflows/upstream-drift.yml). Each report lists what changed in Fluxer since the last one: its API description, its gateway event docs, its rate limit docs, its voice docs and code, new folders that may hold voice work and the Fluxer commits that touched the paths the SDK watches\n\n' "$repository"
             printf 'A listed change is something to review, not proof that bots are affected. To finish a review, update the SDK where needed and move the review pin as [Repository](%s/blob/main/docs/REPOSITORY.md) describes for `node release/upstream.js`, then close this issue. The next report opens a new one\n\n' "$repository"
             cat "$comment"
           } > "$body"
           gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --silent -f "title=$TITLE" -F "body=@$body"
+          printf '## Upstream report posting\n\nOpened a new issue titled "%s" with the report, in [the repository issues](%s/%s/issues)\n\n### Next action\n\nReview each listed change. Update the SDK where needed, move the review pin and close the issue\n' "$TITLE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" >> "$summary"
       # Only now does the observation become the next run's baseline, so a failed post repeats instead of losing changes
       - name: Retain the reported upstream observation
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

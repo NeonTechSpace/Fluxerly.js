@@ -27,6 +27,7 @@ const writers = {
     "release-prepare.yml/publish": { actions: "write" },
     "release-version.yml/pull_request": { contents: "write", "pull-requests": "write", actions: "write" },
     "release-publish.yml/publish": { "id-token": "write" },
+    "release-publish.yml/reconcile": { actions: "write" },
     "upstream-drift.yml/report": { issues: "write" },
 }
 
@@ -105,17 +106,38 @@ test("Release tooling runs from the workflow commit and the release App token st
     assert.deepEqual(reconcile.needs, ["inspect", "publish", "smoke"])
 })
 
-test("A superseded nightly publication skips the install checks, the announcement and the website deploy", () => {
+test("A superseded nightly publication skips the install checks, the announcement and the website deploy start", () => {
     const { jobs } = workflows["release-publish.yml"]
     assert.deepEqual(Object.keys(jobs.publish.outputs).sort(), ["superseded", "superseded_by"])
     for (const name of Object.keys(jobs.publish.outputs))
         assert.equal(jobs.publish.outputs[name], `\${{ steps.publish.outputs.${name} }}`)
     // Without a status function, the default success requirement still applies to these conditions
     for (const id of ["smoke", "reconcile"]) assert.equal(jobs[id].if, "needs.publish.outputs.superseded != 'true'", id)
-    assert.equal(jobs.website.needs, "reconcile")
-    assert.equal(jobs.website.if, undefined)
+    assert.equal(jobs.website, undefined, "The website deploys in its own run, started by the announcement job")
     const summary = jobs.publish.steps.find((step) => step.name === "Summarize npm publication")
     assert.match(summary.with.next, /steps\.publish\.outputs\.superseded == 'true'.*steps\.publish\.outputs\.superseded_by/)
+})
+
+// Catches: A failed website deploy, or a failed start of one, turning a finished release red, or a deploy from a ref the
+// website environment refuses
+test("A published release starts Website on main in its own run and never waits for it", () => {
+    const reconcile = workflows["release-publish.yml"].jobs.reconcile
+    const ids = reconcile.steps.map((step) => step.id)
+    const start = reconcile.steps.find((step) => step.id === "website")
+    assert.ok(ids.indexOf("announce") < ids.indexOf("website"), "The website starts only after the release is announced")
+    for (const step of reconcile.steps.slice(ids.indexOf("website") + 1)) assert.equal(step.if, "always()", "Only the summary follows the start")
+    assert.equal(start.run, 'gh workflow run website.yml --repo "$GITHUB_REPOSITORY" --ref main')
+    assert.doesNotMatch(start.run, /watch|--wait/)
+    assert.equal(start.env.GH_TOKEN, "${{ github.token }}")
+    assert.equal(start["continue-on-error"], true)
+    assert.equal(reconcile.permissions.actions, "write")
+    const summary = reconcile.steps.at(-1)
+    assert.equal(JSON.parse(summary.with.checks)["Website deploy started on main"], "website", "The summary lists the start")
+    const website = workflows["website.yml"]
+    assert.ok(Object.hasOwn(website.on, "workflow_dispatch"))
+    assert.equal(website.on.workflow_call, undefined, "No workflow calls Website, so a release failure can't come from it")
+    for (const [file, workflow] of Object.entries(workflows))
+        for (const [id, job] of Object.entries(workflow.jobs)) assert.doesNotMatch(String(job.uses), /website\.yml/, `${file}/${id}`)
 })
 
 test("Every external action and container is pinned to an immutable digest", () => {
@@ -141,12 +163,8 @@ test("Checkouts drop credentials, scripts avoid expression interpolation and pri
                 (file === "contributions.yml" && trigger === "pull_request_target")
             if (!reviewedCallback) assert.equal(workflow.on[trigger], undefined, `${file} must not use ${trigger}`)
         }
-        for (const [id, job] of Object.entries(workflow.jobs))
-            if (`${file}/${id}` !== "release-publish.yml/website")
-                assert.notEqual(job.secrets, "inherit", `${file}/${id} inherits secrets`)
+        for (const [id, job] of Object.entries(workflow.jobs)) assert.notEqual(job.secrets, "inherit", `${file}/${id} inherits secrets`)
     }
-    // A called workflow receives no website environment secret unless its caller inherits secrets
-    assert.equal(workflows["release-publish.yml"].jobs.website.secrets, "inherit")
 })
 
 test("Contribution callbacks execute only trusted main code with no install or PR artifacts", () => {
@@ -185,15 +203,41 @@ test("Dependency notes execute only reviewed base code and treat the PR branch a
     assert.equal(workflow.concurrency["cancel-in-progress"], false)
 })
 
-test("Only pull requests and ordinary pushes shorten the browser sweep", () => {
+// Catches: A pull request or push that tested no screen because its checkout compared HEAD with itself, or a CI run that
+// still ran the full screen check, which belongs to the website deploy
+test("CI tests only the screens the changed files reach, compared with the pull request base or the push's start", () => {
     const steps = workflows["ci.yml"].jobs["browser"].steps
-    const detect = steps.find((step) => step.id === "stable")
-    assert.equal(detect.if, "github.event_name == 'push'")
-    // A failed version lookup must not shorten the sweep for a Stable
-    assert.equal(detect["continue-on-error"], true)
+    assert.equal(steps.find((step) => String(step.uses).startsWith("actions/checkout@")).with["fetch-depth"], 0)
     const browser = steps.find((step) => step.id === "browser")
-    assert.equal(browser.env.ALL_SCREENS, "${{ github.event_name != 'pull_request' && steps.stable.outputs.pending != 'false' }}")
-    assert.match(browser.run, /if \[ "\$ALL_SCREENS" = true \]; then\s+pnpm --filter fluxerly-docs test:browser\s+else\s+pnpm --filter fluxerly-docs test:browser --quick\s+fi/)
+    const folder = mkdtempSync(join(tmpdir(), "browser-base-"))
+    try {
+        // A stand-in pnpm prints the commands the step runs
+        writeFileSync(join(folder, "pnpm"), '#!/bin/sh\necho "pnpm $*"\n', { mode: 0o755 })
+        const commands = (/** @type {Record<string, string>} */ event) =>
+            spawnSync("bash", ["-e", "-c", browser.run], {
+                encoding: "utf8",
+                env: { PATH: `${folder}:${process.env.PATH}`, EVENT_NAME: "", PULL_REQUEST_BASE: "", PUSH_BEFORE: "", ...event },
+            }).stdout.trim().split("\n")
+        const screens = (/** @type {string} */ base) => [`pnpm --filter fluxerly-docs test:browser --changed --base=${base}`, "pnpm --filter fluxerly-docs test:versions"]
+        assert.deepEqual(commands({ EVENT_NAME: "pull_request", PULL_REQUEST_BASE: "a".repeat(40) }), screens("a".repeat(40)))
+        assert.deepEqual(commands({ EVENT_NAME: "push", PUSH_BEFORE: "b".repeat(40) }), screens("b".repeat(40)))
+        // A new branch's push starts from all zeros
+        assert.deepEqual(commands({ EVENT_NAME: "push", PUSH_BEFORE: "0".repeat(40) }), screens("origin/main"))
+        assert.deepEqual(commands({ EVENT_NAME: "workflow_dispatch" }), screens("origin/main"))
+    } finally {
+        rmSync(folder, { recursive: true, force: true })
+    }
+    assert.equal(browser.env.PULL_REQUEST_BASE, "${{ github.event.pull_request.base.sha }}")
+    assert.equal(browser.env.PUSH_BEFORE, "${{ github.event.before }}")
+    assert.equal(browser.env.EVENT_NAME, "${{ github.event_name }}")
+})
+
+// Catches: A release preparation without a reusable Check that still ran the full screen check, which belongs to the
+// website deploy, or that dropped the multi-version documentation check the package's docs snapshot depends on
+test("Release preparation without a reusable Check runs only the multi-version documentation browser check", () => {
+    const browser = workflows["release-prepare.yml"].jobs.prepare.steps.find((step) => step.id === "browser")
+    assert.equal(browser.run.trim(), "pnpm --filter fluxerly-docs test:versions")
+    assert.equal(browser.if, "steps.ci.outputs.reused == 'false'")
 })
 
 test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped nightly candidate", () => {
@@ -321,7 +365,7 @@ test("GitHub downloads that repeat are kept: release snapshots by CI for the web
     assert.deepEqual(upstream.map((step) => step.uses.split("@")[0]), ["actions/cache/restore", "actions/cache/save"])
     const compare = drift.findIndex((step) => step.id === "drift")
     assert.ok(drift.indexOf(upstream[0]) < compare && compare < drift.indexOf(upstream[1]))
-    // The cache drops an entry unused for seven days, which a weekly run can miss. The trusted run that set the baseline
+    // The cache drops an entry unused for seven days or when the cache space fills up. The trusted run that set the baseline
     // retained the same files for 90 days, and only a cache miss reads them
     const fallback = drift.find((step) => step.id === "upstream_artifact")
     assert.equal(fallback.if, "steps.upstream_cache.outputs.cache-matched-key == '' && steps.baseline.outputs.run_id != ''")
@@ -361,6 +405,17 @@ test("GitHub downloads that repeat are kept: release snapshots by CI for the web
     assert.equal(prepare.find((step) => step.id === "browser_install").run, browser.find((step) => step.id === "browser_install").run)
     assert.ok(prepare.findIndex((step) => step.id === "browser_cache") < prepare.findIndex((step) => step.id === "browser_install"))
     for (const id of ["playwright", "browser_cache", "browser_install"]) assert.equal(prepare.find((step) => step.id === id).if, "steps.ci.outputs.reused == 'false'", id)
+})
+
+// Catches: A preparation without a Check that skipped a floor Node guard CI runs, or a reused preparation that built the
+// website it never reads
+test("Release preparation builds only the SDK it reads and its fallback runs every floor Node check CI runs", () => {
+    const prepare = workflows["release-prepare.yml"].jobs.prepare.steps
+    assert.equal(prepare.find((step) => step.id === "build").run, "pnpm --filter @neontechspace/fluxerly build")
+    const floor = prepare.find((step) => step.id === "floor").run
+    const ci = workflows["ci.yml"].jobs.consumers.steps.filter((step) => step.if === "matrix.runtime" && step.run)
+    assert.ok(ci.length >= 3)
+    for (const step of ci) assert.ok(floor.includes(step.run), `The fallback runs ${step.run}`)
 })
 
 test("A lint run uses a kept actionlint archive only when it matches the pinned checksum, and downloads and checks it otherwise", () => {
@@ -485,10 +540,10 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
     }
 })
 
-test("Upstream drift runs weekly, compares read-only and retains the observation only after a small job posts it", () => {
+test("Upstream drift runs on Monday, Wednesday and Friday, compares read-only and retains the observation only after a small job posts it", () => {
     const workflow = workflows["upstream-drift.yml"]
     const [schedule] = workflow.on.schedule
-    assert.equal(schedule.cron, "0 0 * * 1")
+    assert.equal(schedule.cron, "0 0 * * 1,3,5")
     // Midnight in Berlin all year, as the nightly schedule keeps its Berlin times
     assert.equal(schedule.timezone, "Europe/Berlin")
     assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"))
@@ -562,6 +617,7 @@ test("Upstream posting comments on the open bot issue, opens an explained one wh
                 RUNNER_TEMP: directory,
                 GITHUB_REPOSITORY: "owner/repo",
                 GITHUB_SERVER_URL: "https://github.com",
+                GITHUB_STEP_SUMMARY: join(directory, "posting-summary.md"),
                 GH_CALLS: calls,
                 GH_FOUND: found,
                 GH_FAIL: fail,
@@ -588,7 +644,7 @@ test("Upstream posting comments on the open bot issue, opens an explained one wh
             ...lookup, "api", "--method", "POST", "repos/owner/repo/issues", "--silent", "-f", "title=Fluxer upstream changes to review", "-F", `body=@${body}`,
         ])
         const opened = readFileSync(body, "utf8")
-        assert.match(opened, /^This issue collects the reports of the weekly \[upstream drift check\]\(https:\/\/github\.com\/owner\/repo\/actions\/workflows\/upstream-drift\.yml\)/)
+        assert.match(opened, /^This issue collects the reports of the \[upstream drift check\]\(https:\/\/github\.com\/owner\/repo\/actions\/workflows\/upstream-drift\.yml\)/)
         assert.match(opened, /then close this issue\. The next report opens a new one\n\n## Upstream Fluxer drift\n\nReport\n$/)
         assert.notEqual(run({ fail: "lookup" }).status, 0, "A failed lookup stops the job before the observation is retained")
         assert.notEqual(run({ found: "7", fail: "post" }).status, 0, "A failed comment stops the job before the observation is retained")

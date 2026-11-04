@@ -62,9 +62,11 @@ jobs:
         with:
           title: Release provenance and candidate inspection
           steps: ${{ toJSON(steps) }}
+          checks: '{"Preparation succeeded and its source is on main": "preparation", "Candidate downloaded": "download", "Candidate matches the reviewed checksum": "inspect"}'
           details: >-
-            {"Preparation run ID": ${{ toJSON(inputs.preparation_run_id) }}, "Reviewed checksum input": ${{ toJSON(inputs.candidate_checksum) }}, "Candidate source": ${{ toJSON(steps.preparation.outputs.sourceCommit) }}, "Candidate version": ${{ toJSON(steps.inspect.outputs.version) }}, "Candidate artifact ID": ${{ toJSON(steps.preparation.outputs.artifactId) }}}
-          next: Protected publication proceeds only after this inspection succeeds
+            {"Candidate version": ${{ toJSON(steps.inspect.outputs.version) }}, "Reviewed checksum": ${{ toJSON(inputs.candidate_checksum) }}, "Candidate source": ${{ toJSON(steps.preparation.outputs.sourceCommit) }}, "Preparation run ID": ${{ toJSON(inputs.preparation_run_id) }}}
+          next: The npm publication job runs next in the protected package environment
+          failure: Nothing was published. Check that the preparation run ID and checksum match the Release prepare summary, then start Release publish again
   publish:
     name: Publish npm version
     needs: inspect
@@ -121,9 +123,11 @@ jobs:
         with:
           title: npm version publication
           steps: ${{ toJSON(steps) }}
+          checks: '{"Candidate downloaded": "download", "Candidate reinspected": "inspect", "npm publication": "publish"}'
           details: >-
-            {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Candidate source": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "Reviewed checksum input": ${{ toJSON(inputs.candidate_checksum) }}}
+            {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Reviewed checksum": ${{ toJSON(inputs.candidate_checksum) }}, "Candidate source": ${{ toJSON(needs.inspect.outputs.source_commit) }}}
           next: ${{ steps.publish.outputs.superseded == 'true' && format('Superseded by {0}, which has the same content, so nothing was published. The registry install, announcement and docs jobs are skipped', steps.publish.outputs.superseded_by) || 'The registry install checks run next. Rerun this workflow with the same inputs after any failure, publication reads npm before uploading' }}
+          failure: The version may or may not be on npm. Rerun this workflow with the same inputs after fixing the cause, because publication reads npm before uploading
   smoke:
     name: ${{ matrix.name }}
     needs: [inspect, publish]
@@ -161,8 +165,13 @@ jobs:
         with:
           title: ${{ matrix.name }}
           steps: ${{ toJSON(steps) }}
+          checks: '{"Published version installs from npm and every public entry point imports": "smoke"}'
           details: '{"Package version": ${{ toJSON(needs.inspect.outputs.version) }}, "Node version": ${{ toJSON(matrix.runtime || ''projects/.node-version'') }}}'
-          next: Both registry install checks must pass before the GitHub release is announced
+          next: The GitHub release is announced once both registry install checks pass
+          failure: The version is on npm but not verified here, so the GitHub release is not announced. Fix the cause and rerun the failed job
+          reproduce: |-
+            cd projects
+            node release/smoke.js --version ${{ needs.inspect.outputs.version }}
   reconcile:
     name: Announce the GitHub release
     needs: [inspect, publish, smoke]
@@ -176,7 +185,8 @@ jobs:
     environment: package
     permissions:
       contents: read
-      actions: read
+      # Only to start the Website workflow once the release is announced
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
@@ -226,20 +236,22 @@ jobs:
           CANDIDATE_CHECKSUM: ${{ inputs.candidate_checksum }}
           CANDIDATE_SOURCE_COMMIT: ${{ needs.inspect.outputs.source_commit }}
         run: node projects/release/github.js announce
+      - name: Start the website deploy on main
+        id: website
+        # The release is complete here. Website deploys in its own run, which this one doesn't wait for, so neither a failed
+        # deploy nor a failed start fails the release. A dispatch with the job's own token still starts a run
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run website.yml --repo "$GITHUB_REPOSITORY" --ref main
       - name: Summarize the GitHub release
         if: always()
         uses: $/.github/actions/summary
         with:
           title: GitHub release reconciliation
           steps: ${{ toJSON(steps) }}
+          checks: '{"Candidate reinspected": "inspect", "npm serves the reviewed tarball": "verify", "Release App token created": "release_token", "GitHub release announced": "announce", "Website deploy started on main": "website"}'
           details: >-
-            {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Tag target": ${{ toJSON(needs.inspect.outputs.source_commit) }}, "Preparation run ID": ${{ toJSON(inputs.preparation_run_id) }}}
-          next: The website deploy runs next. Registry publication does not establish website delivery
-  website:
-    needs: reconcile
-    permissions:
-      contents: read
-      actions: read
-    uses: $/.github/workflows/website.yml
-    # Without inherited secrets the called job receives an empty website environment token
-    secrets: inherit # zizmor: ignore[secrets-inherit]
+            {"Candidate version": ${{ toJSON(needs.inspect.outputs.version) }}, "Tag target": ${{ toJSON(needs.inspect.outputs.source_commit) }}}
+          next: The Website workflow deploys main in its own run. Registry publication does not establish website delivery
+          failure: When the announcement failed, the npm version is published without its GitHub release. Fix the cause and rerun the failed job, which announces the same candidate. When only the website start failed, the release is complete, so start the Website workflow on main by hand

@@ -17,6 +17,15 @@ const processTests = [
     "tests/perf/**/*.test.ts",
 ]
 
+// A job summary holds one Vitest report per run, so each names the tests it ran. --project picks one of the two stages below
+const stages: Record<string, string> = { sdk: "unit tests", processes: "process tests" }
+const selected = process.argv.flatMap((argument, index, all) => {
+    if (argument === "--project") return all[index + 1] ?? []
+    return argument.startsWith("--project=") ? argument.slice("--project=".length) : []
+})
+const testSet =
+    selected.length > 0 ? selected.map((name) => stages[name] ?? name).join(" and ") : "unit and process tests"
+
 export default {
     ssr: {
         resolve: {
@@ -24,6 +33,11 @@ export default {
         },
     },
     test: {
+        // Outside GitHub Actions, Vitest keeps its own reporter choice. The github-actions reporter writes the job summary
+        reporters:
+            process.env.GITHUB_ACTIONS === "true"
+                ? ["default", ["github-actions", { jobSummary: { title: `SDK ${testSet}: Vitest results` } }]]
+                : undefined,
         maxWorkers: workers,
         // The examples' tests use node:test, as a bot project's own tests do, and run in the test:examples script
         exclude: ["**/node_modules/**", "**/.git/**", "examples/**"],

@@ -818,13 +818,9 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
         "",
         result.drift ? "Watched documents changed since the comparison baseline" : "Watched documents match the comparison baseline",
         "",
-        `Baseline: ${kind}`,
+        `Baseline: ${kind} at ${escape(result.pinnedCommit.slice(0, 10))}, upstream now at ${escape(result.commit.slice(0, 10))}`,
         "",
         ...(baseline.reason ? [`Baseline fallback: ${escape(baseline.reason)}`, ""] : []),
-        `Baseline commit: ${escape(result.pinnedCommit)}`,
-        "",
-        `Current upstream commit: ${escape(result.commit)}`,
-        "",
         ...changeReport(result),
     ]
     if (sincePin)
@@ -834,8 +830,6 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
             sincePin.drift
                 ? "Watched documents differ from the repository pin"
                 : "Watched documents match the repository pin",
-            "",
-            `Pinned commit: ${escape(sincePin.pinnedCommit)}`,
             "",
             ...changeReport(sincePin),
         )
@@ -847,17 +841,22 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
  * @param {Awaited<ReturnType<typeof checkUpstream>>} result
  */
 function changeReport(result) {
+    // Changed documents come first, so the rows to review are not buried among the unchanged ones
+    const documents = [
+        ...Object.values(result.files).map((file) => [escape(file.path), file.changed, ""]),
+        [`Gateway documents in ${escape(result.gatewayDocs.path)}`, result.gatewayDocs.changed, ""],
+        [`Rate-limit buckets in ${escape(result.rateLimits.path)}`, result.rateLimits.changed, ""],
+        ...result.sourceFacts.map((fact) => [escape(fact.path), fact.changed, ""]),
+        ...result.voice.map((entry) => [`Voice files in ${escape(entry.path)}`, entry.changed, entry.found ? "" : ", not found"]),
+    ]
+    const changed = documents.filter(([, hasChanged]) => hasChanged)
     const lines = [
-        `[Commit range](https://github.com/${result.repository}/compare/${result.pinnedCommit}...${result.commit})`,
+        `${changed.length} of ${documents.length} watched documents changed ([commit range](https://github.com/${result.repository}/compare/${result.pinnedCommit}...${result.commit}))`,
         "",
         "| Document | Result |",
         "| --- | --- |",
-        ...Object.values(result.files).map((file) => `| ${escape(file.path)} | ${file.changed ? "changed" : "unchanged"} |`),
-        `| Gateway documents in ${escape(result.gatewayDocs.path)} | ${result.gatewayDocs.changed ? "changed" : "unchanged"} |`,
-        `| Rate-limit buckets in ${escape(result.rateLimits.path)} | ${result.rateLimits.changed ? "changed" : "unchanged"} |`,
-        ...result.sourceFacts.map((fact) => `| ${escape(fact.path)} | ${fact.changed ? "changed" : "unchanged"} |`),
-        ...result.voice.map(
-            (entry) => `| Voice files in ${escape(entry.path)} | ${entry.changed ? "changed" : "unchanged"}${entry.found ? "" : ", not found"} |`,
+        ...[...changed, ...documents.filter(([, hasChanged]) => !hasChanged)].map(
+            ([name, hasChanged, note]) => `| ${name} | ${hasChanged ? "changed" : "unchanged"}${note} |`,
         ),
         "",
     ]
@@ -933,7 +932,7 @@ function changeReport(result) {
 
 /**
  * Lists the commits after the baseline that touch a watched path, oldest first. A watched path that no longer exists fails
- * the check, because GitHub lists no commits for it and that would look like a quiet week
+ * the check, because GitHub lists no commits for it and that would look like a quiet stretch
  * @param {Manifest} baseline
  * @param {Source} source
  * @param {string} head

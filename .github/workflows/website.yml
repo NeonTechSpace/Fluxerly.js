@@ -1,7 +1,6 @@
 name: Website
 on:
   workflow_dispatch:
-  workflow_call:
 permissions:
   contents: read
   actions: read
@@ -13,7 +12,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: website
       url: https://fluxerly.neontechspace.com
@@ -66,7 +65,36 @@ jobs:
           key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
       - name: Build and check the public site from the published versions
         id: workspace
+        env:
+          CHECK_RESULTS_FILE: ${{ runner.temp }}/public-checks.json
         run: pnpm --filter fluxerly-docs check:public
+        working-directory: projects
+      - name: Read the locked Playwright version
+        id: playwright
+        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/playwright/package.json").version')" >> "$GITHUB_OUTPUT"
+        working-directory: projects
+      - name: Restore Playwright browsers
+        id: browser_cache
+        # Restore only, so this workflow still never saves a cache. CI's Check workflow saves this cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install browser and system dependencies
+        id: browser_install
+        env:
+          BROWSER_CACHED: ${{ steps.browser_cache.outputs.cache-hit }}
+        run: |
+          if [ "$BROWSER_CACHED" = true ]; then
+            pnpm --filter fluxerly-docs exec playwright install-deps chromium
+          else
+            pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
+          fi
+        working-directory: projects
+      - name: Check every screen of the site about to be deployed
+        id: browser
+        # The only full screen check. CI tests just the screens a change reaches
+        run: pnpm --filter fluxerly-docs test:browser
         working-directory: projects
       - name: Require successful Check for the exact checkout
         id: ci
@@ -101,6 +129,12 @@ jobs:
         with:
           title: Website delivery
           steps: ${{ toJSON(steps) }}
+          checks: '{"Release snapshots verified": "snapshots", "SDK declarations build": "build", "Public site build and checks": "workspace", "Check passed for this source": "ci", "Checked source recorded": "source", "Deploy and verification": "deploy"}'
+          results: '{"workspace": "${{ runner.temp }}/public-checks.json"}'
           details: >-
             {"Checked source commit": ${{ toJSON(env.DOCS_SOURCE_COMMIT) }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "Exact deployment URL": ${{ toJSON(steps.deploy.outputs.deployment_url) }}, "Custom-domain access": ${{ toJSON(steps.deploy.outputs.custom_domain_status == 'verified' && 'Verified' || steps.deploy.outputs.custom_domain_status == 'challenged' && 'Cloudflare challenge, public access not verified' || 'Unconfirmed, inspect deployment verification') }}}
           next: Open https://fluxerly.neontechspace.com to look at the deployed site
+          failure: The live site changes only when the deploy step passes. Fix the failed step and run Website again
+          reproduce: |-
+            cd projects
+            pnpm --filter fluxerly-docs check:public

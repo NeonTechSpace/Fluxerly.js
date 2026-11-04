@@ -56,6 +56,8 @@ jobs:
           cache: true
       - name: Check SDK formatting, build, types, runtime and packed consumers
         id: sdk
+        env:
+          CHECK_RESULTS_FILE: ${{ runner.temp }}/sdk-checks.json
         run: pnpm --filter @neontechspace/fluxerly check
         working-directory: projects
       - name: Summarize SDK checks
@@ -64,7 +66,10 @@ jobs:
         with:
           title: SDK checks
           steps: ${{ toJSON(steps) }}
-          next: Check the other jobs too. The check job combines every required result
+          checks: '{"SDK checks": "sdk"}'
+          results: '{"sdk": "${{ runner.temp }}/sdk-checks.json"}'
+          next: Nothing to fix here. The check job combines this result with the other jobs
+          failure: Fix the failed checks and push. Checks that need the SDK build are skipped while the build fails
   tooling:
     name: Website and release tooling checks
     needs: reuse
@@ -96,6 +101,8 @@ jobs:
           key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
       - name: Check release tooling, contribution forms and the documentation website side by side
         id: website
+        env:
+          CHECK_RESULTS_FILE: ${{ runner.temp }}/tooling-checks.json
         # Each check starts once the checks it reads from have passed, and the log names every result with its time
         run: node scripts/check.mjs release contributions web
         working-directory: projects
@@ -105,7 +112,10 @@ jobs:
         with:
           title: Website and release tooling checks
           steps: ${{ toJSON(steps) }}
-          next: Check the other jobs too. The check job combines every required result
+          checks: '{"SDK declarations build": "build", "Release tooling, contribution forms and website": "website"}'
+          results: '{"website": "${{ runner.temp }}/tooling-checks.json"}'
+          next: Nothing to fix here. The check job combines this result with the other jobs
+          failure: Fix the failed checks and push. Website checks that read the built site are skipped while its build fails
   workflows:
     name: Workflow lint and security audit
     needs: reuse
@@ -166,7 +176,12 @@ jobs:
         with:
           title: Workflow lint and security audit
           steps: ${{ toJSON(steps) }}
-          next: Fix reported findings in the workflow source rather than suppressing them
+          checks: '{"Workflow syntax, expressions and shell scripts (actionlint)": "actionlint", "Workflow security audit (zizmor)": "zizmor"}'
+          next: Nothing to fix here. The check job combines this result with the other jobs
+          failure: Fix each finding in the workflow source rather than suppressing it. The actionlint step log and the zizmor annotations name the file and line
+          reproduce: |-
+            actionlint
+            uvx zizmor@1.30.1 .github/workflows
   browser:
     name: Documentation browser checks
     needs: reuse
@@ -178,6 +193,8 @@ jobs:
         id: checkout
         with:
           persist-credentials: false
+          # The screen check compares with a pull request's base or the commit a push started from, so it needs history
+          fetch-depth: 0
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         id: setup
         with:
@@ -217,14 +234,6 @@ jobs:
             pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
           fi
         working-directory: projects
-      - name: Detect a Stable version that npm does not have yet
-        id: stable
-        if: github.event_name == 'push'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          AFTER_SHA: ${{ github.sha }}
-        run: node projects/release/github.js stable-pending
       - name: Restore the kept release snapshots
         id: release_snapshots_cache
         if: github.event_name == 'push'
@@ -256,15 +265,22 @@ jobs:
       - name: Check documentation in a browser
         id: browser
         env:
-          # Pull requests and ordinary pushes test a few screens of each kind. A manual run, a Stable's version branch and any
-          # push while a Stable isn't on npm yet test them all, and so does a push whose version lookup failed
-          ALL_SCREENS: ${{ github.event_name != 'pull_request' && steps.stable.outputs.pending != 'false' }}
+          # Every run tests only what the changed files reach on every screen size. The Website workflow tests everything
+          # before each deploy
+          EVENT_NAME: ${{ github.event_name }}
+          PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          if [ "$ALL_SCREENS" = true ]; then
-            pnpm --filter fluxerly-docs test:browser
+          # A pull request compares with its base commit and a push with the commit it started from. A new branch, whose
+          # start is all zeros, and a manual run compare with where HEAD left main
+          if [ "$EVENT_NAME" = pull_request ]; then
+            base="$PULL_REQUEST_BASE"
+          elif [ "$EVENT_NAME" = push ] && [ -n "${PUSH_BEFORE//0/}" ]; then
+            base="$PUSH_BEFORE"
           else
-            pnpm --filter fluxerly-docs test:browser --quick
+            base=origin/main
           fi
+          pnpm --filter fluxerly-docs test:browser --changed --base="$base"
           pnpm --filter fluxerly-docs test:versions
         working-directory: projects
       - name: Summarize browser checks
@@ -273,7 +289,16 @@ jobs:
         with:
           title: Documentation browser checks
           steps: ${{ toJSON(steps) }}
-          next: Live sandbox checks remain opt-in and separate from CI
+          checks: '{"SDK and documentation build": "build", "Documentation screens in Chromium and version checks": "browser"}'
+          details: >-
+            {"Screens tested": "Those the changed files reach, on every screen size"}
+          next: Nothing to fix here. The check job combines this result with the other jobs
+          failure: Fix the failed screens or version checks named in the browser step log and push
+          reproduce: |-
+            cd projects
+            pnpm build
+            pnpm --filter fluxerly-docs test:browser --changed --base=origin/main
+            pnpm --filter fluxerly-docs test:versions
   consumers:
     name: ${{ matrix.name }}
     needs: reuse
@@ -332,8 +357,16 @@ jobs:
         with:
           title: ${{ matrix.name }}
           steps: ${{ toJSON(steps) }}
+          # The development version's tests and packed consumers run in the SDK checks job, so only the floor job lists them
+          checks: >-
+            ${{ matrix.runtime && '{"Build the SDK": "build", "SDK test suite": "test", "Example bot tests": "examples", "Packed JavaScript and TypeScript consumers": "package", "npm-installed consumers": "npm"}' || '{"Build the SDK": "build", "npm-installed consumers": "npm"}' }}
           details: '{"Node version": ${{ toJSON(matrix.runtime || ''projects/.node-version'') }}}'
-          next: Both the development and Node floor jobs must pass before merging
+          next: Nothing to fix here. The check job needs both Node versions to pass
+          failure: Fix the failed check for this Node version and push. The other Node version runs on its own
+          reproduce: |-
+            cd projects
+            pnpm --filter @neontechspace/fluxerly build
+            pnpm --filter @neontechspace/fluxerly test:npm
   check:
     name: check
     needs: [reuse, sdk, tooling, workflows, browser, consumers]
@@ -353,23 +386,48 @@ jobs:
           CONSUMERS_RESULT: ${{ needs.consumers.result }}
         run: |
           if [ "$REUSE_RESULT" = success ] && [ -n "$REUSED_RUN_URL" ]; then
-            printf '## Required checks\n\nReused %s, which passed for identical content. The check jobs did not run again\n' "$REUSED_RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+            printf '## Required checks\n\nPassed by reuse. An earlier Check run passed for identical content, so the check jobs did not run again\n\nReused run: %s\n\n### Next action\n\nNothing to fix. Live sandbox checks and publishing are not part of Check\n' "$REUSED_RUN_URL" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           status=0
-          printf '## Required checks\n\n| Check group | Result |\n| --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+          failed=""
+          table=""
           for group in SDK TOOLING WORKFLOWS BROWSER CONSUMERS; do
+            case "$group" in
+              SDK) name="SDK checks" ;;
+              TOOLING) name="Website and release tooling checks" ;;
+              WORKFLOWS) name="Workflow lint and security audit" ;;
+              BROWSER) name="Documentation browser checks" ;;
+              CONSUMERS) name="SDK consumers on both Node versions" ;;
+            esac
             variable="${group}_RESULT"
             result="${!variable}"
-            printf '| %s | %s |\n' "$group" "$result" >> "$GITHUB_STEP_SUMMARY"
-            if [ "$result" != success ]; then status=1; fi
+            case "$result" in
+              success) word=passed ;;
+              failure) word=failed ;;
+              cancelled | skipped) word="$result" ;;
+              *) word="not reported" ;;
+            esac
+            table+="| $name | $word |"$'\n'
+            if [ "$result" != success ]; then
+              status=1
+              failed+="${failed:+, }$name"
+            fi
           done
-          if [ "$status" -eq 0 ]; then
-            printf '\nAll required CI groups passed, including both Node consumer versions\n' >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '\nRequired checks did not all pass. Inspect failed, cancelled or skipped jobs before merging\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          printf '\nCI does not publish packages or verify live sandbox behavior\n' >> "$GITHUB_STEP_SUMMARY"
+          {
+            printf '## Required checks\n\n'
+            if [ "$status" -eq 0 ]; then
+              printf 'All five required jobs passed, including both Node consumer versions\n\n'
+            else
+              printf 'Did not pass: %s\n\n' "$failed"
+            fi
+            printf '| Job | Result |\n| --- | --- |\n%s\n### Next action\n\n' "$table"
+            if [ "$status" -eq 0 ]; then
+              printf 'Nothing to fix. Live sandbox checks and publishing are not part of Check\n'
+            else
+              printf 'Open the jobs listed above, their summaries name the failing checks and how to reproduce them. Then push a fix or rerun the failed jobs\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
   release-trigger:
     name: Release preparation trigger
@@ -411,6 +469,8 @@ jobs:
         with:
           title: Release preparation trigger
           steps: ${{ toJSON(steps) }}
+          checks: '{"Unpublished SDK version detected": "trigger", "Release prepare dispatched": "dispatch"}'
           details: >-
             {"SDK version": ${{ toJSON(steps.trigger.outputs.version) }}, "Release prepare dispatched": ${{ toJSON(steps.trigger.outputs.prepare) }}}
-          next: When dispatched, review the Release prepare run summary before publishing
+          next: ${{ steps.trigger.outputs.prepare == 'true' && 'Review the candidate in the Release prepare run it started before publishing' || 'No release to prepare. This push did not bring a Stable SDK version that npm lacks' }}
+          failure: Release prepare was not started for this push. Rerun this job, or start Release prepare from the Actions tab with this commit as the source

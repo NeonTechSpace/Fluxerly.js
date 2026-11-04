@@ -67,9 +67,17 @@ jobs:
         with:
           title: Effect drift
           steps: ${{ toJSON(steps) }}
+          checks: '{"Newest Effect release resolved": "resolve", "SDK build": "build", "SDK type checks": "types", "SDK test suite": "test"}'
           details: >-
             {"Resolved Effect version": ${{ toJSON(steps.resolve.outputs.resolved) }}, "SDK development pin": ${{ toJSON(steps.resolve.outputs.pinned) }}, "SDK peer range": ${{ toJSON(steps.resolve.outputs.range) }}}
           next: >-
             ${{ steps.resolve.outputs.changed == 'false'
             && 'The newest Effect release in the peer range is the development pin, which Check already covers, so the SDK checks did not run'
             || 'The SDK passes its build, type checks and tests with the resolved Effect release' }}
+          failure: The SDK breaks with the newest Effect release its peer range allows. Fix the SDK for it or decide on the peer range before users install it
+          reproduce: |-
+            cd projects
+            pnpm --filter @neontechspace/fluxerly add -D effect@${{ steps.resolve.outputs.resolved || 'latest' }}
+            pnpm --filter @neontechspace/fluxerly run build
+            pnpm --filter @neontechspace/fluxerly run test:types
+            pnpm --filter @neontechspace/fluxerly run test

@@ -96,9 +96,11 @@ jobs:
         with:
           title: Source version preparation
           steps: ${{ toJSON(steps) }}
+          checks: '{"SDK build": "build", "Content guard and version": "version", "Changelog format": "format", "Version change packaged": "change"}'
           details: >-
             {"Source manifest version": ${{ toJSON(steps.version.outputs.version) }}, "Source commit": ${{ toJSON(steps.change.outputs.source_commit) }}, "No-change reason": ${{ toJSON(steps.version.outputs.reason) }}}
-          next: The pull request job opens or updates the version PR from this packaged change
+          next: ${{ steps.version.outputs.skipped == 'true' && 'No version PR is needed, the source has no release change' || 'The pull request job opens or updates the version PR from this packaged change' }}
+          failure: No version PR was prepared. Fix the failed step and run Release version PR again for the same source branch
   pull_request:
     name: Open the version pull request
     needs: version
@@ -168,6 +170,8 @@ jobs:
         with:
           title: Source version pull request
           steps: ${{ toJSON(steps) }}
+          checks: '{"Source commit unchanged": "source", "Version change applied": "apply", "Version PR": "pull_request", "Check dispatched on the version branch": "check"}'
           details: >-
-            {"Source manifest version": ${{ toJSON(needs.version.outputs.version) }}, "PR operation": ${{ toJSON(steps.pull_request.outputs.pull-request-operation) }}, "PR number": ${{ toJSON(steps.pull_request.outputs.pull-request-number) }}, "PR URL": ${{ toJSON(steps.pull_request.outputs.pull-request-url) }}}
-          next: Review the version, changelog and consumed Changesets, and wait for the dispatched Check before merging
+            {"Source manifest version": ${{ toJSON(needs.version.outputs.version) }}, "PR operation": ${{ toJSON(steps.pull_request.outputs.pull-request-operation) }}, "PR URL": ${{ toJSON(steps.pull_request.outputs.pull-request-url) }}}
+          next: Review the version, changelog and consumed Changesets in the PR, and wait for the dispatched Check before merging
+          failure: The version PR is not open or not current. Fix the failed step and run Release version PR again, which also covers a source branch that moved

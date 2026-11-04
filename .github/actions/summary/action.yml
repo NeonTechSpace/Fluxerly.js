@@ -1,5 +1,5 @@
 name: Job summary
-description: Write step outcomes, selected details and the next action to the job summary
+description: Write what the job checked, each check's result, selected details and the next action to the job summary
 inputs:
   title:
     description: Summary heading
@@ -7,16 +7,32 @@ inputs:
   steps:
     description: The job's steps context, passed as toJSON(steps)
     required: true
+  checks:
+    description: JSON object mapping a check's display label to the id of the step that ran it, in the order to show. A step that is not listed appears only when it failed
+    required: false
+    default: '{}'
+  results:
+    description: JSON object mapping a step id to the result file that scripts/check.mjs wrote for it (its CHECK_RESULTS_FILE). The step's row then becomes one row per check, with its time and, on failure, the first error line and the command that reproduces it
+    required: false
+    default: '{}'
   details:
-    description: JSON object mapping display labels to values. Step outputs are never rendered unless listed here
+    description: JSON object mapping display labels to values. Step outputs are never rendered unless listed here. Empty values are left out
     required: false
     default: '{}'
   next:
     description: Next action after the listed steps succeed
     required: false
     default: ''
+  failure:
+    description: Next action when a listed step failed or was cancelled. Without it the summary names the step log to open
+    required: false
+    default: ''
   command:
     description: Ready-to-run follow-up command, shown only when no step failed
+    required: false
+    default: ''
+  reproduce:
+    description: Commands that reproduce the job locally, one per line, shown only when a step failed. The failed checks of a results file add their own
     required: false
     default: ''
 runs:
@@ -27,7 +43,11 @@ runs:
       env:
         SUMMARY_TITLE: ${{ inputs.title }}
         SUMMARY_STEPS: ${{ inputs.steps }}
+        SUMMARY_CHECKS: ${{ inputs.checks }}
+        SUMMARY_RESULTS: ${{ inputs.results }}
         SUMMARY_DETAILS: ${{ inputs.details }}
         SUMMARY_NEXT: ${{ inputs.next }}
+        SUMMARY_FAILURE: ${{ inputs.failure }}
         SUMMARY_COMMAND: ${{ inputs.command }}
+        SUMMARY_REPRODUCE: ${{ inputs.reproduce }}
       run: node "$GITHUB_ACTION_PATH/summary.mjs"

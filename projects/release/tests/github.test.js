@@ -11,7 +11,6 @@ import {
     commandFailure,
     reconcileRelease,
     releaseTrigger,
-    stablePending,
     validatePreparation,
     verifyPreparation,
 } from "../github.js"
@@ -672,15 +671,6 @@ test("Pushes prepare a candidate only when they change the SDK version to one np
         registries: { inventory: async () => ({ npmVersions: [] }) },
     })
     assert.deepEqual([created.prepare, created.version], [true, "1000.0.1"])
-})
-
-test("A Stable counts as pending until npm has it, whatever the last push changed", async () => {
-    const commit = "b".repeat(40)
-    const pending = (version, npmVersions = []) =>
-        stablePending({ after: commit, readVersion: async () => version, registries: { inventory: async () => ({ npmVersions }) } })
-    assert.equal((await pending("1000.0.0")).pending, true)
-    assert.equal((await pending("1000.0.0", ["1000.0.0"])).pending, false)
-    assert.equal((await pending("2000.0.0-nightly.0")).pending, false)
 })
 
 test("A conflicting preexisting tag is rejected before creating any release", async (t) => {

@@ -4,14 +4,17 @@ import { readFile } from "node:fs/promises"
 import os from "node:os"
 import { resolve } from "node:path"
 import { titleCase } from "../../src/lib/title-case.ts"
-import { areasForChanges, changedPaths, repositoryRoot } from "./changed.mjs"
+import { snapshotContent } from "../docs/snapshot-content.mjs"
+import { channelTargets, validateSnapshot } from "../versions.js"
+import { areasForChanges, baseFlag, changedPaths, repositoryRoot } from "./changed.mjs"
 import { experienceKey, launchBrowser, screens, serveSite, skyIconsKey, tourKey } from "./lib.mjs"
 
 // The whole site at every screen in lib.mjs: layout on each kind of page, the first visit's spotlight, menus, titles on
 // every page, and icons over text while scrolling. Fails with a list of what it found. Usage:
-// node scripts/checks/sweep.mjs [--quick] [--changed] [--only=alive,questions,scroll,install,layout,docs,choice,tour,menus,pages,titles,parts,sky,noscript]
+// node scripts/checks/sweep.mjs [--quick] [--changed [--base=<commit>]] [--only=alive,questions,scroll,install,layout,docs,choice,tour,menus,pages,titles,parts,sky,noscript]
 // --quick covers a few screens of each kind. --changed runs only the parts and pages the changed files can reach, as
-// changed.mjs works them out. Reads the built site, so run it after a build
+// changed.mjs works them out, and --base=<commit> makes those the files changed since that commit. Reads the built site,
+// so run it after a build
 //
 // The parts run side by side in one browser. Together they keep at most WORKERS pages busy, the same as one part alone
 // did when they ran in turn, and a part that works one page at a time holds one of those places while it runs
@@ -51,11 +54,31 @@ const areaOf = (path) => {
 // With --changed, the areas the changed files reach. Without it, or when they reach everything, every page counts
 let reach
 if (flags.includes("--changed")) {
-    const { areas, reasons } = areasForChanges(changedPaths(repositoryRoot), repositoryRoot)
-    for (const reason of reasons) console.log(reason)
-    if (areas !== "all") reach = areas
+    let paths
+    try {
+        paths = changedPaths(repositoryRoot, baseFlag(flags))
+    } catch (error) {
+        // A base that a force push left out of the history can't say what changed, so every screen is tested instead
+        console.log(`${error instanceof Error ? error.message : error}, so every part and page is tested`)
+    }
+    if (paths) {
+        const { areas, reasons } = areasForChanges(paths, repositoryRoot)
+        for (const reason of reasons) console.log(reason)
+        if (areas !== "all") reach = areas
+    }
 }
 const covers = (route) => !reach || reach.has(areaOf(route))
+
+// On a public build, the Fluxer commit the version at /docs/ was checked against, picked from released/ the way
+// build-public.mjs picks it. Only that build writes _redirects. Undefined for a build of the current source
+async function publicPin() {
+    if (!existsSync(resolve("dist/_redirects"))) return undefined
+    const snapshots = await Promise.all(globSync("released/*.json").map(async (file) => validateSnapshot(JSON.parse(await readFile(file, "utf8")))))
+    const newest = snapshots.find((snapshot) => snapshot.version === channelTargets(snapshots.map((snapshot) => snapshot.version))[0]?.version)
+    const endpoints = newest?.files.find((file) => file.path === "reference/endpoints.json")
+    if (!newest || !endpoints) throw new Error("A public build needs the published snapshots it was built from in released/")
+    return JSON.parse(snapshotContent(newest, endpoints)).source.fluxer.commit
+}
 
 const blankPicture = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64")
 const found = new Map()
@@ -1605,11 +1628,13 @@ serial("docs", ["/docs/"], async () => {
         return { context, page }
     }
 
-    // Every docs page names the Fluxer commit the repository pins, in the sidebar on a wide screen and in the docs menu on a phone,
-    // and the overview names it again in the page
+    // Every docs page names the Fluxer commit its docs were checked against, in the sidebar on a wide screen and in the docs
+    // menu on a phone, and the overview names it again in the page. That is the repository's pin, except on the public site,
+    // whose docs at /docs/ come from the newest published version's snapshot and so name that version's own pin
     {
         const manifest = JSON.parse(await readFile(new URL("../../../release/upstream/manifest.json", import.meta.url), "utf8"))
-        const pinUrl = `https://github.com/${manifest.repository}/commit/${manifest.commit}`
+        const pinned = (await publicPin()) ?? manifest.commit
+        const pinUrl = `https://github.com/${manifest.repository}/commit/${pinned}`
         for (const [size, path] of [[wide, "/docs/"], [wide, "/docs/api/"], [{ width: 390, height: 844 }, "/docs/commands/"]]) {
             const { context, page } = await openPage(size)
             await page.goto(`${site.url}${path}`, { waitUntil: "load" })
@@ -1619,7 +1644,7 @@ serial("docs", ["/docs/"], async () => {
                 await page.locator(".docs-side[data-open]").waitFor({ timeout: 5000 }).catch(() => {})
             }
             const link = page.locator(".fluxer-pin a")
-            const shown = (await link.count()) === 1 && (await link.isVisible()) && (await link.getAttribute("href")) === pinUrl && (await link.textContent()).trim() === manifest.commit.slice(0, 7)
+            const shown = (await link.count()) === 1 && (await link.isVisible()) && (await link.getAttribute("href")) === pinUrl && (await link.textContent()).trim() === pinned.slice(0, 7)
             if (!shown) report("the docs sidebar doesn't show the pinned Fluxer commit", `${path} ${size.width}x${size.height}`)
             if (path === "/docs/" && (await page.locator(`.fluxer-pin-note a[href="${pinUrl}"]`).count()) !== 1) report("the docs overview doesn't name the pinned Fluxer commit", path)
             await context.close()

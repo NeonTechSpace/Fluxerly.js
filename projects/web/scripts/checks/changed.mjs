@@ -25,7 +25,11 @@ import { fileURLToPath } from "node:url"
 //    file in src that no page imports yet, reaches everything
 //
 // The changed files are those that differ from where HEAD left the pushed main, committed or not, plus untracked ones, as the live
-// runner counts them
+// runner counts them. --base=<commit> compares with where HEAD left that commit instead, as CI does for a pull request's base
+// or the commit a push started from
+
+/** The commit after --base=, if given @param {string[]} flags */
+export const baseFlag = (flags) => flags.find((flag) => flag.startsWith("--base="))?.slice("--base=".length) || undefined
 
 const all = "all"
 
@@ -160,19 +164,28 @@ export function areasForChanges(paths, repository) {
 
 /**
  * The repository's changed paths: Those that differ from where HEAD left the pushed main, so commits not yet pushed to
- * main still count, committed or not, and untracked ones. Then the local main is tried, and finally HEAD
+ * main still count, committed or not, and untracked ones. Then the local main is tried, and finally HEAD. A base, such as
+ * a pull request's base commit or the commit a push started from, replaces main, and a base that git can't find throws
  * @param {string} repository
+ * @param {string} [base]
  */
-export function changedPaths(repository) {
-    const git = (/** @type {string[]} */ ...args) => execFileSync("git", args, { cwd: repository, encoding: "utf8" })
+export function changedPaths(repository, base) {
+    const git = (/** @type {string[]} */ ...args) => execFileSync("git", args, { cwd: repository, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
     let from = "HEAD"
-    for (const main of ["origin/main", "main"])
+    if (base !== undefined)
         try {
-            from = git("merge-base", "HEAD", main).trim()
-            break
+            from = git("merge-base", "HEAD", base).trim()
         } catch {
-            // allow-silent: The next candidate, and finally HEAD, still covers uncommitted changes
+            throw new Error(`The base ${JSON.stringify(base)} has no commit in common with HEAD in this checkout`)
         }
+    else
+        for (const main of ["origin/main", "main"])
+            try {
+                from = git("merge-base", "HEAD", main).trim()
+                break
+            } catch {
+                // allow-silent: The next candidate, and finally HEAD, still covers uncommitted changes
+            }
     const lines = (/** @type {string} */ text) => text.split("\n").filter(Boolean)
     return [...new Set([...lines(git("diff", "--name-only", from)), ...lines(git("ls-files", "--others", "--exclude-standard"))])]
 }
@@ -180,7 +193,7 @@ export function changedPaths(repository) {
 export const repositoryRoot = fileURLToPath(new URL("../../../../", import.meta.url))
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    const { areas, reasons } = areasForChanges(changedPaths(repositoryRoot), repositoryRoot)
+    const { areas, reasons } = areasForChanges(changedPaths(repositoryRoot, baseFlag(process.argv.slice(2))), repositoryRoot)
     for (const reason of reasons) console.log(reason)
     console.log(areas === all ? "Reaches every screen" : areas.size ? `Reaches ${[...areas].sort().join(", ")}` : "Reaches no screen")
 }
