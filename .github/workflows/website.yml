@@ -71,7 +71,9 @@ jobs:
         working-directory: projects
       - name: Require successful Check for the exact checkout
         id: ci
-        run: node web/scripts/checked-source.js
+        # The check job of the main-push Check run, which covers the website, workflow lint and the npm release checks.
+        # The release preparation trigger that follows it in that run is not part of the result
+        run: node web/scripts/checked-source.js --scope check
         working-directory: projects
         env:
           GH_TOKEN: ${{ github.token }}

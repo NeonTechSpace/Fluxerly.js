@@ -17,8 +17,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || startsWith(github.ref_name, 'release/version-') }}
 jobs:
   # Identical git trees need one full Check, so a run for content that already passed reuses that result. A commit that
-  # changes only release version files from a parent whose content passed runs only the website and release tooling
-  # checks. Release prepare still refuses a Stable whose package content differs from the newest nightly
+  # changes only release version files from a parent whose content passed runs only the release tooling and the website
+  # and contribution checks. Release prepare still refuses a Stable whose package content differs from the newest nightly
+  #
+  # Two certificates carry the result. The check job certifies the whole Check. The npm release checks job certifies only
+  # what a published package needs: the SDK checks, the release tooling checks and the consumers on both Node versions.
+  # Each has its own lookup, so npm evidence never waits for website jobs. A lookup waits for the certificate it reads,
+  # not for the rest of the run, and a reuse is accepted only from a lookup job that succeeded with a complete reference.
+  # The jobs behind a certificate skip only for a lookup that succeeded, so a failed lookup runs the actual checks
   reuse:
     name: Reuse a passing Check for identical content
     runs-on: ubuntu-latest
@@ -28,8 +34,12 @@ jobs:
       actions: read
     outputs:
       reused: ${{ steps.reuse.outputs.reused }}
+      run_id: ${{ steps.reuse.outputs.run_id }}
+      run_attempt: ${{ steps.reuse.outputs.run_attempt }}
       run_url: ${{ steps.reuse.outputs.run_url }}
       version_only: ${{ steps.reuse.outputs.version_only }}
+      parent_run_id: ${{ steps.reuse.outputs.parent_run_id }}
+      parent_run_attempt: ${{ steps.reuse.outputs.parent_run_attempt }}
       parent_run_url: ${{ steps.reuse.outputs.parent_run_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,12 +57,45 @@ jobs:
         id: reuse
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node projects/release/reuse.js
+        run: node projects/release/reuse.js --scope check
+  release-reuse:
+    name: Reuse npm release checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      reused: ${{ steps.reuse.outputs.reused }}
+      run_id: ${{ steps.reuse.outputs.run_id }}
+      run_attempt: ${{ steps.reuse.outputs.run_attempt }}
+      run_url: ${{ steps.reuse.outputs.run_url }}
+      version_only: ${{ steps.reuse.outputs.version_only }}
+      parent_run_id: ${{ steps.reuse.outputs.parent_run_id }}
+      parent_run_attempt: ${{ steps.reuse.outputs.parent_run_attempt }}
+      parent_run_url: ${{ steps.reuse.outputs.parent_run_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+          # The parent commit, which the version-only change is compared with
+          fetch-depth: 2
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        id: setup
+        with:
+          working-directory: projects
+          install: false
+      - name: Find an earlier passing npm release checks job for the same git tree
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node projects/release/reuse.js --scope npm
   sdk:
     name: SDK checks
-    needs: reuse
+    needs: release-reuse
     # A failed reuse lookup still runs the full job
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
+    if: ${{ !cancelled() && (needs.release-reuse.result != 'success' || (needs.release-reuse.outputs.reused != 'true' && needs.release-reuse.outputs.version_only != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -80,13 +123,64 @@ jobs:
           steps: ${{ toJSON(steps) }}
           checks: '{"SDK checks": "sdk"}'
           results: '{"sdk": "${{ runner.temp }}/sdk-checks.json"}'
-          next: Nothing to fix here. The check job combines this result with the other jobs
+          next: Nothing to fix here. The npm release checks job combines this result with the release tooling and consumer jobs
           failure: Fix the failed checks and push. Checks that need the SDK build are skipped while the build fails
+  release:
+    name: Release tooling checks
+    needs: release-reuse
+    # Also for a version-only change, because this job checks the version, changelog and Changesets state it changes
+    if: ${{ !cancelled() && (needs.release-reuse.result != 'success' || needs.release-reuse.outputs.reused != 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        id: setup
+        with:
+          working-directory: projects
+          require-lockfile: true
+          cache: true
+      - name: Check the release tooling
+        id: tooling
+        env:
+          CHECK_RESULTS_FILE: ${{ runner.temp }}/release-checks.json
+        run: node scripts/check.mjs release
+        working-directory: projects
+      - name: Lint the workspace scripts that run the checks
+        id: scripts
+        run: pnpm lint:scripts
+        working-directory: projects
+      - name: Check that the SDK version, changelog and Changesets state agree
+        id: version
+        if: needs.release-reuse.result == 'success' && needs.release-reuse.outputs.version_only == 'true'
+        run: node release/version-change.js check
+        working-directory: projects
+      - name: Check the changelog and manifest formatting and the SDK folder for em dashes
+        id: format
+        # The SDK checks job, which a version-only change skips, otherwise covers these files
+        if: needs.release-reuse.result == 'success' && needs.release-reuse.outputs.version_only == 'true'
+        run: |
+          pnpm --filter @neontechspace/fluxerly exec prettier --check CHANGELOG.md package.json
+          pnpm --filter @neontechspace/fluxerly lint:dashes
+        working-directory: projects
+      - name: Summarize release tooling checks
+        if: always()
+        uses: $/.github/actions/summary
+        with:
+          title: Release tooling checks
+          steps: ${{ toJSON(steps) }}
+          checks: '{"Release tooling": "tooling", "Workspace scripts lint": "scripts", "Version, changelog and Changesets state": "version", "Changelog and manifest formatting": "format"}'
+          results: '{"tooling": "${{ runner.temp }}/release-checks.json"}'
+          next: Nothing to fix here. The npm release checks job combines this result with the SDK and consumer jobs
+          failure: Fix the failed checks and push
   tooling:
-    name: Website and release tooling checks
+    name: Website and contribution checks
     needs: reuse
     # Also for a version-only change, because the website builds its changelog page and search from the new notes
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    if: ${{ !cancelled() && (needs.reuse.result != 'success' || needs.reuse.outputs.reused != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -112,40 +206,27 @@ jobs:
         with:
           path: projects/web/.cache/fluxer
           key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
-      - name: Check release tooling, contribution forms and the documentation website side by side
+      - name: Check contribution forms and the documentation website side by side
         id: website
         env:
           CHECK_RESULTS_FILE: ${{ runner.temp }}/tooling-checks.json
         # Each check starts once the checks it reads from have passed, and the log names every result with its time
-        run: node scripts/check.mjs release contributions web
+        run: node scripts/check.mjs contributions web
         working-directory: projects
-      - name: Check that the SDK version, changelog and Changesets state agree
-        id: version
-        if: needs.reuse.outputs.version_only == 'true'
-        run: node release/version-change.js check
-        working-directory: projects
-      - name: Check the changelog and manifest formatting and the SDK folder for em dashes
-        id: format
-        # The SDK checks job, which a version-only change skips, otherwise covers these files
-        if: needs.reuse.outputs.version_only == 'true'
-        run: |
-          pnpm --filter @neontechspace/fluxerly exec prettier --check CHANGELOG.md package.json
-          pnpm --filter @neontechspace/fluxerly lint:dashes
-        working-directory: projects
-      - name: Summarize website and release tooling checks
+      - name: Summarize website and contribution checks
         if: always()
         uses: $/.github/actions/summary
         with:
-          title: Website and release tooling checks
+          title: Website and contribution checks
           steps: ${{ toJSON(steps) }}
-          checks: '{"SDK declarations build": "build", "Release tooling, contribution forms and website": "website", "Version, changelog and Changesets state": "version", "Changelog and manifest formatting": "format"}'
+          checks: '{"SDK declarations build": "build", "Contribution forms and website": "website"}'
           results: '{"website": "${{ runner.temp }}/tooling-checks.json"}'
           next: Nothing to fix here. The check job combines this result with the other jobs
           failure: Fix the failed checks and push. Website checks that read the built site are skipped while its build fails
   workflows:
     name: Workflow lint and security audit
     needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
+    if: ${{ !cancelled() && (needs.reuse.result != 'success' || (needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -211,7 +292,7 @@ jobs:
   browser:
     name: Documentation browser checks
     needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
+    if: ${{ !cancelled() && (needs.reuse.result != 'success' || (needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -327,8 +408,8 @@ jobs:
             pnpm --filter fluxerly-docs test:versions
   consumers:
     name: ${{ matrix.name }}
-    needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
+    needs: release-reuse
+    if: ${{ !cancelled() && (needs.release-reuse.result != 'success' || (needs.release-reuse.outputs.reused != 'true' && needs.release-reuse.outputs.version_only != 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -387,15 +468,100 @@ jobs:
           checks: >-
             ${{ matrix.runtime && '{"Build the SDK": "build", "SDK test suite": "test", "Example bot tests": "examples", "Packed JavaScript and TypeScript consumers": "package", "npm-installed consumers": "npm"}' || '{"Build the SDK": "build", "npm-installed consumers": "npm"}' }}
           details: '{"Node version": ${{ toJSON(matrix.runtime || ''projects/.node-version'') }}}'
-          next: Nothing to fix here. The check job needs both Node versions to pass
+          next: Nothing to fix here. The npm release checks job needs both Node versions to pass
           failure: Fix the failed check for this Node version and push. The other Node version runs on its own
           reproduce: |-
             cd projects
             pnpm --filter @neontechspace/fluxerly build
             pnpm --filter @neontechspace/fluxerly test:npm
+  npm-check:
+    name: npm release checks
+    # The certificate of everything a published package needs: the SDK checks, the release tooling checks and the consumers
+    # on both Node versions. It never waits for the website, workflow lint or the browser, so npm evidence and the Stable
+    # start do not depend on them. The status function lets it report a skipped or cancelled producer instead of skipping
+    needs: [release-reuse, sdk, release, consumers]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize npm release checks and enforce the result
+        shell: bash
+        env:
+          REUSE_RESULT: ${{ needs.release-reuse.result }}
+          REUSED: ${{ needs.release-reuse.outputs.reused }}
+          RUN_ID: ${{ needs.release-reuse.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.release-reuse.outputs.run_attempt }}
+          RUN_URL: ${{ needs.release-reuse.outputs.run_url }}
+          VERSION_ONLY: ${{ needs.release-reuse.outputs.version_only }}
+          PARENT_RUN_ID: ${{ needs.release-reuse.outputs.parent_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ needs.release-reuse.outputs.parent_run_attempt }}
+          PARENT_RUN_URL: ${{ needs.release-reuse.outputs.parent_run_url }}
+          SDK_RESULT: ${{ needs.sdk.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          CONSUMERS_RESULT: ${{ needs.consumers.result }}
+        run: |
+          # A reference is complete only with a numeric run ID and attempt and the URL of that run
+          complete() {
+            [[ "$1" =~ ^[1-9][0-9]*$ && "$2" =~ ^[1-9][0-9]*$ && "$3" == "https://github.com/$GITHUB_REPOSITORY/actions/runs/$1" ]]
+          }
+          # A reuse counts only from a lookup job that succeeded, because a failed job can still leave outputs behind. A
+          # failed lookup runs the actual checks, and their success is as good as any reuse
+          mode=ordinary
+          if [ "$REUSE_RESULT" = success ]; then
+            if [ "$REUSED" = true ] && complete "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL"; then
+              mode=reuse
+            elif [ "$VERSION_ONLY" = true ] && complete "$PARENT_RUN_ID" "$PARENT_RUN_ATTEMPT" "$PARENT_RUN_URL"; then
+              mode=version-only
+            fi
+          fi
+          # The wanted result of the SDK, release tooling and consumer jobs. A version-only change reuses the SDK and
+          # consumer checks of its parent commit and runs the release tooling checks itself
+          case "$mode" in
+            reuse) want_sdk=skipped want_release=skipped want_consumers=skipped ;;
+            version-only) want_sdk=skipped want_release=success want_consumers=skipped ;;
+            *) want_sdk=success want_release=success want_consumers=success ;;
+          esac
+          status=0
+          failed=""
+          table=""
+          judge() {
+            case "$2" in
+              success) word=passed ;;
+              failure) word=failed ;;
+              cancelled | skipped) word="$2" ;;
+              *) word="not reported" ;;
+            esac
+            table+="| $1 | $word |"$'\n'
+            if [ "$2" != "$3" ]; then
+              status=1
+              failed+="${failed:+, }$1"
+            fi
+          }
+          judge "SDK checks" "$SDK_RESULT" "$want_sdk"
+          judge "Release tooling checks" "$RELEASE_RESULT" "$want_release"
+          judge "SDK consumers on both Node versions" "$CONSUMERS_RESULT" "$want_consumers"
+          {
+            printf '## npm release checks\n\n'
+            if [ "$status" -ne 0 ]; then
+              printf 'Did not pass: %s\n\n' "$failed"
+            elif [ "$mode" = reuse ]; then
+              printf 'Passed by reuse. The npm release checks of an earlier Check run passed for identical content, so the SDK, release tooling and consumer jobs did not run again\n\nReused run: %s\n\n' "$RUN_URL"
+            elif [ "$mode" = version-only ]; then
+              printf 'Passed as a version-only change. Only release version files changed from the parent commit, whose npm release checks passed, so only the release tooling checks ran\n\nParent commit run: %s\n\n' "$PARENT_RUN_URL"
+            else
+              printf 'The SDK checks, the release tooling checks and both Node consumer versions passed\n\n'
+            fi
+            printf '| Job | Result |\n| --- | --- |\n%s\n### Next action\n\n' "$table"
+            if [ "$status" -eq 0 ]; then
+              printf 'Nothing to fix. Release preparation reads this result, not the website checks\n'
+            else
+              printf 'Open the jobs listed above, their summaries name the failing checks and how to reproduce them. Then push a fix or re-run all jobs\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
   check:
     name: check
-    needs: [reuse, sdk, tooling, workflows, browser, consumers]
+    needs: [reuse, npm-check, tooling, workflows, browser]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -404,83 +570,87 @@ jobs:
         shell: bash
         env:
           REUSE_RESULT: ${{ needs.reuse.result }}
-          REUSED_RUN_URL: ${{ needs.reuse.outputs.run_url }}
+          REUSED: ${{ needs.reuse.outputs.reused }}
+          RUN_ID: ${{ needs.reuse.outputs.run_id }}
+          RUN_ATTEMPT: ${{ needs.reuse.outputs.run_attempt }}
+          RUN_URL: ${{ needs.reuse.outputs.run_url }}
           VERSION_ONLY: ${{ needs.reuse.outputs.version_only }}
+          PARENT_RUN_ID: ${{ needs.reuse.outputs.parent_run_id }}
+          PARENT_RUN_ATTEMPT: ${{ needs.reuse.outputs.parent_run_attempt }}
           PARENT_RUN_URL: ${{ needs.reuse.outputs.parent_run_url }}
-          SDK_RESULT: ${{ needs.sdk.result }}
+          NPM_RESULT: ${{ needs.npm-check.result }}
           TOOLING_RESULT: ${{ needs.tooling.result }}
           WORKFLOWS_RESULT: ${{ needs.workflows.result }}
           BROWSER_RESULT: ${{ needs.browser.result }}
-          CONSUMERS_RESULT: ${{ needs.consumers.result }}
         run: |
-          if [ "$REUSE_RESULT" = success ] && [ -n "$REUSED_RUN_URL" ]; then
-            printf '## Required checks\n\nPassed by reuse. An earlier Check run passed for identical content, so the check jobs did not run again\n\nReused run: %s\n\n### Next action\n\nNothing to fix. Live sandbox checks and publishing are not part of Check\n' "$REUSED_RUN_URL" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          # A reference is complete only with a numeric run ID and attempt and the URL of that run
+          complete() {
+            [[ "$1" =~ ^[1-9][0-9]*$ && "$2" =~ ^[1-9][0-9]*$ && "$3" == "https://github.com/$GITHUB_REPOSITORY/actions/runs/$1" ]]
+          }
+          # A reuse counts only from a lookup job that succeeded, because a failed job can still leave outputs behind. A
+          # failed lookup runs the actual checks, and their success is as good as any reuse
+          mode=ordinary
+          if [ "$REUSE_RESULT" = success ]; then
+            if [ "$REUSED" = true ] && complete "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL"; then
+              mode=reuse
+            elif [ "$VERSION_ONLY" = true ] && complete "$PARENT_RUN_ID" "$PARENT_RUN_ATTEMPT" "$PARENT_RUN_URL"; then
+              mode=version-only
+            fi
           fi
-          # A version-only change passes with the website and release tooling checks alone, and only when every other job
-          # was skipped for it. A version-only result from a failed lookup job is not trusted
-          version_only=false
-          groups="SDK TOOLING WORKFLOWS BROWSER CONSUMERS"
-          if [ "$REUSE_RESULT" = success ] && [ "$VERSION_ONLY" = true ] && [ -n "$PARENT_RUN_URL" ]; then
-            version_only=true
-            groups=TOOLING
-          fi
+          # The npm release checks always count, because they report their own reuse. A reuse of a whole Check skips the
+          # other jobs. A version-only change runs the website and contribution checks, because the website builds its
+          # changelog page and search from the new notes, and skips workflow lint and the browser
+          case "$mode" in
+            reuse) want_tooling=skipped want_workflows=skipped want_browser=skipped ;;
+            version-only) want_tooling=success want_workflows=skipped want_browser=skipped ;;
+            *) want_tooling=success want_workflows=success want_browser=success ;;
+          esac
           status=0
           failed=""
           table=""
-          for group in $groups; do
-            case "$group" in
-              SDK) name="SDK checks" ;;
-              TOOLING) name="Website and release tooling checks" ;;
-              WORKFLOWS) name="Workflow lint and security audit" ;;
-              BROWSER) name="Documentation browser checks" ;;
-              CONSUMERS) name="SDK consumers on both Node versions" ;;
-            esac
-            variable="${group}_RESULT"
-            result="${!variable}"
-            case "$result" in
+          judge() {
+            case "$2" in
               success) word=passed ;;
               failure) word=failed ;;
-              cancelled | skipped) word="$result" ;;
+              cancelled | skipped) word="$2" ;;
               *) word="not reported" ;;
             esac
-            table+="| $name | $word |"$'\n'
-            if [ "$result" != success ]; then
+            table+="| $1 | $word |"$'\n'
+            if [ "$2" != "$3" ]; then
               status=1
-              failed+="${failed:+, }$name"
+              failed+="${failed:+, }$1"
             fi
-          done
-          if [ "$version_only" = true ]; then
-            for group in SDK WORKFLOWS BROWSER CONSUMERS; do
-              variable="${group}_RESULT"
-              if [ "${!variable}" != skipped ]; then
-                status=1
-                failed+="${failed:+, }$group ran for a version-only change"
-              fi
-            done
-          fi
+          }
+          judge "npm release checks" "$NPM_RESULT" success
+          judge "Website and contribution checks" "$TOOLING_RESULT" "$want_tooling"
+          judge "Workflow lint and security audit" "$WORKFLOWS_RESULT" "$want_workflows"
+          judge "Documentation browser checks" "$BROWSER_RESULT" "$want_browser"
           {
             printf '## Required checks\n\n'
-            if [ "$status" -eq 0 ] && [ "$version_only" = true ]; then
-              printf 'Passed as a version-only change. Only release version files changed from the parent commit, whose content passed Check, so only the website and release tooling checks ran\n\nParent commit Check: %s\n\n' "$PARENT_RUN_URL"
-            elif [ "$status" -eq 0 ]; then
-              printf 'All five required jobs passed, including both Node consumer versions\n\n'
-            else
+            if [ "$status" -ne 0 ]; then
               printf 'Did not pass: %s\n\n' "$failed"
+            elif [ "$mode" = reuse ]; then
+              printf 'Passed by reuse. An earlier Check run passed for identical content, so the website, workflow lint and browser jobs did not run again\n\nReused run: %s\n\n' "$RUN_URL"
+            elif [ "$mode" = version-only ]; then
+              printf 'Passed as a version-only change. Only release version files changed from the parent commit, whose content passed Check, so only the npm release checks and the website and contribution checks ran\n\nParent commit Check: %s\n\n' "$PARENT_RUN_URL"
+            else
+              printf 'All four required jobs passed, including the npm release checks on both Node consumer versions\n\n'
             fi
             printf '| Job | Result |\n| --- | --- |\n%s\n### Next action\n\n' "$table"
             if [ "$status" -eq 0 ]; then
               printf 'Nothing to fix. Live sandbox checks and publishing are not part of Check\n'
             else
-              printf 'Open the jobs listed above, their summaries name the failing checks and how to reproduce them. Then push a fix or rerun the failed jobs\n'
+              printf 'Open the jobs listed above, their summaries name the failing checks and how to reproduce them. Then push a fix or re-run all jobs\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
   release-trigger:
     name: Release preparation trigger
-    needs: check
-    # The default condition skips this job when a reused Check skipped the jobs behind check, so it reads check's result
-    if: ${{ !cancelled() && needs.check.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: npm-check
+    # Release preparation reads the npm release checks, so only they gate its start: A website or workflow lint failure
+    # never blocks a release. The default condition would skip this job when a reuse skipped the jobs behind the npm
+    # release checks, so it reads that result itself
+    if: ${{ !cancelled() && needs.npm-check.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

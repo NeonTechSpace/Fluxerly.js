@@ -47,12 +47,14 @@ jobs:
           working-directory: projects
           require-lockfile: true
           cache: true
-      - name: Reuse successful checks for the exact source or require full validation
+      - name: Reuse the passed npm release checks for the exact source or require full validation
         id: ci
         working-directory: projects
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node web/scripts/checked-source.js --allow-missing
+        # Only the npm release checks job of the main-push Check run counts. The website, workflow lint and browser jobs
+        # of that run may still be going or have failed, because the package does not read them
+        run: node web/scripts/checked-source.js --scope npm --allow-missing
       - name: Restore Fluxer's pinned OpenAPI document and docs source
         id: fluxer_source_cache
         # Restore only, so this workflow still never saves a cache. A cache entry can't change what gets built: the
@@ -63,45 +65,19 @@ jobs:
         with:
           path: projects/web/.cache/fluxer
           key: fluxer-source-${{ hashFiles('projects/release/upstream/manifest.json') }}
-      - name: Run the aggregate workspace check
+      - name: Run the SDK and release tooling checks
         id: workspace
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
         env:
           CHECK_RESULTS_FILE: ${{ runner.temp }}/workspace-checks.json
-        run: pnpm check
-      - name: Read the locked Playwright version
-        id: playwright
+        # What Check's npm release checks cover on the development Node version. The floor checks follow the candidate
+        run: node scripts/check.mjs sdk release
+      - name: Lint the workspace scripts that run the checks
+        id: scripts
         if: steps.ci.outputs.reused == 'false'
         working-directory: projects
-        run: printf 'version=%s\n' "$(node --print 'require("./web/node_modules/playwright/package.json").version')" >> "$GITHUB_OUTPUT"
-      - name: Restore Playwright browsers
-        id: browser_cache
-        if: steps.ci.outputs.reused == 'false'
-        # Restore only, so this workflow still never saves a cache. Check saves the browser under the same key
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
-      - name: Install the test browser
-        id: browser_install
-        if: steps.ci.outputs.reused == 'false'
-        working-directory: projects
-        env:
-          BROWSER_CACHED: ${{ steps.browser_cache.outputs.cache-hit }}
-        run: |
-          if [ "$BROWSER_CACHED" = true ]; then
-            pnpm --filter fluxerly-docs exec playwright install-deps chromium
-          else
-            pnpm --filter fluxerly-docs exec playwright install --with-deps chromium
-          fi
-      - name: Check the multi-version documentation build in a browser
-        id: browser
-        if: steps.ci.outputs.reused == 'false'
-        working-directory: projects
-        # Only the build that holds every released docs version, as CI's browser job checks it. The Screens workflow tests
-        # every screen after pushes to main, so the full screen check doesn't gate a package
-        run: pnpm --filter fluxerly-docs test:versions
+        run: pnpm lint:scripts
       - name: Build fresh artifacts from the CI-checked source
         id: build
         if: steps.ci.outputs.reused == 'true'
@@ -197,12 +173,13 @@ jobs:
         with:
           title: Immutable release preparation
           steps: ${{ toJSON(steps) }}
-          # Skipped steps are the validation this run did not need: A reused Check replaces the workspace and browser checks
+          # Skipped steps are the validation this run did not need: Reused npm release checks replace the SDK and release
+          # tooling checks
           checks: >-
-            {"Workspace checks": "workspace", "Multi-version documentation build": "browser", "Build from the checked source": "build", "Candidate snapshot and preparation": "candidate", "Candidate tarball install": "npm", "Node floor suite and consumers": "floor", "Candidate kept as an artifact": "artifact"}
+            {"SDK and release tooling checks": "workspace", "Workspace scripts lint": "scripts", "Build from the checked source": "build", "Candidate snapshot and preparation": "candidate", "Candidate tarball install": "npm", "Node floor suite and consumers": "floor", "Candidate kept as an artifact": "artifact"}
           results: '{"workspace": "${{ runner.temp }}/workspace-checks.json"}'
           details: >-
-            {"Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate retention": ${{ toJSON(steps.artifact.outcome == 'success' && '90 days after upload' || '') }}, "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
+            {"Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate retention": ${{ toJSON(steps.artifact.outcome == 'success' && '90 days after upload' || '') }}, "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source npm release checks' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
           next: ${{ steps.candidate.outputs.skipped == 'true' && 'Nothing to publish, the SDK content matches an already published version' || 'The publish job starts Release publish for this candidate. The command below can restart publication after a failure' }}
           failure: No candidate was prepared, so nothing can be published. Fix the failed check and run Release prepare again for the same source
           command: ${{ steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}

@@ -1,23 +1,17 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import test from "node:test"
-import { parse } from "yaml"
-import { renderSummary } from "../../../.github/actions/summary/summary.mjs"
+import { renderSummary } from "../actions/summary/summary.mjs"
+import { assertSerialized, bash, evaluate, jobsOf, loadActions, loadWorkflows, repository, stepsOf } from "../test-support/workflows.mjs"
 
-const repository = fileURLToPath(new URL("../../../", import.meta.url))
-const read = (path) => parse(readFileSync(join(repository, path), "utf8"))
-const workflows = Object.fromEntries(
-    readdirSync(join(repository, ".github/workflows"))
-        .filter((name) => name.endsWith(".yml"))
-        .map((name) => [name, read(`.github/workflows/${name}`)]),
-)
-const actions = Object.fromEntries(
-    readdirSync(join(repository, ".github/actions")).map((name) => [name, read(`.github/actions/${name}/action.yml`)]),
-)
+// Invariants of the whole repository and of the website: Every workflow, local action and job is read here. The release
+// suite in projects/release/tests/release-workflows.test.js owns the npm release workflows' own contracts, so a website
+// failure shows up here and an npm release failure there
+const workflows = loadWorkflows()
+const actions = loadActions()
 
 // The only jobs allowed to hold write scopes, and exactly which scopes they hold
 const writers = {
@@ -31,109 +25,8 @@ const writers = {
     "upstream-drift.yml/report": { issues: "write" },
 }
 
-// A static group queues every run behind the previous one, and a queued run is never cancelled
-function assertSerialized(concurrency, where) {
-    assert.equal(typeof concurrency?.group, "string", where)
-    assert.notEqual(concurrency.group.trim(), "", where)
-    assert.doesNotMatch(concurrency.group, /\$\{\{/, `${where} must share one group across runs`)
-    assert.equal(concurrency["cancel-in-progress"], false, where)
-    assert.equal(concurrency.queue, "max", where)
-}
-
-// Windows shells often lack bash on PATH. Git for Windows ships it in bin/ under its install root, which sits three
-// levels above the directory reported by `git --exec-path`, wherever Git is installed
-function windowsGitBash() {
-    const execPath = spawnSync("git", ["--exec-path"], { encoding: "utf8", windowsHide: true }).stdout?.trim()
-    const candidate = execPath ? join(execPath, "../../../bin/bash.exe") : ""
-    return candidate && existsSync(candidate) ? candidate : "bash"
-}
-const bash = process.platform === "win32" ? windowsGitBash() : "bash"
-
-function* jobs() {
-    for (const [file, workflow] of Object.entries(workflows))
-        for (const [id, job] of Object.entries(workflow.jobs)) yield { file, workflow, id, job }
-}
-
-function* steps() {
-    for (const { file, id, job } of jobs()) for (const step of job.steps ?? []) yield { where: `${file}/${id}`, step }
-    for (const [name, action] of Object.entries(actions))
-        for (const step of action.runs.steps ?? []) yield { where: `actions/${name}`, step }
-}
-
-/**
- * Evaluates the GitHub expression subset these workflows use: Context paths, quoted strings, ==, !=, !, && and ||,
- * parentheses and the startsWith, format, cancelled and always functions. A missing context value is null, and strings
- * compare without case, as on GitHub
- * @param {string} expression
- * @param {Record<string, any>} context
- */
-function evaluate(expression, context, status = { cancelled: false }) {
-    const body = String(expression).trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
-    const tokens = [...body.matchAll(/\s*('(?:[^']|'')*'|[A-Za-z_][\w.-]*|==|!=|&&|\|\||[!(),])/gy)].map((match) => match[1])
-    if (tokens.join("").length !== body.replace(/\s+/g, "").length) throw new Error(`Unsupported expression: ${body}`)
-    let position = 0
-    const peek = () => tokens[position]
-    const take = (token) => {
-        if (tokens[position] !== token) throw new Error(`Expected ${token} in ${body}`)
-        position++
-    }
-    const text = (value) => (value == null ? "" : String(value))
-    const equal = (a, b) => (typeof a === "string" && typeof b === "string" ? a.toLowerCase() === b.toLowerCase() : a === b)
-    const functions = {
-        startsWith: (value, prefix) => text(value).toLowerCase().startsWith(text(prefix).toLowerCase()),
-        format: (template, ...values) => template.replace(/\{(\d+)\}/g, (_, index) => text(values[Number(index)])),
-        cancelled: () => status.cancelled,
-        always: () => true,
-    }
-    const primary = () => {
-        const token = tokens[position++]
-        if (token === "(") {
-            const value = or()
-            take(")")
-            return value
-        }
-        if (token.startsWith("'")) return token.slice(1, -1).replaceAll("''", "'")
-        if (peek() === "(") {
-            take("(")
-            const args = []
-            while (peek() !== ")") {
-                args.push(or())
-                if (peek() === ",") take(",")
-            }
-            take(")")
-            return functions[token](...args)
-        }
-        return token.split(".").reduce((value, key) => (value == null ? null : (value[key] ?? null)), context)
-    }
-    const unary = () => (peek() === "!" ? (take("!"), !unary()) : primary())
-    const comparison = () => {
-        const left = unary()
-        if (peek() !== "==" && peek() !== "!=") return left
-        const negate = tokens[position++] === "!="
-        return equal(left, unary()) !== negate
-    }
-    const and = () => {
-        let value = comparison()
-        while (peek() === "&&") {
-            take("&&")
-            const right = comparison()
-            value = value ? right : value
-        }
-        return value
-    }
-    const or = () => {
-        let value = and()
-        while (peek() === "||") {
-            take("||")
-            const right = and()
-            value = value ? value : right
-        }
-        return value
-    }
-    const value = or()
-    if (position !== tokens.length) throw new Error(`Unparsed expression: ${body}`)
-    return value
-}
+const jobs = () => jobsOf(workflows)
+const steps = () => stepsOf(workflows, actions)
 
 test("Workflows default to read-only tokens and grant writes only to the reviewed jobs", () => {
     for (const [file, workflow] of Object.entries(workflows)) {
@@ -147,72 +40,6 @@ test("Workflows default to read-only tokens and grant writes only to the reviewe
         )
         assert.deepEqual(granted, writers[`${file}/${id}`] ?? {}, `${file}/${id} write permissions`)
     }
-})
-
-test("OIDC publication is confined to the protected environment after inspection", () => {
-    const publish = workflows["release-publish.yml"].jobs.publish
-    assert.equal(publish.environment, "package")
-    assert.equal(publish.needs, "inspect")
-    assertSerialized(publish.concurrency, "release-publish.yml/publish")
-    const setup = publish.steps.find((step) => step.id === "setup")
-    assert.equal(setup.with.install, false, "The publisher must not install the workspace")
-})
-
-test("Release tooling runs from the workflow commit and the release App token stays in one step", () => {
-    const publish = workflows["release-publish.yml"]
-    for (const [id, job] of Object.entries(publish.jobs))
-        for (const step of job.steps ?? [])
-            if (String(step.uses).startsWith("actions/checkout@"))
-                assert.equal(step.with?.ref, undefined, `release-publish.yml/${id} must check out the workflow commit`)
-    const source = readFileSync(join(repository, ".github/workflows/release-publish.yml"), "utf8")
-    assert.equal(source.match(/secrets\.RELEASE_APP_PRIVATE_KEY/g)?.length, 1)
-    assert.equal(source.match(/steps\.release_token\.outputs\.token/g)?.length, 1)
-    const reconcile = publish.jobs.reconcile
-    const ids = reconcile.steps.map((step) => step.id)
-    const token = reconcile.steps.find((step) => step.id === "release_token")
-    assert.match(token.uses, /^actions\/create-github-app-token@[a-f0-9]{40}$/)
-    assert.equal(token.with["permission-contents"], "write")
-    assert.equal(Object.keys(token.with).filter((key) => key.startsWith("permission-")).length, 1)
-    assert.equal(token.with["skip-token-revoke"], undefined)
-    assert.ok(ids.indexOf("verify") < ids.indexOf("release_token"), "npm bytes are verified before the token exists")
-    const announce = reconcile.steps.find((step) => step.id === "announce")
-    assert.equal(announce.env.GH_TOKEN, "${{ steps.release_token.outputs.token }}")
-    assert.equal(reconcile.environment, "package")
-    assert.deepEqual(reconcile.needs, ["inspect", "publish", "smoke"])
-})
-
-test("A superseded nightly publication skips the install checks, the announcement and the website deploy start", () => {
-    const { jobs } = workflows["release-publish.yml"]
-    assert.deepEqual(Object.keys(jobs.publish.outputs).sort(), ["superseded", "superseded_by"])
-    for (const name of Object.keys(jobs.publish.outputs))
-        assert.equal(jobs.publish.outputs[name], `\${{ steps.publish.outputs.${name} }}`)
-    // Without a status function, the default success requirement still applies to these conditions
-    for (const id of ["smoke", "reconcile"]) assert.equal(jobs[id].if, "needs.publish.outputs.superseded != 'true'", id)
-    assert.equal(jobs.website, undefined, "The website deploys in its own run, started by the announcement job")
-    const summary = jobs.publish.steps.find((step) => step.name === "Summarize npm publication")
-    assert.match(summary.with.next, /steps\.publish\.outputs\.superseded == 'true'.*steps\.publish\.outputs\.superseded_by/)
-})
-
-// Catches: A failed website deploy, or a failed start of one, turning a finished release red, or a deploy from a ref the
-// website environment refuses
-test("A published release starts Website on main in its own run and never waits for it", () => {
-    const reconcile = workflows["release-publish.yml"].jobs.reconcile
-    const ids = reconcile.steps.map((step) => step.id)
-    const start = reconcile.steps.find((step) => step.id === "website")
-    assert.ok(ids.indexOf("announce") < ids.indexOf("website"), "The website starts only after the release is announced")
-    for (const step of reconcile.steps.slice(ids.indexOf("website") + 1)) assert.equal(step.if, "always()", "Only the summary follows the start")
-    assert.equal(start.run, 'gh workflow run website.yml --repo "$GITHUB_REPOSITORY" --ref main')
-    assert.doesNotMatch(start.run, /watch|--wait/)
-    assert.equal(start.env.GH_TOKEN, "${{ github.token }}")
-    assert.equal(start["continue-on-error"], true)
-    assert.equal(reconcile.permissions.actions, "write")
-    const summary = reconcile.steps.at(-1)
-    assert.equal(JSON.parse(summary.with.checks)["Website deploy started on main"], "website", "The summary lists the start")
-    const website = workflows["website.yml"]
-    assert.ok(Object.hasOwn(website.on, "workflow_dispatch"))
-    assert.equal(website.on.workflow_call, undefined, "No workflow calls Website, so a release failure can't come from it")
-    for (const [file, workflow] of Object.entries(workflows))
-        for (const [id, job] of Object.entries(workflow.jobs)) assert.doesNotMatch(String(job.uses), /website\.yml/, `${file}/${id}`)
 })
 
 test("Every external action and container is pinned to an immutable digest", () => {
@@ -307,14 +134,6 @@ test("CI tests only the screens the changed files reach, compared with the pull 
     assert.equal(browser.env.EVENT_NAME, "${{ github.event_name }}")
 })
 
-// Catches: A release preparation without a reusable Check that still ran the full screen check, which belongs to the
-// Screens workflow, or that dropped the multi-version documentation check the package's docs snapshot depends on
-test("Release preparation without a reusable Check runs only the multi-version documentation browser check", () => {
-    const browser = workflows["release-prepare.yml"].jobs.prepare.steps.find((step) => step.id === "browser")
-    assert.equal(browser.run.trim(), "pnpm --filter fluxerly-docs test:versions")
-    assert.equal(browser.if, "steps.ci.outputs.reused == 'false'")
-})
-
 // Catches: A deploy delayed by the full screen check, or a push to main that changes what the website builds from
 // without any run testing every screen
 test("Screens tests every screen after pushes to main that change the website's inputs, and Website deploys without it", () => {
@@ -349,158 +168,6 @@ test("Screens tests every screen after pushes to main that change the website's 
         if (where.startsWith("website.yml/"))
             assert.doesNotMatch(String(step.run ?? "") + String(step.uses ?? ""), /test:browser|playwright/i, `${where} runs no screen check`)
     assert.equal(workflows["website.yml"].jobs.deploy["timeout-minutes"], 30)
-})
-
-test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped candidate", () => {
-    const workflow = workflows["release-prepare.yml"]
-    const [schedule] = workflow.on.schedule
-    assert.equal(schedule.cron, "0 0,12 * * *")
-    // GitHub reads schedules as UTC unless a timezone is named, so this keeps the runs at the same Berlin times all year
-    assert.equal(schedule.timezone, "Europe/Berlin")
-    assert.deepEqual(
-        [workflow.on.workflow_dispatch.inputs.nightly.type, workflow.on.workflow_dispatch.inputs.nightly.default],
-        ["boolean", false],
-    )
-    // Scheduled runs have no inputs, so the event alone must select nightly preparation and its shared queue
-    const nightly = "github.event_name == 'schedule' || inputs.nightly"
-    const candidate = workflow.jobs.prepare.steps.find((step) => step.id === "candidate")
-    assert.equal(candidate.env.RELEASE_NIGHTLY, `\${{ ${nightly} }}`)
-    // The github context has no run start time, so the step dates the version with its own UTC clock, read once for
-    // both planning and preparation. The helper loads only for a nightly, so the step itself still runs for an older RC or
-    // Stable source, which must include dated nightly support once a dated nightly is published
-    assert.equal(candidate.env.RELEASE_NIGHTLY_STARTED_AT, undefined)
-    assert.ok(!candidate.run.includes("run_started_at"), "The github context has no run_started_at")
-    assert.ok(!/^\s*import \{[^}]*nightlyDateOf/m.test(candidate.run), "nightlyDateOf must not be a static import")
-    assert.equal(candidate.run.match(/nightlyDateOf\(new Date\(\)\.toISOString\(\)\)/g)?.length, 1)
-    // Its number is the run number
-    assert.equal(candidate.env.RELEASE_NIGHTLY_NUMBER, "${{ github.run_number }}")
-    // An unreviewed nightly must build the workflow commit that Release publish checks against main, never source_ref
-    const checkout = workflow.jobs.prepare.steps.find((step) => step.id === "checkout")
-    assert.equal(checkout.with.ref, `\${{ (${nightly}) && github.sha || inputs.source_ref }}`)
-    assert.ok(workflow.concurrency.group.includes(`(${nightly}) && 'nightly'`), workflow.concurrency.group)
-    const outputs = workflow.jobs.prepare.outputs
-    assert.deepEqual(Object.keys(outputs).sort(), ["checksum", "skipped"])
-    for (const key of ["skipped", "checksum"])
-        assert.equal(outputs[key], `\${{ steps.candidate.outputs.${key} }}`, key)
-    const job = workflow.jobs.publish
-    assert.equal(job.needs, "prepare")
-    // Both channels publish after successful preparation. A skipped run has no candidate
-    assert.equal(job.if, "needs.prepare.outputs.skipped == 'false'")
-    // Node is set up only for the job summary, without installing the workspace
-    assert.equal(job.steps.find((step) => step.id === "setup").with.install, false)
-    const runs = job.steps.filter((step) => step.run)
-    assert.equal(runs.length, 1, "The publish job runs only its dispatch")
-    const [dispatch] = runs
-    assert.doesNotMatch(dispatch.run, /\b(install|pnpm|npm|node)\b/)
-    assert.deepEqual(dispatch.env, {
-        GH_TOKEN: "${{ github.token }}",
-        PREPARATION_RUN_ID: "${{ github.run_id }}",
-        CANDIDATE_CHECKSUM: "${{ needs.prepare.outputs.checksum }}",
-    })
-    // Run the dispatch against a fake gh to read the exact arguments it receives
-    const checksum = "c".repeat(64)
-    const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'gh() { printf "%s\\n" "$@"; }\n' + dispatch.run], {
-        encoding: "utf8",
-        timeout: 10_000,
-        windowsHide: true,
-        env: { ...process.env, GITHUB_REPOSITORY: "owner/repo", PREPARATION_RUN_ID: "30", CANDIDATE_CHECKSUM: checksum },
-    })
-    assert.ifError(result.error)
-    assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
-        "workflow", "run", "release-publish.yml", "--repo", "owner/repo", "--ref", "main",
-        "-f", "preparation_run_id=30", "-f", `candidate_checksum=${checksum}`,
-    ])
-    // The dispatched fields are exactly the inputs Release publish accepts
-    assert.deepEqual(Object.keys(workflows["release-publish.yml"].on.workflow_dispatch.inputs).sort(), [
-        "candidate_checksum",
-        "preparation_run_id",
-    ])
-})
-
-// Catches: Stable losing its automatic dispatch, or a checksum being replaced between preparation and gh
-test("Stable and nightly dispatch their own preparation run and the checksum read from the candidate", () => {
-    const workflow = workflows["release-prepare.yml"]
-    const prepare = workflow.jobs.prepare
-    const publish = workflow.jobs.publish
-    assert.deepEqual(publish.permissions, { contents: "read", actions: "write" })
-    const candidate = prepare.steps.find((step) => step.id === "candidate")
-    const dispatch = publish.steps.find((step) => step.id === "dispatch")
-    const script = candidate.run.match(/node --input-type=module <<'NODE'\n([\s\S]*)\nNODE/)[1]
-        .replace(/^import .*\n/gm, "")
-    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-auto-publish-"))
-    try {
-        for (const [index, [event, nightly, channel]] of [
-            ["workflow_dispatch", false, "stable"],
-            ["workflow_dispatch", true, "nightly"],
-            ["schedule", false, "nightly"],
-        ].entries()) {
-            const source = "a".repeat(40)
-            const checksum = String(index + 1).repeat(64)
-            const output = join(directory, `outputs-${index}`)
-            // External commands and candidate reading are fixtures. Execute the workflow's actual output-writing code
-            // Nightly planning's dynamic import reads its real date helper, without calling a registry
-            const fixtures = `
-                import { appendFileSync } from 'node:fs'
-                import { join } from 'node:path'
-                const execFileSync = (command, args) => {
-                    if (command === 'git') return '${source}'
-                    if (args[0] === 'release:plan') return JSON.stringify({ version: '1001.0.0-nightly.20261104.1' })
-                    return JSON.stringify({ skipped: false })
-                }
-                const readCandidate = async () => ({ sourceCommit: '${source}', docs: {}, version: '1001.0.0', channel: '${channel}', checksum: '${checksum}' })
-            `
-            const prepared = spawnSync(process.execPath, ["--input-type=module"], {
-                cwd: join(repository, "projects"), input: fixtures + script, encoding: "utf8", timeout: 10_000,
-                env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "41", RELEASE_NIGHTLY: String(channel === "nightly"), RELEASE_LINE: "", RELEASE_NIGHTLY_NUMBER: "1" },
-            })
-            assert.ifError(prepared.error)
-            assert.equal(prepared.status, 0, prepared.stderr)
-            const values = Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").map((line) => {
-                const split = line.indexOf("=")
-                return [line.slice(0, split), line.slice(split + 1)]
-            }))
-            const context = { github: { event_name: event, run_id: "41", token: "synthetic" }, inputs: { nightly }, steps: { candidate: { outputs: values } } }
-            const outputs = Object.fromEntries(Object.entries(prepare.outputs).map(([key, value]) => [key, evaluate(value, context)]))
-            context.needs = { prepare: { outputs } }
-            assert.equal(evaluate(publish.if, context), true, `${channel} must start publication`)
-            const env = Object.fromEntries(Object.entries(dispatch.env).map(([key, value]) => [key, evaluate(value, context)]))
-            const sent = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'gh() { printf "%s\\n" "$@"; }\n' + dispatch.run], {
-                encoding: "utf8", timeout: 10_000, windowsHide: true,
-                env: { ...process.env, ...env, GITHUB_REPOSITORY: "owner/repo" },
-            })
-            assert.ifError(sent.error)
-            assert.equal(sent.status, 0, sent.stderr)
-            assert.deepEqual(sent.stdout.trim().split(/\r?\n/), [
-                "workflow", "run", "release-publish.yml", "--repo", "owner/repo", "--ref", "main",
-                "-f", "preparation_run_id=41", "-f", `candidate_checksum=${checksum}`,
-            ])
-            assert.match(values.publish_command, new RegExp(`-f preparation_run_id=41 -f candidate_checksum=${checksum}$`))
-            for (const skipped of ["true", ""]) {
-                outputs.skipped = skipped
-                assert.equal(evaluate(publish.if, context), false, "No candidate must not dispatch")
-            }
-        }
-    } finally {
-        rmSync(directory, { recursive: true, force: true })
-    }
-})
-
-test("Version pull requests have no channel input and derive readiness from the epoch", () => {
-    const workflow = workflows["release-version.yml"]
-    assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), ["epoch", "line", "source_ref"])
-    const version = workflow.jobs.version.steps.find((step) => step.id === "version")
-    assert.equal(version.env.RELEASE_CHANNEL, "${{ inputs.epoch && 'nightly' || 'stable' }}")
-    assert.equal(version.env.RELEASE_EPOCH, "${{ inputs.epoch }}")
-})
-
-
-test("Release and website work is serialized with read-only caches and never cancelled mid-run", () => {
-    for (const file of ["release-prepare.yml", "release-version.yml", "release-publish.yml", "website.yml", "screens.yml"])
-        assert.equal(workflows[file]["cache-mode"], "read", `${file} cache access`)
-    for (const file of ["release-prepare.yml", "release-version.yml", "website.yml"])
-        assert.equal(workflows[file].concurrency["cancel-in-progress"], false, file)
-    assertSerialized(workflows["release-publish.yml"].jobs.reconcile.concurrency, "release-publish.yml/reconcile")
 })
 
 // Catches: A merged version pull request whose Check runs keep going, a version branch whose runs share no group with
@@ -559,6 +226,51 @@ test("Release and website workflows only restore Fluxer's pinned files that CI s
     }
 })
 
+// Catches: A deploy of a source whose whole Check did not pass, or one that falls back to deploying without evidence
+test("Website deploys only after the check job of the exact main-push Check run passed, with no fallback", () => {
+    const deploy = workflows["website.yml"].jobs.deploy.steps
+    const ci = deploy.find((step) => step.id === "ci")
+    assert.equal(ci.run, "node web/scripts/checked-source.js --scope check")
+    assert.doesNotMatch(ci.run, /allow-missing/)
+    const order = deploy.map((step) => step.id)
+    assert.ok(order.indexOf("workspace") < order.indexOf("ci") && order.indexOf("ci") < order.indexOf("source") && order.indexOf("source") < order.indexOf("deploy"))
+    assert.equal(deploy.find((step) => step.id === "source").env.CHECKED_SOURCE, "${{ steps.ci.outputs.source_commit }}")
+})
+
+// Catches: A workflow that calls Website, which would let a release failure come from a deploy, or a deploy that cannot be
+// started by hand or by the announcement job
+test("Website runs only on its own dispatch, and no workflow calls it", () => {
+    const website = workflows["website.yml"]
+    assert.ok(Object.hasOwn(website.on, "workflow_dispatch"))
+    assert.equal(website.on.workflow_call, undefined, "No workflow calls Website, so a release failure can't come from it")
+    for (const [file, workflow] of Object.entries(workflows))
+        for (const [id, job] of Object.entries(workflow.jobs)) assert.doesNotMatch(String(job.uses), /website\.yml/, `${file}/${id}`)
+})
+
+test("Website and Screens work reads caches without saving them and Website is never cancelled mid-run", () => {
+    for (const file of ["website.yml", "screens.yml"]) assert.equal(workflows[file]["cache-mode"], "read", `${file} cache access`)
+    assert.equal(workflows["website.yml"].concurrency["cancel-in-progress"], false)
+})
+
+// Catches: A job added to Check that its required result does not wait for, which would let it fail without blocking a merge
+test("The required check job is named check, always runs and waits for every job except the release trigger", () => {
+    const { jobs: ci } = workflows["ci.yml"]
+    assert.equal(ci.check.name, "check")
+    assert.equal(ci.check.if, "always()")
+    const reached = new Set()
+    const visit = (/** @type {string} */ id) => {
+        for (const need of [ci[id].needs ?? []].flat()) {
+            if (reached.has(need)) continue
+            reached.add(need)
+            visit(need)
+        }
+    }
+    visit("check")
+    assert.deepEqual([...reached].sort(), Object.keys(ci).filter((id) => !["check", "release-trigger"].includes(id)).sort())
+    // The release trigger is downstream of npm-check and is excluded from the required merge result
+    assert.ok(![ci.check.needs].flat().includes("release-trigger"))
+})
+
 test("GitHub downloads that repeat are kept: release snapshots by CI for the website, upstream files by the drift job", () => {
     const releases = (/** @type {any} */ step) => step.with?.path === "projects/web/.cache/releases"
     const website = workflows["website.yml"].jobs.deploy.steps
@@ -609,28 +321,6 @@ test("GitHub downloads that repeat are kept: release snapshots by CI for the web
     assert.equal(zizmorCache.with.path, "~/.cache/pip")
     assert.equal(zizmorCache.with.key, `zizmor-pip-\${{ runner.os }}-${zizmor.with.version}`)
     assert.ok(lint.indexOf(zizmorCache) < lint.indexOf(zizmor))
-
-    // Release preparation restores Check's browser download under the same key, and installs Chromium only on a miss
-    const browserKey = (/** @type {any[]} */ list) => list.find((step) => step.id === "browser_cache")
-    const prepare = workflows["release-prepare.yml"].jobs.prepare.steps
-    assert.match(browserKey(prepare).uses, /^actions\/cache\/restore@/)
-    assert.equal(browserKey(prepare).with.key, browserKey(browser).with.key)
-    assert.equal(browserKey(prepare).with.path, browserKey(browser).with.path)
-    assert.equal(prepare.find((step) => step.id === "playwright").run, browser.find((step) => step.id === "playwright").run)
-    assert.equal(prepare.find((step) => step.id === "browser_install").run, browser.find((step) => step.id === "browser_install").run)
-    assert.ok(prepare.findIndex((step) => step.id === "browser_cache") < prepare.findIndex((step) => step.id === "browser_install"))
-    for (const id of ["playwright", "browser_cache", "browser_install"]) assert.equal(prepare.find((step) => step.id === id).if, "steps.ci.outputs.reused == 'false'", id)
-})
-
-// Catches: A preparation without a Check that skipped a floor Node guard CI runs, or a reused preparation that built the
-// website it never reads
-test("Release preparation builds only the SDK it reads and its fallback runs every floor Node check CI runs", () => {
-    const prepare = workflows["release-prepare.yml"].jobs.prepare.steps
-    assert.equal(prepare.find((step) => step.id === "build").run, "pnpm --filter @neontechspace/fluxerly build")
-    const floor = prepare.find((step) => step.id === "floor").run
-    const ci = workflows["ci.yml"].jobs.consumers.steps.filter((step) => step.if === "matrix.runtime" && step.run)
-    assert.ok(ci.length >= 3)
-    for (const step of ci) assert.ok(floor.includes(step.run), `The fallback runs ${step.run}`)
 })
 
 test("A lint run uses a kept actionlint archive only when it matches the pinned checksum, and downloads and checks it otherwise", () => {
@@ -700,93 +390,6 @@ test("A cache miss in the drift job reads the trusted run's kept files, and a fa
             assert.equal(existsSync(join(temporary, "projects/release/.cache/upstream", "a".repeat(40))), !fail)
             assert.equal(existsSync(summary), Boolean(fail), "Only a failed read is reported")
             if (fail) assert.match(readFileSync(summary, "utf8"), /downloaded again/)
-        }
-    } finally {
-        rmSync(directory, { recursive: true, force: true })
-    }
-})
-
-// Catches: A gate that passes with a skipped required job, or a version-only pass with only some jobs skipped for it
-test("The required CI gate needs every job and rejects failed, cancelled, skipped and missing results", () => {
-    const ci = workflows["ci.yml"]
-    const check = ci.jobs.check
-    const gated = Object.keys(ci.jobs).filter((id) => !["check", "release-trigger"].includes(id))
-    assert.deepEqual([...check.needs].sort(), gated.sort())
-    assert.equal(check.if, "always()")
-    const groups = Object.keys(check.steps[0].env).filter((key) => key.endsWith("_RESULT") && key !== "REUSE_RESULT")
-    assert.equal(groups.length, gated.length - 1, "Every check job result reaches the gate")
-    // Check jobs skip for a reused result, and all but the tooling job for a version-only change. A failed lookup, which
-    // reports neither, still runs them
-    const outputs = (reused, versionOnly) => ({ needs: { reuse: { outputs: { reused, version_only: versionOnly } } } })
-    for (const id of gated.filter((id) => id !== "reuse")) {
-        const job = ci.jobs[id]
-        assert.equal(job.needs, "reuse", id)
-        assert.equal(evaluate(job.if, outputs("", "")), true, id)
-        assert.equal(evaluate(job.if, outputs("false", "false")), true, id)
-        assert.equal(evaluate(job.if, outputs("true", "false")), false, id)
-        assert.equal(evaluate(job.if, outputs("false", "true")), id === "tooling", id)
-        assert.equal(evaluate(job.if, outputs("", ""), { cancelled: true }), false, id)
-    }
-    // The lookup compares with the parent commit and hands both results to the jobs and the gate
-    const reuse = ci.jobs.reuse
-    assert.equal(reuse.steps.find((step) => step.id === "checkout").with["fetch-depth"], 2)
-    assert.equal(reuse.outputs.version_only, "${{ steps.reuse.outputs.version_only }}")
-    assert.equal(reuse.outputs.parent_run_url, "${{ steps.reuse.outputs.parent_run_url }}")
-    assert.equal(check.steps[0].env.VERSION_ONLY, "${{ needs.reuse.outputs.version_only }}")
-    assert.equal(check.steps[0].env.PARENT_RUN_URL, "${{ needs.reuse.outputs.parent_run_url }}")
-    // The version-only steps run only for a version-only change
-    for (const id of ["version", "format"]) {
-        const step = ci.jobs.tooling.steps.find((step) => step.id === id)
-        assert.equal(evaluate(step.if, outputs("false", "true")), true, id)
-        assert.equal(evaluate(step.if, outputs("false", "false")), false, id)
-    }
-    // Those skipped jobs make the implicit success() condition false, so the release trigger reads check's own result
-    assert.match(ci.jobs["release-trigger"].if, /^\$\{\{ !cancelled\(\) && needs\.check\.result == 'success' && /)
-    const passed = { ...Object.fromEntries(groups.map((key) => [key, "success"])), REUSE_RESULT: "success", REUSED_RUN_URL: "" }
-    const skipped = Object.fromEntries(groups.map((key) => [key, "skipped"]))
-    const reused = { REUSE_RESULT: "success", REUSED_RUN_URL: "https://github.com/owner/repo/actions/runs/1" }
-    const versionOnly = {
-        ...skipped,
-        TOOLING_RESULT: "success",
-        REUSE_RESULT: "success",
-        REUSED_RUN_URL: "",
-        VERSION_ONLY: "true",
-        PARENT_RUN_URL: "https://github.com/owner/repo/actions/runs/2",
-    }
-    // [results, expected exit status]
-    const cases = [
-        [passed, 0],
-        // A failed reuse lookup is harmless once the full check jobs passed
-        [{ ...passed, REUSE_RESULT: "failure" }, 0],
-        [{ ...skipped, ...reused }, 0],
-        [{ ...skipped, ...reused, REUSE_RESULT: "failure" }, 1],
-        [{ ...skipped, REUSE_RESULT: "success", REUSED_RUN_URL: "" }, 1],
-        [versionOnly, 0],
-        // A version-only claim from a failed lookup job or without the parent's passing Check is not trusted
-        [{ ...versionOnly, REUSE_RESULT: "failure" }, 1],
-        [{ ...versionOnly, PARENT_RUN_URL: "" }, 1],
-        [{ ...versionOnly, VERSION_ONLY: "false" }, 1],
-    ]
-    for (const key of groups)
-        for (const result of ["failure", "cancelled", "skipped", ""]) cases.push([{ ...passed, [key]: result }, 1])
-    for (const result of ["failure", "cancelled", "skipped", ""]) cases.push([{ ...versionOnly, TOOLING_RESULT: result }, 1])
-    // Every other job must have been skipped for the version-only change
-    for (const key of groups.filter((key) => key !== "TOOLING_RESULT"))
-        for (const result of ["success", "failure", "cancelled", ""]) cases.push([{ ...versionOnly, [key]: result }, 1])
-    const root = realpathSync(tmpdir())
-    const directory = mkdtempSync(join(root, "fluxerly-gate-"))
-    try {
-        for (const [index, [results, expected]] of cases.entries()) {
-            const summary = join(directory, `gate-${index}.md`)
-            const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", check.steps[0].run], {
-                cwd: directory,
-                encoding: "utf8",
-                timeout: 10_000,
-                windowsHide: true,
-                env: { ...process.env, ...results, GITHUB_STEP_SUMMARY: summary },
-            })
-            assert.ifError(result.error)
-            assert.equal(result.status, expected, `case ${index}: ${result.stderr}`)
         }
     } finally {
         rmSync(directory, { recursive: true, force: true })

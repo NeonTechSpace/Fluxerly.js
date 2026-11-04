@@ -20,7 +20,7 @@ Stable can only ship what a nightly already shipped. The tooling compares the tw
 2. Run [Release version PR](/.github/workflows/release-version.yml) with `source_ref: main`.
    It opens a `release/version-VERSION` pull request with the new version and changelog, and starts [Check](/.github/workflows/ci.yml) on it. The version number comes from the release notes, so there's nothing to type
 3. Review the version and changelog, then merge after Check passes. Merging is the release decision
-4. Check runs again on `main`. When it passes, it starts [Release prepare](/.github/workflows/release-prepare.yml) for that commit.
+4. Check runs again on `main`. When its `npm release checks` job passes, it starts [Release prepare](/.github/workflows/release-prepare.yml) for that commit, even while the website checks are still running or have failed.
    After successful preparation, it starts [Release publish](/.github/workflows/release-publish.yml) itself with its own run ID and the candidate SHA256 it computed
 5. Follow Release publish. It publishes the retained package, installs it from npm on both supported Node versions, announces the GitHub release and starts the [Website](/.github/workflows/website.yml) deploy on `main` in its own run, which it doesn't wait for, so a website failure never fails the release
 6. Confirm the result in the run summaries.
@@ -80,7 +80,7 @@ When a pending major or minor note is removed, the next nightly's version can dr
 | `The source holds a nightly target, not a release` | Release prepare was started before the Stable version PR was merged | Run Release version PR, merge it, then prepare |
 | `No pending Changesets fragments or readiness promotion` or `Publishable SDK bytes changed` | Nothing describes this release | Add a release note |
 | `The source branch moved after version preparation` | New commits arrived during Release version PR | Rerun Release version PR |
-| `Check run N did not pass` or `The exact-source Check gate timed out` | Release prepare or Website found no passing Check for the source | Fix or rerun Check, then rerun the blocked workflow |
+| `Check run N did not pass its JOB job`, `Check run N has no completed JOB job` or `The exact-source Check gate timed out` | Release prepare, which reads `npm release checks`, or Website, which reads `check`, found no passing certificate job in the Check run for the source. A run from before the certificate existed has none | Fix Check, or re-run all jobs of the named run when its latest attempt lacks the job, then rerun the blocked workflow. A source from before the certificates needs a reviewed descendant |
 | `GitHub OIDC configuration is incomplete, refusing token fallback` | The publisher has no OIDC token | Confirm `id-token: write`, the `package` environment and npm trusted publishing |
 
 Unchanged publishable content on a nightly is not a failure. Release prepare retains no candidate in that case
@@ -158,9 +158,9 @@ Each nightly compares against the previous nightly on the same `major.minor` lin
 
 | Workflow | Trigger | Inputs and result |
 | --- | --- | --- |
-| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, website and release tooling, workflow lint, browser and two-version consumer jobs in parallel. The browser job tests the parts and pages the changed files reach, compared with a pull request's base or the commit a push started from, and Screens tests every screen after pushes to `main`. The `check` job requires all of them, reuses an earlier passing run for identical content, or for a [version-only change](/docs/RELEASING.md#version-only-changes) requires only the website and release tooling job |
+| [Check](/.github/workflows/ci.yml) | Pull requests, pushes to `main`, manual and version-branch dispatches | Runs SDK, release tooling, website and contribution, workflow lint, browser and two-version consumer jobs in parallel. The browser job tests the parts and pages the changed files reach, compared with a pull request's base or the commit a push started from, and Screens tests every screen after pushes to `main`. The `npm release checks` job certifies the SDK, release tooling and consumer jobs alone. The `check` job requires that certificate and the website and contribution, workflow lint and browser jobs, reuses an earlier passing run for identical content, or for a [version-only change](/docs/RELEASING.md#version-only-changes) requires only the certificate and the website and contribution job |
 | [Release version PR](/.github/workflows/release-version.yml) | Manual | `source_ref` and optional `line`. Opens the Stable version pull request, or with `epoch`, a pull request that sets a new epoch as the nightly target |
-| [Release prepare](/.github/workflows/release-prepare.yml) | Twice a day for a nightly, dispatched by Check after a version change on `main`, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Starts Release publish for any retained candidate and prints the command for recovery |
+| [Release prepare](/.github/workflows/release-prepare.yml) | Twice a day for a nightly, dispatched by Check after a version change on `main` once its `npm release checks` passed, or manual | `source_ref`, optional `line` and `nightly`. Retains the candidate artifact for 90 days. Starts Release publish for any retained candidate and prints the command for recovery |
 | [Release publish](/.github/workflows/release-publish.yml) | Started by a successful Release prepare, or manual for recovery | `preparation_run_id` and `candidate_checksum`. Publishes, checks registry installs, announces, then starts Website on `main` without waiting for it |
 | [Website](/.github/workflows/website.yml) | Started on `main` by Release publish after the announcement, or manual | Always builds `main` from the published versions' snapshots and deploys it to `https://fluxerly.neontechspace.com` |
 | [Screens](/.github/workflows/screens.yml) | Pushes to `main`, including merged pull requests, that change the website, the SDK source, examples, manifest or changelog the docs build from, Fluxer's pinned files or the dependencies, or manual | No inputs. Builds the site from that commit and runs the full screen check, `test:browser` on every screen, except after a [version-only](/docs/RELEASING.md#version-only-changes) push. Website doesn't wait for it |
@@ -175,34 +175,42 @@ The candidate commit is only the tag target and must be reachable from `main`
 Release version PR builds the version change in a read-only job, then a separate job opens the pull request.
 Pull request events for pull requests created or updated with `GITHUB_TOKEN` are not guaranteed, so that job also dispatches Check on the version branch
 
-Identical content needs one full Check. The first job of every Check run compares the checked-out git tree with other push and dispatched Check runs in this repository.
-The newest conclusive matching run by completion time decides, regardless of its run ID. When it passed, the check jobs are skipped and the required `check` job passes with a summary that links that run.
-An unfinished matching attempt is awaited for up to 40 minutes only when it started before the current attempt, so matching runs never wait for each other. A failed or uncertain lookup runs the full Check.
+Check reports its result in two certificate jobs.
+The `npm release checks` job passes only when the SDK checks, the release tooling checks and the SDK consumers on both Node versions passed. The website and contribution checks, workflow lint, the browser job and the release trigger feed nothing into it.
+The `check` job is the required status. It requires that certificate and the website and contribution, workflow lint and browser jobs
+
+Identical content needs each certificate once. Every Check run starts two lookup jobs, one for `check` and one for `npm release checks`, and each compares the checked-out git tree with other push and dispatched Check runs in this repository.
+A lookup reads only its own certificate job, from the latest attempt of each matching run, so a run counts as soon as that job has passed, while the rest of the run is still going or has failed. The npm lookup never waits for website jobs. A run from before a certificate existed has none and never counts.
+The newest conclusive certificate by completion time decides, regardless of its run ID, and a failed certificate blocks an older pass. When it passed, the jobs behind it are skipped and the certificate passes with a summary that links that run.
+An unfinished certificate is awaited for up to 40 minutes only when its run started before the current attempt, so matching runs never wait for each other. A failed or uncertain lookup runs the checks behind that certificate.
+A reuse counts only from a lookup job that succeeded and returned a numeric run, its attempt and that run's URL, so outputs left behind by a failed lookup never skip a check.
 Pull request runs never serve as evidence, because they check a merge commit rather than the recorded branch head.
-Any run that reuses a passing Check, including a manual one, tests nothing new. Every screen is tested only by Screens, after each push to `main` that changes what the website builds from
+Any run that reuses a passing certificate, including a manual one, tests nothing new. Every screen is tested only by Screens, after each push to `main` that changes what the website builds from
 
 #### Version-only changes
 
 A version pull request changes only what Release version PR writes, so Check skips most of its jobs for it.
-When a run reuses no earlier result, its first job compares the commit with its first parent, which is the pull request's base for a pull request run and the previous `main` commit for a squash-merged push.
+When a run reuses no earlier result, each lookup job compares the commit with its first parent, which is the pull request's base for a pull request run and the previous `main` commit for a squash-merged push.
 The change is version-only when it changes only these, and anything else, including any other line of the SDK manifest, runs the full Check:
 
 - The top-level `version` line of `projects/sdk/package.json`, to a higher version
 - A new section for that version in `projects/sdk/CHANGELOG.md`, with every other line unchanged
 - Deleted Changesets notes in `projects/.changeset/` and `projects/.changeset/pre/`, notes moved unchanged into `projects/.changeset/pre/`, and `projects/.changeset/pre.json`
 
-A version-only change also needs a passing Check for the parent commit's content, found and awaited as for identical content. Every such pass therefore traces back to a full Check of everything but the version files.
-The run then runs only the website and release tooling job, because the website builds its changelog page and search from the new notes. That job also checks that the version, its changelog section and the Changesets state agree, and the changelog's formatting and em dashes.
-The `check` job passes only when that job passed and every other check job was skipped for the version-only change. The `main` push run after merging passes the same way, and Release prepare reuses it like any passing main-push Check. Release prepare still refuses a Stable whose package content differs from the newest nightly.
+A version-only change also needs a passing certificate for the parent commit's content, found and awaited as for identical content.
+Each lookup needs the parent's own certificate, `npm release checks` for the npm lookup and `check` for the full one, so neither stands in for the other. Every such pass therefore traces back to actual checks of everything but the version files.
+The run then runs the release tooling job and the website and contribution job, because the website builds its changelog page and search from the new notes. The release tooling job also checks that the version, its changelog section and the Changesets state agree, and the changelog's formatting and em dashes.
+The `npm release checks` job passes only when the release tooling job passed and the SDK and consumer jobs were skipped for the version-only change. The `check` job passes only when that certificate and the website and contribution job passed and the workflow lint and browser jobs were skipped. The `main` push run after merging passes the same way, and Release prepare reuses its certificate like any passing main-push Check. Release prepare still refuses a Stable whose package content differs from the newest nightly.
 Screens skips its screen check for a push to `main` whose change from its first parent is version-only
 
 Check runs for one version branch of this repository share a concurrency group, so a newer run cancels an older one. Merging or closing the version pull request starts Version PR closed, which joins that group and cancels the runs still going
 
-Release prepare reuses the newest successful main-push Check for the exact source, waiting while it runs. A main-push Check that reused identical content counts as successful.
-Only a verified absence of such a run falls back to the full workspace check, the multi-version documentation check and the declared-minimum-Node checks. The full screen check stays with Screens
+Release prepare reuses the `npm release checks` job of the newest main-push Check run for the exact source, waiting while that job runs. The rest of that run may still be going, or may have failed in the website and contribution checks, workflow lint, the browser job or the release trigger, because a package reads none of them. A reuse of that certificate from an earlier identical run counts as successful.
+A run that finished without the certificate or with it failed stops preparation. Release prepare runs the helper of the source it checks out, so a source from before the certificates, whose helper does not know the scope option and whose Check has no `npm release checks` job, is rejected, and a rerun of its old Check cannot add the job. Prepare a reviewed descendant that contains the certificates. If a latest attempt lacks the job, re-run all jobs of that run so the attempt holds it. Only a verified absence of any main-push Check run for the source falls back to the SDK checks, the release tooling checks, the workspace script lint and the declared-minimum-Node checks. The full screen check stays with Screens and the browser checks with Check.
 Preparation always builds fresh output, snapshots the documentation and installs the candidate's actual tarball before retaining it
 
-Check on `main` dispatches Release prepare only when its own run passes. A newer push cancels an older Check, so dispatch Release prepare manually if a version change was superseded
+Check on `main` dispatches Release prepare when its own `npm release checks` pass, whatever the website checks report. A newer push cancels an older Check, so dispatch Release prepare manually if a version change was superseded.
+Website still requires the `check` job of the same run before it deploys, so a source whose website or workflow lint checks failed is published to npm but not deployed
 
 Release prepare starts Release publish from its last job for both Stable and nightly candidates, so Release publish waits up to 5 minutes for the preparation run to finish before trusting it
 
