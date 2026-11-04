@@ -9,3 +9,13 @@ allowBuilds:
   sharp: true
 minimumReleaseAgeExclude:
   - zod@4.6.4
+# Security fixes for parents that pin a vulnerable version. Remove each once its parent's own range allows the fix
+overrides:
+  # Miniflare, which Wrangler runs for the website's local Pages functions, pins undici 7.29.1. 7.30.1 fixes the open undici 7 advisories
+  miniflare>undici: 7.30.1
+  # TypeDoc 0.28 allows only minimatch 10, which every advisory below 11.0.1 covers. Its patch below replaces the one call
+  # minimatch 11 removed
+  typedoc>minimatch: 11.0.1
+patchedDependencies:
+  # Uses minimatch 11's partial match where TypeDoc 0.28.20 calls the removed matchOne. Drop it with the override above
+  typedoc@0.28.20: patches/typedoc@0.28.20.patch

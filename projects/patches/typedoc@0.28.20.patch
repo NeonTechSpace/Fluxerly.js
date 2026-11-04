@@ -1,0 +1,19 @@
+diff --git a/dist/node-utils.js b/dist/node-utils.js
+index 96a483d44c9ca066a5128dc40abcffdb8a3aee4b..b71eb0b986bb0a8d72da69e6653b15f62f196512 100644
+--- a/dist/node-utils.js
++++ b/dist/node-utils.js
+@@ -325,12 +325,8 @@ function glob(pattern, root, options = {}) {
+       if (childPath[childPath.length - 1] === "node_modules" && !shouldIncludeNodeModules) {
+         return false;
+       }
+-      return mini.set.some((row) => mini.matchOne(
+-        childPath,
+-        row,
+-        /* partial */
+-        true
+-      ));
++      // minimatch 11 has no public matchOne. A partial match of the joined path tests each row the same way
++      return mini.match(childPath.join("/"), true);
+     },
+     matchDirectories: options.includeDirectories,
+     followSymlinks: options.followSymlinks

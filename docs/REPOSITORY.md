@@ -64,7 +64,7 @@ Run shared pnpm commands from that directory
 | --- | --- |
 | [AGENTS.md](/AGENTS.md) | Repository-specific instructions for coding agents |
 | [projects/package.json](/projects/package.json) | Private workspace root and accepted pnpm major |
-| [projects/pnpm-workspace.yaml](/projects/pnpm-workspace.yaml) | Includes the SDK, release tooling and website in one workspace |
+| [projects/pnpm-workspace.yaml](/projects/pnpm-workspace.yaml) | Includes the SDK, release tooling and website in one workspace, and holds the security overrides for parents that pin a vulnerable dependency, each with its reason, and the dependency patches in [projects/patches](/projects/patches/) that an override needs |
 | [projects/pnpm-lock.yaml](/projects/pnpm-lock.yaml) | Shared, generated dependency lockfile for the workspace |
 | [projects/.node-version](/projects/.node-version) | One development Node.js version source |
 | [.gitattributes](/.gitattributes) | Shared Git text and line-ending rules |
