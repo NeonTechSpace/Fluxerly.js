@@ -4,18 +4,18 @@
     "floors": {
         "tune": {
             "hit1": 0.775,
-            "hit3": 0.862,
+            "hit3": 0.861,
             "mrr": 0.822
         },
         "holdout": {
             "hit1": 0.811,
-            "hit3": 0.855,
+            "hit3": 0.854,
             "mrr": 0.835
         }
     },
     "ceilings": {
         "tune": {
-            "missed": 25
+            "missed": 26
         },
         "holdout": {
             "missed": 18
@@ -3001,19 +3001,9 @@
             "kind": "github",
             "set": "tune",
             "expect": [
-                "/docs/support-and-compatibility/",
-                "/docs/changelog/"
+                "/docs/support-and-compatibility/"
             ],
             "source": "GitHub issue 23"
-        },
-        {
-            "q": "release 1000.0.0",
-            "kind": "github",
-            "set": "tune",
-            "expect": [
-                "/docs/changelog/"
-            ],
-            "source": "GitHub release pull requests"
         },
         {
             "q": "getting started",
@@ -3247,15 +3237,6 @@
             "expect": [
                 "/docs/api/js-ts/events-and-collectors/",
                 "/docs/events-and-collectors/"
-            ],
-            "source": "synthetic"
-        },
-        {
-            "q": "what changed in the latest version",
-            "kind": "newcomer",
-            "set": "tune",
-            "expect": [
-                "/docs/changelog/"
             ],
             "source": "synthetic"
         },
@@ -4097,15 +4078,6 @@
             "set": "tune",
             "expect": [
                 "/docs/glossary/"
-            ],
-            "source": "synthetic"
-        },
-        {
-            "q": "changel",
-            "kind": "partial",
-            "set": "holdout",
-            "expect": [
-                "/docs/changelog/"
             ],
             "source": "synthetic"
         },

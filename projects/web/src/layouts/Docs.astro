@@ -37,9 +37,11 @@ interface Props {
     searchDescription?: string
     // Other words readers use for the page's topic, which search reads as it reads the title
     searchTerms?: string[]
+    // Leaves the page out of search. The changelog's release notes repeat every topic the guides own and outrank them
+    unsearchable?: boolean
 }
 
-const { title, description, section, current, toc, crumbs, searchDescription, searchTerms } = Astro.props
+const { title, description, section, current, toc, crumbs, searchDescription, searchTerms, unsearchable = false } = Astro.props
 
 // Guides in cyan, reference in violet: what you do, then what the SDK knows
 const parts = await docsCourse(current, section)
@@ -288,7 +290,7 @@ const trail = breadcrumbs([
                     )
                 }
 
-                <article class="docs-article" data-pagefind-body data-pagefind-meta={`group:${searchGroup}`} data-pagefind-filter={searchFilter}>
+                <article class="docs-article" data-pagefind-body={unsearchable ? undefined : ""} data-pagefind-meta={`group:${searchGroup}`} data-pagefind-filter={searchFilter}>
                     {searchTerms?.length ? <span hidden data-pagefind-meta="search[data-search]" data-search={searchTerms.join(", ")} /> : null}
                     {searchTerms?.map((term) => <span hidden data-pagefind-filter="alias[data-alias]" data-alias={aliasKey(term)} />)}
                     {

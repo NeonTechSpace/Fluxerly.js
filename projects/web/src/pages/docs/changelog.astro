@@ -16,6 +16,6 @@ const toc = [...html.matchAll(/<h2 id="([^"]+)">([\s\S]*?)<\/h2>/g)].map((match)
 }))
 ---
 
-<Docs title="Changelog" description="What changed in each release of the Fluxerly.js SDK, newest first" section="guides" current="/docs/changelog/" toc={toc}>
+<Docs title="Changelog" description="What changed in each release of the Fluxerly.js SDK, newest first" section="guides" current="/docs/changelog/" toc={toc} unsearchable>
     <Fragment set:html={html} />
 </Docs>
