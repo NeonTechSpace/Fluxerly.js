@@ -11,8 +11,7 @@ A Fluxer bot SDK for JavaScript, TypeScript and Effect
 [FAQ](https://fluxerly.neontechspace.com/docs/faq/) ·
 [NeonFlux, a bot built with it](https://github.com/NeonTechSpace/NeonFlux)
 
-Fluxerly.js handles HTTP requests and gateway connections for messages, events, community resources and commands.
-Both APIs use the same underlying code
+Fluxerly.js handles HTTP requests and gateway connections for messages, events, community resources and commands. Both APIs use the same underlying code
 
 | API                       | Import                                   | Application style                                            |
 | ------------------------- | ---------------------------------------- | ------------------------------------------------------------ |
@@ -21,8 +20,7 @@ Both APIs use the same underlying code
 | Testing                   | `@neontechspace/fluxerly/testing`        | Application tests with an in-memory gateway and HTTP server  |
 | Effect testing            | `@neontechspace/fluxerly/effect/testing` | The same test client for Effect programs                     |
 
-The default API does not require learning or setting up Effect.
-Applications that use Effect directly must install a version within the Effect range described below
+The default API does not require learning or setting up Effect. Applications that use Effect directly must install a version within the Effect range described below
 
 ## What Fluxerly includes
 
@@ -44,14 +42,32 @@ The result is less infrastructure to build, with testing and application structu
 
 Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it. Until then, voice states, member voice controls such as move, mute, deafen and disconnect, voice notes, and audio or video attachments work
 
-## Requirements
+## Install
 
-Fluxerly is tested against Node.js 24.15 or newer.
-JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
+Fluxer moves fast, and Fluxerly keeps pace. Two channels fit different bots:
 
-Keep the package manager's lockfile for reproducible installs and review the changelog before upgrading.
-Nightly releases can include breaking changes. Install one with `npm install --save-exact @neontechspace/fluxerly@nightly`, or `bun add --exact @neontechspace/fluxerly@nightly` with Bun, so a fresh install without a lockfile cannot pick up a newer nightly that breaks the API.
-The installed package also contains the changelog as `CHANGELOG.md`
+- **Stable:** Releases that passed every check, for bots that value calm
+- **Nightly:** The newest changes as they land, for bots that want them first
+
+Fluxerly is tested against Node.js 24.15 or newer. JavaScript needs no compiler. Use TypeScript 7 to check types or compile TypeScript code, with `@types/node` as a development dependency
+
+Install the Stable channel with npm, pnpm or Bun:
+
+```sh
+npm install @neontechspace/fluxerly
+pnpm add @neontechspace/fluxerly
+bun add @neontechspace/fluxerly
+```
+
+Nightly releases can include breaking changes, so pin the exact version. A fresh install without a lockfile then cannot pick up a newer nightly that breaks the API:
+
+```sh
+npm install --save-exact @neontechspace/fluxerly@nightly
+pnpm add --save-exact @neontechspace/fluxerly@nightly
+bun add --exact @neontechspace/fluxerly@nightly
+```
+
+Keep the package manager's lockfile for reproducible installs and review the changelog before upgrading. The installed package also contains the changelog as `CHANGELOG.md`
 
 ## Start a bot
 
@@ -80,38 +96,30 @@ export const bot = defineBot({
 if (import.meta.main) await runBot({ token: process.env.FLUXER_BOT_TOKEN, ...bot })
 ```
 
-The same code works in JavaScript and TypeScript. The file exports the bot's options as `bot`, so the generated test can import them and run the bot without a token or a network. The `defineBot` function returns them unchanged and keeps the types of command arguments.
-Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel where the bot can read and reply.
-While changing the bot, `npm run dev` restarts it after each saved change
+The same code works in JavaScript and TypeScript. The file exports the bot's options as `bot`, so the generated test can import them and run the bot without a token or a network. The `defineBot` function returns them unchanged and keeps the types of command arguments. Set `FLUXER_BOT_TOKEN` in `.env`, check the bot with `npm test` and start it with `npm start`, then send **!ping** in a channel where the bot can read and reply. While changing the bot, `npm run dev` restarts it after each saved change
 
-By default, messages from bots, including the bot's own replies, skip the commands.
-Press Ctrl+C to stop the bot and wait for SDK cleanup.
-A permanent connection failure stops the bot, prints what went wrong with a suggested fix and reports failure to the operating system.
-The bot must still stop or finish work it starts outside the SDK, such as database writes
+By default, messages from bots, including the bot's own replies, skip the commands. Press Ctrl+C to stop the bot and wait for SDK cleanup. A permanent connection failure stops the bot, prints what went wrong with a suggested fix and reports failure to the operating system. The bot must still stop or finish work it starts outside the SDK, such as database writes
 
-While it runs, the bot prints startup, readiness, lost connections, long rate-limit waits, shutdown and any handler error in full.
-Set `FLUXERLY_DEBUG=1` to add Debug records, or pass `logging` settings to change levels or send records to another logger.
-Records never contain the token. The SDK is ESM-only, so `require()` fails with an explanation instead of loading it
+While it runs, the bot prints startup, readiness, lost connections, long rate-limit waits, shutdown and any handler error in full. Set `FLUXERLY_DEBUG=1` to add Debug records, or pass `logging` settings to change levels or send records to another logger. Records never contain the token. The SDK is ESM-only, so `require()` fails with an explanation instead of loading it
 
-The same configuration object accepts `events` for event handlers and `setup` for other startup work.
-For direct control over connection and shutdown, use `createClient`. Both are available in JavaScript and TypeScript without using Effect
+The same configuration object accepts `events` for event handlers and `setup` for other startup work. For direct control over connection and shutdown, use `createClient`. Both are available in JavaScript and TypeScript without using Effect
 
 ## Start an Effect bot
 
 The Effect API also provides the one-object `runBot` configuration. Its handlers return Effects instead of Promises and Results. The runner uses the application's Effect runtime and services, and waits for cleanup before finishing. The file `examples/starter/bot-effect.ts` shows the complete bot
 
-Before running the Effect example, add Effect 4 to the bot project's dependencies with `npm install effect@4`, `pnpm add effect@4` or `bun add effect@4`.
-The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. The SDK is tested against the lowest version in that range, and a daily check runs its tests against the newest Effect 4 release in the range. Later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
+Before running the Effect example, add Effect 4 to the bot project's dependencies with `npm install effect@4`, `pnpm add effect@4` or `bun add effect@4`. The SDK accepts the Effect range listed under `peerDependencies.effect` in `node_modules/@neontechspace/fluxerly/package.json`. Later Effect 4 releases are accepted. Effect 3 and Effect 4 prereleases are not
 
-Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project to inspect the installed version.
-Recheck the SDK manifest when upgrading the SDK
+Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project to inspect the installed version. Recheck the SDK manifest when upgrading the SDK
 
 ## For coding agents
 
-Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them.
-The complete guide is `agents/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
+Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them. The complete guide is `agents/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
 
 Agents that read web pages can start from the docs' [llms.txt](https://fluxerly.neontechspace.com/llms.txt), which links the newest version's Markdown guides and condensed API reference
 
-The installed `package.json` lists the supported Node.js version and import paths.
-The files listed in the `types` entries inside `exports` contain the API reference and examples
+The installed `package.json` lists the supported Node.js version and import paths. The files listed in the `types` entries inside `exports` contain the API reference and examples
+
+## Issues and security
+
+Report bugs and request features in [GitHub issues](https://github.com/NeonTechSpace/Fluxerly.js/issues). Report vulnerabilities privately as the [security policy](https://github.com/NeonTechSpace/Fluxerly.js/security/policy) describes, never in a public issue
