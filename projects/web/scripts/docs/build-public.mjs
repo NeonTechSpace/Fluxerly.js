@@ -8,6 +8,7 @@ import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { channelTargets, compareVersions, parseVersion, validateSnapshot } from "../versions.js"
+import { snapshotContent } from "./snapshot-content.mjs"
 
 const site = fileURLToPath(new URL("../../", import.meta.url))
 const option = (name, fallback) => {
@@ -47,7 +48,7 @@ async function materialize(snapshot) {
     for (const file of snapshot.files) {
         const path = join(root, file.path)
         await mkdir(dirname(path), { recursive: true })
-        await writeFile(path, file.content)
+        await writeFile(path, snapshotContent(snapshot, file))
     }
     return root
 }
