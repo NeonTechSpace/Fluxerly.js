@@ -7,6 +7,7 @@ import { parsers } from "prettier/plugins/babel"
 import { afterEach, expect, test } from "vitest"
 import { liveChecks } from "./run-all.js"
 import { checkClasses, declaredCheck } from "./support/check-classes.js"
+import { acquireLock } from "./support/harness.js"
 
 const live = new URL("./", import.meta.url)
 const harnessUrl = new URL("./support/harness.js", import.meta.url).href
@@ -233,3 +234,36 @@ test(
     },
     (3 * 6 + 1) * childTimeoutMs,
 )
+
+// Release failures paired a stalled sharding startup with another lane's startup. Keep both API modes and the
+// partial-startup cancellation probe isolated through the runner and direct harness declarations
+test("the runner schedules sharding exclusively", () => {
+    expect(liveChecks().get("sharding")?.lockClass).toBe("shared-state")
+})
+
+test("sharding excludes expressions in either acquisition order and both API modes", () => {
+    const root = mkdtempSync(join(parent, "fluxerly-live-startup-"))
+    roots.push(root)
+    const path = join(root, ".env.test.local.lock")
+    for (const mode of ["default", "effect"]) {
+        const sharding = declaredCheck("sharding.js", [mode])
+        const expressions = declaredCheck("expressions.js", [mode])
+        for (const [first, second] of [
+            [sharding, expressions],
+            [expressions, sharding],
+        ]) {
+            const held = acquireLock({ path, check: first })
+            let unexpected
+            try {
+                expect(() => {
+                    unexpected = acquireLock({ path, check: second })
+                }).toThrow()
+            } finally {
+                unexpected?.release()
+                expect(held.release()).toBe(true)
+            }
+            const next = acquireLock({ path, check: second })
+            expect(next.release()).toBe(true)
+        }
+    }
+})

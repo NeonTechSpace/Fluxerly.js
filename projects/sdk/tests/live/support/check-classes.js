@@ -103,7 +103,9 @@ export const checkClasses = Object.freeze({
         // Exact request counts and timing assume that no other run spends the bot's rate limits
         "--rate-limits": sdkWork("shared-state"),
     },
-    "sharding.js": { "": sdkWork("read-only") },
+    // Release runs repeatedly stalled sharding and another lane's gateway startup together, while isolated reruns
+    // passed. Isolate the whole multi-client probe, including intentional partial startup and cancellation
+    "sharding.js": { "": sdkWork("shared-state") },
     "supervisor.js": { "": sdkWork("read-only") },
     "text-validation.js": { "": sdkWork("test-owned") },
     // Guild-wide reads are filtered to its own channels, and only this check creates threads
