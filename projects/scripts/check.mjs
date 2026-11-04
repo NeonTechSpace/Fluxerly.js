@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 
 const workspace = fileURLToPath(new URL("../", import.meta.url))
 
-/** @typedef {{ name: string, group: string, folder: string, script: string, after?: string[] }} Step */
+/** @typedef {{ name: string, group: string, folder: string, script: string, after?: string[], alone?: boolean }} Step */
 
 /** @type {Step[]} */
 const steps = [
@@ -25,9 +25,10 @@ const steps = [
         folder: "sdk",
         script: `lint:${lint}`,
     })),
-    // The unit tests use fixtures, not the build, so they run while it compiles. The process tests run the built SDK
-    { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit" },
-    { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"] },
+    // The unit tests use fixtures, not the build. The process tests run the built SDK. Both start a worker per thread and
+    // hold timing-bounded tests, so each runs alone rather than beside other steps on a small machine such as CI's
+    { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit", alone: true },
+    { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"], alone: true },
     { name: "sdk build", group: "sdk", folder: "sdk", script: "build" },
     { name: "sdk examples", group: "sdk", folder: "sdk", script: "test:examples", after: ["sdk build"] },
     { name: "sdk public contract", group: "sdk", folder: "sdk", script: "test:public-contract", after: ["sdk build"] },
@@ -88,15 +89,22 @@ async function check(groups) {
     /** @type {string[]} */
     const skipped = []
     // Heavy steps start their own workers, so more steps than threads would only slow each other down
-    let free = Math.max(2, availableParallelism())
-    /** @type {(() => void)[]} */
+    // A step that runs alone takes every slot. Waiting steps start in order, so one waiting to run alone is not starved
+    const total = Math.max(2, availableParallelism())
+    let free = total
+    /** @type {{ need: number, go: () => void }[]} */
     const queue = []
-    const slot = () => (free > 0 ? (free--, Promise.resolve()) : new Promise((go) => queue.push(() => go(undefined))))
-    const release = () => {
-        const next = queue.shift()
-        if (next) next()
-        else free++
+    const pump = () => {
+        while (queue.length > 0 && queue[0].need <= free) {
+            const next = /** @type {{ need: number, go: () => void }} */ (queue.shift())
+            free -= next.need
+            next.go()
+        }
     }
+    /** @param {number} need */
+    const slot = (need) => new Promise((go) => (queue.push({ need, go: () => go(undefined) }), pump()))
+    /** @param {number} need */
+    const release = (need) => ((free += need), pump())
 
     /** @param {Step} step @returns {Promise<boolean>} */
     const start = async (step) => {
@@ -106,9 +114,10 @@ async function check(groups) {
             skipped.push(step.name)
             return false
         }
-        await slot()
+        const need = step.alone ? total : 1
+        await slot(need)
         const from = Date.now()
-        const { code, output } = await run(step.script, resolve(workspace, step.folder)).finally(release)
+        const { code, output } = await run(step.script, resolve(workspace, step.folder)).finally(() => release(need))
         console.log(`${code === 0 ? "passed" : "FAILED"}  ${step.name}  ${seconds(Date.now() - from)}`)
         if (code !== 0) failed.push({ name: step.name, output })
         return code === 0
