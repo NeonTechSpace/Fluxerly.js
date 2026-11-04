@@ -37,8 +37,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
-          # A nightly publishes without review, so it builds only the workflow's own commit, which Release publish
-          # requires to be part of main. Other candidates build the selected source and wait for checksum review
+          # A nightly builds only the workflow's own commit. Stable builds the selected merged source
+          # Release publish requires both the source and preparation workflow commit to be part of main
           ref: ${{ (github.event_name == 'schedule' || inputs.nightly) && github.sha || inputs.source_ref }}
           persist-credentials: false
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
@@ -203,14 +203,14 @@ jobs:
           results: '{"workspace": "${{ runner.temp }}/workspace-checks.json"}'
           details: >-
             {"Candidate version": ${{ toJSON(steps.candidate.outputs.version) }}, "Candidate channel": ${{ toJSON(steps.candidate.outputs.channel) }}, "Candidate SHA256": ${{ toJSON(steps.candidate.outputs.checksum) }}, "Candidate source": ${{ toJSON(steps.candidate.outputs.source) }}, "Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate retention": ${{ toJSON(steps.artifact.outcome == 'success' && '90 days after upload' || '') }}, "Source validation": ${{ toJSON(steps.ci.outputs.reused == 'true' && 'Reused exact-source Check' || 'Full preparation checks') }}, "Reused Check run": ${{ toJSON(steps.ci.outputs.run_url) }}, "No-change reason": ${{ toJSON(steps.candidate.outputs.reason) }}}
-          next: ${{ (github.event_name == 'schedule' || inputs.nightly) && (steps.candidate.outputs.skipped == 'true' && 'Nothing to publish, the SDK content matches an already published version' || 'The publish job starts Release publish for this nightly candidate') || 'Review the version, release notes and candidate SHA256 externally. Then publish this candidate from main' }}
+          next: ${{ steps.candidate.outputs.skipped == 'true' && 'Nothing to publish, the SDK content matches an already published version' || 'The publish job starts Release publish for this candidate. The command below can restart publication after a failure' }}
           failure: No candidate was prepared, so nothing can be published. Fix the failed check and run Release prepare again for the same source
-          command: ${{ !(github.event_name == 'schedule' || inputs.nightly) && steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}
+          command: ${{ steps.candidate.outputs.skipped == 'false' && steps.candidate.outputs.publish_command || '' }}
   publish:
-    name: Start nightly publication
+    name: Start release publication
     needs: prepare
-    # The trigger, not a step output that checked-out code could write, decides whether this run is a nightly
-    if: (github.event_name == 'schedule' || inputs.nightly) && needs.prepare.outputs.skipped == 'false'
+    # The default success condition also requires preparation and candidate retention to have passed
+    if: needs.prepare.outputs.skipped == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -226,23 +226,23 @@ jobs:
         with:
           working-directory: projects
           install: false
-      # Nightly builds are published without external review. Release publish still inspects the candidate and waits
-      # for this run to finish before it trusts the preparation
-      - name: Dispatch Release publish for the nightly candidate
+      # Merging the Stable version PR is the release decision. Both channels use the preparation checksum
+      # Release publish still inspects the candidate and waits for this run to finish before trusting it
+      - name: Dispatch Release publish for the candidate
         id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           PREPARATION_RUN_ID: ${{ github.run_id }}
           CANDIDATE_CHECKSUM: ${{ needs.prepare.outputs.checksum }}
         run: gh workflow run release-publish.yml --repo "$GITHUB_REPOSITORY" --ref main -f preparation_run_id="$PREPARATION_RUN_ID" -f candidate_checksum="$CANDIDATE_CHECKSUM"
-      - name: Summarize the nightly publication start
+      - name: Summarize the publication start
         if: always()
         uses: $/.github/actions/summary
         with:
-          title: Nightly publication start
+          title: Release publication start
           steps: ${{ toJSON(steps) }}
           checks: '{"Release publish dispatched": "dispatch"}'
           details: >-
             {"Preparation run ID": ${{ toJSON(github.run_id) }}, "Candidate SHA256": ${{ toJSON(needs.prepare.outputs.checksum) }}}
-          next: Follow the Release publish run it started. It publishes, checks registry installs, announces the prerelease and deploys the website, unless a nightly with the same content was published meanwhile
-          failure: Release publish did not start for this nightly. Start it from the Actions tab with the preparation run ID and SHA256 above
+          next: Follow the Release publish run it started. It publishes, checks registry installs, announces the release and starts the website deploy, unless a nightly with the same content was published meanwhile
+          failure: Release publish did not start for this candidate. Start it from the Actions tab with the preparation run ID and SHA256 above

@@ -1,0 +1,25 @@
+name: Version PR closed
+# A merged or closed version pull request needs no more Check runs. This run joins the concurrency group of Check runs
+# for the same version branch of this repository, which cancels any still running or queued
+on:
+  pull_request:
+    types: [closed]
+permissions:
+  contents: read
+concurrency:
+  group: >-
+    ${{ github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/version-') &&
+    format('check-version-{0}', github.head_ref) || format('version-pr-closed-{0}', github.run_id) }}
+  cancel-in-progress: true
+jobs:
+  cancel:
+    name: Cancel the version branch's Check runs
+    if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/version-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report the version branch
+        id: report
+        env:
+          VERSION_BRANCH: ${{ github.head_ref }}
+        run: printf 'Joined the Check group of %s, which cancels its Check runs that were still going\n' "$VERSION_BRANCH"

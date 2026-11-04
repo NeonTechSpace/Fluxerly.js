@@ -24,8 +24,36 @@ concurrency:
   group: screens-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  changes:
+    name: Detect a version-only change
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version_only: ${{ steps.detect.outputs.version_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
+        with:
+          persist-credentials: false
+          # The parent commit, which the version-only change is compared with
+          fetch-depth: 2
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        id: setup
+        with:
+          working-directory: projects
+          install: false
+      - name: Detect a push that changes only release version files
+        id: detect
+        # A version-only push changes no screen the parent commit's run did not test. A manual run tests every screen
+        if: github.event_name == 'push'
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: node projects/release/version-change.js detect --parent "$PUSH_BEFORE"
   screens:
     name: Full screen check
+    needs: changes
+    # A failed detection still runs the screen check
+    if: ${{ !cancelled() && needs.changes.outputs.version_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

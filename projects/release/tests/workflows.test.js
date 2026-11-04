@@ -60,6 +60,81 @@ function* steps() {
         for (const step of action.runs.steps ?? []) yield { where: `actions/${name}`, step }
 }
 
+/**
+ * Evaluates the GitHub expression subset these workflows use: Context paths, quoted strings, ==, !=, !, && and ||,
+ * parentheses and the startsWith, format, cancelled and always functions. A missing context value is null, and strings
+ * compare without case, as on GitHub
+ * @param {string} expression
+ * @param {Record<string, any>} context
+ */
+function evaluate(expression, context, status = { cancelled: false }) {
+    const body = String(expression).trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
+    const tokens = [...body.matchAll(/\s*('(?:[^']|'')*'|[A-Za-z_][\w.-]*|==|!=|&&|\|\||[!(),])/gy)].map((match) => match[1])
+    if (tokens.join("").length !== body.replace(/\s+/g, "").length) throw new Error(`Unsupported expression: ${body}`)
+    let position = 0
+    const peek = () => tokens[position]
+    const take = (token) => {
+        if (tokens[position] !== token) throw new Error(`Expected ${token} in ${body}`)
+        position++
+    }
+    const text = (value) => (value == null ? "" : String(value))
+    const equal = (a, b) => (typeof a === "string" && typeof b === "string" ? a.toLowerCase() === b.toLowerCase() : a === b)
+    const functions = {
+        startsWith: (value, prefix) => text(value).toLowerCase().startsWith(text(prefix).toLowerCase()),
+        format: (template, ...values) => template.replace(/\{(\d+)\}/g, (_, index) => text(values[Number(index)])),
+        cancelled: () => status.cancelled,
+        always: () => true,
+    }
+    const primary = () => {
+        const token = tokens[position++]
+        if (token === "(") {
+            const value = or()
+            take(")")
+            return value
+        }
+        if (token.startsWith("'")) return token.slice(1, -1).replaceAll("''", "'")
+        if (peek() === "(") {
+            take("(")
+            const args = []
+            while (peek() !== ")") {
+                args.push(or())
+                if (peek() === ",") take(",")
+            }
+            take(")")
+            return functions[token](...args)
+        }
+        return token.split(".").reduce((value, key) => (value == null ? null : (value[key] ?? null)), context)
+    }
+    const unary = () => (peek() === "!" ? (take("!"), !unary()) : primary())
+    const comparison = () => {
+        const left = unary()
+        if (peek() !== "==" && peek() !== "!=") return left
+        const negate = tokens[position++] === "!="
+        return equal(left, unary()) !== negate
+    }
+    const and = () => {
+        let value = comparison()
+        while (peek() === "&&") {
+            take("&&")
+            const right = comparison()
+            value = value ? right : value
+        }
+        return value
+    }
+    const or = () => {
+        let value = and()
+        while (peek() === "||") {
+            take("||")
+            const right = and()
+            value = value ? value : right
+        }
+        return value
+    }
+    const value = or()
+    if (position !== tokens.length) throw new Error(`Unparsed expression: ${body}`)
+    return value
+}
+
 test("Workflows default to read-only tokens and grant writes only to the reviewed jobs", () => {
     for (const [file, workflow] of Object.entries(workflows)) {
         assert.ok(workflow.permissions, `${file} must declare top-level permissions`)
@@ -259,13 +334,24 @@ test("Screens tests every screen after pushes to main that change the website's 
     const runs = Object.values(screens.jobs).flatMap((job) => job.steps.map((step) => step.run ?? ""))
     assert.ok(runs.includes("pnpm build"), "Screens tests the site built from this commit")
     assert.ok(runs.includes("pnpm --filter fluxerly-docs test:browser"), "Screens tests every screen")
+    // A version-only push skips the screen check, and a failed or skipped detection still runs it
+    const check = screens.jobs.screens
+    assert.equal(check.needs, "changes")
+    for (const [versionOnly, runsCheck] of [["true", false], ["false", true], ["", true]])
+        assert.equal(evaluate(check.if, { needs: { changes: { outputs: { version_only: versionOnly } } } }), runsCheck, versionOnly)
+    const detect = screens.jobs.changes.steps.find((step) => step.id === "detect")
+    assert.equal(detect.run, 'node projects/release/version-change.js detect --parent "$PUSH_BEFORE"')
+    assert.equal(detect.env.PUSH_BEFORE, "${{ github.event.before }}")
+    assert.equal(detect.if, "github.event_name == 'push'")
+    assert.equal(screens.jobs.changes.outputs.version_only, "${{ steps.detect.outputs.version_only }}")
+    assert.equal(screens.jobs.changes.steps.find((step) => step.id === "checkout").with["fetch-depth"], 2)
     for (const { where, step } of steps())
         if (where.startsWith("website.yml/"))
             assert.doesNotMatch(String(step.run ?? "") + String(step.uses ?? ""), /test:browser|playwright/i, `${where} runs no screen check`)
     assert.equal(workflows["website.yml"].jobs.deploy["timeout-minutes"], 30)
 })
 
-test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped nightly candidate", () => {
+test("Nightly preparation runs at midnight and midday and starts only Release publish from main for an unskipped candidate", () => {
     const workflow = workflows["release-prepare.yml"]
     const [schedule] = workflow.on.schedule
     assert.equal(schedule.cron, "0 0,12 * * *")
@@ -298,9 +384,8 @@ test("Nightly preparation runs at midnight and midday and starts only Release pu
         assert.equal(outputs[key], `\${{ steps.candidate.outputs.${key} }}`, key)
     const job = workflow.jobs.publish
     assert.equal(job.needs, "prepare")
-    // The trigger decides, because a reviewed-source run executes code that could forge a nightly output.
-    // A skipped nightly has no candidate to publish
-    assert.equal(job.if, `(${nightly}) && needs.prepare.outputs.skipped == 'false'`)
+    // Both channels publish after successful preparation. A skipped run has no candidate
+    assert.equal(job.if, "needs.prepare.outputs.skipped == 'false'")
     // Node is set up only for the job summary, without installing the workspace
     assert.equal(job.steps.find((step) => step.id === "setup").with.install, false)
     const runs = job.steps.filter((step) => step.run)
@@ -333,6 +418,74 @@ test("Nightly preparation runs at midnight and midday and starts only Release pu
     ])
 })
 
+// Catches: Stable losing its automatic dispatch, or a checksum being replaced between preparation and gh
+test("Stable and nightly dispatch their own preparation run and the checksum read from the candidate", () => {
+    const workflow = workflows["release-prepare.yml"]
+    const prepare = workflow.jobs.prepare
+    const publish = workflow.jobs.publish
+    assert.deepEqual(publish.permissions, { contents: "read", actions: "write" })
+    const candidate = prepare.steps.find((step) => step.id === "candidate")
+    const dispatch = publish.steps.find((step) => step.id === "dispatch")
+    const script = candidate.run.match(/node --input-type=module <<'NODE'\n([\s\S]*)\nNODE/)[1]
+        .replace(/^import .*\n/gm, "")
+    const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-auto-publish-"))
+    try {
+        for (const [index, [event, nightly, channel]] of [
+            ["workflow_dispatch", false, "stable"],
+            ["workflow_dispatch", true, "nightly"],
+            ["schedule", false, "nightly"],
+        ].entries()) {
+            const source = "a".repeat(40)
+            const checksum = String(index + 1).repeat(64)
+            const output = join(directory, `outputs-${index}`)
+            // External commands and candidate reading are fixtures. Execute the workflow's actual output-writing code
+            // Nightly planning's dynamic import reads its real date helper, without calling a registry
+            const fixtures = `
+                import { appendFileSync } from 'node:fs'
+                import { join } from 'node:path'
+                const execFileSync = (command, args) => {
+                    if (command === 'git') return '${source}'
+                    if (args[0] === 'release:plan') return JSON.stringify({ version: '1001.0.0-nightly.20261104.1' })
+                    return JSON.stringify({ skipped: false })
+                }
+                const readCandidate = async () => ({ sourceCommit: '${source}', docs: {}, version: '1001.0.0', channel: '${channel}', checksum: '${checksum}' })
+            `
+            const prepared = spawnSync(process.execPath, ["--input-type=module"], {
+                cwd: join(repository, "projects"), input: fixtures + script, encoding: "utf8", timeout: 10_000,
+                env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "41", RELEASE_NIGHTLY: String(channel === "nightly"), RELEASE_LINE: "", RELEASE_NIGHTLY_NUMBER: "1" },
+            })
+            assert.ifError(prepared.error)
+            assert.equal(prepared.status, 0, prepared.stderr)
+            const values = Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").map((line) => {
+                const split = line.indexOf("=")
+                return [line.slice(0, split), line.slice(split + 1)]
+            }))
+            const context = { github: { event_name: event, run_id: "41", token: "synthetic" }, inputs: { nightly }, steps: { candidate: { outputs: values } } }
+            const outputs = Object.fromEntries(Object.entries(prepare.outputs).map(([key, value]) => [key, evaluate(value, context)]))
+            context.needs = { prepare: { outputs } }
+            assert.equal(evaluate(publish.if, context), true, `${channel} must start publication`)
+            const env = Object.fromEntries(Object.entries(dispatch.env).map(([key, value]) => [key, evaluate(value, context)]))
+            const sent = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'gh() { printf "%s\\n" "$@"; }\n' + dispatch.run], {
+                encoding: "utf8", timeout: 10_000, windowsHide: true,
+                env: { ...process.env, ...env, GITHUB_REPOSITORY: "owner/repo" },
+            })
+            assert.ifError(sent.error)
+            assert.equal(sent.status, 0, sent.stderr)
+            assert.deepEqual(sent.stdout.trim().split(/\r?\n/), [
+                "workflow", "run", "release-publish.yml", "--repo", "owner/repo", "--ref", "main",
+                "-f", "preparation_run_id=41", "-f", `candidate_checksum=${checksum}`,
+            ])
+            assert.match(values.publish_command, new RegExp(`-f preparation_run_id=41 -f candidate_checksum=${checksum}$`))
+            for (const skipped of ["true", ""]) {
+                outputs.skipped = skipped
+                assert.equal(evaluate(publish.if, context), false, "No candidate must not dispatch")
+            }
+        }
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
 test("Version pull requests have no channel input and derive readiness from the epoch", () => {
     const workflow = workflows["release-version.yml"]
     assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), ["epoch", "line", "source_ref"])
@@ -348,8 +501,45 @@ test("Release and website work is serialized with read-only caches and never can
     for (const file of ["release-prepare.yml", "release-version.yml", "website.yml"])
         assert.equal(workflows[file].concurrency["cancel-in-progress"], false, file)
     assertSerialized(workflows["release-publish.yml"].jobs.reconcile.concurrency, "release-publish.yml/reconcile")
-    // Manual CI dispatches are never cancelled by a later run
-    assert.match(workflows["ci.yml"].concurrency["cancel-in-progress"], /github\.event_name\s*!=\s*'workflow_dispatch'/)
+})
+
+// Catches: A merged version pull request whose Check runs keep going, a version branch whose runs share no group with
+// Version PR closed, a fork branch that can cancel them, or a manual dispatch that a later run cancels
+test("Check runs of a version branch share one group, which a newer run or a closed version PR cancels", () => {
+    const { concurrency } = workflows["ci.yml"]
+    const closed = workflows["version-pr-closed.yml"]
+    const repository = "owner/repo"
+    const pull = (head, repo = repository, action = "synchronize") => ({
+        github: {
+            event_name: "pull_request", repository, head_ref: head, ref: "refs/pull/7/merge", ref_name: "7/merge", run_id: 11,
+            event: { action, pull_request: { head: { repo: { full_name: repo } } } },
+        },
+    })
+    const dispatch = (branch) => ({
+        github: { event_name: "workflow_dispatch", repository, head_ref: "", ref: `refs/heads/${branch}`, ref_name: branch, run_id: 12, event: {} },
+    })
+    const push = { github: { event_name: "push", repository, head_ref: "", ref: "refs/heads/main", ref_name: "main", run_id: 13, event: {} } }
+    const group = (context) => evaluate(concurrency.group, context)
+    const cancels = (context) => evaluate(concurrency["cancel-in-progress"], context)
+    const version = "check-version-release/version-1001.0.0"
+    assert.equal(group(pull("release/version-1001.0.0")), version)
+    assert.equal(group(dispatch("release/version-1001.0.0")), version)
+    assert.equal(evaluate(closed.concurrency.group, pull("release/version-1001.0.0", repository, "closed")), version)
+    assert.equal(closed.concurrency["cancel-in-progress"], true)
+    assert.deepEqual(closed.on, { pull_request: { types: ["closed"] } })
+    assert.equal(cancels(dispatch("release/version-1001.0.0")), true)
+    assert.equal(evaluate(closed.jobs.cancel.if, pull("release/version-1001.0.0", repository, "closed")), true)
+    // A fork's branch of the same name joins no group of this repository's version branch
+    assert.notEqual(group(pull("release/version-1001.0.0", "fork/repo")), version)
+    assert.notEqual(evaluate(closed.concurrency.group, pull("release/version-1001.0.0", "fork/repo", "closed")), version)
+    assert.equal(evaluate(closed.jobs.cancel.if, pull("release/version-1001.0.0", "fork/repo", "closed")), false)
+    assert.notEqual(evaluate(closed.concurrency.group, pull("feature", repository, "closed")), group(pull("feature")))
+    // Other runs keep their groups, and other manual dispatches are never cancelled by a later run
+    assert.equal(group(pull("feature")), "check-pull_request-refs/pull/7/merge")
+    assert.equal(group(push), "check-push-refs/heads/main")
+    assert.equal(cancels(push), true)
+    assert.equal(group(dispatch("main")), "check-workflow_dispatch-12")
+    assert.equal(cancels(dispatch("main")), false)
 })
 
 test("Release and website workflows only restore Fluxer's pinned files that CI saves, under the same key", () => {
@@ -516,24 +706,53 @@ test("A cache miss in the drift job reads the trusted run's kept files, and a fa
     }
 })
 
+// Catches: A gate that passes with a skipped required job, or a version-only pass with only some jobs skipped for it
 test("The required CI gate needs every job and rejects failed, cancelled, skipped and missing results", () => {
-    const check = workflows["ci.yml"].jobs.check
-    const gated = Object.keys(workflows["ci.yml"].jobs).filter((id) => !["check", "release-trigger"].includes(id))
+    const ci = workflows["ci.yml"]
+    const check = ci.jobs.check
+    const gated = Object.keys(ci.jobs).filter((id) => !["check", "release-trigger"].includes(id))
     assert.deepEqual([...check.needs].sort(), gated.sort())
     assert.equal(check.if, "always()")
     const groups = Object.keys(check.steps[0].env).filter((key) => key.endsWith("_RESULT") && key !== "REUSE_RESULT")
     assert.equal(groups.length, gated.length - 1, "Every check job result reaches the gate")
-    // Check jobs skip only for a reused result, and a failed lookup still runs them
+    // Check jobs skip for a reused result, and all but the tooling job for a version-only change. A failed lookup, which
+    // reports neither, still runs them
+    const outputs = (reused, versionOnly) => ({ needs: { reuse: { outputs: { reused, version_only: versionOnly } } } })
     for (const id of gated.filter((id) => id !== "reuse")) {
-        const job = workflows["ci.yml"].jobs[id]
+        const job = ci.jobs[id]
         assert.equal(job.needs, "reuse", id)
-        assert.match(job.if, /^\$\{\{ !cancelled\(\) && needs\.reuse\.outputs\.reused != 'true' \}\}$/, id)
+        assert.equal(evaluate(job.if, outputs("", "")), true, id)
+        assert.equal(evaluate(job.if, outputs("false", "false")), true, id)
+        assert.equal(evaluate(job.if, outputs("true", "false")), false, id)
+        assert.equal(evaluate(job.if, outputs("false", "true")), id === "tooling", id)
+        assert.equal(evaluate(job.if, outputs("", ""), { cancelled: true }), false, id)
+    }
+    // The lookup compares with the parent commit and hands both results to the jobs and the gate
+    const reuse = ci.jobs.reuse
+    assert.equal(reuse.steps.find((step) => step.id === "checkout").with["fetch-depth"], 2)
+    assert.equal(reuse.outputs.version_only, "${{ steps.reuse.outputs.version_only }}")
+    assert.equal(reuse.outputs.parent_run_url, "${{ steps.reuse.outputs.parent_run_url }}")
+    assert.equal(check.steps[0].env.VERSION_ONLY, "${{ needs.reuse.outputs.version_only }}")
+    assert.equal(check.steps[0].env.PARENT_RUN_URL, "${{ needs.reuse.outputs.parent_run_url }}")
+    // The version-only steps run only for a version-only change
+    for (const id of ["version", "format"]) {
+        const step = ci.jobs.tooling.steps.find((step) => step.id === id)
+        assert.equal(evaluate(step.if, outputs("false", "true")), true, id)
+        assert.equal(evaluate(step.if, outputs("false", "false")), false, id)
     }
     // Those skipped jobs make the implicit success() condition false, so the release trigger reads check's own result
-    assert.match(workflows["ci.yml"].jobs["release-trigger"].if, /^\$\{\{ !cancelled\(\) && needs\.check\.result == 'success' && /)
+    assert.match(ci.jobs["release-trigger"].if, /^\$\{\{ !cancelled\(\) && needs\.check\.result == 'success' && /)
     const passed = { ...Object.fromEntries(groups.map((key) => [key, "success"])), REUSE_RESULT: "success", REUSED_RUN_URL: "" }
     const skipped = Object.fromEntries(groups.map((key) => [key, "skipped"]))
     const reused = { REUSE_RESULT: "success", REUSED_RUN_URL: "https://github.com/owner/repo/actions/runs/1" }
+    const versionOnly = {
+        ...skipped,
+        TOOLING_RESULT: "success",
+        REUSE_RESULT: "success",
+        REUSED_RUN_URL: "",
+        VERSION_ONLY: "true",
+        PARENT_RUN_URL: "https://github.com/owner/repo/actions/runs/2",
+    }
     // [results, expected exit status]
     const cases = [
         [passed, 0],
@@ -542,9 +761,18 @@ test("The required CI gate needs every job and rejects failed, cancelled, skippe
         [{ ...skipped, ...reused }, 0],
         [{ ...skipped, ...reused, REUSE_RESULT: "failure" }, 1],
         [{ ...skipped, REUSE_RESULT: "success", REUSED_RUN_URL: "" }, 1],
+        [versionOnly, 0],
+        // A version-only claim from a failed lookup job or without the parent's passing Check is not trusted
+        [{ ...versionOnly, REUSE_RESULT: "failure" }, 1],
+        [{ ...versionOnly, PARENT_RUN_URL: "" }, 1],
+        [{ ...versionOnly, VERSION_ONLY: "false" }, 1],
     ]
     for (const key of groups)
         for (const result of ["failure", "cancelled", "skipped", ""]) cases.push([{ ...passed, [key]: result }, 1])
+    for (const result of ["failure", "cancelled", "skipped", ""]) cases.push([{ ...versionOnly, TOOLING_RESULT: result }, 1])
+    // Every other job must have been skipped for the version-only change
+    for (const key of groups.filter((key) => key !== "TOOLING_RESULT"))
+        for (const result of ["success", "failure", "cancelled", ""]) cases.push([{ ...versionOnly, [key]: result }, 1])
     const root = realpathSync(tmpdir())
     const directory = mkdtempSync(join(root, "fluxerly-gate-"))
     try {

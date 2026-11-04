@@ -7,10 +7,18 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # Runs for one version branch of this repository share a group, whether a pull request event or Release version PR's
+  # dispatch started them, so a newer run and Version PR closed cancel them. Other manual dispatches are never cancelled
+  group: >-
+    ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) &&
+    startsWith(github.head_ref || github.ref_name, 'release/version-') &&
+    format('check-version-{0}', github.head_ref || github.ref_name) ||
+    format('check-{0}-{1}', github.event_name, github.event_name == 'workflow_dispatch' && github.run_id || github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || startsWith(github.ref_name, 'release/version-') }}
 jobs:
-  # Identical git trees need one full Check, so a run for content that already passed reuses that result
+  # Identical git trees need one full Check, so a run for content that already passed reuses that result. A commit that
+  # changes only release version files from a parent whose content passed runs only the website and release tooling
+  # checks. Release prepare still refuses a Stable whose package content differs from the newest nightly
   reuse:
     name: Reuse a passing Check for identical content
     runs-on: ubuntu-latest
@@ -21,11 +29,15 @@ jobs:
     outputs:
       reused: ${{ steps.reuse.outputs.reused }}
       run_url: ${{ steps.reuse.outputs.run_url }}
+      version_only: ${{ steps.reuse.outputs.version_only }}
+      parent_run_url: ${{ steps.reuse.outputs.parent_run_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
           persist-credentials: false
+          # The parent commit, which the version-only change is compared with
+          fetch-depth: 2
       - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
         id: setup
         with:
@@ -40,7 +52,7 @@ jobs:
     name: SDK checks
     needs: reuse
     # A failed reuse lookup still runs the full job
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -73,6 +85,7 @@ jobs:
   tooling:
     name: Website and release tooling checks
     needs: reuse
+    # Also for a version-only change, because the website builds its changelog page and search from the new notes
     if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -106,20 +119,33 @@ jobs:
         # Each check starts once the checks it reads from have passed, and the log names every result with its time
         run: node scripts/check.mjs release contributions web
         working-directory: projects
+      - name: Check that the SDK version, changelog and Changesets state agree
+        id: version
+        if: needs.reuse.outputs.version_only == 'true'
+        run: node release/version-change.js check
+        working-directory: projects
+      - name: Check the changelog and manifest formatting and the SDK folder for em dashes
+        id: format
+        # The SDK checks job, which a version-only change skips, otherwise covers these files
+        if: needs.reuse.outputs.version_only == 'true'
+        run: |
+          pnpm --filter @neontechspace/fluxerly exec prettier --check CHANGELOG.md package.json
+          pnpm --filter @neontechspace/fluxerly lint:dashes
+        working-directory: projects
       - name: Summarize website and release tooling checks
         if: always()
         uses: $/.github/actions/summary
         with:
           title: Website and release tooling checks
           steps: ${{ toJSON(steps) }}
-          checks: '{"SDK declarations build": "build", "Release tooling, contribution forms and website": "website"}'
+          checks: '{"SDK declarations build": "build", "Release tooling, contribution forms and website": "website", "Version, changelog and Changesets state": "version", "Changelog and manifest formatting": "format"}'
           results: '{"website": "${{ runner.temp }}/tooling-checks.json"}'
           next: Nothing to fix here. The check job combines this result with the other jobs
           failure: Fix the failed checks and push. Website checks that read the built site are skipped while its build fails
   workflows:
     name: Workflow lint and security audit
     needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -185,7 +211,7 @@ jobs:
   browser:
     name: Documentation browser checks
     needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -302,7 +328,7 @@ jobs:
   consumers:
     name: ${{ matrix.name }}
     needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.reuse.outputs.version_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -379,6 +405,8 @@ jobs:
         env:
           REUSE_RESULT: ${{ needs.reuse.result }}
           REUSED_RUN_URL: ${{ needs.reuse.outputs.run_url }}
+          VERSION_ONLY: ${{ needs.reuse.outputs.version_only }}
+          PARENT_RUN_URL: ${{ needs.reuse.outputs.parent_run_url }}
           SDK_RESULT: ${{ needs.sdk.result }}
           TOOLING_RESULT: ${{ needs.tooling.result }}
           WORKFLOWS_RESULT: ${{ needs.workflows.result }}
@@ -389,10 +417,18 @@ jobs:
             printf '## Required checks\n\nPassed by reuse. An earlier Check run passed for identical content, so the check jobs did not run again\n\nReused run: %s\n\n### Next action\n\nNothing to fix. Live sandbox checks and publishing are not part of Check\n' "$REUSED_RUN_URL" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          # A version-only change passes with the website and release tooling checks alone, and only when every other job
+          # was skipped for it. A version-only result from a failed lookup job is not trusted
+          version_only=false
+          groups="SDK TOOLING WORKFLOWS BROWSER CONSUMERS"
+          if [ "$REUSE_RESULT" = success ] && [ "$VERSION_ONLY" = true ] && [ -n "$PARENT_RUN_URL" ]; then
+            version_only=true
+            groups=TOOLING
+          fi
           status=0
           failed=""
           table=""
-          for group in SDK TOOLING WORKFLOWS BROWSER CONSUMERS; do
+          for group in $groups; do
             case "$group" in
               SDK) name="SDK checks" ;;
               TOOLING) name="Website and release tooling checks" ;;
@@ -414,9 +450,20 @@ jobs:
               failed+="${failed:+, }$name"
             fi
           done
+          if [ "$version_only" = true ]; then
+            for group in SDK WORKFLOWS BROWSER CONSUMERS; do
+              variable="${group}_RESULT"
+              if [ "${!variable}" != skipped ]; then
+                status=1
+                failed+="${failed:+, }$group ran for a version-only change"
+              fi
+            done
+          fi
           {
             printf '## Required checks\n\n'
-            if [ "$status" -eq 0 ]; then
+            if [ "$status" -eq 0 ] && [ "$version_only" = true ]; then
+              printf 'Passed as a version-only change. Only release version files changed from the parent commit, whose content passed Check, so only the website and release tooling checks ran\n\nParent commit Check: %s\n\n' "$PARENT_RUN_URL"
+            elif [ "$status" -eq 0 ]; then
               printf 'All five required jobs passed, including both Node consumer versions\n\n'
             else
               printf 'Did not pass: %s\n\n' "$failed"

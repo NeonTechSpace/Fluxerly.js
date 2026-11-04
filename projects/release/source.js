@@ -104,6 +104,18 @@ async function readSourceNotes(workspace) {
 }
 
 /**
+ * Checks a source right after a version change: The changelog has a section for the manifest version, the Changesets
+ * prerelease state matches the version's channel and no pending note is left unconsumed
+ * @param {string} workspace
+ */
+export async function assertVersionedSource(workspace) {
+    const { manifest, pending } = await readSourceNotes(workspace)
+    if (pending.length > 0) throw new Error("The versioned source still has pending Changesets notes")
+    changelogSection(await readFile(join(workspace, "sdk", "CHANGELOG.md"), "utf8"), manifest.version)
+    return manifest.version
+}
+
+/**
  * Plans the nightly build of the current source with its UTC build date and run number, checked against the published
  * npm versions
  * @param {string} workspace

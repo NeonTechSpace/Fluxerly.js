@@ -5,6 +5,7 @@ import { appendFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createGithub } from "./github.js"
+import { describeVersionChange, detectVersionChange } from "./version-change.js"
 
 const shaPattern = /^[a-f0-9]{40}$/
 const workflowPath = ".github/workflows/ci.yml"
@@ -95,31 +96,63 @@ async function main() {
     const tree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { encoding: "utf8", windowsHide: true }).trim()
     /** @type {{ runId: number, runUrl: string } | null} */
     let result = null
+    /** @type {{ runId: number, runUrl: string } | null} */
+    let parentCheck = null
     // Any lookup failure runs the full Check, so reuse can only ever save work
     try {
         const github = createGithub(repository)
         const current = await github.api(`actions/runs/${runId}`)
         if (current.id !== runId || current.run_attempt !== Number(process.env.GITHUB_RUN_ATTEMPT))
             throw new Error("The current Check attempt could not be verified")
-        result = await findReusableCheck({
-            tree,
-            runId,
-            runStartedAt: current.run_started_at ?? (current.run_attempt === 1 ? current.created_at : undefined),
-            repository: repository ?? "",
-            listRuns: () => github.api("actions/workflows/ci.yml/runs?per_page=100&exclude_pull_requests=true"),
-            progress: console.log,
-        })
+        // Both lookups share one wait bound, so they fit in the job's timeout together
+        const deadline = Date.now() + 40 * 60_000
+        /** @param {string} tree */
+        const lookup = (tree) =>
+            findReusableCheck({
+                waitMs: Math.max(0, deadline - Date.now()),
+                tree,
+                runId,
+                runStartedAt: current.run_started_at ?? (current.run_attempt === 1 ? current.created_at : undefined),
+                repository: repository ?? "",
+                listRuns: () => github.api("actions/workflows/ci.yml/runs?per_page=100&exclude_pull_requests=true"),
+                progress: console.log,
+            })
+        result = await lookup(tree)
+        if (!result) {
+            // A change of only release version files needs only the release checks, when the content it changes passed
+            // Check. That run was full or version-only itself, so every such pass traces back to a full Check
+            const change = detectVersionChange()
+            console.log(describeVersionChange(change))
+            if (change.versionOnly && change.parent) {
+                const parentTree = execFileSync("git", ["rev-parse", `${change.parent}^{tree}`], {
+                    encoding: "utf8",
+                    windowsHide: true,
+                }).trim()
+                parentCheck = await lookup(parentTree)
+                console.log(
+                    parentCheck
+                        ? `Check run ${parentCheck.runId} passed for the parent commit's tree ${parentTree}`
+                        : `No passing Check exists for the parent commit's tree ${parentTree}. Running the full Check`,
+                )
+            }
+        }
     } catch (error) {
         console.log(`Check reuse lookup failed, running the full Check: ${error instanceof Error ? error.message : "Unknown error"}`)
     }
     console.log(
         result
             ? `Check run ${result.runId} already passed for tree ${tree}. Reusing it`
-            : `No reusable passing Check exists for tree ${tree}. Running the full Check`,
+            : parentCheck
+              ? "Running only the release version checks"
+              : `No reusable passing Check exists for tree ${tree}. Running the full Check`,
     )
     const output = process.env.GITHUB_OUTPUT
     if (output)
-        await appendFile(output, `reused=${result !== null}\nrun_url=${result?.runUrl ?? ""}\ntree=${tree}\n`)
+        await appendFile(
+            output,
+            `reused=${result !== null}\nrun_url=${result?.runUrl ?? ""}\ntree=${tree}\n` +
+                `version_only=${parentCheck !== null}\nparent_run_url=${parentCheck?.runUrl ?? ""}\n`,
+        )
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
