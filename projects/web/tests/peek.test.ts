@@ -216,7 +216,8 @@ test("a lone lowercase word is an option only where the sentence makes it one", 
     const option = await render("Enable it with the client's `cache` option, or set `sharding: \"auto\"`")
     assert.deepEqual(
         option.marks.map((mark) => mark.key),
-        ["/docs/api/js-ts/options/#clientoptions-cache", "/docs/api/js-ts/options/#clientoptions-sharding"],
+        // The client is a glossary term, marked as in any sentence
+        ["/docs/glossary/#client", "/docs/api/js-ts/options/#clientoptions-cache", "/docs/api/js-ts/options/#clientoptions-sharding"],
     )
 })
 
@@ -256,8 +257,56 @@ test("the entries a table of sentences becomes are marked like prose, but not th
     assert.doesNotMatch(html, /<span class="entry-label">[^<]*<a /)
     assert.deepEqual(
         marks.map((mark) => mark.text),
-        ["lifecycle.connectionEnded", "4004", "gateway", "runBot"],
+        // Both tokens are the bot's credential
+        ["lifecycle.connectionEnded", "4004", "token", "gateway", "token", "runBot"],
     )
+})
+
+test("Client and Token mark only their glossary meaning", async () => {
+    const sentence = await render("Keep the client secret and the OAuth client ID on the server, and pass the bot token to the client")
+    const clientOrToken = (mark: (typeof marks)[number]) => mark.key === "/docs/glossary/#client" || mark.key === "/docs/glossary/#token"
+    assert.deepEqual(
+        sentence.marks.filter(clientOrToken).map((mark) => [mark.text, mark.key]),
+        [
+            ["token", "/docs/glossary/#token"],
+            ["client", "/docs/glossary/#client"],
+        ],
+    )
+    // A bare token in a guide is the credential, also in a paragraph about command arguments, as in the quick start
+    const credential = await render("A missing token is reported instead, before the bot connects")
+    assert.deepEqual(credential.marks.filter(clientOrToken).map((mark) => mark.text), ["token"])
+    const quickStart = guides["quick-start"]!.split("\n").find((line) => line.includes("command arguments") && /\btoken\b/.test(line))
+    assert.ok(quickStart, "The quick start no longer speaks of the token beside command arguments, so this check reads nothing")
+    assert.deepEqual((await render(quickStart, "quick-start")).marks.filter(clientOrToken).map((mark) => mark.text), ["token"])
+    // In the comments of the Commands reference, a token is a piece of a command's text, as in these from the SDK
+    for (const [comment, self] of [
+        ["Convert a decimal token such as `3` or `-2` to a JavaScript safe integer.", "/docs/api/js-ts/commands/#commandargumentinteger"],
+        ["Resolve the token against these channel candidates only", "/docs/api/js-ts/commands/#commandargumentchannelchoice-type"],
+        ["Empty quotes produce an empty token, which a text argument descriptor rejects.", "/docs/api/effect/commands/#commands-parsequoted"],
+    ] as const)
+        assert.deepEqual((await render(comment, undefined, self)).marks.filter(clientOrToken), [], comment)
+    // Elsewhere in the reference, a comment's token is the credential
+    const webhook = await render("Its metadata contains no token.", undefined, "/docs/api/js-ts/invites-and-webhooks/#webhook")
+    assert.deepEqual(webhook.marks.filter(clientOrToken).map((mark) => mark.text), ["token"])
+    // Fluxer's apps and OAuth's client credentials are not the SDK's client
+    for (const apps of ["On a media channel only: Clients hide the media download options", "Orders in which clients list the posts", "The mobile client shows it", "Invalid client credentials or instance settings"])
+        assert.deepEqual((await render(apps)).marks.filter(clientOrToken), [], apps)
+    const voice = guides["guilds-and-permissions"]!.split("\n").find((line) => line.includes("a client that supports encrypted call media"))
+    assert.ok(voice, "The guide no longer speaks of a client that supports encrypted call media, so this check reads nothing")
+    assert.deepEqual((await render(voice, "guilds-and-permissions")).marks.filter((mark) => mark.key === "/docs/glossary/#client"), [])
+    // The changelog's out-of-range tokens are pieces of a command's text
+    const changelog = read("../sdk/CHANGELOG.md").split("\n").find((line) => line.includes("out-of-range tokens"))
+    assert.ok(changelog, "The changelog no longer speaks of out-of-range tokens, so this check reads nothing")
+    assert.deepEqual((await render(changelog, undefined)).marks.filter(clientOrToken), [])
+})
+
+test("the OAuth guide's client secret and client ID are not the SDK's client", async () => {
+    const guide = guides["webhooks-and-oauth"]!
+    // The guide must still speak of both, or this test checks nothing
+    assert.match(guide, /client secret/i)
+    assert.match(guide, /client ID/)
+    const { html } = await render(guide, "webhooks-and-oauth")
+    assert.doesNotMatch(html, /href="\/docs\/glossary\/#client"[^>]*>clients?<\/a>\s+(?:secret|ID)/i)
 })
 
 test("a reference comment does not mark the symbol it documents", async () => {

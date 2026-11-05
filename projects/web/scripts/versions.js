@@ -43,3 +43,21 @@ export function validateSnapshot(snapshot) {
     if (required.some((path) => !paths.has(path))) throw new Error("Incomplete docs snapshot")
     return snapshot
 }
+
+/**
+ * Which of the served versions npm marks as deprecated, with npm's own message, from the package's registry document. A served
+ * version npm doesn't list throws, since whether it is deprecated is then unknown and the version menu must not leave it out
+ * @param {unknown} packument @param {string[]} versions @returns {Record<string, string>}
+ */
+export function npmDeprecations(packument, versions) {
+    const listed = /** @type {{ versions?: Record<string, { deprecated?: unknown }> }} */ (packument)?.versions
+    if (!listed || typeof listed !== "object") throw new Error("npm's registry document lists no versions")
+    /** @type {Record<string, string>} */
+    const deprecated = {}
+    for (const version of versions) {
+        const entry = listed[version]
+        if (!entry || typeof entry !== "object") throw new Error(`npm's registry document doesn't list ${version}, so whether it is deprecated is unknown. A version published a moment ago can take a minute to appear there`)
+        if (typeof entry.deprecated === "string" && entry.deprecated.trim()) deprecated[version] = entry.deprecated.trim()
+    }
+    return deprecated
+}

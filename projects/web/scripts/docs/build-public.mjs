@@ -1,14 +1,18 @@
 // Builds the public site from the published versions' snapshots in released/, which scripts/fetch-releases.js imports. The newest version
 // (Stable, otherwise Nightly) is the site: its docs live at /docs/ and only they are indexed. Every other version gets its own
 // docs, reference and search under its own address: /docs/nightly/ and /docs/<exact Stable version>/. They are told to stay out of
-// search results, so one page never competes with itself. /docs/latest/ and the newest version's own address redirect to /docs/
-// Usage: node scripts/docs/build-public.mjs [--released FOLDER] [--out FOLDER]
+// search results, so one page never competes with itself. /docs/latest/ and the newest version's own address redirect to /docs/.
+// The version menu marks the versions npm marks as deprecated, read fresh from npm's registry on every build, so a later deprecation
+// shows with the next build. A build that can't read it stops, rather than leave a deprecation out. --registry FILE reads that
+// document from a file instead, which the version check uses for its made-up versions
+// Usage: node scripts/docs/build-public.mjs [--released FOLDER] [--out FOLDER] [--registry FILE]
 import { execFileSync } from "node:child_process"
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { channelTargets, compareVersions, parseVersion, validateSnapshot } from "../versions.js"
+import { channelTargets, compareVersions, npmDeprecations, parseVersion, validateSnapshot } from "../versions.js"
 import { snapshotContent } from "./snapshot-content.mjs"
+import { writeSearchWords } from "./search-words.mjs"
 
 const site = fileURLToPath(new URL("../../", import.meta.url))
 const option = (name, fallback) => {
@@ -18,6 +22,7 @@ const option = (name, fallback) => {
 const released = option("--released", join(site, "released"))
 const out = option("--out", join(site, "dist"))
 const packageName = "@neontechspace/fluxerly"
+const registryAt = process.argv.indexOf("--registry")
 const bin = (name) => join(site, "node_modules/.bin", name)
 
 const snapshots = new Map()
@@ -36,7 +41,24 @@ const others = [...snapshots.keys()]
     .reverse()
     .map((version) => ({ version, label: version, path: version }))
 const baseOf = (target) => (target.version === newest.version ? "/docs/" : `/docs/${target.path}/`)
-const shown = channels.map((target) => ({ label: target.label, version: target.version, base: baseOf(target) }))
+
+/** The package's registry document, which says which versions are deprecated. Read on every build, since a deprecation can come at any time.
+ * npm's short form for installs carries each version's deprecation too, and stays small while the full document grows with every nightly */
+async function readRegistry() {
+    if (registryAt >= 0) return JSON.parse(await readFile(resolve(process.argv[registryAt + 1]), "utf8"))
+    const url = `https://registry.npmjs.org/${packageName.replace("/", "%2F")}`
+    const response = await fetch(url, { headers: { accept: "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8" }, signal: AbortSignal.timeout(30_000) })
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`)
+    return response.json()
+}
+let deprecated
+try {
+    deprecated = npmDeprecations(await readRegistry(), [...snapshots.keys()])
+} catch (error) {
+    throw new Error(`The public build reads npm's registry to mark deprecated versions in the version menu, and couldn't: ${error.message}. It stops rather than leave a deprecation out`, { cause: error })
+}
+const versionEntry = (target) => ({ label: target.label, version: target.version, base: baseOf(target), ...(deprecated[target.version] ? { deprecated: deprecated[target.version] } : {}) })
+const shown = channels.map(versionEntry)
 const builds = [...channels.slice(1), ...others]
 
 // Astro moves files into its output, so the builds stay on the project's own disk
@@ -66,7 +88,7 @@ async function build(target, outDir) {
             DOCS_CONTENT: content,
             DOCS_VERSION: target.version,
             DOCS_VERSIONS: JSON.stringify(shown),
-            DOCS_OLDER_VERSIONS: JSON.stringify(others.map((item) => ({ label: item.label, version: item.version, base: baseOf(item) }))),
+            DOCS_OLDER_VERSIONS: JSON.stringify(others.map(versionEntry)),
             ...(isNewest ? {} : { PUBLIC_DOCS_BASE: `/docs/${target.path}/` }),
             // npm's plain install follows `latest`, so only the newest Stable's pages can rely on it. Every other page names its exact version
             ...(isNewest && target.label === "Stable" ? {} : { DOCS_PACKAGE_SPEC: `${packageName}@${target.version}` }),
@@ -94,6 +116,7 @@ function moveLinks(html, base) {
 await rm(out, { recursive: true, force: true })
 await build(newest, out)
 execFileSync(bin("pagefind"), ["--site", out], { cwd: site, stdio: "inherit" })
+await writeSearchWords(out)
 
 for (const target of builds) {
     const base = `/docs/${target.path}/`
@@ -105,6 +128,7 @@ for (const target of builds) {
         else if (path.endsWith("peek.json")) await writeFile(path, (await readFile(path, "utf8")).replaceAll('"/docs/', `"${base}`))
     }
     execFileSync(bin("pagefind"), ["--site", docs], { cwd: site, stdio: "inherit" })
+    await writeSearchWords(docs)
     await cp(docs, join(out, "docs", target.path), { recursive: true })
     await cp(join(outDir, "_astro"), join(out, "_astro"), { recursive: true })
 }
@@ -117,4 +141,4 @@ await writeFile(join(out, "_redirects"), `${redirects.join("\n")}\n`)
 const hidden = builds.map((target) => `/docs/${target.path}/*\n  X-Robots-Tag: noindex\n`).join("\n")
 if (hidden) await appendFile(join(out, "_headers"), `\n${hidden}`)
 await rm(temporary, { recursive: true, force: true })
-console.log(JSON.stringify({ newest: newest.version, others: builds.map((target) => target.version) }))
+console.log(JSON.stringify({ newest: newest.version, others: builds.map((target) => target.version), deprecated: Object.keys(deprecated) }))

@@ -28,17 +28,19 @@ The types come from Fluxer's OpenAPI document at the commit this release pins, w
 
 ### Routes newer than the SDK
 
-The `client.rest.request` method takes any path and body, for a route or field newer than the pinned description, or a route that needs no token. This one reads another application's public name, from a route that needs no token:
+The `client.rest.request` method takes any path and body, for a route or field newer than the pinned description, or a route the typed list leaves out, such as one that needs no token and is not among the public reads it types. This one reads the community guidelines link of Fluxer's message report flow, from such a route:
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
 
-export async function applicationName(client: Client, applicationId: string) {
-    const result = await client.rest.request<{ name?: unknown }>({
+export async function reportGuidelines(client: Client) {
+    const result = await client.rest.request<{ guidelines_url?: unknown }>({
         method: "GET",
-        path: `/oauth2/applications/${applicationId}/public`,
+        path: "/reports/flows/message",
     })
-    return result.map((response) => (typeof response.body.name === "string" ? response.body.name : undefined))
+    return result.map((response) =>
+        typeof response.body.guidelines_url === "string" ? response.body.guidelines_url : undefined,
+    )
 }
 ```
 
@@ -50,7 +52,7 @@ Both use the queue, rate limits, deadline and logging of the named methods. Logs
 
 ## Read an event without a type
 
-Every gateway event also arrives as the `raw` event, in the form Fluxer sent it. Types listed in `gateway.ignoredEvents` do not arrive, apart from the mention and reaction batch exceptions that `gateway.ignoredEvents` describes. When `documented` is true, Fluxer's documentation describes the event's type, and comparing `t` with that type gives `d` its documented fields under Fluxer's own names, so a misspelled field fails to compile. This one notices when the bot's own membership of a thread changes:
+Every gateway event also arrives as the `raw` event, in the form Fluxer sent it. Types listed in `gateway.ignoredEvents` do not arrive, apart from the mention and reaction batch exceptions that `gateway.ignoredEvents` describes. When `documented` is true, the SDK describes the event's type, and comparing `t` with that type gives `d` its described fields under Fluxer's own names, so a misspelled field fails to compile. The SDK builds those descriptions from Fluxer's documentation, with reviewed corrections from Fluxer's server code, and from server code alone for a few types the documentation leaves out, such as `GUILD_HEALTH_UPDATE`. This one notices when the bot's own membership of a thread changes:
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"
@@ -63,7 +65,7 @@ export function watchOwnThreadMembership(client: Client) {
 }
 ```
 
-The types come from Fluxer's gateway and HTTP API documentation at the Fluxer commit the SDK was reviewed against. They check nothing at runtime: `d` is still the body Fluxer sent, which can lack a documented field or carry a newer one, so check a field before relying on it. A type that documentation does not describe, such as one Fluxer added later, still arrives, with `documented: false` and an unknown `d` to validate. `GatewayDispatchPayloads` names the payload of each documented type, and `GatewayPayloadObjects` the objects inside them, keyed by the address of their documentation, such as `GatewayPayloadObjects["/http-api/messages/#message-object"]`
+The types come from Fluxer's gateway and HTTP API documentation at the Fluxer commit the SDK was reviewed against, with those corrections. They check nothing at runtime: `d` is still the body Fluxer sent, which can lack a documented field or carry a newer one, so check a field before relying on it. A type the SDK does not describe, such as one Fluxer added later, still arrives, with `documented: false` and an unknown `d` to validate. `GatewayDispatchPayloads` names the payload of each documented type, and `GatewayPayloadObjects` the objects inside them, keyed by the address of their documentation, such as `GatewayPayloadObjects["/http-api/messages/#message-object"]`
 
 A `raw` handler turns off [`ignoredEvents: "auto"`](/docs/configuration/#events-and-the-gateway), so the bot also receives the event types that setting would skip. With `ignoredEvents: "auto"`, register the `raw` handler before `client.connect`. Automatic filtering is decided when Identify starts a new session. Adding a `raw` handler later does not change that session's filtering, and Resume keeps the existing list
 

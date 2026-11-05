@@ -1,9 +1,11 @@
 import type { Client } from "@neontechspace/fluxerly"
 
-export async function applicationName(client: Client, applicationId: string) {
-    const result = await client.rest.request<{ name?: unknown }>({
+export async function reportGuidelines(client: Client) {
+    const result = await client.rest.request<{ guidelines_url?: unknown }>({
         method: "GET",
-        path: `/oauth2/applications/${applicationId}/public`,
+        path: "/reports/flows/message",
     })
-    return result.map((response) => (typeof response.body.name === "string" ? response.body.name : undefined))
+    return result.map((response) =>
+        typeof response.body.guidelines_url === "string" ? response.body.guidelines_url : undefined,
+    )
 }

@@ -12,9 +12,17 @@ Each term has a short definition and a link to the guide or reference page that 
 
 A cache is a local copy of Fluxer data that the client keeps up to date from gateway events, so a lookup needs no request. Caching is off until it is enabled in the client options, and each lookup returns a [frozen snapshot](/docs/glossary/#frozen-snapshot). See [Configuration](/docs/configuration/#cache) for every cache category and [History and cache](/docs/history-and-cache/) for the message cache
 
+### Cancellation signal
+
+A cancellation signal is an `AbortSignal` that asks running work to stop and clean up. A `client.on` handler receives one that is aborted when its subscription closes or the client shuts down, and methods that take request options accept one as `signal`. Aborting cannot undo a change Fluxer already received. See [Reliability](/docs/reliability/#set-a-request-deadline-and-allow-cancellation)
+
 ### Channel
 
 A channel is a place where messages are sent: A text or voice channel in a [community](/docs/glossary/#guild), or a direct conversation. Most message methods take a channel ID. See [Messages](/docs/messages/)
+
+### Client
+
+A client is the SDK object that sends requests to Fluxer for a bot, a webhook or an OAuth application. The bot's client also holds its token, its gateway connection and everything the bot has registered. The `runBot` function creates and runs one from the bot's options, and `createClient` returns one without connecting it. See [Core concepts](/docs/core-concepts/#the-client)
 
 ### Collector
 
@@ -32,7 +40,7 @@ A cooldown stops a command from running again too soon for the same user, channe
 
 ### Duration options
 
-Options whose names end in `Ms`, such as `timeoutMs` and `durationMs`, are measured in milliseconds. For example, `30_000` means 30 seconds
+Options whose names end in `Ms`, such as `timeoutMs` and `durationMs`, are measured in milliseconds. For example, `30_000` means 30 seconds. See [Reliability](/docs/reliability/#set-a-request-deadline-and-allow-cancellation) for request deadlines
 
 ## E
 
@@ -90,11 +98,15 @@ A guild in the API is a community in Fluxer. The app says community, while API f
 
 A handler is a function that the SDK calls for each [event](/docs/glossary/#event) of one type. Register it with `client.on` or the `events` option of `runBot`. A handler that throws, or returns an Err, is reported and keeps receiving later events. See [Events and collectors](/docs/events-and-collectors/)
 
+### Heartbeat
+
+A heartbeat is a small message the SDK sends over the [gateway](/docs/glossary/#gateway) connection at the interval Fluxer sets, to show the connection is still alive. When Fluxer does not acknowledge one before the next is due, the SDK treats the connection as lost and [reconnects](/docs/glossary/#reconnect). See [Troubleshooting](/docs/troubleshooting/#the-connection-is-recovering)
+
 ## I
 
 ### ID
 
-An ID is the unique number Fluxer gives each user, community, channel, message and role. The SDK keeps IDs as decimal strings, such as `"1234567890123456789"`, because JavaScript numbers lose precision for values this large. A canonical ID has no sign, surrounding whitespace or leading zeroes. See [snowflake](/docs/glossary/#snowflake)
+An ID is the unique number Fluxer gives each user, community, channel, message and role, and the SDK keeps every ID as a decimal string such as `"1234567890123456789"`. A string keeps the full value, because JavaScript numbers lose precision for values this large. A canonical ID has no sign, surrounding whitespace or leading zeroes. Methods trim surrounding whitespace from an ID before use, as Fluxer does, so `" 123 "` acts as `"123"`. An ID passed as a number fails before any request, because a JavaScript number holding a real Fluxer ID has already lost digits. See [snowflake](/docs/glossary/#snowflake)
 
 ### Identify
 
@@ -102,13 +114,13 @@ Identify is the gateway command that logs a [shard](/docs/glossary/#shard) in an
 
 ### Intent
 
-The SDK sends no gateway intents when it connects. To ask Fluxer not to send event types the bot does not use, set the client's `gateway.ignoredEvents` option. See [Configuration](/docs/configuration/)
+Fluxer has no gateway intents, so a bot receives events without turning any on, except presence updates for chosen members, which need `client.presence.setMembers`. To ask Fluxer not to send event types the bot does not use, set the client's `gateway.ignoredEvents` option. See [Configuration](/docs/configuration/)
 
 ## L
 
 ### Log level
 
-Each SDK log record has a level. From least to most severe: Trace and Debug for detail that is off by default, Info for normal milestones such as readiness, Warn for problems the bot survives, such as a dropped event, and Error for failures, such as a failed handler. Fatal is the highest level, so a Fatal threshold hides failed handlers. See [Logging](/docs/logging/)
+A log level says how severe an SDK log record is, from Trace, Debug and Info through Warn and Error to Fatal. Trace and Debug are for detail that is off by default, Info for normal milestones such as readiness, Warn for problems the bot survives, such as a dropped event, and Error for failures, such as a failed handler. Fatal is the highest level, so a Fatal threshold hides failed handlers. See [Logging](/docs/logging/)
 
 ## M
 
@@ -132,6 +144,10 @@ OAuth lets a person approve an application's access to their account through a c
 
 ## P
 
+### Permission
+
+A permission is one action a member may take in a [community](/docs/glossary/#guild) or one of its channels, such as sending messages or banning members. Each [role](/docs/glossary/#role) grants a set of permissions, and a channel's overwrites can allow or deny them there. Fluxer refuses a request that needs a permission the bot lacks. See [Communities and permissions](/docs/guilds-and-permissions/)
+
 ### PKCE
 
 PKCE is an OAuth safeguard: The application creates a secret verifier and sends only its hash when the consent flow starts, then proves it started the flow by sending the verifier when it exchanges the code. The `oauth.createPkce` helper creates the pair. See [Webhooks and OAuth](/docs/webhooks-and-oauth/)
@@ -144,11 +160,15 @@ A prefix command is a message that starts with a chosen prefix, such as `!ping` 
 
 ### Rate limit
 
-A rate limit caps how many requests Fluxer accepts in a period. Fluxer answers HTTP 429 when a limit is reached. The SDK then waits for the delay Fluxer names and sends the request again when its body can be reused, logging long waits. A request fails at once instead when that wait would pass its deadline. An unknown uppercase provider code remains in `details.providerCode`, including when the deadline prevents that wait. See [Troubleshooting](/docs/troubleshooting/)
+A rate limit caps how many requests Fluxer accepts in a period. Fluxer answers HTTP 429 when a limit is reached. The SDK then waits for the delay Fluxer names and sends the request again when its body can be reused, logging long waits. A request fails at once instead when that wait would pass its deadline. See [Troubleshooting](/docs/troubleshooting/)
+
+### Reconnect
+
+The client reconnects by itself after it loses a [gateway](/docs/glossary/#gateway) connection, and [resumes](/docs/glossary/#resume) the session when it can. Each lost connection logs a `lifecycle.connectionLost` record that names the next step. A failure the SDK does not retry, such as a rejected token, ends with a `lifecycle.connectionEnded` record instead. See [Troubleshooting](/docs/troubleshooting/#the-connection-is-recovering)
 
 ### REST
 
-REST is Fluxer's HTTP API for reading and changing resources, such as sending a message or fetching a community. REST requests work without the [gateway](/docs/glossary/#gateway) connection. HTTP 204 is a successful response without a value. For a route without an SDK method, use `client.rest.request` with a path after `/v1`. The method rejects a `/v1` prefix and token-authenticated webhook paths even when unreserved route letters are percent-encoded. These checks remain case-sensitive. Discovery and request transport causes retain only safe facts, not raw error text. See the [client reference](/docs/api/js-ts/client/#rest)
+REST is Fluxer's HTTP API for reading and changing resources, such as sending a message or fetching a community. REST requests work without the [gateway](/docs/glossary/#gateway) connection. HTTP 204 is a successful response without a value. For a route without an SDK method, use `client.rest.request` with a path after `/v1`. See [Raw requests and events](/docs/raw-requests-and-events/) and the [client reference](/docs/api/js-ts/client/#rest)
 
 ### Result
 
@@ -197,6 +217,10 @@ A supervisor runs a bot's shards in several child Node.js processes. A superviso
 ### Test client
 
 A test client is a real client connected to an in-memory Fluxer instead of the network. The `createTestClient` and `createTestBot` functions create one, and a test uses it to deliver events and check the requests the bot sent. See [Testing](/docs/testing/)
+
+### Token
+
+A token is a secret that proves who a request comes from. The bot token runs the bot and belongs in an environment variable such as `FLUXER_BOT_TOKEN`, never in the code. A webhook has its own token, and OAuth gives an application tokens that act for one user. See [Create a bot](/docs/create-a-bot/) and [Webhooks and OAuth](/docs/webhooks-and-oauth/)
 
 ## U
 

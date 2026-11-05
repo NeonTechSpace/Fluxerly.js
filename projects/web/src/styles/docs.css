@@ -70,13 +70,12 @@
     --accent-deep: var(--cyan-deep);
     --accent-soft: rgb(70 227 239 / 0.12);
     --line: var(--hair);
-    /* The reading column's measure in pixels, 76 characters of the article's 19px type, so the frame can add it up */
+    /* The reading column's widest measure in pixels, 76 characters of the article's 19px type */
     --read-w: 947px;
     --room-gap: clamp(40px, 3.4vw, 72px);
-    /* The room's frame on wide screens: sidebar, reading column, outline and the gaps. Declared again here because a variable built from others takes the values where it is declared */
-    --frame: calc(var(--side-w) + var(--read-w) + var(--outline-w) + 2 * var(--room-gap));
-    --frame-pad: 0px;
-    --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
+    /* The room stands in the site's frame, the one the header and footer keep on every page, so the sidebar starts under the
+       wordmark and the outline ends under the last header control. The reading column gives up what the frame lacks */
+    --frame-inline: var(--site-frame-inline);
 
     background: transparent;
 }
@@ -182,11 +181,41 @@
 }
 
 /* The sea floor's crystal bubbles, fainter and slower here, rising the whole height of the screen. They fade in low and out high, so none
-   appears or ends suddenly */
+   appears or ends suddenly. They rise only in the reading column's free side, the water between the end of its running text, 36em of
+   the article's type, and the page's icon, so the sidebar and the outline, which float on the night with no surface of their own,
+   always read clear. The layer is that lane alone, with room for a bubble's sway on each side, and the header's band stays clear,
+   since its frosting alone still lets a bubble show behind its links: a bubble fades out slowly before it. The lane comes from the
+   same values that place the sidebar and the outline */
+.docs-bubbles {
+    --clear-fade: 24px;
+    /* A bubble's widest sway, with its glow */
+    --sway-room: 56px;
+    --side-to: calc(var(--frame-inline) + var(--side-w));
+    --outline-from: calc(100% - var(--frame-inline) - var(--outline-w));
+    /* The lane ends short of the page's icon, which closes the reading column's first line, by a bubble's sway */
+    --lane-to: calc(var(--outline-from) - var(--room-gap) - clamp(56px, 5vw, 80px) - var(--clear-fade));
+    --lane-from: min(calc(var(--side-to) + var(--room-gap) + 36 * var(--type-lead)), calc(var(--lane-to) - 64px));
+
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--lane-from) - var(--sway-room));
+    width: calc(var(--lane-to) - var(--lane-from) + 2 * var(--sway-room));
+    mask-image: linear-gradient(to bottom, transparent var(--room-top), #000 calc(var(--room-top) + 3 * var(--clear-fade)));
+}
+
+/* Below a wide laptop the reading column has no free side: Its running text reaches the outline, and without the outline beside it
+   the Docs menu button and the page's outline ride in the reading column itself. The water keeps its light and leaves the bubbles out */
+@media (max-width: 1439px) {
+    .docs-bubbles {
+        display: none;
+    }
+}
+
 .docs-bubble {
     position: absolute;
     bottom: -48px;
-    left: var(--x);
+    left: calc(var(--sway-room) + (100% - 2 * var(--sway-room) - var(--size)) * var(--lane));
     width: var(--size);
     height: var(--size);
     opacity: 0;
@@ -195,23 +224,17 @@
     animation-delay: calc(-1 * var(--from-start, 0s) - var(--water-t, 0ms));
 }
 
+/* Gold is the night's opposite hue, so a gold bubble as faint as the others mixes with the blue behind it into a grey brown. It
+   carries more of its own light and a glow in the palette's gold, and reads as gold beside the cyan and violet ones */
+.docs-bubble[data-bubble="gold"] {
+    --bubble-light: 0.9;
+    filter: drop-shadow(0 0 5px color-mix(in srgb, var(--color-gold) 50%, transparent));
+}
+
 .docs-bubble svg {
     display: block;
     width: 100%;
     height: 100%;
-}
-
-/* Without the outline beside it, the reading column has no free side, so the bubbles are fewer and fainter */
-@media (max-width: 1279px) {
-    .docs-bubble {
-        --bubble-light: 0.25;
-
-        left: var(--x-narrow);
-    }
-
-    .docs-bubble:nth-of-type(2n) {
-        display: none;
-    }
 }
 
 @keyframes docs-bubble {
@@ -258,10 +281,10 @@ body.docs .site-header::before {
     position: relative;
     display: grid;
     grid-template-columns: var(--side-w) minmax(0, var(--read-w)) var(--outline-w);
-    justify-content: center;
+    justify-content: space-between;
     column-gap: var(--room-gap);
     min-height: 100vh;
-    padding-inline: var(--page-margin);
+    padding-inline: var(--frame-inline);
     font-size: var(--type-lead);
 }
 
@@ -1101,6 +1124,62 @@ html[data-course-settling] .course-station::details-content {
     margin: 0.45em 0 0;
 }
 
+/* The changelog reads as separate changes: each stands apart from the next, a line that introduces a list reads as its
+   heading, and a written line's label such as Affected or Migration starts it in a brighter step. The commit is a quiet tag:
+   beside the change's first line in the margin when the column has room past the reading measure, otherwise after that line */
+.changelog > ul > li + li {
+    margin-top: 1.6em;
+}
+
+.changelog li > p:has(+ :is(ul, ol)) {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-soft);
+}
+
+.changelog .change-label {
+    font-weight: var(--weight-semibold);
+    color: var(--ink-soft);
+}
+
+/* The tag is 20 px tall, and a touch takes 44: its clear layer reaches 12 px above and below it. After a line the tag's margins hold
+   that room in its own line, so the layer never covers the line above or below, which may hold links of their own */
+.docs-prose.changelog a.change-commit {
+    position: relative;
+    display: inline-block;
+    margin: 12px 0 12px 8px;
+    padding: 1px 6px;
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    font-weight: var(--weight-regular);
+    line-height: 1.5;
+    color: var(--ink-body);
+    white-space: nowrap;
+    vertical-align: 1px;
+    text-decoration: none;
+    background: var(--tint);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.docs-prose.changelog a.change-commit::after {
+    position: absolute;
+    inset: -12px -4px;
+    content: "";
+}
+
+.docs-prose.changelog a.change-commit:hover {
+    color: var(--ink-high);
+}
+
+@container article (min-width: 760px) {
+    .docs-prose.changelog a.change-commit {
+        position: absolute;
+        top: 0.35em;
+        left: calc(100% + 24px);
+        margin: 0;
+    }
+}
+
 /* A note: a rule on its left and its text on the night, no box. A note that opens with a bold word, such as Tip
    or Warning, is one of the three kinds, and the rule and the word take the kind's meaning color */
 .docs-prose blockquote,
@@ -1608,19 +1687,21 @@ html[data-course-settling] .course-station::details-content {
 
 /* Which published version the docs show: one menu with the version on screen, the way a reader expects to find it */
 .version-menu {
-    position: relative;
-    z-index: 3;
+    flex: none;
     margin: 12px 0 0;
     font-size: var(--type-small);
 }
 
+/* A version with a label, such as Stable or Nightly, reads whole on its own line under the label, a size smaller, since a nightly's
+   number is too long to share a line with its label in the sidebar. Every labelled row and the button keep this one shape */
 .version-menu summary,
 .version-single {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 2px 10px;
     min-height: 44px;
-    padding: 0 14px;
+    padding: 8px 14px;
     color: var(--ink-high);
     background: var(--well);
     border-radius: var(--corner-medium);
@@ -1628,7 +1709,10 @@ html[data-course-settling] .course-station::details-content {
     box-shadow: inset 0 0 0 1px var(--hair);
 }
 
+/* The caret keeps the right edge, beside however many lines the version takes */
 .version-menu summary {
+    position: relative;
+    padding-right: 38px;
     cursor: pointer;
     list-style: none;
     transition: box-shadow var(--speed-fast) ease;
@@ -1653,19 +1737,37 @@ html[data-course-settling] .course-station::details-content {
     font-weight: var(--weight-medium);
 }
 
+/* A version breaks only where its own line can't hold it */
 .version-number {
-    min-width: 0;
     margin-left: auto;
-    overflow: hidden;
     font-family: var(--font-mono);
     color: var(--ink-muted);
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+}
+
+.version-label + .version-number {
+    flex-basis: 100%;
+    order: 1;
+    margin-left: 0;
+    font-size: var(--type-micro);
+}
+
+/* An older version's number is its only word, and a prerelease's is a size smaller there too, so it fits its row whole */
+.version-number[data-prerelease] {
+    font-size: var(--type-micro);
+}
+
+/* A labelled version that npm deprecated keeps its badge on the label's line */
+.version-label ~ .version-deprecated {
+    margin-left: auto;
 }
 
 .version-caret {
-    flex: none;
+    position: absolute;
+    top: 50%;
+    right: 14px;
     color: var(--ink-muted);
+    translate: 0 -50%;
     transition: rotate var(--speed-fast) ease;
 }
 
@@ -1677,12 +1779,11 @@ html[data-course-settling] .course-station::details-content {
     transition: none;
 }
 
+/* The list opens in the sidebar's flow and moves the rest of the sidebar down, so it never lies over a row of the course and cuts
+   it at its edge. However many versions there are, the list scrolls by itself and its end stays on a short screen. Its scroll
+   doesn't carry over to the page */
 .version-list {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    left: 0;
-    /* However many versions there are, the list scrolls by itself and its end stays on a short screen. Its scroll doesn't carry over to the page */
+    margin-top: 6px;
     max-height: max(132px, min(320px, calc(100dvh / var(--page-zoom, 1) - 230px)));
     padding: 6px;
     overflow-y: auto;
@@ -1692,17 +1793,16 @@ html[data-course-settling] .course-station::details-content {
     background: var(--color-night-2);
     border-radius: var(--corner-medium);
     corner-shape: squircle;
-    box-shadow:
-        inset 0 0 0 1px var(--hair),
-        var(--raised-shade);
+    box-shadow: inset 0 0 0 1px var(--hair);
 }
 
 .version-list a {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 2px 10px;
     min-height: 44px;
-    padding: 0 8px;
+    padding: 6px 8px;
     color: var(--ink-muted);
     text-decoration: none;
     border-radius: var(--corner-small);
@@ -1719,6 +1819,11 @@ html[data-course-settling] .course-station::details-content {
     background: rgb(255 255 255 / 0.08);
 }
 
+/* The version on screen is as bright as its row, also where it is the row's only word, as an older version is */
+.version-list a:is(:hover, [aria-current]) .version-number {
+    color: var(--ink-high);
+}
+
 /* An older version is only its number, so it starts on the left like the heading above it */
 .version-group ~ a .version-number {
     margin-left: 0;
@@ -1729,6 +1834,32 @@ html[data-course-settling] .course-station::details-content {
     padding: 6px 8px 0;
     color: var(--ink-muted);
     border-top: 1px solid var(--hair);
+}
+
+/* A version npm marks as deprecated says so beside its number, in the warning's gold, quietly enough to leave the number first */
+.version-deprecated {
+    flex: none;
+    padding: 1px 7px;
+    font-size: var(--type-micro);
+    font-weight: var(--weight-medium);
+    color: var(--gold);
+    background: rgb(236 196 110 / 0.1);
+    border-radius: var(--corner-small);
+    corner-shape: squircle;
+}
+
+.version-group ~ a .version-deprecated {
+    margin-left: auto;
+}
+
+/* On a deprecated version's own pages the same word opens the page, with npm's own message */
+.docs-prose > .version-note {
+    max-width: var(--measure);
+    margin: 0 0 1.6em;
+}
+
+.docs-prose > .version-note > p {
+    margin: 0;
 }
 
 /* The Fluxer commit this version was checked against, a quiet line under the version. The commit opens on GitHub, and a
@@ -2014,6 +2145,11 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         border-color var(--speed-fast) ease;
 }
 
+/* A part of a name, such as .directMessages, moves to the next line whole. See identifierHtml in code-breaks.mjs */
+.name-part {
+    display: inline-block;
+}
+
 .toc-list li[data-depth="3"] a {
     padding-left: 30px;
 }
@@ -2247,7 +2383,41 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     gap: 8px 12px;
 }
 
-.search-retry {
+/* A corrected or suggested query, above the results, where a phone's keyboard does not cover it */
+.search-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin: 0;
+    padding: 12px 22px 4px;
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+}
+
+/* The note's sentence takes at most two lines, so the first result stays in view on a phone */
+.search-note > span {
+    display: -webkit-box;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+}
+
+/* The query as search read it, which may differ from the typed one by a single letter */
+.search-note strong {
+    font-weight: var(--weight-medium);
+    color: var(--ink-high);
+}
+
+/* With no results under it, the note ends the dialog, so its button keeps the same room below as above */
+.search-notes:has(+ .search-results:empty) .search-note {
+    padding-bottom: 12px;
+}
+
+.search-retry,
+.search-again {
     min-height: 44px;
     padding: 0 16px;
     font: inherit;
@@ -2258,6 +2428,14 @@ html[data-lang="ts"] [data-lang-variant="js"] {
     border-radius: var(--corner-small);
     corner-shape: squircle;
     cursor: pointer;
+}
+
+/* The note's button keeps to one line inside the dialog */
+.search-again {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Two columns: the outline folds into the top of the page */
@@ -2332,27 +2510,7 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         font-size: var(--type-display);
     }
 
-    /* The title with the page's icon at the end of its line, held clear of a long title */
-.docs-heading.has-icon {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-}
-
-.docs-heading .docs-title {
-    min-width: 0;
-}
-
-.docs-icon {
-    flex: none;
-    width: clamp(56px, 5vw, 80px);
-    height: clamp(56px, 5vw, 80px);
-    object-fit: contain;
-    filter: drop-shadow(0 6px 10px rgb(0 0 0 / 0.5));
-}
-
-.docs-lead {
+    .docs-lead {
         margin-top: 12px;
     }
 
@@ -2374,7 +2532,8 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 @media (min-width: 1280px) and (max-width: 1679px) {
     .docs {
         --side-w: 260px;
-        --outline-w: 200px;
+        /* Wide enough for most of the reference's type names, such as AttachmentDownloadOptions, to stand whole */
+        --outline-w: 240px;
         --room-gap: 32px;
     }
 }
@@ -2421,12 +2580,15 @@ html[data-lang="ts"] [data-lang-variant="js"] {
         transition: transform var(--speed-normal) ease;
     }
 
+    /* The page recedes behind the open sheet, darker and softer than behind search, so its controls beside the sheet
+       read as out of reach rather than as part of the menu */
     .side-scrim {
         position: fixed;
         inset: 0;
         z-index: 39;
         display: block;
-        background: rgb(2 3 14 / 0.72);
+        background: rgb(2 3 14 / 0.86);
+        backdrop-filter: blur(6px);
         opacity: 0;
         pointer-events: none;
         transition: opacity var(--speed-normal) ease;
@@ -2489,6 +2651,16 @@ html[data-lang="ts"] [data-lang-variant="js"] {
 
     .toc-fold {
         margin-bottom: 28px;
+    }
+}
+
+/* Beside the title the icon took a quarter of a phone's column, and a title of a few words broke into three short lines. On a
+   phone held upright the icon stands above the title, which has the whole column */
+@media (max-width: 480px) {
+    .docs-heading.has-icon {
+        flex-direction: column-reverse;
+        align-items: flex-start;
+        gap: 12px;
     }
 }
 

@@ -47,10 +47,14 @@ export type FacePartName = keyof typeof faceArt.parts
 // about 390 device pixels at 1920x1080, 730 at 2560x1329 at scale 1.5 and 780 at 3840x2160 with the page
 // zoom. scripts/prepare-art.mjs writes them
 export const mascotWidths = [584, 876, 1168] as const
-export const mascotSrcset = mascotWidths.map((width) => `/art/mascot-${width}.webp ${width}w`).join(", ")
+const mascotFile = (width: number) => `/art/mascot-${width}.webp`
+export const mascotSrcset = mascotWidths.map((width) => `${mascotFile(width)} ${width}w`).join(", ")
+// The width of the conductor's file at this address, or undefined for another picture
+export const mascotWidthOf = (address: string) => mascotWidths.find((width) => address.endsWith(mascotFile(width)))
 // The hero conductor's bow tie and what lies under it, at the same widths, so the browser picks the same size as for the conductor
-export const bowSrcset = mascotWidths.map((width) => `/art/bow-${width}.webp ${width}w`).join(", ")
-export const bowUnderSrcset = mascotWidths.map((width) => `/art/bow-under-${width}.webp ${width}w`).join(", ")
+export const bowFile = (width: number) => `/art/bow-${width}.webp`
+export const bowUnderFile = (width: number) => `/art/bow-under-${width}.webp`
+export const bowSrcset = mascotWidths.map((width) => `${bowFile(width)} ${width}w`).join(", ")
 
 // The conductor's box as Hero.astro lays it out, so the browser picks the picture nearest the size it draws
 // instead of the largest: the room between the eye line, at 38% of the height, and the 84px the hat keeps clear of

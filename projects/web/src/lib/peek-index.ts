@@ -53,6 +53,9 @@ export interface GlossaryTerm {
     pattern: RegExp
     /** A capitalized name such as Effect, which as the first word of a sentence may be an ordinary word */
     name: boolean
+    /** Where the reference address of the symbol a comment documents matches this, the word has another meaning there,
+     * as a token of a command's text */
+    notForSymbol?: RegExp
 }
 
 export interface PeekTerms {
@@ -398,16 +401,29 @@ export function parseGlossary(markdown: string): { term: string; slug: string; b
 
 const regexEscape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
+// Terms whose word also means something else, and the words around it that tell the meanings apart. The client in
+// OAuth's client secret, client ID and client credentials is the OAuth application, and the clients that show, hide or
+// list something, a client that supports a feature and a mobile or desktop client are Fluxer's apps, not the SDK's
+// client. A token described as a piece of text, such as an out-of-range or a parsed token, and every token in the
+// reference comments of the SDK's Commands category, whose page is commands, is a piece of a command's text, while the
+// guides and the other comments mean the credential
+const otherMeanings: Record<string, { notBefore?: string; notAfter?: string; notForSymbol?: RegExp }> = {
+    Client: { notBefore: "(?:secrets?|IDs?|credentials?|shows?|hides?|lists?|that\\s+supports?)\\b", notAfter: "\\b(?:mobile|desktop)\\s+" },
+    Token: { notAfter: "\\b(?:out-of-range|decimal|numeric|positional|parsed|remaining|quoted)\\s+", notForSymbol: /^\/docs\/api\/[\w-]+\/commands\// },
+}
+
 // A term matches with its plural. The glossary writes common nouns in lowercase, such as "A shard is", and names such
 // as Effect or Result capitalized. A term the definition never writes in lowercase is a name and matches capitalized only
-function termPattern(term: string, definition: string): { pattern: RegExp; name: boolean } {
+function termPattern(term: string, definition: string): Omit<GlossaryTerm, "key" | "term"> {
     const lower = term.toLowerCase()
     // Code such as client.rest.request and link targets do not count as the term written in lowercase
     const prose = definition.replace(/`[^`]*`/g, "").replace(/\]\([^)]*\)/g, "]")
     const caseless = term !== lower && new RegExp(`(?<![\\w-])${regexEscape(lower)}`).test(prose)
     const stem = regexEscape(term).replace(/ /g, "\\s+")
     const forms = /[^aeiou]y$/i.test(term) ? `${stem.slice(0, -1)}(?:y|ies)` : `${stem}(?:s|es)?`
-    return { pattern: new RegExp(`(?<![\\w.$/#@-])${forms}(?![\\w-])`, caseless ? "gi" : "g"), name: !caseless && /^[A-Z][a-z]+$/.test(term) }
+    const { notBefore, notAfter, notForSymbol } = Object.hasOwn(otherMeanings, term) ? otherMeanings[term]! : {}
+    const pattern = `(?<![\\w.$/#@-])${notAfter ? `(?<!${notAfter})` : ""}${forms}(?![\\w-])${notBefore ? `(?!\\s+${notBefore})` : ""}`
+    return { pattern: new RegExp(pattern, caseless ? "gi" : "g"), name: !caseless && /^[A-Z][a-z]+$/.test(term), ...(notForSymbol ? { notForSymbol } : {}) }
 }
 
 function addGlossary({ entries, terms }: Build, markdown: string) {

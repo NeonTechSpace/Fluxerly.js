@@ -208,6 +208,8 @@ interface Scan {
     /** Whether the text starts a sentence: it opens its block, or the text before it ends one */
     opensBlock: boolean
     blockText: string
+    /** The reference address of the symbol a comment documents */
+    self?: string
 }
 
 function scanText(value: string, scan: Scan): Found[] {
@@ -231,13 +233,16 @@ function scanText(value: string, scan: Scan): Found[] {
     }
     for (const match of value.matchAll(apiWords)) add("api", resolveApi(terms, match[1]!, { entries: scan.entries, loose: true }), match.index, match.index + match[1]!.length)
     if (scan.glossary)
-        for (const term of terms.glossary)
+        for (const term of terms.glossary) {
+            // The symbol a comment documents can give the term's word another meaning, as a command's text does a token
+            if (scan.self && term.notForSymbol?.test(scan.self)) continue
             for (const match of value.matchAll(term.pattern)) {
                 // A sentence that opens with a name such as Effect, or with a singular word such as "Identify each
                 // copy", often opens with an ordinary word or a verb. "Events sent during the move" is the term
                 const opening = opensSentence(match.index) && (term.name || match[0].toLowerCase() === term.term.toLowerCase())
                 if (!opening) add("term", term.key, match.index, match.index + match[0].length)
             }
+        }
     // Overlaps keep the earlier, then the longer, then the more specific mark
     found.sort((a, b) => a.start - b.start || b.end - b.start - (a.end - a.start) || priority[a.kind] - priority[b.kind])
     const kept: Found[] = []
@@ -329,7 +334,7 @@ export default function rehypePeek(options: RehypePeekOptions) {
                 } else if (isText(child)) {
                     const blockText = blockTexts.get(block) ?? blockTexts.set(block, textOf(block)).get(block)!
                     const opensBlock = index === 0 && blockText.trimStart().startsWith(child.value.trimStart())
-                    for (const found of scanText(child.value, { terms, entries, levelWords, glossary, opensBlock, blockText }))
+                    for (const found of scanText(child.value, { terms, entries, levelWords, glossary, opensBlock, blockText, ...(typeof self === "string" ? { self } : {}) }))
                         decide({ ...found, ...target(terms, found.key), text: child, parent: node as Element })
                 }
             }

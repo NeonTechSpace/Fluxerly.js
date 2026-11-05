@@ -32,7 +32,7 @@ The `channels.fetchAll` method lists forum and media channels but never their po
 Fluxer leaves the post settings out of some payloads, such as the `guildChannelDelete` event. Each setting is therefore optional, and its absence means that it is unavailable, not that it has its default
 
 - `availableTags`: The tags a post can carry, at most 20. Only members who can manage threads may apply or remove a `moderated` tag
-- `defaultReactionEmoji`: The reaction clients show on each post, or null
+- `defaultReactionEmoji`: The reaction the Fluxer app shows on each post, or null
 - `defaultSortOrder`: A `ForumSortOrder` value, or null
 - `defaultForumLayout`: A `ForumLayout` value, on a forum channel only
 - `defaultTagSetting`: How a post search matches tags, `"match_some"` or `"match_all"`

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react"
 import { MagnifyingGlassIcon } from "@phosphor-icons/react"
-import { answer as answerQuery, pagefindOptions, searchable, type Hit, type PagefindApi, type PagefindModule } from "../lib/docs-search"
+import { answer as answerQuery, pagefindOptions, searchable, type Answer, type HeadingCounts, type Hit, type PagefindApi, type PagefindModule, type SearchWords } from "../lib/docs-search"
 import { composing, EnterIntent } from "../lib/search-enter"
 
 // Each published version has its own index, beside its own pages
@@ -86,6 +86,20 @@ const reopenPagefind = () => {
     return searcher.load()
 }
 
+// The words the docs use and the real words close to them, for reading a mistyped word. Downloaded once, the first time
+// no title or heading names a whole query, and asked for again after a failure
+let words: Promise<SearchWords> | undefined
+function loadWords() {
+    const loading = (words ??= fetch(`${indexPath}words.json`).then((response) => {
+        if (!response.ok) throw new Error(`The search word list answered ${response.status}`)
+        return response.json() as Promise<SearchWords>
+    }))
+    loading.catch(() => {
+        if (words === loading) words = undefined
+    })
+    return loading
+}
+
 const copies = {
     searcher: searcher.load,
     checker: checker.load,
@@ -96,14 +110,46 @@ const copies = {
     failedChunks: () => failedChunks,
     forgetSearcher: searcher.forget,
     forgetChecker: checker.forget,
+    words: loadWords,
+    async pageCount() {
+        const entry = await fetch(`${indexPath}pagefind-entry.json`)
+        if (!entry.ok) throw new Error(`The search index answered ${entry.status}`)
+        const { languages } = (await entry.json()) as { languages: Record<string, { page_count: number }> }
+        return Object.values(languages).reduce((total, language) => total + language.page_count, 0)
+    },
+    async headings() {
+        const response = await fetch(`${indexPath}headings.json`)
+        if (!response.ok) throw new Error(`The shared headings answered ${response.status}`)
+        return (await response.json()) as HeadingCounts
+    },
 }
-const answer = (text: string, isStale: () => boolean) => answerQuery(text, isStale, copies)
+const answer = (text: string, isStale: () => boolean, asTyped: boolean) => answerQuery(text, isStale, copies, asTyped)
+
+// A query as the note shows it: 32 characters of it, with … where it goes on. They start a few characters before the
+// first one that differs from the query as typed, so a corrected word late in a pasted log line stays in view
+const noteLength = 32
+function brief(text: string, typed = text) {
+    if (text.length <= noteLength) return text
+    let differs = 0
+    while (differs < text.length && text[differs] === typed[differs]) differs++
+    const start = differs === text.length ? 0 : Math.min(Math.max(0, differs - 8), text.length - (noteLength - 1))
+    const room = noteLength - (start ? 1 : 0)
+    const end = start + room >= text.length ? text.length : start + room - 1
+    return `${start ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`
+}
+
+// A note button's spoken name: Its visible label first, then the whole query when the label shows only part of it
+const spoken = (label: string, query: string) => (label.includes(query) ? undefined : `${label}, ${query}`)
 
 export default function DocsSearch() {
     const dialog = useRef<HTMLDialogElement>(null)
     const input = useRef<HTMLInputElement>(null)
     const [query, setQuery] = useState("")
     const [hits, setHits] = useState<Hit[]>([])
+    // How search read the answered query: A typo it corrected or a correction it only suggests
+    const [reading, setReading] = useState<Omit<Answer, "hits">>({})
+    // The query the reader asked to search as typed, without correcting it
+    const [asTyped, setAsTyped] = useState("")
     // The query the shown results answer. Until the newest query is answered, no result is not yet nothing found
     const [answered, setAnswered] = useState("")
     const [active, setActive] = useState(0)
@@ -157,25 +203,28 @@ export default function DocsSearch() {
         // One letter matches the start of almost every page, so a search waits for a second one
         if (!searchable(text)) {
             setHits([])
+            setReading({})
             // Cleared results answer no query. The same query typed again then waits for its own answer, so Enter opens its
             // first result once it arrives, and nothing found never shows before it does
             setAnswered("")
             return
         }
         let stale = false
-        answer(text, () => stale).then(
+        answer(text, () => stale, text === asTyped).then(
             (next) => {
                 if (!next || stale) return
-                setHits(next)
+                setHits(next.hits)
+                setReading({ readAs: next.readAs, suggestion: next.suggestion })
                 setAnswered(text)
                 setActive(0)
-                go(enter.arrive(text, next))
+                go(enter.arrive(text, next.hits))
             },
             (error) => {
                 if (stale) return
                 enter.clear()
                 console.error("Search failed:", error)
                 setHits([])
+                setReading({})
                 setAnswered("")
                 setState("unavailable")
             },
@@ -183,7 +232,15 @@ export default function DocsSearch() {
         return () => {
             stale = true
         }
-    }, [query, state])
+    }, [query, state, asTyped])
+
+    // Searches again for a query the reader picks from the note, as typed or as suggested
+    const searchFor = (text: string, typed: boolean) => {
+        enter.clear()
+        setAsTyped(typed ? text : "")
+        setQuery(text)
+        input.current?.focus()
+    }
 
     const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
         if (composing(event.nativeEvent)) return
@@ -209,9 +266,36 @@ export default function DocsSearch() {
             ? "Search could not load. Check the connection and try again"
             : state === "loading"
               ? "Opening the index"
-              : searchable(query.trim()) && answered === query.trim() && !hits.length
+              : searchable(query.trim()) && answered === query.trim() && !hits.length && !reading.suggestion
                 ? `Nothing found for “${query.trim()}”`
                 : ""
+    // The note above the results, where a phone's keyboard does not hide it: A corrected typo with a way back to the
+    // query as typed, or a correction search only suggests
+    const shown = answered === query.trim() && state === "ready"
+    // The query as read stands out from the muted note, so a one-letter correction is not missed. A long query, such as a
+    // pasted log line, shows only part of it, so the note stays short and the first result stays in view on a phone. Each
+    // button's spoken name also holds the whole query it searches
+    const again = `Search “${brief(answered)}”`
+    const offered = reading.suggestion && `Search “${brief(reading.suggestion, answered)}”`
+    const note = shown && reading.readAs ? (
+        <p className="search-note">
+            <span>
+                Results for “<strong>{brief(reading.readAs, answered)}</strong>”
+            </span>
+            <button className="search-again" type="button" aria-label={spoken(again, answered)} onClick={() => searchFor(answered, true)}>
+                {again}
+            </button>
+        </p>
+    ) : shown && reading.suggestion ? (
+        <p className="search-note">
+            <span>
+                {hits.length ? "" : `Nothing found for “${brief(answered)}”. `}Did you mean “<strong>{brief(reading.suggestion, answered)}</strong>”?
+            </span>
+            <button className="search-again" type="button" aria-label={spoken(offered!, reading.suggestion)} onClick={() => searchFor(reading.suggestion!, false)}>
+                {offered}
+            </button>
+        </p>
+    ) : null
 
     return (
         <>
@@ -252,6 +336,10 @@ export default function DocsSearch() {
                     <button className="search-close" type="button" onClick={() => dialog.current?.close()}>
                         Esc
                     </button>
+                </div>
+                {/* Always on the page, so a screen reader announces a note that appears in it */}
+                <div className="search-notes" role="status">
+                    {note}
                 </div>
                 <ul className="search-results" id={listId} role="listbox" aria-label="Results">
                     {hits.map((hit, index) => (

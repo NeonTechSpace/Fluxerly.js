@@ -29,7 +29,7 @@ const items: Item[] = [
     },
     {
         title: "Security Reviewed with Frontier AI",
-        text: "Frontier AI models review the code for security flaws, on top of the code scanning that runs on every push. A finding counts only with proof, such as a failing test or a traced path, and the maintainer decides every fix",
+        text: "Frontier models from different AI labs review the code for security flaws, each on its own, so no single model's blind spots decide the outcome. A finding counts only with proof, such as a failing test or a traced path. Code scanning runs on every push, the GitHub workflows are checked for unsafe patterns, and Dependabot flags vulnerable dependencies. Maintainers decide how each finding is handled",
         href: links.securityPolicy,
         link: "Security Policy",
     },
@@ -104,11 +104,11 @@ const facts = ["A way to every route a bot can use", "Fixes on npm up to twice a
         display: flex;
         gap: 22px;
         padding: 30px 0 34px;
-        border-top: 1px solid rgb(160 190 255 / 0.14);
+        border-top: 1px solid var(--color-divider);
     }
 
     .item:last-child {
-        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+        border-bottom: 1px solid var(--color-divider);
     }
 
     .item .wave-mark {

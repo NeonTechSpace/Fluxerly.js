@@ -29,6 +29,26 @@ const { title = homeTitle, description = homeDescription, noindex, graph } = Ast
         <Seo title={title} description={description} noindex={noindex} graph={graph} />
         <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
         <PageTransitions />
+        <!-- The homepage's first frame waits for the whole hero, so a reload never shows the header alone, with the conductor gone,
+             before the hero arrives. Browsers without this link, such as Firefox, keep the page unseen until the hero's end instead,
+             see Hero.astro, and a page that never gets there shows after a few seconds. Where the link works the page is never
+             drawn while it is unseen, so nothing changes there -->
+        {
+            Astro.url.pathname === "/" && (
+                <>
+                    <link rel="expect" href="#hero-end" blocking="render" />
+                    <style is:inline>
+                        html[data-hero-hold] body {
+                            opacity: 0;
+                        }
+                    </style>
+                    <script is:inline>
+                        document.documentElement.dataset.heroHold = ""
+                        setTimeout(() => delete document.documentElement.dataset.heroHold, 3000)
+                    </script>
+                </>
+            )
+        }
     </head>
     <body>
         <a class="skip-link" href="#main">Skip to Content</a>

@@ -101,20 +101,37 @@ const place = (b: ArtBox) =>
                     alt=""
                     data-mascot
                 />
-                <!-- The picture shows as soon as it is whole. Until then its tiny preview, part of this page, stands in for it, so the
-                     conductor is there in the first frame with the words -->
+                <!-- The picture shows as soon as it is whole. Until then its preview, part of this page, stands in for it, so the
+                     conductor is there in the first frame with the words, and the picture resolves out of it. A picture already
+                     here shows in the first frame itself. A picture that never comes leaves the preview standing -->
                 <script is:inline>
                     {
+                        const mascot = document.currentScript.previousElementSibling
                         const show = () => {
                             delete document.documentElement.dataset.mascotWait
                             delete document.documentElement.dataset.iconsHeld
                         }
                         // A return doesn't wait for the conductor or for the hero's script, so the cached icons are ready as early as they can be
                         if (document.documentElement.dataset.iconsHeld === undefined) for (const icon of document.querySelectorAll("[data-sky-icon]")) icon.loading = "eager"
-                        document.currentScript.previousElementSibling.decode().then(show, (reason) => {
-                            console.warn("The conductor's picture didn't load:", reason)
-                            show()
-                        })
+                        const failed = (reason) => {
+                            console.warn("The conductor's picture didn't load, so its preview stands in:", reason)
+                            delete document.documentElement.dataset.iconsHeld
+                        }
+                        // A window that grows or turns while the picture loads can pick a larger file, which turns the decode down. The
+                        // picture still comes, so the conductor waits for that file, and only a file that fails leaves the preview
+                        const reveal = () =>
+                            mascot.decode().then(show, (reason) => {
+                                if (mascot.complete && mascot.naturalWidth > 0) show()
+                                else if (mascot.complete) failed(reason)
+                                else {
+                                    const settled = new AbortController()
+                                    const { signal } = settled
+                                    mascot.addEventListener("load", () => (settled.abort(), reveal()), { signal })
+                                    mascot.addEventListener("error", () => (settled.abort(), failed(new Error(`${mascot.currentSrc} didn't load`))), { signal })
+                                }
+                            })
+                        if (mascot.complete && mascot.naturalWidth > 0) show()
+                        else reveal()
                     }
                 </script>
                 <!-- The living face, over the painted glass: see src/scene/face.ts. Still shows the painted mascot alone and
@@ -132,16 +149,19 @@ const place = (b: ArtBox) =>
 
         <NpmWaterline />
     </div>
+    <span id="hero-end" hidden></span>
+    <!-- The hero is whole, so the page may show, see Site.astro -->
+    <script is:inline>
+        delete document.documentElement.dataset.heroHold
+    </script>
 </section>
 
 <script is:inline>
-    // The sky's icons show when src/lib/hero-runtime.ts has them, and the conductor when its picture is whole, and a slow or failed
-    // picture or script never keeps them hidden for long
+    // The sky's icons show when src/lib/hero-runtime.ts has them, and a slow or failed picture or script never keeps them hidden for
+    // long. The conductor waits for its whole picture however long it takes, since its preview stands in until then, and a picture
+    // shown half arrived would paint top down over nothing
     setTimeout(() => delete document.documentElement.dataset.iconsWait, 1000)
-    setTimeout(() => {
-        delete document.documentElement.dataset.mascotWait
-        delete document.documentElement.dataset.iconsHeld
-    }, 4000)
+    setTimeout(() => delete document.documentElement.dataset.iconsHeld, 4000)
 </script>
 
 <script>
@@ -164,14 +184,17 @@ const place = (b: ArtBox) =>
     }
 
     /* The conductor's picture waits unseen until it is decoded, see the inline scripts above, then comes in
-       as one picture instead of painting top down as it arrives, and its reflection with it. Its preview holds the place */
+       as one picture instead of painting top down as it arrives, and its reflection with it. Its preview holds the place,
+       and the picture resolves out of it: it fades in over the preview, which stays whole underneath until the picture is
+       too. Still keeps this one fade, since the same picture growing sharper moves nothing, and a cut from the soft
+       preview to the sharp picture would show as a jump */
     .conductor::before {
         content: "";
         position: absolute;
         inset: 0;
         background: var(--preview) center / 100% 100% no-repeat;
         opacity: 0;
-        transition: opacity 0s linear var(--speed-normal);
+        transition: opacity 0s linear var(--speed-slow);
     }
 
     :global(html[data-mascot-wait]) .conductor::before {
@@ -181,15 +204,11 @@ const place = (b: ArtBox) =>
 
     .mascot,
     .conductor-reflection img {
-        transition: opacity var(--speed-normal) ease-out;
+        transition: opacity var(--speed-slow) ease-in-out;
     }
 
     :global(html[data-mascot-wait]) :is(.mascot, .conductor-reflection img) {
         opacity: 0;
-    }
-
-    :global(html[data-still]) :is(.mascot, .conductor-reflection img) {
-        transition: none;
     }
 
     /* The water deepens into the sections below. Nothing below the surface keeps its light for long */
@@ -391,7 +410,7 @@ const place = (b: ArtBox) =>
         transition: opacity var(--speed-normal) ease-out;
     }
 
-    /* Still has no fades, so the icons and the frozen frame simply appear */
+    /* Still fades nothing but the conductor's preview into its picture, see above, so the icons and the frozen frame simply appear */
     :global(html[data-still]) .sky-icons,
     :global(html[data-still]) .scene :global(canvas[data-scene-frame]) {
         transition: none;
@@ -406,7 +425,7 @@ const place = (b: ArtBox) =>
         display: none;
     }
 
-    :global(html[data-art-here]) :is(.mascot, .conductor-reflection img, .sky-icons) {
+    :global(html[data-art-here]) .sky-icons {
         transition: none;
     }
 

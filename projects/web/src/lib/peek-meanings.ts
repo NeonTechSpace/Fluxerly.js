@@ -184,7 +184,7 @@ export const logLevels: (Meaning & { level: string })[] = [
         examples: "Heartbeats and every gateway opcode",
         sources: [
             { ...levelsTable, quote: "| `trace` | Heartbeats and every gateway opcode |" },
-            { ...glossaryLevels, quote: "Trace and Debug for detail that is off by default" },
+            { ...glossaryLevels, quote: "Trace and Debug are for detail that is off by default" },
         ],
     },
     {
@@ -196,7 +196,7 @@ export const logLevels: (Meaning & { level: string })[] = [
         examples: "Each REST request and retry, gateway dispatches and rejected commands",
         sources: [
             { ...levelsTable, quote: "| `debug` | Every REST request with its route template, status and duration, retries, gateway dispatch summaries, rejected and unmatched commands |" },
-            { ...glossaryLevels, quote: "Trace and Debug for detail that is off by default" },
+            { ...glossaryLevels, quote: "Trace and Debug are for detail that is off by default" },
         ],
     },
     {

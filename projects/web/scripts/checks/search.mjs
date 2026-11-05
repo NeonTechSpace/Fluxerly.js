@@ -69,9 +69,23 @@ const copies = {
     forgetChecker() {
         checker = undefined
     },
+    words: async () => JSON.parse(await readFile(join(index, "words.json"), "utf8")),
+    pageCount: async () => Object.values(JSON.parse(await readFile(join(index, "pagefind-entry.json"), "utf8")).languages).reduce((total, language) => total + language.page_count, 0),
+    headings: async () => JSON.parse(await readFile(join(index, "headings.json"), "utf8")),
 }
 
 const { floors, ceilings, queries } = JSON.parse(await readFile(queriesFile, "utf8"))
+
+// Every docs word the synonym map swaps in must be a word the docs use, as the built index's word list holds it
+const { synonyms } = await import(pathToFileURL(resolve(web, "src/lib/search-synonyms.ts")).href)
+const wordList = JSON.parse(await readFile(join(index, "words.json"), "utf8"))
+const docsWords = new Set(wordList.words)
+// The public word list holds no profanity
+const { shippable } = await import(pathToFileURL(resolve(web, "scripts/docs/search-words.mjs")).href)
+const profane = wordList.real.filter((word) => !shippable([word]).length)
+if (profane.length) throw new Error(`The word list in ${join(index, "words.json")} holds words its profanity blocklist leaves out, ${profane.length} in all`)
+const unknownSynonyms = [...new Set(Object.values(synonyms).flat())].flatMap((phrase) => phrase.split(" ")).filter((word) => !docsWords.has(word))
+if (unknownSynonyms.length) throw new Error(`The synonym map in src/lib/search-synonyms.ts swaps in words the docs never use: ${unknownSynonyms.join(", ")}`)
 
 // An address as the dialog links it, without index.html and with a slash before the anchor
 const place = (url) => url.replace(/index\.html/, "").replace(/\/?(#|$)/, "/$1")
@@ -85,7 +99,7 @@ const results = []
 const times = []
 for (const query of queries) {
     const started = performance.now()
-    const hits = (await answer(query.q, () => false, copies)) ?? []
+    const hits = (await answer(query.q, () => false, copies))?.hits ?? []
     const ms = performance.now() - started
     times.push(ms)
     const rank = hits.findIndex((hit) => query.expect.some((expected) => matches(hit.url, expected))) + 1
@@ -174,6 +188,24 @@ for (const result of results.filter((entry) => entry.essential && entry.rank !==
 // among its results, so finding one meaning first cannot hide that the other is missing
 for (const result of results.filter((entry) => !entry.shown)) {
     below.push(`Query ${JSON.stringify(result.q)} shows none of the pages it must show, such as ${result.shows[0]}`)
+}
+// Behavior search must keep on the built index, from tests/search-behavior.json: A real word is never rewritten, a clear
+// typo is read before pages that miss a word are tried, and a query opens the place it names. Checked only with the
+// default query sets, as other sets measure other copies of the search code
+if (!option("--queries") && !option("--lib")) {
+    const { cases } = JSON.parse(await readFile(resolve(web, "tests/search-behavior.json"), "utf8"))
+    for (const check of cases) {
+        const result = await answer(check.q, () => false, copies)
+        const urls = result?.hits.map((hit) => hit.url) ?? []
+        const said = (field) => (result?.[field] === undefined ? null : result[field])
+        for (const field of ["readAs", "suggestion"]) {
+            if (field in check && said(field) !== check[field]) below.push(`${JSON.stringify(check.q)} has ${field} ${JSON.stringify(said(field))}, not ${JSON.stringify(check[field])}: ${check.why}`)
+        }
+        if (check.first && !(urls[0] && matches(urls[0], check.first))) below.push(`${JSON.stringify(check.q)} opens ${urls[0] ?? "nothing"} first, not ${check.first}: ${check.why}`)
+        if (check.top3 && !urls.slice(0, 3).some((url) => check.top3.some((expected) => matches(url, expected)))) {
+            below.push(`${JSON.stringify(check.q)} shows ${urls.slice(0, 3).join(", ") || "nothing"} first, none of ${check.top3.join(", ")}: ${check.why}`)
+        }
+    }
 }
 if (below.length) {
     console.error(`\nSearch got worse:\n${below.join("\n")}\nRun with --failures to see which queries no longer find their page first`)

@@ -4,6 +4,7 @@
 // Escape, leaving or losing focus closes it. A touch only follows the link. The card's data is one JSON file built
 // with the site, fetched on the first hover, so a page carries nothing extra until then
 import { getExperience } from "./experience"
+import { leavesSite } from "./external-links.mjs"
 import type { PeekEntry } from "./peek-index"
 
 // A published version's pages are built under their own address, and read that version's meanings
@@ -11,6 +12,14 @@ const indexUrl = `${import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"}peek.json`
 const openDelay = 300
 // Long enough to cross the gap between a mark and its card
 const closeDelay = 160
+// A mark reached this soon after a card closed opens after the short pause of a switch, as moving between neighbouring marks
+const warmFor = 400
+// While a card shows, the pointer rests this long on a neighbouring mark before the card changes to it, so passing over one on the
+// way into the card keeps the card
+const switchDelay = 90
+// A card opens only once the pointer has come to rest on its mark: When it moved further than this during the pause, the pause starts
+// again, so a pointer that only passes over a mark opens nothing
+const restDistance = 6
 const gap = 8
 const margin = 12
 
@@ -18,9 +27,18 @@ let entries: Promise<Record<string, PeekEntry> | undefined> | undefined
 
 function load() {
     entries ??= fetch(indexUrl)
-        .then((response) => (response.ok ? (response.json() as Promise<{ entries: Record<string, PeekEntry> }>) : undefined))
-        .then((index) => index?.entries)
-        .catch(() => undefined)
+        .then((response) => {
+            if (!response.ok) throw new Error(`${indexUrl} answered ${response.status} ${response.statusText}`.trim())
+            return response.json() as Promise<{ entries: Record<string, PeekEntry> }>
+        })
+        .then((index) => {
+            if (!index?.entries) throw new Error(`${indexUrl} holds no entries`)
+            return index.entries
+        })
+        .catch((reason: unknown) => {
+            console.warn("The docs' hover explanations didn't load:", reason)
+            return undefined
+        })
         .then((loaded) => {
             // A failed load is tried again on the next hover
             if (!loaded) entries = undefined
@@ -77,7 +95,7 @@ function cardHtml(key: string, own: PeekEntry, all: Record<string, PeekEntry>): 
         entry.a ? `<p class="peek-action"><span class="peek-label">Next step</span>${entry.a}</p>` : "",
         `<div class="peek-foot"><span class="peek-kind">${escape(entry.k)}</span>`,
         // The mark itself links to the same place, so the card's link stays out of the tab order
-        `<a class="peek-link" href="${escape(href)}" tabindex="-1">${escape(entry.l ?? linkLabel(href))}${arrow}</a></div>`,
+        `<a class="peek-link" href="${escape(href)}" tabindex="-1"${leavesSite(href) ? ' target="_blank" rel="noopener"' : ""}>${escape(entry.l ?? linkLabel(href))}${arrow}</a></div>`,
     ].join("")
 }
 
@@ -88,7 +106,7 @@ let wanted: HTMLAnchorElement | undefined
 let shown: HTMLAnchorElement | undefined
 let openTimer: number | undefined
 let closeTimer: number | undefined
-let pointerY: number | undefined
+let closedAt = Number.NEGATIVE_INFINITY
 let previousDescription: string | null = null
 
 function cardElement(): HTMLDivElement {
@@ -98,7 +116,14 @@ function cardElement(): HTMLDivElement {
     card.id = "docs-peek"
     card.setAttribute("role", "tooltip")
     card.hidden = true
-    card.addEventListener("pointerenter", () => clearTimeout(closeTimer))
+    card.addEventListener("pointerenter", () => {
+        clearTimeout(closeTimer)
+        // Reaching the card keeps it, even when the pointer passed over a neighbouring mark on the way
+        if (shown && wanted !== shown) {
+            clearTimeout(openTimer)
+            wanted = shown
+        }
+    })
     card.addEventListener("pointerleave", (event) => {
         if (!shown?.contains(event.relatedTarget as Node | null)) scheduleClose()
     })
@@ -111,54 +136,73 @@ const zoom = () => Number.parseFloat(getComputedStyle(document.body).zoom) || 1
 
 function place(trigger: HTMLAnchorElement, peek: HTMLDivElement) {
     const scale = zoom()
-    const box = trigger.getBoundingClientRect()
-    const lines = [...trigger.getClientRects()]
-    // A mark that wraps lines up with the line under the pointer
-    const line = (pointerY !== undefined && lines.find((rect) => pointerY! >= rect.top && pointerY! <= rect.bottom)) || lines[0] || box
+    // A mark around code is measured by its code, whose tint reaches a little past the link's own line
+    const mark = trigger.querySelector<HTMLElement>(":scope > code") ?? trigger
+    const box = mark.getBoundingClientRect()
+    const lines = [...mark.getClientRects()]
     const width = peek.offsetWidth * scale
     const height = peek.offsetHeight * scale
     const viewWidth = document.documentElement.clientWidth
     const viewHeight = window.innerHeight
-    const left = Math.max(margin, Math.min(line.left, viewWidth - margin - width))
     // Below the whole mark when it fits, else above it, so the card never covers the words it explains
     const below = box.bottom + gap
     const above = box.top - gap - height
     const top = below + height <= viewHeight - margin || above < margin ? below : above
+    // A mark that wraps keeps its card at the piece of it the card touches, its last line below or its first above, so the card
+    // never starts under a neighbouring mark
+    const line = (top === below ? lines.at(-1) : lines[0]) ?? box
+    const left = Math.max(margin, Math.min(line.left, viewWidth - margin - width))
     peek.style.left = `${left / scale}px`
     peek.style.top = `${top / scale}px`
     peek.dataset.side = top === below ? "below" : "above"
 }
 
+/** Shows the card of a mark. A card that is already showing changes in place, with no fade, so moving between neighbouring marks
+ * never shows a gap or a card on its way out */
 async function open(trigger: HTMLAnchorElement) {
     const key = keyOf(trigger)
-    const all = key ? await load() : undefined
-    const entry = key ? all?.[key] : undefined
-    // The pointer may have moved on while the index loaded
-    if (!key || !entry || !all || wanted !== trigger || !trigger.isConnected) return
+    if (!key) return
+    const all = await load()
+    const entry = all?.[key]
+    // The pointer may have moved on while the index loaded. A mark the index doesn't know simply has no card
+    if (wanted !== trigger || !trigger.isConnected || (all && !entry)) return
     const peek = cardElement()
-    peek.innerHTML = cardHtml(key, entry, all)
-    peek.dataset.form = entry.f ?? "sig"
-    if (entry.f === "level") peek.dataset.level = entry.t.toLowerCase()
+    // An index that didn't load says so in the card, and the next hover tries again
+    peek.innerHTML = all && entry ? cardHtml(key, entry, all) : '<p class="peek-text">This explanation couldn\'t load. The link still opens the page</p>'
+    peek.dataset.form = entry?.f ?? "sig"
+    if (entry?.f === "level") peek.dataset.level = entry.t.toLowerCase()
     else delete peek.dataset.level
     peek.toggleAttribute("data-still", still())
+    const showing = shown !== undefined && !peek.hidden
+    if (shown) forget(shown)
     shown = trigger
     previousDescription = trigger.getAttribute("aria-describedby")
     trigger.setAttribute("aria-describedby", [previousDescription, peek.id].filter(Boolean).join(" "))
-    peek.classList.remove("is-open")
     peek.hidden = false
+    if (showing) {
+        place(trigger, peek)
+        return
+    }
+    peek.classList.remove("is-open")
     place(trigger, peek)
     // The next frame starts the fade in, which Still and reduced motion leave out
     requestAnimationFrame(() => peek.classList.add("is-open"))
+}
+
+/** Gives a mark back the description it had before its card */
+function forget(trigger: HTMLAnchorElement) {
+    if (previousDescription) trigger.setAttribute("aria-describedby", previousDescription)
+    else trigger.removeAttribute("aria-describedby")
+    previousDescription = null
 }
 
 function close() {
     clearTimeout(openTimer)
     clearTimeout(closeTimer)
     if (shown) {
-        if (previousDescription) shown.setAttribute("aria-describedby", previousDescription)
-        else shown.removeAttribute("aria-describedby")
+        forget(shown)
+        closedAt = performance.now()
     }
-    previousDescription = null
     wanted = shown = undefined
     if (card) {
         card.hidden = true
@@ -171,22 +215,58 @@ function scheduleClose() {
     closeTimer = window.setTimeout(close, closeDelay)
 }
 
+// Where the pointer is, and where it was when the running pause started
+const pointer = { x: 0, y: 0 }
+
+/** Opens a mark's card after a pause, once the pointer rests: a pause in which it moved on starts again. Focus opens at once */
+function openAfter(trigger: HTMLAnchorElement, delay: number) {
+    clearTimeout(openTimer)
+    if (delay === 0) {
+        void open(trigger)
+        return
+    }
+    const from = { ...pointer }
+    openTimer = window.setTimeout(() => {
+        if (wanted !== trigger) return
+        if (Math.hypot(pointer.x - from.x, pointer.y - from.y) > restDistance) openAfter(trigger, delay)
+        else void open(trigger)
+    }, delay)
+}
+
 function intend(trigger: HTMLAnchorElement, delay: number) {
     clearTimeout(closeTimer)
     if (trigger === wanted) return
+    clearTimeout(openTimer)
+    // From one mark's card to a neighbour's: the card changes to the mark under the pointer, without closing between them
+    if (shown) {
+        wanted = trigger
+        openAfter(trigger, Math.min(delay, switchDelay))
+        return
+    }
+    // Soon after a card closed, the next mark opens after a switch's short pause, never at once
+    const warm = performance.now() - closedAt < warmFor
     close()
     wanted = trigger
     void load()
-    openTimer = window.setTimeout(() => void open(trigger), delay)
+    openAfter(trigger, warm ? Math.min(delay, switchDelay) : delay)
 }
 
 function setup() {
+    document.addEventListener(
+        "pointermove",
+        (event) => {
+            pointer.x = event.clientX
+            pointer.y = event.clientY
+        },
+        { passive: true },
+    )
     document.addEventListener("pointerover", (event) => {
         // A touch follows the link, with no peek in the way
         if (event.pointerType === "touch") return
+        pointer.x = event.clientX
+        pointer.y = event.clientY
         const trigger = triggerOf(event.target)
         if (!trigger) return
-        pointerY = event.clientY
         intend(trigger, openDelay)
     })
     document.addEventListener("pointerout", (event) => {
@@ -194,15 +274,18 @@ function setup() {
         const trigger = triggerOf(event.target)
         const to = event.relatedTarget as Node | null
         if (!trigger || trigger !== wanted || trigger.contains(to) || card?.contains(to)) return
-        // Leaving before the card opened cancels it. Leaving an open card's mark gives the pointer time to reach it
-        if (shown) scheduleClose()
-        else close()
+        // Leaving before the card opened cancels it, and a neighbour's card that hadn't taken over yet leaves the open one as it was.
+        // Leaving an open card's mark gives the pointer time to reach it
+        clearTimeout(openTimer)
+        if (shown) {
+            wanted = shown
+            scheduleClose()
+        } else close()
     })
     document.addEventListener("focusin", (event) => {
         const trigger = triggerOf(event.target)
         // Keyboard focus only. A click or a tap also focuses the link, and should not open a card
         if (!trigger?.matches(":focus-visible")) return
-        pointerY = undefined
         intend(trigger, 0)
     })
     document.addEventListener("focusout", (event) => {

@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs"
 import { guideAsMarkdown } from "../../scripts/docs/remark-guides.mjs"
 import inventory from "@content/guides/meta.json"
 import { featurePages } from "./links"
+import { siteOrigin } from "./site-address.mjs"
 import { titleCase } from "./title-case"
 import { model } from "./reference"
 import { checkedText, referenceText as condensedText, referenceTextProblems, tasksMarkdown as tasksText } from "./reference-text.ts"
 
 const raw = import.meta.glob<string>("@content/guides/*.md", { query: "?raw", import: "default", eager: true })
-export const site = "https://fluxerly.neontechspace.com"
+export const site = siteOrigin
 const base = import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"
 const version = process.env.DOCS_VERSION ?? (JSON.parse(readFileSync("../sdk/package.json", "utf8")) as { version: string }).version
 const about = `Fluxerly.js is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect\n\nVoice: Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it\n\nThese files describe SDK version ${version}`

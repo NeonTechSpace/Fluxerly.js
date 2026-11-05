@@ -7,7 +7,7 @@ This guide covers the website, SDK documentation authoring, local checks, publis
 Apply [documentation placement](/docs/DOCUMENTATION.md#documentation-placement) before adding prose
 
 - Edit caller-visible member behavior in public SDK source comments
-- Edit handwritten guides in `projects/web/content/guides/`. `meta.json` there is the ordered inventory for the sidebar. Use short `navTitle` sidebar labels and `title` for headings. List other words readers use for a guide's topic, such as `getting started`, under `search`. Docs search reads them as it reads the title
+- Edit handwritten guides in `projects/web/content/guides/`. `meta.json` there is the ordered inventory for the sidebar. Use short `navTitle` sidebar labels and `title` for headings. List other words readers use for a guide's topic, such as `getting started`, under `search`. Docs search reads the `navTitle` and the `search` words as it reads the title, so `search` needs no copy of the `navTitle`
 - Edit the site under `projects/web/src/`, with shared values at the top of `src/styles/global.css`
 - Author release fragments through Changesets, which owns the SDK changelog that the site renders at `/docs/changelog/`
 - Edit the generated error and log codes page through its entries in `projects/sdk/src/internal/code-catalogue.ts`. Logging an uncatalogued code fails the SDK type check
@@ -124,13 +124,13 @@ Release import ([fetch-releases.js](/projects/web/scripts/fetch-releases.js)) us
 | `/docs/<version>/` | Each older Stable release, with `noindex` |
 | `/docs/latest/` and the newest version's own address | A 302 redirect to `/docs/`, keeping the rest of the path, from a static `_redirects` file |
 
-Numbered nightly addresses and retired channels return 404. Each version has its own reference, changelog and search index. The sidebar's version menu lists Stable, Nightly and any older Stable releases. It keeps the same page when the destination has it, otherwise opening that version's overview.
+Numbered nightly addresses and retired channels return 404. Each version has its own reference, changelog and search index. The sidebar's version menu lists Stable, Nightly and any older Stable releases. It keeps the same page when the destination has it, otherwise opening that version's overview. A version npm marks as deprecated says so in the menu and atop its own pages with npm's message. The public build reads npm's registry for this on every run, so deprecating a version needs only a new deploy, and a build that can't read the registry fails
 
 ## Deployment
 
 [Website](/.github/workflows/website.yml) is started on `main` by Release publish after the GitHub release is announced, in its own run, or run by hand. It always checks out `main`, imports the published versions' snapshots, and runs `check:public`. The full screen check, `test:browser` on every screen, runs in [Screens](/.github/workflows/screens.yml) after each push to `main` that changes what the website builds from, so a deploy never waits for it. Before upload it requires the `check` job of the main-push [Check workflow](/.github/workflows/ci.yml) run for that exact checkout through [checked-source.js](/projects/web/scripts/checked-source.js), waiting up to twenty minutes and rejecting failed, cancelled, missing or mismatched evidence
 
-[deploy.js](/projects/web/scripts/deploy.js) validates the Pages project, the Production branch `main`, the custom hostname, the source marker and the build's sitemap and redirects. It uploads with Wrangler from `projects/web`, so `functions/` goes along, then verifies the exact deployment at its Pages URL and at `https://fluxerly.neontechspace.com`: The source marker, the `/docs/latest/` redirect and that `/docs/` is open to search engines. Cloudflare bot protection on the custom domain counts as a warning, and a plain access denial as a failure. Never rerun an upload after an uncertain result, reconcile it in Cloudflare first, because a failed step doesn't prove that nothing was uploaded.
+[deploy.js](/projects/web/scripts/deploy.js) validates the Pages project, the Production branch `main`, the custom hostname, the source marker and the build's sitemap and redirects. It uploads with Wrangler from `projects/web`, then verifies the exact deployment at its Pages URL and at `https://fluxerly.neontechspace.com`: The source marker, the `/docs/latest/` redirect and that `/docs/` is open to search engines. Cloudflare bot protection on the custom domain counts as a warning, and a plain access denial as a failure. Never rerun an upload after an uncertain result, reconcile it in Cloudflare first, because a failed step doesn't prove that nothing was uploaded.
 
 Set these in GitHub Settings, Environments, `website`:
 
@@ -140,4 +140,4 @@ Set these in GitHub Settings, Environments, `website`:
 | `CLOUDFLARE_PAGES_PROJECT` | Environment variable | The Pages project name |
 | `CLOUDFLARE_API_TOKEN` | Environment secret | A token that can read the project and deploy Pages |
 
-The homepage's download chart reads `/api/npm-downloads` ([its function](/projects/web/functions/api/npm-downloads.ts)), which needs the KV namespace `NPM_DOWNLOADS` bound to the Pages project. The counts update with each deploy, when the Website workflow runs `pnpm --filter fluxerly-docs downloads:fetch`, and from then on once a day after 04:00 UTC, about three hours after npm publishes the previous UTC day. A copy stays fresh until the first 04:00 UTC after it was fetched, and a stale one is served at once while it is refreshed in the background. Without the binding each Cloudflare location asks npm on its own.
+The homepage's download chart is drawn at build time from the counts the Website workflow fetches with `pnpm --filter fluxerly-docs downloads:fetch` before each deploy. The site has no server code, so the counts are as new as the last deploy

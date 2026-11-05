@@ -80,7 +80,7 @@ const bubbles = columns.map((x, index) => ({
         <div class="floor-light"></div>
         {
             bubbles.map((bubble) => (
-                <span class="bubble" style={`--x: ${bubble.x}%; --size: ${bubble.size}px; --rise-for: ${bubble.rise}s; --wait: ${bubble.wait}s; --sway: ${bubble.sway}px; --turn: ${bubble.turn}deg`}>
+                <span class="bubble" data-bubble={bubble.tone} style={`--x: ${bubble.x}%; --size: ${bubble.size}px; --rise-for: ${bubble.rise}s; --wait: ${bubble.wait}s; --sway: ${bubble.sway}px; --turn: ${bubble.turn}deg`}>
                     <svg viewBox="0 0 40 40" focusable="false">
                         <use href={`#crystal-${bubble.tone}`} />
                     </svg>
@@ -166,13 +166,29 @@ const bubbles = columns.map((x, index) => ({
             face = null
             endingBox.dataset.hole = "layers"
         }
+        // Starting the shader costs long frames: making its context, building its program and taking in each picture. Each of them
+        // waits until the page has rested from scrolling for a moment, however long the steps before it took, so a fling that ends at
+        // the footer, or one that starts again while the shader's code and pictures arrive, stays smooth. The moving layers hold the
+        // black hole's place until the shader fades in over them
+        let scrolled = -Infinity
+        addEventListener("scroll", () => (scrolled = performance.now()), { passive: true })
+        const resting = () =>
+            new Promise<void>((done) => {
+                const look = () => {
+                    const quiet = performance.now() - scrolled
+                    if (quiet >= 250) done()
+                    else window.setTimeout(look, 250 - quiet)
+                }
+                look()
+            })
         const wakeHole = () => {
             if (face || endingBox.dataset.hole === "layers" || endingBox.dataset.live === undefined || getExperience() === "still") return
             let made: EndingFace | null = null
             import("../../scene/ending-face")
                 .then(async ({ createEndingFace }) => {
+                    await resting()
                     if (face || getExperience() === "still") return
-                    made = createEndingFace(faceSlot, backToLayers)
+                    made = createEndingFace(faceSlot, backToLayers, resting)
                     if (!made) return backToLayers()
                     face = made
                     await made.load()
@@ -191,9 +207,21 @@ const bubbles = columns.map((x, index) => ({
                     backToLayers()
                 })
         }
+        let holeWanted = false
+        const wakeHoleAtRest = () => {
+            if (holeWanted) return
+            holeWanted = true
+            resting().then(() => {
+                holeWanted = false
+                // Scrolled away again before resting, so it waits until the end of the page is near once more
+                if (!near) return
+                if (window.requestIdleCallback) window.requestIdleCallback(wakeHole, { timeout: 1000 })
+                else wakeHole()
+            })
+        }
         const wake = () => {
             if (getExperience() === "still") return
-            if (endingBox.dataset.loading !== undefined) return wakeHole()
+            if (endingBox.dataset.loading !== undefined) return wakeHoleAtRest()
             endingBox.dataset.loading = ""
             const pictures = [...endingBox.querySelectorAll<HTMLImageElement>("img[data-src]")]
             for (const picture of pictures) picture.src = picture.dataset.src ?? ""
@@ -201,7 +229,7 @@ const bubbles = columns.map((x, index) => ({
             Promise.all(pictures.map((picture) => picture.decode()))
                 .then(() => {
                     endingBox.toggleAttribute("data-live", true)
-                    if (near) wakeHole()
+                    if (near) wakeHoleAtRest()
                 })
                 .catch((reason) => console.warn("The conductor at the end of the page stays as painted:", reason))
         }
@@ -304,6 +332,16 @@ const bubbles = columns.map((x, index) => ({
         filter: drop-shadow(0 0 6px rgb(120 230 255 / 0.5));
     }
 
+    /* Gold is the night's opposite hue, so a gold bubble as faint as the others mixes with the blue behind it into a grey brown. It
+       carries more of its own light and glows in the palette's gold, not the water's cyan */
+    .bubble[data-bubble="gold"] {
+        --bubble-peak: 1;
+        --bubble-late: 0.9;
+
+        opacity: 1;
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--color-gold) 55%, transparent));
+    }
+
     .bubble:nth-of-type(n + 7) {
         display: none;
     }
@@ -320,6 +358,10 @@ const bubbles = columns.map((x, index) => ({
         opacity: 0;
         filter: none;
         animation: bubble-rise var(--rise-for) linear var(--wait) infinite paused;
+    }
+
+    :global(html:not([data-still])) .bubble[data-bubble="gold"] {
+        filter: drop-shadow(0 0 6px color-mix(in srgb, var(--color-gold) 55%, transparent));
     }
 
     :global(html:not([data-still])) .abyss[data-on] .bubble {
@@ -358,13 +400,13 @@ const bubbles = columns.map((x, index) => ({
             opacity: 0;
         }
         8% {
-            opacity: 0.9;
+            opacity: var(--bubble-peak, 0.9);
         }
         50% {
             transform: translate3d(var(--sway), calc(var(--reach) * -0.5), 0) rotate(calc(var(--turn) * 0.5)) scale(1);
         }
         82% {
-            opacity: 0.55;
+            opacity: var(--bubble-late, 0.55);
         }
         100% {
             transform: translate3d(calc(var(--sway) * -0.4), calc(var(--reach) * -1), 0) rotate(var(--turn)) scale(1.08);

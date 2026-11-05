@@ -44,6 +44,8 @@
     --color-periwinkle: #b9c7ff;
     --color-success: #7fe3a6;
     --color-info: #7fb0ff;
+    /* The hairlines between a section's parts: quiet, but there on every screen */
+    --color-divider: rgb(160 190 255 / 0.3);
     --font-sans: "Outfit Variable", "Outfit Fallback", system-ui, sans-serif;
     --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
 }
@@ -80,10 +82,20 @@
     --page-margin: clamp(20px, 2.5vw, 48px);
     --page-gutter: clamp(14px, 1.25vw, 24px);
     /* The frame the page's content sits in, which the header and footer line up with on wide screens: the 1720px
-       page grid with its own margin inside. The docs set their own frame */
+       page grid with its own margin inside */
     --frame: 1720px;
     --frame-pad: var(--page-margin);
     --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
+    /* The site's frame, which the header and footer keep on every page and the docs' room stands in: the page grid with the
+       page margin it has where the signal line is drawn, see below, whether or not this page draws the line */
+    --site-margin: clamp(20px, 2.5vw, 48px);
+    --site-frame-inline: max(var(--site-margin), calc((100% - var(--frame)) / 2 + var(--site-margin)));
+}
+
+@media (min-width: 1280px) and (max-width: 1919px) {
+    :root {
+        --site-margin: 56px;
+    }
 }
 
 /* Screens that draw the signal line but have no frame margin to spare: the page margin widens so a station sits
@@ -952,19 +964,10 @@ section[id] {
     }
 }
 
-/* The header and footer keep the site's frame on every page, also in the docs, which set a frame of their own. So they
-   never shift as the reader moves between them */
+/* The header and footer keep the site's frame on every page, also in the docs, whose page margin differs. So they never
+   shift as the reader moves between them */
 .site-header,
 .site-footer {
-    --page-margin: clamp(20px, 2.5vw, 48px);
-    --frame: 1720px;
-    --frame-pad: var(--page-margin);
-    --frame-inline: max(var(--page-margin), calc((100% - var(--frame)) / 2 + var(--frame-pad)));
-}
-
-@media (min-width: 1280px) and (max-width: 1919px) {
-    .site-header,
-    .site-footer {
-        --page-margin: 56px;
-    }
+    --page-margin: var(--site-margin);
+    --frame-inline: var(--site-frame-inline);
 }

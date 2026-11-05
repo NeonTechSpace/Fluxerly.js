@@ -6,6 +6,6 @@
         "types": ["node"],
         "paths": { "@content/*": ["./content/*"] }
     },
-    "include": [".astro/types.d.ts", "src/**/*", "functions/**/*", "tests/**/*"],
+    "include": [".astro/types.d.ts", "src/**/*", "tests/**/*"],
     "exclude": ["dist"]
 }

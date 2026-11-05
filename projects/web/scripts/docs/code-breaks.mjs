@@ -28,7 +28,8 @@ export function seams(text, { block = false } = {}) {
             (!block && upper.test(at) && upper.test(before) && /[a-z]/.test(after)) ||
             // After a slash, an underscore, a double colon, an opening parenthesis or a comma with no space after it.
             // A comma between digits is part of a number
-            (before === "/" && word.test(at) && !(block && /@[\w-]+\/$/.test(text.slice(0, index)))) ||
+            // An address's scheme stays on the host's line, so https:// never ends a line alone
+            (before === "/" && word.test(at) && !(block && /@[\w-]+\/$/.test(text.slice(0, index))) && !/^[a-z][\w+.-]*:\/\/$/i.test(text.slice(0, index))) ||
             (before === "_" && /[A-Za-z]/.test(at) && word.test(text[index - 2] ?? "")) ||
             (before === ":" && text[index - 2] === ":" && word.test(at)) ||
             (before === "(" && at !== ")") ||
@@ -72,8 +73,24 @@ export const routeHtml = (path) =>
         .map((segment) => `<span class="${/^\{[^}]+\}$/.test(segment) ? "route-part route-param" : "route-part"}">${escape(segment)}</span>`)
         .join("/<wbr>")
 
-/** Escaped HTML of a label that is one identifier, such as a heading in an outline. Text with spaces breaks at its spaces */
-export const identifierHtml = (text) => (/\s/.test(String(text)) ? escape(text) : breakableHtml(text))
+/**
+ * Escaped HTML of a label that is one identifier, such as a heading in an outline. Text with spaces breaks at its spaces. A name
+ * breaks first between its parts, before a dot or after a slash, and each part is one inline block (name-part in the styles) that
+ * moves to the next line whole. Only a part wider than the whole line breaks at its camelCase humps, so client.directMessages never
+ * ends a line with client.direct
+ */
+export function identifierHtml(text) {
+    const value = String(text)
+    if (/\s/.test(value)) return escape(value)
+    const parts = []
+    let start = 0
+    for (const point of seams(value, { block: true })) {
+        parts.push(value.slice(start, point))
+        start = point
+    }
+    parts.push(value.slice(start))
+    return parts.map((part) => `<span class="name-part">${breakableHtml(part)}</span>`).join("<wbr>")
+}
 
 const unescape = (value) => value.replace(/&(lt|gt|quot|#39|amp);/g, (_, name) => ({ lt: "<", gt: ">", quot: '"', "#39": "'", amp: "&" })[name])
 

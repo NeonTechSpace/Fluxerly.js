@@ -6,10 +6,10 @@
     "scripts": {
         "dev": "astro dev",
         "generate": "node scripts/docs/generate.mjs",
-        "build": "pnpm run generate && astro build && pagefind --site dist",
+        "build": "pnpm run generate && astro build && pagefind --site dist && node scripts/docs/search-words.mjs dist",
         "build:public": "node scripts/docs/build-public.mjs",
         "preview": "astro preview",
-        "lint": "oxlint -c .oxlintrc.json scripts src tests functions && node ../scripts/em-dashes.mjs .",
+        "lint": "oxlint -c .oxlintrc.json scripts src tests && node ../scripts/em-dashes.mjs .",
         "check": "node ../scripts/check.mjs web",
         "check:types": "astro check",
         "check:public": "node ../scripts/check.mjs public",

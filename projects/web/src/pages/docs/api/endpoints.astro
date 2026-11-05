@@ -81,7 +81,7 @@ const searchText = (route: EndpointRoute) =>
                                             </span>
                                             {/* The gap before the docs link stays at the end of the summary's line, so a wrapped link starts flush */}
                                             <span class="ep-summary">
-                                                {route.summary}<span class="ep-gap" aria-hidden="true" /><wbr />{route.docs && <a class="ep-docs" href={route.docs} aria-label={`${route.summary} in the Fluxer docs`}>Fluxer docs</a>}
+                                                {route.summary}<span class="ep-gap" aria-hidden="true" /><wbr />{route.docs && <a class="ep-docs" href={route.docs} target="_blank" rel="noopener" aria-label={`${route.summary} in the Fluxer docs`}>Fluxer docs</a>}
                                             </span>
                                         </td>
                                         <td class="ep-sdk" role="cell">

@@ -4,8 +4,8 @@ import snapshot from "../../data/npm-downloads.json"
 import { chartView, downloadHistory, packageUrl } from "../../lib/downloads"
 import { packageName } from "../../lib/npm-history"
 
-// The chart is drawn here from the snapshot, which is the first paint and the fallback. The script below draws
-// it again with the same function when the edge endpoint has a newer history
+// The chart is drawn here from the snapshot the Website workflow fetches before each deploy, so its counts are as
+// new as the site
 const view = chartView(downloadHistory(snapshot.days))
 ---
 
@@ -35,9 +35,11 @@ const view = chartView(downloadHistory(snapshot.days))
                 </span>
                 <div class="who">
                     <p class="where">
-                        <a class="name-link" href="https://github.com/Neonsy">Neonsy</a><span class="sep" aria-hidden="true">|</span><a
+                        <a class="name-link" href="https://github.com/Neonsy" target="_blank" rel="noopener">Neonsy</a><span class="sep" aria-hidden="true">|</span><a
                             class="org-link"
-                            href="https://github.com/NeonTechSpace">NeonTechSpace</a
+                            href="https://github.com/NeonTechSpace"
+                            target="_blank"
+                            rel="noopener">NeonTechSpace</a
                         >
                     </p>
                 </div>
@@ -51,7 +53,7 @@ const view = chartView(downloadHistory(snapshot.days))
             <figcaption>
                 <span class="total"><span class="count" data-total>{view.total}</span> <span data-total-word>{view.word}</span></span>
                 <span class="caption">
-                    All npm downloads of <a class="prose-link package" href={packageUrl}>{packageName}</a>, added up <span data-unit>{view.unit}</span> by <span data-unit>{view.unit}</span>
+                    All npm downloads of <a class="prose-link package" href={packageUrl} target="_blank" rel="noopener">{packageName}</a>, added up <span data-unit>{view.unit}</span> by <span data-unit>{view.unit}</span>
                 </span>
             </figcaption>
             <div class="chart">
@@ -117,8 +119,7 @@ const view = chartView(downloadHistory(snapshot.days))
 </section>
 
 <script>
-    import { chartView, downloadHistory, type ChartView, type Reading } from "../../lib/downloads"
-    import { isNpmHistory } from "../../lib/npm-history"
+    import type { Reading } from "../../lib/downloads"
 
     for (const figure of document.querySelectorAll<HTMLElement>("[data-downloads]")) {
         const plot = figure.querySelector<HTMLElement>("[data-plot]")
@@ -130,17 +131,12 @@ const view = chartView(downloadHistory(snapshot.days))
             count: figure.querySelector<HTMLElement>("[data-readout-count]"),
             total: figure.querySelector<HTMLElement>("[data-readout-total]"),
         }
-        let readings: Reading[] = JSON.parse(figure.dataset.points ?? "[]")
+        const readings: Reading[] = JSON.parse(figure.dataset.points ?? "[]")
         if (!plot || !cross || !marker || !readout || readings.length === 0) continue
         let shown = -1
 
         // The line as the readings draw it, from the first day's zero to the newest total
-        let line: { x: number; y: number }[] = []
-        const setReadings = (next: Reading[]) => {
-            readings = next
-            line = [{ x: 0, y: 100 }, ...next]
-        }
-        setReadings(readings)
+        const line = [{ x: 0, y: 100 }, ...readings]
 
         // Where the line is at a point across the plot, in percent from the top. The line only rises, so
         // over any stretch it runs between its height at the stretch's left end and at its right end
@@ -233,97 +229,6 @@ const view = chartView(downloadHistory(snapshot.days))
             { threshold: 0.4 },
         )
         seen.observe(plot)
-
-        // A newer history replaces what the build drew, in place. Every part is set from the same view the
-        // build used. The chart keeps its box, so nothing around it moves. A line that has not drawn itself
-        // yet draws the new path, and one that has drawn is simply the new shape
-        const redraw = (view: ChartView) => {
-            const grid = figure.querySelector("[data-grid]")!
-            const base = grid.querySelector(".base")!
-            for (const old of grid.querySelectorAll("line:not(.base)")) old.remove()
-            for (const at of view.gridlines) {
-                const gridline = document.createElementNS("http://www.w3.org/2000/svg", "line")
-                for (const [name, value] of [["x1", "0"], ["x2", "1000"], ["y1", String(at)], ["y2", String(at)]]) gridline.setAttribute(name, value)
-                base.before(gridline)
-            }
-
-            // The value marks sit under the line in the stack, as the build puts them
-            const growth = figure.querySelector("[data-growth]")!
-            for (const old of plot.querySelectorAll("[data-tick]")) old.remove()
-            for (const tick of view.ticks) {
-                const mark = document.createElement("span")
-                mark.className = "tick"
-                mark.style.top = tick.top
-                mark.setAttribute("aria-hidden", "true")
-                mark.toggleAttribute("data-tick", true)
-                mark.textContent = tick.label
-                growth.before(mark)
-            }
-
-            figure.querySelector("[data-area]")!.setAttribute("d", view.area)
-            figure.querySelector("[data-line]")!.setAttribute("d", view.line)
-            const bead = figure.querySelector<HTMLElement>("[data-bead]")!
-            bead.style.left = view.bead.left
-            bead.style.top = view.bead.top
-
-            figure.querySelector("[data-months]")!.replaceChildren(
-                ...view.months.map((month) => {
-                    const mark = document.createElement("span")
-                    mark.style.left = month.left
-                    mark.textContent = month.label
-                    return mark
-                }),
-            )
-
-            figure.querySelector("[data-total]")!.textContent = view.total
-            figure.querySelector("[data-total-word]")!.textContent = view.word
-            for (const name of figure.querySelectorAll("[data-unit]")) name.textContent = view.unit
-            plot.setAttribute("aria-label", view.plotLabel)
-            figure.querySelector("[data-first-column]")!.textContent = view.firstColumn
-            figure.querySelector("[data-rows]")!.replaceChildren(
-                ...view.rows.map((row) => {
-                    const tr = document.createElement("tr")
-                    const th = document.createElement("th")
-                    th.scope = "row"
-                    th.textContent = row.label
-                    tr.append(th, ...[row.count, row.total].map((text) => Object.assign(document.createElement("td"), { textContent: text })))
-                    return tr
-                }),
-            )
-
-            setReadings(view.readings)
-            // A reading that is open follows its step into the new numbers
-            if (shown >= 0) show(shown)
-        }
-
-        // Once the section is within about a screen of the viewport, the page asks the edge for the newest
-        // history, once. Under astro dev and a plain static serve the same address answers with the build's
-        // own snapshot (src/pages/api/npm-downloads.ts), so nothing changes there
-        const update = async () => {
-            try {
-                const response = await fetch("/api/npm-downloads", { headers: { accept: "application/json" } })
-                if (!response.ok) {
-                    console.warn("The npm download history answered", response.status)
-                    return
-                }
-                const history: unknown = await response.json()
-                if (!isNpmHistory(history)) return
-                const view = chartView(downloadHistory(history.days))
-                if (JSON.stringify(view.readings) !== figure.dataset.points) redraw(view)
-            } catch (error) {
-                // Offline, or no endpoint here: the chart the build drew is still true as of its snapshot
-                console.warn("The npm download history did not load", error)
-            }
-        }
-        const near = new IntersectionObserver(
-            (entries) => {
-                if (!entries.some((entry) => entry.isIntersecting)) return
-                near.disconnect()
-                void update()
-            },
-            { rootMargin: "100% 0px" },
-        )
-        near.observe(figure)
     }
 </script>
 

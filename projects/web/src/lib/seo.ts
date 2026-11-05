@@ -68,8 +68,10 @@ export function plainText(markdown = ""): string {
         .trim()
 }
 
-// A trail of named steps for a docs page, ending at the page itself
-export function breadcrumbs(steps: { name: string; path: string }[]): Node {
+// A trail of named steps for a docs page, ending at the page itself. Search engines show a trail of two steps or more, so a
+// shorter one, such as the docs overview's own, is left out
+export function breadcrumbs(steps: { name: string; path: string }[]): Node | undefined {
+    if (steps.length < 2) return undefined
     return {
         "@type": "BreadcrumbList",
         itemListElement: steps.map((step, index) => ({

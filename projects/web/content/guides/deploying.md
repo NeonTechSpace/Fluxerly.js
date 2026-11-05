@@ -93,7 +93,7 @@ The `pm2 save` command records the running apps, and `pm2 startup` prints the co
 
 ## Run with systemd
 
-Before enabling this service, create the `fluxer-bot` system user and install the bot and its dependencies in `/srv/fluxer-bot`. That user needs permission to read the project and run Node.js
+Before enabling this service, create the `fluxer-bot` system user and install the bot and its dependencies in `/srv/fluxer-bot`. That user must be able to read the project and run Node.js
 
 Create a unit file such as `/etc/systemd/system/fluxer-bot.service`
 

@@ -136,7 +136,7 @@ const searchDescription = declaration
                                         </dt>
                                         <dd>
                                             {" "}
-                                            <Md md={item.summary} inline />
+                                            <Md md={item.summary} inline self={item.url} />
                                             {homes.length > 1 && <span class="ref-from"> From {entryByKey(item.home).title}</span>}
                                         </dd>
                                     </div>
@@ -152,7 +152,7 @@ const searchDescription = declaration
                                     </dt>
                                     <dd>
                                         {" "}
-                                        <Md md={firstSentence(item.doc?.summary)} inline />
+                                        <Md md={firstSentence(item.doc?.summary)} inline self={item.url} />
                                     </dd>
                                 </div>
                             ))}
@@ -162,7 +162,7 @@ const searchDescription = declaration
                             <dl class="ref-list ref-index">
                                 <div class="ref-row" id={item.anchor}>
                                     <dt><a href={item.url}><Code text={item.name} /></a></dt>
-                                    <dd>{" "}<Md md={firstSentence(item.doc?.summary)} inline /></dd>
+                                    <dd>{" "}<Md md={firstSentence(item.doc?.summary)} inline self={item.url} /></dd>
                                 </div>
                             </dl>
                         ) : (

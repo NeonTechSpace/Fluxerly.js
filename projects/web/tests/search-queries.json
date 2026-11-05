@@ -3,22 +3,22 @@
     "seed": 20261103,
     "floors": {
         "tune": {
-            "hit1": 0.775,
-            "hit3": 0.861,
-            "mrr": 0.822
+            "hit1": 0.85,
+            "hit3": 0.945,
+            "mrr": 0.9
         },
         "holdout": {
-            "hit1": 0.811,
-            "hit3": 0.854,
-            "mrr": 0.835
+            "hit1": 0.824,
+            "hit3": 0.9,
+            "mrr": 0.86
         }
     },
     "ceilings": {
         "tune": {
-            "missed": 26
+            "missed": 7
         },
         "holdout": {
-            "missed": 18
+            "missed": 11
         }
     },
     "queries": [

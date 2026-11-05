@@ -42,11 +42,23 @@ html[data-still] .motion:not([data-ready]) {
 /* The waves are longer than the icon. The window shows the middle and lets them flow in and out softly
    at both sides, the way a signal passes through */
 .motion-waves {
+    position: relative;
+    display: block;
+    flex: none;
     width: 20px;
     height: 20px;
-    overflow: visible;
     mask-image: linear-gradient(to right, transparent, #000 16%, #000 84%, transparent);
     mask-repeat: no-repeat;
+}
+
+/* The waves at the icon's scale, 20 px for its 24 units, placed so the icon's first unit is the window's left edge */
+.motion-strip {
+    position: absolute;
+    top: 0;
+    left: -12.5px;
+    width: 45px;
+    height: 20px;
+    overflow: visible;
 }
 
 /* The wave rolls while motion is on, a slow travel of the crests from left to right. It waits until the
@@ -56,10 +68,13 @@ html[data-still] .motion:not([data-ready]) {
     stroke: currentColor;
     stroke-width: 1.8;
     stroke-linecap: round;
+}
+
+.motion-strip {
     animation: motion-roll 2.4s linear infinite paused;
 }
 
-.motion[data-ready][aria-checked="true"] .motion-wave {
+.motion[data-ready][aria-checked="true"] .motion-strip {
     animation-play-state: running;
 }
 
@@ -68,10 +83,10 @@ html[data-still] .motion:not([data-ready]) {
     opacity: 0.6;
 }
 
-/* One full period, 18 units of the 24 unit icon, so the last frame is the first again */
+/* One full period, 18 units of the 24 unit icon, 15 px, so the last frame is the first again */
 @keyframes motion-roll {
     from {
-        transform: translateX(-18px);
+        transform: translateX(-15px);
     }
     to {
         transform: translateX(0);

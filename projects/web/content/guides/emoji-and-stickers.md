@@ -44,6 +44,14 @@ The helper returns `undefined` when the configured emoji is not in the community
 
 Custom markup can also be passed directly, for example `client.messages.addReaction(message, "<a:party:123>")`, with the example ID replaced by an available emoji. The SDK converts it to the form Fluxer's reaction endpoint expects
 
+### Emoji and stickers from age-restricted communities
+
+Fluxer treats a community as age-restricted when it is marked NSFW or set to the age-restricted level. Its custom emoji and stickers work only inside that community, whatever the bot's permissions:
+
+- A new reaction with such an emoji elsewhere fails with reason `rejected` and an `apiError` with code `missingPermissions`. Adding to a reaction that is already on the message still works
+- A sticker from such a community fails the same way when it is sent anywhere else
+- Such an emoji in message text sent or edited anywhere else becomes plain `:name:` text, so the message is sent without the image
+
 ## Reuse a received or parsed emoji
 
 Reaction [events](/docs/glossary/#event) already contain everything needed to add the same reaction. This [handler](/docs/glossary/#handler), registered with `client.on`, mirrors each person's reaction with the bot's own. Supply the connected bot's ID so the bot ignores its own reactions
@@ -99,7 +107,7 @@ Received messages list their stickers in `message.stickers`. Image URLs come fro
 
 ## Create a reusable community emoji
 
-Supply image bytes from a trusted source. Community emoji uploads accept at most 512 KiB of image data. Creating emoji or stickers needs `CreateExpressions`. Fluxer also checks the image format, dimensions and the community's remaining slots
+Supply image bytes from a trusted source. Fluxer decides how large an emoji or sticker image may be, 512 KiB by default, and a community can have a different limit. Creating emoji or stickers needs `CreateExpressions`. Fluxer also checks the image format, dimensions and the community's remaining slots
 
 ```ts
 import type { Client } from "@neontechspace/fluxerly"

@@ -259,14 +259,15 @@ export const faceShader = {
             float running = 1.0 - smoothstep(0.8, 1.0, uCharge.x);
             float edge0 = exp(-front0 * front0 / 0.012) * running;
             float edge1 = exp(-front1 * front1 / 0.012) * running;
-            stroke0.rgb *= 1.0 + filled0 * uCharge.y * (0.4 + 0.75 * smoothstep(0.5, 0.92, stroke0.r / max(stroke0.a, 0.01)));
-            stroke1.rgb *= 1.0 + filled1 * uCharge.y * (0.4 + 0.75 * smoothstep(0.5, 0.92, stroke1.r / max(stroke1.a, 0.01)));
+            stroke0.rgb *= 1.0 + filled0 * uCharge.y * (0.85 + 1.2 * smoothstep(0.5, 0.92, stroke0.r / max(stroke0.a, 0.01)));
+            stroke1.rgb *= 1.0 + filled1 * uCharge.y * (0.85 + 1.2 * smoothstep(0.5, 0.92, stroke1.r / max(stroke1.a, 0.01)));
             stroke0.rgb += vec3(0.55, 0.93, 1.0) * stroke0.a * edge0 * uCharge.y * 0.45;
             stroke1.rgb += vec3(0.55, 0.93, 1.0) * stroke1.a * edge1 * uCharge.y * 0.45;
-            // Their soft light, which breathes, answers the pointer and rises with the charge: the strokes' own shape, far out of focus
-            // Baked smooth, and ending in an oval well before the edge of its picture
+            // Their soft light, which breathes, answers the pointer and rises with the charge: the strokes' own shape a little out of
+            // focus, so it glows along each line and never fills the space between them. Baked smooth, and ending in an oval well before the
+            // edge of its picture. The strokes cover most of it, so the charge lights the strokes themselves the most
             float waveLight = part(uWavesLight, wavesBox, p, 0.0).a * smoothstep(1.0, 0.55, length((p - vec2(1013.0, 1198.0)) / vec2(180.0, 155.0)));
-            color.rgb += cyan * waveLight * (uGlow * 0.8 + (0.07 + 0.04 * sin(t * 0.85)) * wake + (filled0 * 0.7 + edge0 * 0.35) * uCharge.y);
+            color.rgb += cyan * waveLight * (uGlow * 0.65 + (0.07 + 0.04 * sin(t * 0.85)) * wake + (filled0 * 0.9 + edge0 * 0.45) * uCharge.y);
             color = over(over(color, stroke1), stroke0);
 
             // The crescents float and rock as small moons, each on its own, and a glint crosses their facets now and then

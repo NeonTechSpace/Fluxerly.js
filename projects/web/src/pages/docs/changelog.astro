@@ -4,18 +4,25 @@
 import { readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import Docs from "../../layouts/Docs.astro"
+import { links } from "../../lib/links"
 import { renderMarkdown } from "../../lib/markdown"
+import { changelogMarkdown, markChangelog } from "../../lib/changelog"
+import type { TocItem } from "../../lib/docs-nav"
 
 const source = readFileSync(join(resolve(process.env.DOCS_CONTENT ?? "content"), "changelog.md"), "utf8").replace(/^# .*\n+/, "")
-const html = await renderMarkdown(source)
-// The outline links to the headings as they were rendered, so their addresses always exist
-const toc = [...html.matchAll(/<h2 id="([^"]+)">([\s\S]*?)<\/h2>/g)].map((match) => ({
-    depth: 2 as const,
-    text: match[2]!.replace(/<[^>]+>/g, ""),
-    id: match[1]!,
-}))
+const html = markChangelog(await renderMarkdown(changelogMarkdown(source, links.github)))
+// The outline links to the headings as they were rendered, so their addresses always exist. Each version lists its kinds of
+// change under it, so a reader can go straight to a version's major, minor or patch changes. Those names repeat for every
+// version, so a screen reader hears the version first
+let version = ""
+const toc: TocItem[] = [...html.matchAll(/<h([23]) id="([^"]+)">([\s\S]*?)<\/h\1>/g)].map((match) => {
+    const depth = Number(match[1]) as 2 | 3
+    const text = match[3]!.replace(/<[^>]+>/g, "")
+    if (depth === 2) version = text
+    return { depth, text, id: match[2]!, ...(depth === 3 && version ? { under: version } : {}) }
+})
 ---
 
-<Docs title="Changelog" description="What changed in each release of the Fluxerly.js SDK, newest first" section="guides" current="/docs/changelog/" toc={toc} unsearchable>
+<Docs title="Changelog" description="What changed in each release of the Fluxerly.js SDK, newest first" section="guides" current="/docs/changelog/" toc={toc} unsearchable proseClass="changelog">
     <Fragment set:html={html} />
 </Docs>

@@ -10,6 +10,9 @@ import remarkGuides from "./scripts/docs/remark-guides.mjs"
 import remarkEntries from "./scripts/docs/remark-entries.mjs"
 import remarkTitles from "./scripts/docs/remark-titles.mjs"
 import rehypeCodeBreaks, { codeLineIndent, collapseLongCode, remarkLongCode } from "./scripts/docs/code-breaks.mjs"
+import rehypeExternalLinks from "./src/lib/external-links.mjs"
+import { siteOrigin } from "./src/lib/site-address.mjs"
+import remarkExampleAddresses from "./scripts/docs/remark-example-addresses.mjs"
 import sitemap from "./scripts/sitemap.mjs"
 import { buildPeek } from "./src/lib/peek-index.ts"
 import rehypePeek from "./src/lib/rehype-peek.ts"
@@ -30,16 +33,17 @@ const peekDigest = createHash("sha256")
     .digest("hex")
 
 export default defineConfig({
-    site: "https://fluxerly.neontechspace.com",
+    site: siteOrigin,
     output: "static",
     integrations: [react(), sitemap()],
     markdown: {
         // The guides keep their straight quotes, as code and prose in them are written. Tables of sentences become
         // entries, the names, codes and terms in the prose are marked for their peeks, and inline code wraps only at
-        // the seams of its identifiers. The marks come first, so they read each code's whole text
+        // the seams of its identifiers. The marks come first, so they read each code's whole text. Links that leave the
+        // site open in a new tab, and an example address Markdown would link by itself reads as code
         processor: unified({
-            remarkPlugins: [remarkGuides, remarkLongCode, remarkEntries, remarkTitles],
-            rehypePlugins: [[rehypePeek, { terms: peekTerms, digest: peekDigest }], rehypeCodeBreaks],
+            remarkPlugins: [remarkExampleAddresses, remarkGuides, remarkLongCode, remarkEntries, remarkTitles],
+            rehypePlugins: [[rehypePeek, { terms: peekTerms, digest: peekDigest }], rehypeCodeBreaks, rehypeExternalLinks],
             smartypants: false,
         }),
         shikiConfig: { theme: fluxerlyTheme, langs: [gitignoreGrammar], transformers: [codeLineIndent, collapseLongCode] },

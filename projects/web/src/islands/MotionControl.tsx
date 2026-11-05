@@ -30,11 +30,14 @@ export default function MotionControl() {
                 onClick={() => setExperience(moving ? "still" : "immersive")}
             >
                 {/* Each wave runs three periods long, one either side of the window, so sliding it by exactly
-                    one period loops without a seam */}
-                <svg className="motion-waves" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path className="motion-wave" d="M-15 9c3-3.6 6-3.6 9 0s6 3.6 9 0 6-3.6 9 0 6 3.6 9 0 6-3.6 9 0 6 3.6 9 0" />
-                    <path className="motion-wave motion-wave-low" d="M-15 15c3-3.6 6-3.6 9 0s6 3.6 9 0 6-3.6 9 0 6 3.6 9 0 6-3.6 9 0 6 3.6 9 0" />
-                </svg>
+                    one period loops without a seam. The strip slides as a whole picture, which the compositor moves
+                    without asking the page to lay out or paint again */}
+                <span className="motion-waves" aria-hidden="true">
+                    <svg className="motion-strip" viewBox="-15 0 54 24" focusable="false">
+                        <path className="motion-wave" d="M-15 9c3-3.6 6-3.6 9 0s6 3.6 9 0 6-3.6 9 0 6 3.6 9 0 6-3.6 9 0 6 3.6 9 0" />
+                        <path className="motion-wave motion-wave-low" d="M-15 15c3-3.6 6-3.6 9 0s6 3.6 9 0 6-3.6 9 0 6 3.6 9 0 6-3.6 9 0 6 3.6 9 0" />
+                    </svg>
+                </span>
                 <svg className="motion-next" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
                     {moving ? <path className="motion-pause" d="M3.6 2.4v7.2M8.4 2.4v7.2" /> : <path className="motion-play" d="M3.4 2.2 9.8 6 3.4 9.8Z" />}
                 </svg>

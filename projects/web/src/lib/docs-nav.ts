@@ -20,6 +20,9 @@ export interface TocItem {
     depth: 2 | 3
     text: string
     id: string
+    // The heading this one sits under, which a screen reader hears first where the outline repeats the same words, such as each
+    // version's Major Changes in the changelog
+    under?: string
 }
 
 // One station of a part's course: a group that opens and closes. The current page's group starts open

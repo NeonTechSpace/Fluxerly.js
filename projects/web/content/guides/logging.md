@@ -12,7 +12,7 @@ On a terminal the client prints one readable line per record: Time, level, categ
 
 ```text
 2026-09-27 03:14:20.850 INFO  lifecycle  [lifecycle.starting] Starting Fluxerly <version> for fluxer.com with 2 shards version=<version> instance=fluxer.com shards=2 totalShards=2
-2026-09-27 03:14:20.853 INFO  lifecycle  [lifecycle.startupDeadline] Startup of 2 shards may take up to 31.0 s: The configured 30.0 s (connection.startupTimeoutMs) plus 1 s per additional shard, because the SDK starts shard sessions 1 s apart startupTimeoutMs=31000 configuredMs=30000 shards=2
+2026-09-27 03:14:20.853 INFO  lifecycle  [lifecycle.startupDeadline] Startup of 2 shards may take up to 31.0 s: The configured 30.0 s (connection.startupTimeoutMs) plus 1 s per additional shard, because the SDK starts shard sessions 1 s apart. Sending Identify adds up to 2 min 15 s while Fluxer starts the session startupTimeoutMs=31000 configuredMs=30000 shards=2 identifyWaitMs=135000
 2026-09-27 03:14:20.891 INFO  lifecycle  [lifecycle.ready] Shard 0 is ready shardId=0 attempt=1 durationMs=36 mode=identify shards=2
 2026-09-27 03:14:21.890 INFO  lifecycle  [lifecycle.ready] Shard 1 is ready shardId=1 attempt=1 durationMs=1033 mode=identify shards=2
 2026-09-27 03:14:21.891 INFO  lifecycle  [lifecycle.connected] Connected to Fluxer as MyBot in 1520 communities communities=1520 shards=2

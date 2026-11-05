@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { join, relative, resolve } from "node:path"
-import { launchBrowser, serveSite, tourKey } from "./lib.mjs"
+import { launchBrowser, screens, serveSite, tourKey } from "./lib.mjs"
 
 // The public site built from made-up published versions, with the two things a real one needs from a Pages host read from its own files:
 // each version's pages, links and search stay in that version, only the newest is open to search engines, and old addresses redirect.
@@ -31,11 +31,15 @@ olderEndpoints.source.fluxer.commit = olderPin
 const filesOf = (version) => (version === older ? files.map((file) => (file === endpointsFile ? { ...file, content: JSON.stringify(olderEndpoints) } : file)) : files)
 await mkdir(released, { recursive: true })
 for (const version of [stable, older, nightly]) await writeFile(join(released, `${version}.json`), JSON.stringify({ schemaVersion: 3, version, sourceCommit, files: filesOf(version) }))
+// npm's registry document for the made-up versions, with the older one deprecated, as npm marks one
+const deprecation = "Upgrade to 1000.1.0 or newer"
+const registry = join(temporary, "registry.json")
+await writeFile(registry, JSON.stringify({ versions: { [stable]: {}, [nightly]: {}, [older]: { deprecated: deprecation } } }))
 
 const problems = []
 const expect = (ok, message) => ok || problems.push(message)
 try {
-    execFileSync(process.execPath, ["scripts/docs/build-public.mjs", "--released", released, "--out", out], { stdio: ["ignore", "pipe", "inherit"] })
+    execFileSync(process.execPath, ["scripts/docs/build-public.mjs", "--released", released, "--out", out, "--registry", registry], { stdio: ["ignore", "pipe", "inherit"] })
     const read = (path) => readFile(join(out, path), "utf8")
     const newest = await read("docs/commands/index.html")
     const other = await read("docs/nightly/commands/index.html")
@@ -50,7 +54,7 @@ try {
     expect(olderPage.includes('name="robots" content="noindex"'), "an older version's pages must stay out of search results")
     expect(olderPage.includes(`href="/docs/${older}/quick-start/"`), "an older version's links must stay in that version")
     expect((await read(`docs/${older}/quick-start/index.html`)).includes(`@neontechspace/fluxerly@${older}`), "an older version's pages must install that version")
-    expect(/<summary[^>]*>\s*<span class="version-label"[^>]*>[\s\S]*?1000\.0\.0/.test(olderPage), "an older version's pages must say which version they show")
+    expect(/<summary[^>]*>\s*(?:<span class="sr-only"[^>]*>[^<]*<\/span>\s*)?<span class="version-label"[^>]*>[\s\S]*?1000\.0\.0/.test(olderPage), "an older version's pages must say which version they show")
     // The pin shows in the sidebar of every page and at the end of the overview, from the version's own snapshot
     const pinLink = (commit) => new RegExp(`<a href="https://github\\.com/fluxerapp/fluxer/commit/${commit}"[^>]*data-fluxer-pin="${commit}"[^>]*>\\s*${commit.slice(0, 7)}\\s*</a>`, "g")
     const pinCount = (page, commit) => page.match(pinLink(commit))?.length ?? 0
@@ -59,6 +63,11 @@ try {
     expect(pinCount(await read(`docs/${older}/index.html`), olderPin) === 2, "an older version's overview must name its Fluxer commit in the sidebar and in the page")
     expect(pinCount(await read("docs/index.html"), generatedPin) === 2, "the overview must name its Fluxer commit in the sidebar and in the page")
     expect(/version-list[\s\S]*Older Versions/.test(newest) && newest.includes(`data-docs-version="/docs/${older}/"`), "the newest pages must offer the older versions")
+    // npm's deprecation shows in every version's menu and on the deprecated version's own pages, and nowhere else
+    const menuEntry = (page, version) => new RegExp(`data-docs-version="/docs/${version.replaceAll(".", "\\.")}/"[^>]*>[\\s\\S]*?</a>`).exec(page)?.[0] ?? ""
+    expect(menuEntry(newest, older).includes("version-deprecated") && menuEntry(other, older).includes("version-deprecated"), "the version menu must mark a version npm deprecated")
+    expect(!/version-deprecated/.test(menuEntry(newest, "nightly")) && (newest.match(/class="version-deprecated"/g)?.length ?? 0) === 1, "the version menu must mark only the deprecated version")
+    expect(olderPage.includes("version-note") && olderPage.includes(deprecation) && !newest.includes("version-note"), "a deprecated version's pages must say so with npm's message, and only its pages")
     expect(other.includes(`"https://fluxerly.neontechspace.com/docs/nightly/commands/`) && !other.includes(`"https://fluxerly.neontechspace.com/docs/commands/`), "another version's share address and structured data must name that version")
     expect((await read("docs/nightly/quick-start.md")).includes("https://fluxerly.neontechspace.com/docs/nightly/"), "another version's Markdown links must stay in that version")
     // The text files for AI tools: Every link is a full address, guides link to their Markdown, and the reference carries real signatures
@@ -142,6 +151,71 @@ try {
     await page.locator(`.version-list a[data-docs-version="/docs/${older}/"]`).click()
     await page.waitForURL(`${site.url}/docs/${older}/commands/`)
     expect((await page.locator(".version-menu summary .version-number").textContent()).trim() === older, "the menu must show the older version")
+    // The version on screen looks chosen, not faded: An older version is its row's only word, and it is as bright as the row
+    await page.locator(".version-menu summary").click()
+    const looks = await page.evaluate(() => {
+        const bright = (number) => getComputedStyle(number).color === getComputedStyle(number.parentElement).color && getComputedStyle(number).opacity === "1"
+        const label = document.querySelector(".version-menu summary .version-label")
+        return { listed: bright(document.querySelector(".version-list a[aria-current] .version-number")), summary: !label.hidden && label.getClientRects().length > 0 && bright(label) }
+    })
+    // The button's accessible name holds the words it shows, so speech input that says "Older Version" reaches it
+    {
+        const cdp = await page.context().newCDPSession(page)
+        const { root } = await cdp.send("DOM.getDocument")
+        const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: ".version-menu summary" })
+        const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false })
+        const spoken = String(nodes[0]?.name?.value ?? "").replace(/\s+/g, " ")
+        const shown = await page.evaluate(() =>
+            [...document.querySelectorAll(".version-menu summary :is(.version-label, .version-number, .version-deprecated)")]
+                .filter((part) => part.getClientRects().length > 0)
+                .map((part) => part.textContent.trim())
+                .join(" "),
+        )
+        expect(shown.includes("Older Version") && shown.includes(older) && spoken.includes(shown), `the menu's button must be named with the words it shows: it shows "${shown}" and is named "${spoken}"`)
+        await cdp.detach()
+    }
+    expect(looks.listed, "the menu's chosen older version must be as bright as its row, not faded")
+    expect(looks.summary, "the menu's button must name an older version as brightly as Stable and Nightly")
+    // Every version reads whole in the menu on every screen the screen check covers, a nightly's long number too, and the menu keeps its shape
+    const cutAt = []
+    for (const screen of screens) {
+        const context = await browser.newContext({ viewport: { width: screen.width, height: screen.height }, hasTouch: Boolean(screen.touch), isMobile: Boolean(screen.touch), deviceScaleFactor: screen.dpr ?? 1 })
+        const small = await context.newPage()
+        await small.addInitScript(([key]) => localStorage.setItem(key, "1"), [tourKey])
+        await small.goto(`${site.url}/docs/nightly/commands/`, { waitUntil: "load" })
+        const menuButton = small.locator(".side-open").first()
+        if (await menuButton.isVisible()) await menuButton.click()
+        await small.locator(".version-menu summary").click()
+        const problem = await small.evaluate(() => {
+            const inside = (inner, outer) => inner.left >= outer.left - 1 && inner.right <= outer.right + 1 && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1
+            const meets = (a, b) => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)
+            const menu = document.querySelector(".version-menu")
+            for (const number of menu.querySelectorAll(".version-number")) {
+                if (number.scrollWidth > number.clientWidth + 1 || !inside(number.getBoundingClientRect(), number.parentElement.getBoundingClientRect())) return `${number.textContent} is cut`
+                const lines = document.createRange()
+                lines.selectNodeContents(number)
+                if (lines.getClientRects().length > 1) return `${number.textContent} is split across lines`
+            }
+            const summary = menu.querySelector("summary")
+            const caret = summary.querySelector(".version-caret").getBoundingClientRect()
+            if (!inside(caret, summary.getBoundingClientRect()) || [...summary.children].some((child) => !child.matches(".version-caret") && meets(child.getBoundingClientRect(), caret))) return "the caret overlaps the version"
+            const list = menu.querySelector(".version-list").getBoundingClientRect()
+            if (!inside(list, document.querySelector(".docs-side").getBoundingClientRect())) return "the list leaves the sidebar"
+            // The open list lies over no row of the sidebar, which its edge would cut in half. A row scrolled out of the course's own
+            // view counts only where that view shows it
+            const view = document.querySelector(".course-scroll").getBoundingClientRect()
+            for (const row of document.querySelectorAll(".docs-side :is(a, summary, button, p)")) {
+                if (menu.contains(row)) continue
+                const box = row.getBoundingClientRect()
+                const seen = row.closest(".course-scroll") ? { left: box.left, right: box.right, top: Math.max(box.top, view.top), bottom: Math.min(box.bottom, view.bottom) } : box
+                if (box.width > 0 && seen.bottom > seen.top && meets(seen, list)) return `the open list lies over ${row.textContent.trim().slice(0, 30)}`
+            }
+            return ""
+        })
+        if (problem) cutAt.push(`${screen.name}: ${problem}`)
+        await context.close()
+    }
+    expect(!cutAt.length, `every version must read whole in the menu: ${cutAt.slice(0, 6).join(", ")}`)
     // A long list of versions scrolls inside the menu, doesn't move the page, and stays reachable on short and phone screens
     for (const [width, height, touch] of [[1366, 768, false], [1024, 500, false], [844, 390, true], [390, 844, true]]) {
         const context = await browser.newContext({ viewport: { width, height }, hasTouch: touch, isMobile: touch })
@@ -179,7 +253,7 @@ try {
     const nightlyOut = join(temporary, "nightly-out")
     await mkdir(nightlyOnly, { recursive: true })
     await writeFile(join(nightlyOnly, `${nightly}.json`), JSON.stringify({ schemaVersion: 3, version: nightly, sourceCommit, files }))
-    execFileSync(process.execPath, ["scripts/docs/build-public.mjs", "--released", nightlyOnly, "--out", nightlyOut], { stdio: ["ignore", "pipe", "inherit"] })
+    execFileSync(process.execPath, ["scripts/docs/build-public.mjs", "--released", nightlyOnly, "--out", nightlyOut, "--registry", registry], { stdio: ["ignore", "pipe", "inherit"] })
     const home = await readFile(join(nightlyOut, "index.html"), "utf8")
     expect(home.includes("npm install --save-exact @neontechspace/fluxerly@nightly") && home.includes("npx @neontechspace/fluxerly@nightly init"), "with no Stable yet, the homepage must install the nightly")
     for (const path of ["index.html", "first-reply/index.html"]) {

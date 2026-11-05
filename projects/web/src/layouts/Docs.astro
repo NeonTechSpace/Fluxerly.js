@@ -23,6 +23,7 @@ import { fluxerPinOf } from "../lib/fluxer-pin"
 import { breadcrumbs } from "../lib/seo"
 import { seededRandom } from "../lib/stars"
 import { identifierHtml } from "../../scripts/docs/code-breaks.mjs"
+import docsSheet from "../lib/docs-sheet.js?raw"
 // The one Outfit file the pages' Latin text needs, asked for with the page instead of after its stylesheet
 import outfitUrl from "@fontsource-variable/outfit/files/outfit-latin-wght-normal.woff2?url"
 
@@ -37,11 +38,24 @@ interface Props {
     searchDescription?: string
     // Other words readers use for the page's topic, which search reads as it reads the title
     searchTerms?: string[]
+    // The page's name in the sidebar, such as Troubleshooting, when it differs from the title. Search reads it as a search term
+    navTitle?: string
     // Leaves the page out of search. The changelog's release notes repeat every topic the guides own and outrank them
     unsearchable?: boolean
+    // A class for the page's prose, for a page with styles of its own such as the changelog
+    proseClass?: string
 }
 
-const { title, description, section, current, toc, crumbs, searchDescription, searchTerms, unsearchable = false } = Astro.props
+const { title, description, section, current, toc, crumbs, searchDescription, navTitle, unsearchable = false, proseClass } = Astro.props
+// Readers look for a page by the name the sidebar gives it as well as by its title. A name the title or an earlier name
+// already gives, ignoring case and punctuation, is left out
+const names = [navTitle, ...(Astro.props.searchTerms ?? [])].filter((term): term is string => !!term)
+const searchTerms = names.filter((term, index) => aliasKey(term) !== aliasKey(title) && names.findIndex((other) => aliasKey(other) === aliasKey(term)) === index)
+// A query that holds an alias costs a search that reads the whole word index, so a sidebar label whose words the title
+// already holds, such as Messages for Send messages, embeds and files, is no alias. The title finds the page
+const titleWords = aliasKey(title).split(" ")
+const inTitle = (term: string) => aliasKey(term).split(" ").every((word) => titleWords.some((titleWord) => titleWord.startsWith(word) || word.startsWith(titleWord)))
+const aliases = searchTerms.filter((term) => term !== navTitle || !inTitle(term))
 
 // Guides in cyan, reference in violet: what you do, then what the SDK knows
 const parts = await docsCourse(current, section)
@@ -62,25 +76,30 @@ const icon = docsIcons[slug] ?? (section === "reference" ? docsIcons.api : undef
 const searchGroup = section === "guides" ? (guideGroup(slug) ?? "Guides") : section === "codes" ? "Error and log codes" : "API reference"
 // Search asks the codes page alone for a pasted code, which other pages that use the same words may push out of its results
 const searchFilter = section === "codes" ? "page:codes" : undefined
+// The Effect reference repeats the JavaScript & TypeScript reference entry for entry, so its words weigh less, and an Effect
+// twin comes after other pages that answer a query as well
+const searchWeight = section === "reference" && /\/api\/effect(?:-testing)?\//.test(current) ? "0.5" : undefined
 
 // Crystal bubbles drifting up through the water, the ones from the sea floor at the end of the main pages, slower and fainter. Each
 // takes a whole number of turns in the hour the night's clock runs on, so it has no seam
 const bubbleTones = ["cyan", "violet", "cyan", "gold", "violet", "cyan"] as const
 const bubbleDraw = seededRandom(5503)
-const bubbles = Array.from({ length: 14 }, (_, index) => {
+const bubbles = Array.from({ length: 8 }, (_, index) => {
     const rise = [36, 40, 45, 48, 50, 60][Math.floor(bubbleDraw() * 6)]!
     const side = index % 2 ? 1 : -1
     return {
         tone: bubbleTones[index % bubbleTones.length]!,
-        // On a wide screen they keep to the sides of the reading column, on a narrow one there are no sides to keep to
-        style: `--x: ${Math.round((index % 2 ? 78 + bubbleDraw() * 21 : 1 + bubbleDraw() * 20) * 10) / 10}%; --x-narrow: ${Math.round(((index + bubbleDraw()) / 14) * 1000) / 10}%; --size: ${12 + Math.round(bubbleDraw() * 24)}px; --rise-for: ${rise}s; --from-start: ${Math.round(bubbleDraw() * rise)}s; --sway: ${side * (14 + Math.round(bubbleDraw() * 34))}px; --turn: ${side * (40 + Math.round(bubbleDraw() * 120))}deg`,
+        // They rise in the free water between the reading measure and the outline, each at its own place across it
+        style: `--lane: ${Math.round(((index + bubbleDraw()) / 8) * 1000) / 1000}; --size: ${12 + Math.round(bubbleDraw() * 24)}px; --rise-for: ${rise}s; --from-start: ${Math.round(bubbleDraw() * rise)}s; --sway: ${side * (14 + Math.round(bubbleDraw() * 34))}px; --turn: ${side * (40 + Math.round(bubbleDraw() * 120))}deg`,
     }
 })
 
-// The published versions this site serves, from scripts/docs/build-public.mjs. A build of the working tree has none
-const docsVersions: { label: string; version: string; base: string }[] = JSON.parse(process.env.DOCS_VERSIONS ?? "[]")
+// The published versions this site serves, from scripts/docs/build-public.mjs, each with npm's message when npm marks it as
+// deprecated. A build of the working tree has none
+type DocsVersion = { label: string; version: string; base: string; deprecated?: string }
+const docsVersions: DocsVersion[] = JSON.parse(process.env.DOCS_VERSIONS ?? "[]")
 const docsBase = import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"
-const olderVersions: { label: string; version: string; base: string }[] = JSON.parse(process.env.DOCS_OLDER_VERSIONS ?? "[]")
+const olderVersions: DocsVersion[] = JSON.parse(process.env.DOCS_OLDER_VERSIONS ?? "[]")
 const allVersions = [...docsVersions, ...olderVersions]
 const currentVersion = allVersions.find((version) => version.base === docsBase)
 // The Fluxer commit this version's docs were checked against, from its own endpoint map
@@ -104,6 +123,8 @@ const metaDescription =
               toc.filter((item) => item.depth === 2).map((item) => item.text),
           )
 // The trail search engines show above a result: Docs, the reference's own steps where it has them, then this page
+// An outline entry, with the heading it sits under for screen readers where one is given
+const outlineHtml = (item: TocItem) => `${item.under ? `<span class="sr-only">${item.under.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`)} </span>` : ""}${identifierHtml(item.text)}`
 const trail = breadcrumbs([
     { name: "Docs", path: "/docs/" },
     ...(crumbs ?? []).map((crumb) => ({ name: crumb.title, path: crumb.href })),
@@ -116,7 +137,7 @@ const trail = breadcrumbs([
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={[trail]} />
+        <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={trail ? [trail] : []} />
         {markdownUrl && <link rel="alternate" type="text/markdown" href={markdownUrl} title="This page as Markdown" />}
         <link rel="alternate" type="text/plain" href={`${docsBase}llms.txt`} title="Docs index for AI tools" />
         <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
@@ -130,6 +151,8 @@ const trail = breadcrumbs([
                 // Storage is blocked, npm and JavaScript stay selected
             }
         </script>
+        <!-- The Docs menu answers from the first frame its button is drawn in, before the page's modules run -->
+        <script is:inline set:html={docsSheet} />
         <PageTransitions />
         <CourseState />
         <!-- The first frame waits for the sidebar and the outline, so the course opens as the previous page left it
@@ -158,15 +181,17 @@ const trail = breadcrumbs([
             <span class="ray ray-c"></span>
             <span class="ray ray-d"></span>
             <CrystalDefs />
-            {
-                bubbles.map((bubble) => (
-                    <span class="docs-bubble" style={bubble.style}>
-                        <svg viewBox="0 0 40 40" focusable="false">
-                            <use href={`#crystal-${bubble.tone}`} />
-                        </svg>
-                    </span>
-                ))
-            }
+            <div class="docs-bubbles">
+                {
+                    bubbles.map((bubble) => (
+                        <span class="docs-bubble" data-bubble={bubble.tone} style={bubble.style}>
+                            <svg viewBox="0 0 40 40" focusable="false">
+                                <use href={`#crystal-${bubble.tone}`} />
+                            </svg>
+                        </span>
+                    ))
+                }
+            </div>
         </div>
         <Header />
 
@@ -185,9 +210,13 @@ const trail = breadcrumbs([
                 {
                     allVersions.length > 1 && (
                         <details class="version-menu" data-version-menu data-pagefind-ignore>
-                            <summary aria-label={`Documentation version: ${currentVersion?.label}`}>
-                                <span class="version-label">{currentVersion?.label}</span>
-                                <span class="version-number" title={currentVersion?.version}>{currentVersion?.version}</span>
+                            <summary>
+                                {/* The button's name is its visible words after this one, so speech input can say what it shows */}
+                                <span class="sr-only">Documentation Version:</span>
+                                {/* An older version's label is its number, so the button names it an older version and shows the number once, under that name */}
+                                <span class="version-label">{currentVersion?.label === currentVersion?.version ? "Older Version" : currentVersion?.label}</span>
+                                <span class="version-number" data-prerelease={currentVersion?.version?.includes("-") ? "" : undefined}>{currentVersion?.version}</span>
+                                {currentVersion?.deprecated && <span class="version-deprecated">Deprecated</span>}
                                 <svg class="version-caret" viewBox="0 0 256 256" width="14" height="14" fill="currentColor" aria-hidden="true"
                                     ><path d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"
                                     ></path></svg
@@ -197,13 +226,15 @@ const trail = breadcrumbs([
                                 {docsVersions.map((version) => (
                                     <a href={version.base} data-docs-version={version.base} aria-current={version.base === docsBase ? "true" : undefined}>
                                         <span class="version-label">{version.label}</span>
-                                        <span class="version-number" title={version.version}>{version.version}</span>
+                                        <span class="version-number" data-prerelease={version.version.includes("-") ? "" : undefined}>{version.version}</span>
+                                        {version.deprecated && <span class="version-deprecated">Deprecated</span>}
                                     </a>
                                 ))}
                                 {olderVersions.length > 0 && <p class="version-group">Older Versions</p>}
                                 {olderVersions.map((version) => (
                                     <a href={version.base} data-docs-version={version.base} aria-current={version.base === docsBase ? "true" : undefined}>
-                                        <span class="version-number" title={version.version}>{version.version}</span>
+                                        <span class="version-number" data-prerelease={version.version.includes("-") ? "" : undefined}>{version.version}</span>
+                                        {version.deprecated && <span class="version-deprecated">Deprecated</span>}
                                     </a>
                                 ))}
                             </div>
@@ -214,7 +245,8 @@ const trail = breadcrumbs([
                     allVersions.length === 1 && (
                         <p class="version-menu version-single" data-pagefind-ignore>
                             <span class="version-label">{currentVersion?.label}</span>
-                            <span class="version-number" title={currentVersion?.version}>{currentVersion?.version}</span>
+                            <span class="version-number" data-prerelease={currentVersion?.version?.includes("-") ? "" : undefined}>{currentVersion?.version}</span>
+                            {currentVersion?.deprecated && <span class="version-deprecated">Deprecated</span>}
                         </p>
                     )
                 }
@@ -244,7 +276,7 @@ const trail = breadcrumbs([
                             <ul class="toc-list" data-outline>
                                 {toc.map((item, index) => (
                                     <li data-depth={item.depth}>
-                                        <a href={`#${item.id}`} data-outline-link aria-current={index === 0 ? "location" : undefined} set:html={identifierHtml(item.text)} />
+                                        <a href={`#${item.id}`} data-outline-link aria-current={index === 0 ? "location" : undefined} set:html={outlineHtml(item)} />
                                     </li>
                                 ))}
                             </ul>
@@ -282,7 +314,7 @@ const trail = breadcrumbs([
                             <ul class="toc-list">
                                 {toc.map((item) => (
                                     <li data-depth={item.depth}>
-                                        <a href={`#${item.id}`} data-fold-link set:html={identifierHtml(item.text)} />
+                                        <a href={`#${item.id}`} data-fold-link set:html={outlineHtml(item)} />
                                     </li>
                                 ))}
                             </ul>
@@ -290,9 +322,9 @@ const trail = breadcrumbs([
                     )
                 }
 
-                <article class="docs-article" data-pagefind-body={unsearchable ? undefined : ""} data-pagefind-meta={`group:${searchGroup}`} data-pagefind-filter={searchFilter}>
+                <article class="docs-article" data-pagefind-body={unsearchable ? undefined : ""} data-pagefind-meta={`group:${searchGroup}`} data-pagefind-filter={searchFilter} data-pagefind-weight={searchWeight}>
                     {searchTerms?.length ? <span hidden data-pagefind-meta="search[data-search]" data-search={searchTerms.join(", ")} /> : null}
-                    {searchTerms?.map((term) => <span hidden data-pagefind-filter="alias[data-alias]" data-alias={aliasKey(term)} />)}
+                    {aliases.map((term) => <span hidden data-pagefind-filter="alias[data-alias]" data-alias={aliasKey(term)} />)}
                     {
                         crumbs?.length ? (
                             <nav class="crumbs" aria-label="Breadcrumbs" data-pagefind-ignore>
@@ -323,7 +355,16 @@ const trail = breadcrumbs([
                             </p>
                         )
                     }
-                    <div class="docs-prose">
+                    <div class:list={["docs-prose", proseClass]}>
+                        {
+                            currentVersion?.deprecated && (
+                                <div class="note version-note" data-kind="warning" role="note" data-pagefind-ignore>
+                                    <p>
+                                        <strong>Deprecated on npm:</strong> {currentVersion.deprecated}
+                                    </p>
+                                </div>
+                            )
+                        }
                         <Fragment set:html={article} />
                     </div>
                 </article>

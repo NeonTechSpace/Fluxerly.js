@@ -323,10 +323,11 @@ async function writeFace() {
         await sharp(cut).extract(box).webp(webp(92)).toFile(art(`face/${name}.webp`))
         console.log(`wrote face/${name}.webp (${box.width}x${box.height})`)
     }
-    // The soft light of the waves, baked smooth once with room around it, at a quarter of its box, which is plenty for something this soft
+    // The soft light of the waves, baked once at a quarter of its box. It stays close to the strokes, a glow on each line, never one
+    // haze between them that reads as a lit ball
     const wavesBox = { left: 830, top: 1040, width: 366, height: 316 }
     const shape = await sharp(layer("waves")).ensureAlpha().extractChannel(3).raw().toBuffer()
-    const soft = await sharp(shape, { raw: { width: canvas, height: canvas, channels: 1 } }).blur(26).toColourspace("b-w").raw().toBuffer()
+    const soft = await sharp(shape, { raw: { width: canvas, height: canvas, channels: 1 } }).blur(9).toColourspace("b-w").raw().toBuffer()
     const glow = Buffer.alloc(canvas * canvas * 4)
     for (let i = 0; i < soft.length; i++) {
         glow.fill(255, i * 4, i * 4 + 3)
@@ -472,9 +473,11 @@ async function writeBow() {
     await writeSizes(await png(under), "bow-under", 92, mascotWidths)
 }
 
-// The conductor at a tiny size, written into the page itself, so it holds the conductor's place from the first frame
+// The conductor at a small size, written into the page itself, so it holds the conductor's place from the first frame and the whole
+// picture resolves out of it without a jump. Large enough to keep the frame's rim and glow, which a tinier one blurred away, and with
+// its edges at full alpha quality, since the night shows through them
 async function writeMascotPreview() {
-    const picture = await sharp(fileURLToPath(new URL("../public/art/mascot-584.webp", import.meta.url))).resize({ width: 120 }).webp({ quality: 60, alphaQuality: 70, effort: 6 }).toBuffer()
+    const picture = await sharp(fileURLToPath(new URL("../public/art/mascot-1168.webp", import.meta.url))).resize({ width: 240 }).webp({ quality: 60, alphaQuality: 100, effort: 6, smartSubsample: true }).toBuffer()
     await writeFile(fileURLToPath(new URL("../src/lib/mascot-preview.json", import.meta.url)), `${JSON.stringify({ src: `data:image/webp;base64,${picture.toString("base64")}` })}\n`)
     console.log(`wrote the conductor's preview, ${picture.length} bytes`)
 }

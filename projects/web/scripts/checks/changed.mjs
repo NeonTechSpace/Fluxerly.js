@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url"
 //    and the Fluxer pin in projects/release/upstream, which feeds the endpoint map and the docs pages' commit line.
 //    They count as a change to the generated content. The workspace's package files reach everything, since they pick
 //    the versions the site is built with
-// 2. Website files no screen shows reach nothing: its tests, its Cloudflare functions, its Markdown notes such as
+// 2. Website files no screen shows reach nothing: its tests, its Markdown notes such as
 //    AGENTS.md, and the checks the screen check doesn't run
 // 3. Content in projects/web/content, generated or written, reaches the pages that read the content collection or
 //    import from @content
@@ -44,7 +44,6 @@ const outsideWebsite = (path) => {
 
 const unseen = [
     /^projects\/web\/tests\//,
-    /^projects\/web\/functions\//,
     /^projects\/web\/(?!content\/)(.*\/)?[^/]+\.md$/,
     /^projects\/web\/scripts\/checks\/(design-scores\.json|look\.mjs|search\.mjs|versions\.mjs)$/,
 ]

@@ -16,7 +16,7 @@ Not yet. Fluxerly waits for Fluxer's new voice system and does not support voice
 
 ## Which Node.js version is required?
 
-Fluxerly is tested against Node.js 24.15 or newer. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/support-and-compatibility/)
+Fluxerly needs Node.js 24.15 or newer and checks the version when it loads. A bot runs as a Node.js program on a computer or server, not inside a web page. See [support and compatibility](/docs/support-and-compatibility/)
 
 ## Does TypeScript need extra setup?
 

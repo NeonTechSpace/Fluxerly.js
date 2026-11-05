@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { existsSync, globSync } from "node:fs"
+import { existsSync, globSync, statSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import os from "node:os"
 import { resolve } from "node:path"
@@ -11,7 +11,7 @@ import { experienceKey, launchBrowser, screens, serveSite, skyIconsKey, tourKey 
 
 // The whole site at every screen in lib.mjs: layout on each kind of page, the first visit's spotlight, menus, titles on
 // every page, and icons over text while scrolling. Fails with a list of what it found. Usage:
-// node scripts/checks/sweep.mjs [--quick] [--changed [--base=<commit>]] [--only=alive,questions,scroll,install,layout,docs,choice,tour,menus,pages,titles,parts,sky,noscript]
+// node scripts/checks/sweep.mjs [--quick] [--changed [--base=<commit>]] [--only=alive,questions,scroll,install,layout,docs,choice,tour,menus,water,pages,titles,parts,sky,noscript]
 // --quick covers a few screens of each kind. --changed runs only the parts and pages the changed files can reach, as
 // changed.mjs works them out, and --base=<commit> makes those the files changed since that commit. Reads the built site,
 // so run it after a build
@@ -23,7 +23,7 @@ const quick = flags.includes("--quick")
 const only = flags.find((flag) => flag.startsWith("--only="))?.slice(7).split(",")
 // Every check part, longest first, so the long ones start first instead of finishing alone at the end. A misspelled name
 // in --only would otherwise run nothing and report clean
-const groups = ["alive", "questions", "scroll", "install", "layout", "docs", "choice", "tour", "menus", "pages", "titles", "parts", "sky", "noscript"]
+const groups = ["alive", "questions", "scroll", "install", "layout", "docs", "choice", "tour", "menus", "water", "pages", "titles", "parts", "sky", "noscript"]
 const unknown = only?.find((part) => !groups.includes(part))
 if (unknown !== undefined) {
     console.error(`Unknown screen check ${JSON.stringify(unknown)}. Known checks: ${groups.join(", ")}`)
@@ -336,6 +336,71 @@ function auditLayout(touch) {
         if (header && box(title).top < box(header).bottom - 8) problems.push("docs: title under the header")
         if (box(title).top > height * 0.75) problems.push("docs: title low on the first screen")
     }
+    // The docs stand in the header's frame: The sidebar starts under the wordmark, and the outline ends under the header's last control
+    const side = document.querySelector(".docs-side")
+    if (header && side && getComputedStyle(side).position === "fixed" && getComputedStyle(side).visibility !== "hidden" && box(side).width > 0) {
+        if (Math.abs(box(side).left - box(header.querySelector(".home")).left) > 2) problems.push("docs: the sidebar doesn't line up with the wordmark")
+        const outline = document.querySelector(".docs-outline")
+        const controls = [...header.querySelectorAll(".nav > *")].filter((element) => box(element).width > 0)
+        if (outline && box(outline).width > 0 && controls.length && Math.abs(box(outline).right - box(controls.at(-1)).right) > 2) problems.push("docs: the outline doesn't line up with the header's last control")
+    }
+    // A title that wraps has nearly the whole column. Beside the page's icon on a phone it broke into three short lines
+    if (title && shown(title)) {
+        const lines = document.createRange()
+        lines.selectNodeContents(title)
+        const wraps = new Set([...lines.getClientRects()].map((rect) => Math.round(rect.top))).size > 1
+        if (wraps && box(title).width < box(title.parentElement).width * 0.8) problems.push("docs: a wrapping title shares its lines with the icon")
+    }
+    // A comma, period or closing bracket never starts a line: It stays with the code, link or other inline element before it. An
+    // inline block of code let it wrap alone. Only text right after an element can, since text alone never breaks before them
+    {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+        const stranded = []
+        while (walker.nextNode() && stranded.length < 3) {
+            const text = walker.currentNode
+            const before = text.previousSibling
+            if (!(before instanceof Element) || !/^[.,;:!?)\]]/.test(text.data) || !text.parentElement.closest(".docs-prose, .ref") || !shown(text.parentElement)) continue
+            if (before.tagName === "BR" || !getComputedStyle(before).display.startsWith("inline")) continue
+            const last = [...before.getClientRects()].filter((rect) => rect.width > 0).at(-1)
+            const range = document.createRange()
+            range.setStart(text, 0)
+            range.setEnd(text, 1)
+            const mark = range.getClientRects()[0]
+            if (last && mark && mark.top >= last.bottom - 2) stranded.push(`${before.textContent.slice(-30)}${text.data.slice(0, 10)}`)
+        }
+        for (const line of stranded) problems.push(`a line starts with punctuation: ${line}`)
+    }
+    // A name in On This Page breaks only between its parts, before a dot or after a slash. A part breaks inside, at a camelCase hump,
+    // only when it is wider than the line, and the outline is wide enough for a part as long as AttachmentDownloadOptions
+    for (const link of document.querySelectorAll(".docs-outline .toc-list a")) {
+        if (!shown(link) || /\s/.test(link.textContent.trim())) continue
+        const characters = []
+        const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode()) {
+            for (let index = 0; index < walker.currentNode.length; index++) {
+                const range = document.createRange()
+                range.setStart(walker.currentNode, index)
+                range.setEnd(walker.currentNode, index + 1)
+                const rect = range.getClientRects()[0]
+                if (rect) characters.push({ character: walker.currentNode.data[index], top: rect.top })
+            }
+        }
+        const text = characters.map((entry) => entry.character).join("")
+        for (let index = 1; index < characters.length; index++) {
+            if (characters[index].top <= characters[index - 1].top + 2 || characters[index].character === "." || /[/(,]/.test(characters[index - 1].character)) continue
+            const part = text.slice(0, index).split(/(?=\.)|(?<=[/(,])/).at(-1) + text.slice(index).split(/(?=\.)|(?<=[/(,])/)[0]
+            const measure = document.createElement("span")
+            measure.style.cssText = "position: absolute; white-space: nowrap"
+            measure.textContent = part
+            link.append(measure)
+            const width = measure.getBoundingClientRect().width / zoom
+            measure.remove()
+            const style = getComputedStyle(link)
+            const line = box(link).width / zoom - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight)
+            if (width <= Math.max(line, 224)) problems.push(`docs: ${part} breaks inside in On This Page`)
+            break
+        }
+    }
 
     for (const element of document.querySelectorAll("main *, header *, footer *")) {
         if (![...element.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim()) || !shown(element) || element.closest("svg,.station,.log,[aria-hidden=true],.sr-only")) continue
@@ -361,6 +426,105 @@ function auditLayout(touch) {
     }
     return [...new Set(problems)]
 }
+
+part("water", ["/docs/commands/"], async () => {
+    // The docs' bubbles never show through the navigation: The header, the sidebar and the outline, or the Docs menu button and the
+    // folded outline where those ride in the reading column. Each bubble is held at the moment of its rise where it covers the most of
+    // them, and they are compared with the bubbles shown and hidden, so this reads what the screen shows rather than where a bubble's
+    // box is
+    const sharp = (await import("sharp")).default
+    await inParallel(sizes, async (screen) => {
+        const { context, page } = await openPage(screen, "immersive")
+        await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
+        await page.evaluate(() => document.fonts.ready.then(() => {}))
+        const columns = await page.evaluate(() => {
+            const columns = [".site-header", ".docs-side", ".docs-outline", ".side-open", ".toc-fold"]
+                .map((selector) => document.querySelector(selector))
+                .filter((element) => element && getComputedStyle(element).visibility !== "hidden" && getComputedStyle(element).display !== "none")
+                .map((element) => element.getBoundingClientRect())
+                .map((box) => ({ x: Math.max(0, box.left), y: Math.max(0, box.top), right: Math.min(innerWidth, box.right), bottom: Math.min(innerHeight, box.bottom) }))
+                .filter((box) => box.right - box.x > 1 && box.bottom - box.y > 1)
+            if (!columns.length) return []
+            for (const animation of document.getAnimations()) animation.pause()
+            let crossing = 0
+            for (const bubble of document.querySelectorAll(".docs-bubble")) {
+                const animation = bubble.getAnimations()[0]
+                if (!animation || getComputedStyle(bubble).display === "none") continue
+                const length = animation.effect.getComputedTiming().duration
+                let most = 0
+                let when
+                for (let step = 0; step < 80; step++) {
+                    animation.currentTime = (length * step) / 80
+                    if (Number(getComputedStyle(bubble).opacity) < 0.1) continue
+                    const box = bubble.getBoundingClientRect()
+                    for (const column of columns) {
+                        const area = Math.max(0, Math.min(box.right, column.right) - Math.max(box.left, column.x)) * Math.max(0, Math.min(box.bottom, column.bottom) - Math.max(box.top, column.y))
+                        if (area > most) [most, when] = [area, animation.currentTime]
+                    }
+                }
+                if (when !== undefined) [animation.currentTime, crossing] = [when, crossing + 1]
+            }
+            return crossing ? columns : []
+        })
+        if (columns.length) {
+            await frames(page)
+            const picture = (column) => page.screenshot({ clip: { x: column.x, y: column.y, width: column.right - column.x, height: column.bottom - column.y } }).then((png) => sharp(png).removeAlpha().raw().toBuffer())
+            const shown = await Promise.all(columns.map(picture))
+            await page.evaluate(() => document.querySelectorAll(".docs-bubble").forEach((bubble) => (bubble.style.visibility = "hidden")))
+            await frames(page)
+            const hidden = await Promise.all(columns.map(picture))
+            const changed = shown.reduce((sum, picture, index) => {
+                let count = 0
+                for (let at = 0; at < picture.length; at += 3) if (Math.max(...[0, 1, 2].map((channel) => Math.abs(picture[at + channel] - hidden[index][at + channel]))) > 16) count++
+                return sum + count
+            }, 0)
+            if (changed > 12) report(`the docs' bubbles show through the navigation (${changed} pixels)`, screen.name)
+        }
+        await context.close()
+    })
+
+    // A gold bubble reads as the palette's gold, not as a grey brown disc. It is held at its brightest over open water, with the
+    // article and the moving light rays hidden so the water behind it is the same on every run, and its brightest tenth of pixels
+    // must keep gold's hue, some color and some light. Faint gold over the blue night measured a saturation of 0.1 and a lightness
+    // of 0.28
+    const { context, page } = await openPage({ width: 1920, height: 1080 }, "immersive")
+    await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
+    const clip = await page.evaluate(async () => {
+        for (const animation of document.getAnimations()) animation.pause()
+        for (const element of document.querySelectorAll(".docs-main, .ray")) element.style.visibility = "hidden"
+        const bubble = document.querySelector('.docs-bubble:has(use[href="#crystal-gold"])')
+        const animation = bubble?.getAnimations()[0]
+        if (!animation) return null
+        const length = animation.effect.getComputedTiming().duration
+        let [most, when] = [0, 0]
+        for (let step = 0; step < 40; step++) {
+            animation.currentTime = (length * step) / 40
+            const box = bubble.getBoundingClientRect()
+            const light = Number(getComputedStyle(bubble).opacity)
+            if (light > most && box.top > 200 && box.bottom < innerHeight - 20) [most, when] = [light, animation.currentTime]
+        }
+        animation.currentTime = when
+        await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+        const box = bubble.getBoundingClientRect()
+        return { x: Math.round(box.left), y: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) }
+    })
+    if (!clip) report("the docs' water has no gold bubble to check", "desktop-1920-full")
+    else {
+        const pixels = await page.screenshot({ clip }).then((png) => sharp(png).removeAlpha().raw().toBuffer())
+        const all = []
+        for (let at = 0; at < pixels.length; at += 3) all.push([pixels[at], pixels[at + 1], pixels[at + 2]])
+        all.sort((a, b) => b[0] + b[1] + b[2] - (a[0] + a[1] + a[2]))
+        const brightest = all.slice(0, Math.max(1, Math.round(all.length / 10)))
+        const [red, green, blue] = [0, 1, 2].map((channel) => brightest.reduce((sum, pixel) => sum + pixel[channel], 0) / brightest.length / 255)
+        const high = Math.max(red, green, blue)
+        const low = Math.min(red, green, blue)
+        const lightness = (high + low) / 2
+        const saturation = high === low ? 0 : (high - low) / (1 - Math.abs(2 * lightness - 1))
+        const hue = high === low ? 0 : high === red ? (60 * ((green - blue) / (high - low)) + 360) % 360 : high === green ? 60 * ((blue - red) / (high - low) + 2) : 60 * ((red - green) / (high - low) + 4)
+        if (hue < 30 || hue > 55 || saturation < 0.18 || lightness < 0.35) report(`a gold bubble reads as brown (hue ${Math.round(hue)}, saturation ${saturation.toFixed(2)}, lightness ${lightness.toFixed(2)})`, "desktop-1920-full")
+    }
+    await context.close()
+})
 
 part("layout", routes, async () => {
     // One page for each route and kind of device, resized through every screen, and a blank picture for each picture: they
@@ -442,9 +606,10 @@ part("parts", ["/", "/commands/", "/effect/", "/first-reply/", "/testing/", "/pr
         await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important} .glow{visibility:hidden!important}" })
         for (const figure of await page.$$(".companion[data-parts]")) {
             await figure.scrollIntoViewIfNeeded()
+            // Bounded only so a broken page can't hang the run. A busy machine took more than 8 s for the homepage's first icon
             const live = await figure.evaluate((element) => new Promise((done) => {
                 const started = Date.now()
-                const look = () => (element.dataset.live !== undefined ? done(true) : Date.now() - started > 8000 ? done(false) : setTimeout(look, 50))
+                const look = () => (element.dataset.live !== undefined ? done(true) : Date.now() - started > 60000 ? done(false) : setTimeout(look, 50))
                 look()
             }))
             const name = await figure.evaluate((element) => element.querySelector(".part")?.dataset.src?.split("/").at(-2) ?? "?")
@@ -700,12 +865,200 @@ serial("alive", ["/", "/commands/", "/docs/"], async () => {
         // Asked of the animation itself, not of two readings in time, since the 3D sky's start can hold the page up for a moment
         const running = await page.evaluate(() => document.querySelector(".home-waves").getAnimations().filter((animation) => animation.playState === "running").length)
         if (Boolean(running) !== moves) report(moves ? "the logo's waves don't move by themselves" : "the logo's waves move in Still", mode)
+        // A browser runs an endless animation of a part inside an SVG on the main thread and draws it again on every frame, which made
+        // the page stutter while it scrolled. The header's endless motions move whole SVGs, which the compositor runs alone
+        const inside = await page.evaluate(() =>
+            document
+                .querySelector(".site-header")
+                .getAnimations({ subtree: true })
+                .filter((animation) => animation.effect?.getComputedTiming().iterations === Infinity && animation.effect.target?.ownerSVGElement)
+                .map((animation) => animation.animationName ?? animation.effect.target.getAttribute("class")),
+        )
+        for (const name of inside) report(`the header runs an endless animation inside an SVG: ${name}`, mode)
         await context.close()
     }
 
-    // The docs' water moves by itself and never follows the page's scroll, and rests in Still. No script draws it
-    for (const [mode, moves] of [["immersive", true], ["still", false]]) {
+    // The conductor is continuous from its first painted frame to its final one. Each frame is read in the conductor's box, with the sky
+    // and the words behind it hidden where they would change the reading. The mean difference of two pictures is on a 0 to 255 scale
+    const conductorBox = (page) =>
+        page.evaluate(() => {
+            const { left, top, width, height } = document.querySelector("[data-conductor-slot]").getBoundingClientRect()
+            return { x: Math.round(left), y: Math.round(top), width: Math.round(width), height: Math.round(height) }
+        })
+    const pixelsOf = (picture) => sharp(picture).resize(80, 115, { fit: "fill" }).removeAlpha().raw().toBuffer()
+    const difference = (a, b) => a.reduce((sum, value, index) => sum + Math.abs(value - b[index]), 0) / a.length
+
+    // After a reload in Motion the conductor's head never leaves the screen while its face, cap and bow tie come alive over the painted
+    // one. A mask on the painted conductor hid the whole head for a few hundred milliseconds. Every frame the browser drew is read
+    {
+        const { context, page } = await openPage(screen, "immersive")
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        await page.waitForSelector("[data-conductor] [data-bow]", { state: "attached", timeout: 60000 }).catch(() => {})
+        const clip = await conductorBox(page)
+        const cdp = await context.newCDPSession(page)
+        const drawn = []
+        cdp.on("Page.screencastFrame", (frame) => {
+            drawn.push(frame.data)
+            cdp.send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => {})
+        })
+        // Small frames are enough to see a head go, and keep a run of hundreds of them quick to read
+        await cdp.send("Page.startScreencast", { format: "jpeg", quality: 80, maxWidth: 720, maxHeight: 720 })
+        await page.reload({ waitUntil: "load" })
+        const alive = await page.waitForFunction(() => document.querySelector("[data-bow]") && getComputedStyle(document.querySelector("[data-mascot]")).visibility === "hidden", null, { timeout: 60000 }).then(() => true, () => false)
+        // Some frames more, so a head that blinks out after the bow came alive is drawn too
+        await page.evaluate(() => new Promise((done) => {
+            let count = 0
+            const next = () => (++count >= 30 ? done() : requestAnimationFrame(next))
+            requestAnimationFrame(next)
+        }))
+        await cdp.send("Page.stopScreencast")
+        await cdp.detach()
+        if (!alive) report("the hero's bow tie never takes over from the painted one after a reload", "/")
+        // The head, below the cap: the frame's rim and glass, which the face animates only a little
+        const heads = []
+        for (const data of drawn) {
+            const picture = sharp(Buffer.from(data, "base64"))
+            const { width } = await picture.metadata()
+            const scale = width / screen.width
+            const head = await picture
+                .extract({ left: Math.round((clip.x + clip.width * 0.02) * scale), top: Math.round((clip.y + clip.height * 0.4) * scale), width: Math.round(clip.width * 0.96 * scale), height: Math.round(clip.height * 0.5 * scale) })
+                .removeAlpha()
+                .raw()
+                .toBuffer()
+            heads.push(head.reduce((sum, value) => sum + value, 0) / head.length)
+        }
+        const middle = [...heads].sort((a, b) => a - b)[Math.floor(heads.length / 2)]
+        if (heads.length < 3) report(`only ${heads.length} frames were drawn across a reload, too few to read`, "/")
+        else if (Math.min(...heads) < middle * 0.8) report(`the conductor's head vanishes for a moment after a reload in Motion: ${Math.round(Math.min(...heads))} against ${Math.round(middle)}`, "/")
+        await context.close()
+    }
+
+    // On a slow connection the conductor's preview stands in from the first frame for as long as its picture takes, longer than any
+    // of the page's own waits, and the picture then resolves out of it with no jump. The picture is held until the check lets it through,
+    // and the reveal's animations are paused as they start and stepped through, so no timing decides the result. Both modes reveal it
+    // with the same rules, and Still keeps the scene from moving the conductor between two readings
+    {
+        const mode = "still"
         const { context, page } = await openPage(screen, mode)
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        let letThrough = () => {}
+        const held = new Promise((done) => (letThrough = done))
+        await page.route(/\/art\/mascot-\d+\.webp/, async (route) => {
+            await held
+            await route.continue()
+        })
+        const cdp = await context.newCDPSession(page)
+        await cdp.send("Network.setCacheDisabled", { cacheDisabled: true })
+        await page.addInitScript(() => {
+            new MutationObserver((changes, watch) => {
+                if (!document.documentElement || document.documentElement.hasAttribute("data-mascot-wait") || !document.querySelector("[data-mascot]")) return
+                // The conductor's own fades, its picture's, its reflection's and its preview's. The page's endless motions don't count
+                window.reveal = document.getAnimations().filter((animation) => animation.effect?.target?.closest?.("[data-conductor], [data-conductor-reflection]"))
+                for (const animation of window.reveal) animation.pause()
+                watch.disconnect()
+            }).observe(document, { subtree: true, attributes: true, attributeFilter: ["data-mascot-wait"] })
+        })
+        await page.reload({ waitUntil: "domcontentloaded" })
+        await page.addStyleTag({ content: ".hero .backdrop > :not(.conductor-reflection), .hero .scene, .hero .sky-icons, .hero .copy, .hero .face { visibility: hidden !important }" })
+        await frames(page)
+        const clip = await conductorBox(page)
+        const look = async () => pixelsOf(await page.screenshot({ clip }))
+        const first = await look()
+        // Past the page's longest wait, on its own clock, and one turn of its timers after, so every wait that was due has run
+        await page.waitForFunction(() => performance.now() > 4500, null, { timeout: 30000, polling: 100 })
+        await page.evaluate(() => new Promise((done) => setTimeout(done, 0)))
+        await frames(page)
+        const meanwhile = await look()
+        if (difference(first, meanwhile) > 1.5) report(`the conductor's preview doesn't stand in while its picture is on its way, in ${mode}: it changed by ${difference(first, meanwhile).toFixed(1)}`, "/")
+        if (await page.evaluate(() => Array.isArray(window.reveal))) report(`the conductor's preview gives way before its picture has arrived, in ${mode}`, "/")
+        letThrough()
+        const revealed = await page.waitForFunction(() => Array.isArray(window.reveal), null, { timeout: 30000 }).then(() => true, () => false)
+        if (!revealed) report(`the conductor's picture never shows after it arrives, in ${mode}`, "/")
+        else {
+            const end = await page.evaluate(() => Math.max(0, ...window.reveal.map((animation) => Number(animation.effect?.getComputedTiming().endTime)).filter(Number.isFinite)))
+            const pictures = [first]
+            for (let time = 0; time <= end + 40; time += 40) {
+                await page.evaluate((at) => window.reveal.forEach((animation) => (animation.currentTime = at)), time)
+                await frames(page)
+                pictures.push(await look())
+            }
+            await page.evaluate(() => window.reveal.forEach((animation) => animation.finish()))
+            await frames(page)
+            const final = await look()
+            pictures.push(final)
+            const jump = Math.max(...pictures.slice(1).map((picture, index) => difference(pictures[index], picture)))
+            if (jump > 3) report(`the conductor jumps from its preview to its picture, in ${mode}: ${jump.toFixed(1)} in one frame`, "/")
+            if (difference(first, final) > 4) report(`the conductor's preview looks unlike its picture, in ${mode}: ${difference(first, final).toFixed(1)}`, "/")
+        }
+        await cdp.detach()
+        await context.close()
+    }
+
+    // A window that grows while the conductor's picture is on its way picks a larger file, and the browser turns down the decode it
+    // was asked for. The picture still shows once that file is there, instead of the preview standing for the whole visit. On a
+    // screen of double density, where the two sizes pick different files
+    {
+        const { context, page } = await openPage({ width: 1280, height: 720, dpr: 2 }, "still")
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        let letThrough = () => {}
+        const held = new Promise((done) => (letThrough = done))
+        const asked = new Set()
+        await page.route(/\/art\/mascot-\d+\.webp/, async (route) => {
+            asked.add(new URL(route.request().url()).pathname)
+            await held
+            await route.continue()
+        })
+        const cdp = await context.newCDPSession(page)
+        await cdp.send("Network.setCacheDisabled", { cacheDisabled: true })
+        // Waits on the check's own side for the page to ask for a file. Bounded only so a broken page can't hang the run
+        const askedFor = async (count) => {
+            for (let tries = 0; tries < 600 && asked.size < count; tries++) await new Promise((done) => setTimeout(done, 50))
+            return asked.size >= count
+        }
+        await page.reload({ waitUntil: "domcontentloaded" })
+        await askedFor(1)
+        await page.setViewportSize({ width: 2560, height: 1440 })
+        const switched = await askedFor(2)
+        letThrough()
+        if (!switched) report("the conductor's picture keeps its file after the window grows, so the check can't try a decode turned down", "/")
+        else {
+            const shown = await page.waitForFunction(() => !document.documentElement.hasAttribute("data-mascot-wait"), null, { timeout: 30000 }).then(() => true, () => false)
+            if (!shown) report(`the conductor stays on its preview when the window grows while its picture loads: asked for ${[...asked].join(", ")}`, "/")
+        }
+        await cdp.detach()
+        await context.close()
+    }
+
+    // The bow tie's copy of the painted conductor follows the file the window picks: after the bow has taken over, a window that
+    // grows on a screen of double density gives the painted conductor a larger file, and the copy is drawn again from it
+    {
+        const { context, page } = await openPage({ width: 1280, height: 720, dpr: 2 }, "immersive")
+        await page.goto(`${site.url}/`, { waitUntil: "load" })
+        const tookOver = await page.waitForFunction(() => document.querySelector("[data-bow-body]") && getComputedStyle(document.querySelector("[data-mascot]")).visibility === "hidden", null, { timeout: 60000 }).then(() => true, () => false)
+        if (!tookOver) report("the hero's bow tie never takes over, so its copy can't be checked after a resize", "/")
+        else {
+            const before = await page.evaluate(() => document.querySelector("[data-bow-body]").width)
+            await page.setViewportSize({ width: 2560, height: 1440 })
+            // Its file at the new size, then the copy at that file's width. Bounded only so a broken page can't hang the run
+            const file = await page.waitForFunction((before) => {
+                const width = Number(/mascot-(\d+)\.webp/.exec(document.querySelector("[data-mascot]").currentSrc)?.[1])
+                return width > before && document.querySelector("[data-mascot]").complete && width
+            }, before, { timeout: 30000 }).then((handle) => handle.jsonValue(), () => null)
+            if (!file) report("the painted conductor keeps its file after the window grows, so the check can't compare its copy", "/")
+            else {
+                const followed = await page.waitForFunction((file) => document.querySelector("[data-bow-body]")?.width === file, file, { timeout: 30000 }).then(() => true, () => false)
+                const now = await page.evaluate(() => document.querySelector("[data-bow-body]")?.width)
+                if (!followed) report(`the bow tie's copy of the conductor stays ${now} px wide after the window grows and the conductor's file is ${file} px`, "/")
+            }
+        }
+        await context.close()
+    }
+
+    // The docs' water moves by itself and never follows the page's scroll, and rests in Still. No script draws it. Its bubbles rise
+    // from a wide laptop up, where the reading column has a free side
+    const wide = sizes.find((candidate) => !candidate.touch && candidate.width >= 1440) ?? screen
+    for (const [mode, moves] of [["immersive", true], ["still", false]]) {
+        const { context, page } = await openPage(wide, mode)
         await page.goto(`${site.url}/docs/commands/`, { waitUntil: "load" })
         const night = await page.evaluate(() => {
             const box = document.querySelector("[data-night]")
@@ -1053,6 +1406,122 @@ serial("alive", ["/", "/commands/", "/docs/"], async () => {
         await context.close()
     }
 
+    // Starting the page end's shader costs long frames, so its context, its program and each picture it takes in wait until the
+    // page rests from scrolling, also when scrolling starts again while its code or pictures are on their way. Its code is held
+    // until scrolling has started again, then let through while the scrolling goes on. Its pictures' decoding is held the same way
+    // once it has its context. Time is the page's fake clock, moved a tenth of a second after each scroll, so only the page's own
+    // rules decide when it rests, however busy the machine is
+    {
+        const route = "/commands/"
+        const { context, page } = await openPage(screen, "immersive")
+        await page.addInitScript(() => {
+            window.scrolls = 0
+            window.glWork = []
+            addEventListener("scroll", () => window.scrolls++, { passive: true, capture: true })
+            const getContext = HTMLCanvasElement.prototype.getContext
+            HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+                const made = getContext.call(this, type, ...rest)
+                if (type === "webgl2" && made && !this.isConnected) window.glWork.push("context")
+                return made
+            }
+            for (const step of ["linkProgram", "texImage2D"]) {
+                const own = WebGL2RenderingContext.prototype[step]
+                WebGL2RenderingContext.prototype[step] = function (...args) {
+                    window.glWork.push(step)
+                    return own.apply(this, args)
+                }
+            }
+            // The shader's pictures are its own, never on the page, and their decoding waits for the check
+            let letDecode = () => {}
+            const decodeHeld = new Promise((done) => (letDecode = done))
+            window.letDecode = letDecode
+            window.decoded = 0
+            const decode = HTMLImageElement.prototype.decode
+            HTMLImageElement.prototype.decode = function () {
+                if (this.isConnected || !this.src.includes("/art/face/")) return decode.call(this)
+                return decodeHeld.then(() => decode.call(this)).then(() => void window.decoded++)
+            }
+        })
+        let letThrough = () => {}
+        const held = new Promise((done) => (letThrough = done))
+        let asked = false
+        let arrived = false
+        page.on("requestfinished", (request) => /\/_astro\/ending-face\./.test(request.url()) && (arrived = true))
+        await page.route(/\/_astro\/ending-face\.[^/]*\.js$/, async (request) => {
+            asked = true
+            await held
+            await request.continue()
+        })
+        await page.clock.install()
+        await page.goto(site.url + route, { waitUntil: "load" })
+        await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000)
+        // Waits on the real clock, which the page's fake one doesn't hold. Bounded only so a broken page can't hang the run
+        const until = async (check) => {
+            for (let tries = 0; tries < 600; tries++) {
+                if (await check()) return true
+                await new Promise((done) => setTimeout(done, 50))
+            }
+            return false
+        }
+        // One step of a scroll: up or down a little, near the page end, and a tenth of a second on its clock once the page has seen it
+        let steps = 0
+        const scroll = async () => {
+            const seen = await page.evaluate((up) => {
+                window.scrollBy({ top: up ? -40 : 40, behavior: "instant" })
+                return window.scrolls
+            }, steps++ % 2 === 0)
+            await until(() => page.evaluate((seen) => window.scrolls > seen, seen))
+            await page.clock.runFor(100)
+        }
+        const work = () => page.evaluate(() => window.glWork)
+        await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" }))
+        await page.evaluate(() => window.scrollBy({ top: -200, behavior: "instant" }))
+        const live = await until(async () => {
+            await page.clock.runFor(100)
+            return page.evaluate(() => document.querySelector("[data-ending-alive][data-live]") !== null)
+        })
+        // At rest, so it asks for its code
+        const askedAtRest = live && (await until(async () => {
+            await page.clock.runFor(100)
+            return asked
+        }))
+        if (!live || !askedAtRest) report("the page end's black hole never asks for its shader at rest", route)
+        else {
+            for (let step = 0; step < 4; step++) await scroll()
+            letThrough()
+            await until(() => arrived)
+            for (let step = 0; step < 20; step++) await scroll()
+            const whileScrolling = await work()
+            if (whileScrolling.length) report(`the page end's shader starts while the page scrolls: ${[...new Set(whileScrolling)].join(", ")}`, route)
+            // At rest it makes its context, then waits for its pictures
+            const context = await until(async () => {
+                await page.clock.runFor(100)
+                return (await work()).includes("context")
+            })
+            if (!context) report("the page end's shader makes no context once the page rests", route)
+            else {
+                await scroll()
+                await page.evaluate(() => window.letDecode())
+                await until(() => page.evaluate(() => window.decoded >= 6))
+                // A turn of the page's tasks, so whatever its decoded pictures let go has run. Its timers wait for the fake clock
+                await page.evaluate(() => new Promise((done) => {
+                    const channel = new MessageChannel()
+                    channel.port1.onmessage = () => done()
+                    channel.port2.postMessage(0)
+                }))
+                for (let step = 0; step < 4; step++) await scroll()
+                const afterScroll = (await work()).filter((step) => step !== "context")
+                if (afterScroll.length) report(`the page end's shader builds or takes in pictures while the page scrolls: ${[...new Set(afterScroll)].join(", ")}`, route)
+                const shown = await until(async () => {
+                    await page.clock.runFor(100)
+                    return page.evaluate(() => document.querySelector("[data-ending-face][data-on]") !== null)
+                })
+                if (!shown) report("the page end's shader never shows once the page rests", route)
+            }
+        }
+        await context.close()
+    }
+
     // In Still it never starts: the page end's living parts are not asked for, so nothing draws the black hole
     {
         const { context, page } = await openPage(screen, "still")
@@ -1103,8 +1572,8 @@ serial("alive", ["/", "/commands/", "/docs/"], async () => {
             const wiggles = tilt !== null && (await page.waitForFunction(`Math.abs((${angle})() - ${tilt}) > 0.005`, null, { timeout: 30000 }).then(() => true, () => false))
             if (!wiggles) report("the hero's bow tie stands still while the site moves", "/")
             await page.click(".motion[data-ready]")
-            const gone = await page.waitForFunction(() => !document.querySelector("[data-bow]") && !document.querySelector("[data-mascot]").style.maskImage, null, { timeout: 15000 }).then(() => true, () => false)
-            if (!gone) report("the hero's bow tie stays alive after a press to still, or leaves the painted bow cut out", "/")
+            const gone = await page.waitForFunction(() => !document.querySelector("[data-bow], [data-bow-body]") && getComputedStyle(document.querySelector("[data-mascot]")).visibility === "visible", null, { timeout: 15000 }).then(() => true, () => false)
+            if (!gone) report("the hero's bow tie stays alive after a press to still, or leaves the painted conductor hidden", "/")
         }
         await context.close()
     }
@@ -1114,7 +1583,7 @@ serial("alive", ["/", "/commands/", "/docs/"], async () => {
         page.on("request", (request) => /\/art\/bow-/.test(request.url()) && asked.push(request.url()))
         await page.goto(`${site.url}/`, { waitUntil: "networkidle" })
         await frames(page)
-        const live = await page.evaluate(() => Boolean(document.querySelector("[data-bow]") || document.querySelector("[data-mascot]").style.maskImage))
+        const live = await page.evaluate(() => Boolean(document.querySelector("[data-bow], [data-bow-body]") || document.querySelector("[data-mascot]").style.visibility))
         if (live || asked.length) report("the hero's bow tie comes alive in Still", "/")
         await context.close()
     }
@@ -1414,7 +1883,7 @@ serial("choice", ["/", "/commands/", "/docs/commands/"], async (pages) => {
                 held: document.querySelectorAll("[data-still]:not(html):not(.peek-card)").length > 0,
                 checked: document.querySelector(".motion").getAttribute("aria-checked") === "true",
                 logo: running(document.querySelector(".home-waves")),
-                wave: running(document.querySelector(".motion-wave")),
+                wave: running(document.querySelector(".motion-strip")),
                 world: running(world, true),
                 seen: window.seenStill,
             }
@@ -1584,11 +2053,11 @@ serial("sky", ["/", "/docs/"], async () => {
             watch.disconnect()
         }).observe(document, { subtree: true, childList: true }))
         await page.goto(`${site.url}/`, { waitUntil: "load" })
-        const back = await page.evaluate(() => ({ known: window.artKnownBeforeHero, fade: parseFloat(getComputedStyle(document.querySelector(".sky-icons")).transitionDuration), mascotFade: parseFloat(getComputedStyle(document.querySelector("[data-mascot]")).transitionDuration), held: document.documentElement.hasAttribute("data-icons-held") }))
+        // The conductor resolves out of its preview, with no jump, which the alive part's reload check measures frame by frame
+        const back = await page.evaluate(() => ({ known: window.artKnownBeforeHero, fade: parseFloat(getComputedStyle(document.querySelector(".sky-icons")).transitionDuration), held: document.documentElement.hasAttribute("data-icons-held") }))
         if (!back.known) report("a return to the homepage doesn't know the sky's icons are cached before the first paint", "/")
         if (back.held) report("a return to the homepage holds the sky's icons back", "/")
         if (back.fade > 0) report("the sky's icons fade in on a return to the homepage", "/")
-        if (back.mascotFade > 0) report("the conductor fades in on a return to the homepage", "/")
         await context.close()
     }
 })
@@ -1803,6 +2272,63 @@ serial("docs", ["/docs/"], async () => {
         await context.close()
     }
 
+    // A clear typo is read with a note above the results, clear of a phone's keyboard, and a way back to the query as
+    // typed. A real word near a docs word is only offered a correction
+    {
+        const { context, page } = await openPage({ width: 390, height: 844 })
+        await openSearch(page)
+        // A screen reader announces a note only in a live region that was there before it
+        const region = await page.evaluate(() => !!document.querySelector('.search-dialog [role="status"]:not(.search-status)'))
+        if (!region) report("the search note has no live region before a note appears", "phone-390")
+        await page.fill(".search-dialog input", "colector")
+        const read = await page.locator(".search-note", { hasText: "Results for “collector”" }).waitFor({ timeout: 30000 }).then(() => true, () => false)
+        if (!read) report("a corrected typo is not shown above the results", "phone-390")
+        else {
+            const above = await page.evaluate(() => {
+                const note = document.querySelector(".search-note")?.getBoundingClientRect()
+                const first = document.querySelector(".search-results li")?.getBoundingClientRect()
+                return !!note && !!first && note.bottom <= first.top + 1
+            })
+            if (!above) report("the note on a corrected typo is not above the results", "phone-390")
+            await page.locator(".search-note button").click()
+            const typed = await page
+                .waitForFunction(() => !document.querySelector(".search-note") && document.querySelector(".search-dialog input")?.value === "colector", null, { timeout: 30000 })
+                .then(() => true, () => false)
+            if (!typed) report("searching a corrected query as typed still corrects it", "phone-390")
+        }
+        await page.fill(".search-dialog input", "modal")
+        const offered = await page.locator(".search-note", { hasText: "Did you mean “model”?" }).waitFor({ timeout: 30000 }).then(() => true, () => false)
+        if (!offered) report("a real word near a docs word is not offered a correction", "phone-390")
+        await context.close()
+    }
+
+    // A long query, such as a pasted log line, keeps the note short on a small phone, so the first result stays in view
+    // and the note's button stays inside the dialog
+    {
+        const { context, page } = await openPage({ width: 320, height: 568 })
+        await openSearch(page)
+        const log = [
+            "[events.handlerFaild] TypeError: Cannot read properties of undefined (reading 'content')",
+            "at onMessage (/srv/fluxer-bot/src/handlers/messages.ts:128:22) at processTicksAndRejections (node:internal/process/task_queues:105:5)",
+            "Caused by: Error: The stored message is unavailable after the channel was removed from the community",
+        ]
+        await page.fill(".search-dialog input", log.join(" "))
+        const noted = await page.locator(".search-note").waitFor({ timeout: 30000 }).then(() => true, () => false)
+        if (!noted) report("a pasted log line with a typo in its code gets no note", "phone-320")
+        else {
+            const fits = await page.evaluate(() => {
+                const dialog = document.querySelector(".search-dialog")?.getBoundingClientRect()
+                const button = document.querySelector(".search-note button")?.getBoundingClientRect()
+                const first = document.querySelector(".search-results li")?.getBoundingClientRect()
+                if (!dialog || !button || !first) return { result: false, button: false }
+                return { result: first.top + 48 <= Math.min(dialog.bottom, innerHeight), button: button.right <= dialog.right + 1 }
+            })
+            if (!fits.result) report("a long query's note pushes the first result out of view", "phone-320")
+            if (!fits.button) report("a long query's note button runs past the dialog", "phone-320")
+        }
+        await context.close()
+    }
+
     // A word nobody wrote is answered as nothing found, not as a failure
     {
         const { context, page } = await openPage(wide)
@@ -1917,6 +2443,324 @@ serial("docs", ["/docs/"], async () => {
         await context.close()
     }
 
+    // Moving from a log record's level badge to the record beside it changes the card to the record's at once, without closing in
+    // between, and a record that wraps keeps its card at the line the card sits under, not under the badge
+    {
+        const route = "/docs/api/js-ts/sharding-and-supervision/"
+        const { context, page } = await openPage({ width: 1133, height: 900 })
+        await page.goto(site.url + route, { waitUntil: "load" })
+        const record = page.locator('a.peek-code[href*="sessionsnapshotignored"]').first()
+        const level = record.locator("xpath=following-sibling::a[contains(@class, 'peek-level')][1]")
+        if (!(await record.count()) || !(await level.count())) report("no log record beside its level to hover", route)
+        else {
+            await record.evaluate((element) => window.scrollBy(0, element.getBoundingClientRect().top - 300))
+            // Hovered once it stays put after the jump
+            await record.evaluate(async (element) => {
+                let last = NaN
+                for (let frame = 0; frame < 60; frame++) {
+                    await new Promise((done) => requestAnimationFrame(() => done()))
+                    const top = element.getBoundingClientRect().top
+                    if (top === last) return
+                    last = top
+                }
+            })
+            const rects = (locator) => locator.evaluate((element) => [...element.getClientRects()].map((rect) => ({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom })))
+            const card = () => page.evaluate(() => {
+                const peek = document.querySelector(".peek-card")
+                return peek && !peek.hidden ? { title: peek.querySelector(".peek-title")?.textContent ?? "", left: peek.getBoundingClientRect().left, width: peek.getBoundingClientRect().width } : null
+            })
+            const [badge] = await rects(level)
+            await page.mouse.move((badge.left + badge.right) / 2, (badge.top + badge.bottom) / 2, { steps: 3 })
+            await page.waitForSelector(".peek-card:not([hidden])", { timeout: 5000 }).catch(() => {})
+            if (!(await card())?.title.includes("Warn")) report("hovering a level badge opens no card", route)
+            const lines = await rects(record)
+            const last = lines.at(-1)
+            // One move straight onto the record, so the check never depends on how long the pointer spends between the two
+            await page.mouse.move((last.left + last.right) / 2, (last.top + last.bottom) / 2)
+            const closed = !(await card())
+            await page.waitForFunction(() => document.querySelector(".peek-card .peek-title")?.textContent?.includes("sessionSnapshotIgnored"), null, { timeout: 1000 }).catch(() => {})
+            const shown = await card()
+            if (!shown?.title.includes("sessionSnapshotIgnored")) report("moving from a level badge to its record doesn't open the record's card", route)
+            else {
+                if (closed) report("moving from a level badge to its record closes the card in between", route)
+                const viewWidth = await page.evaluate(() => document.documentElement.clientWidth)
+                const expected = Math.max(12, Math.min(last.left, viewWidth - 12 - shown.width))
+                if (Math.abs(shown.left - expected) > 2) report(`a wrapped record's card starts at ${Math.round(shown.left)} px, not at its last line, ${Math.round(expected)} px`, route)
+            }
+        }
+        await context.close()
+    }
+
+    // Each change's commit tag takes a 44 px touch, on a phone and beside a wide column, and its touch area covers no other link
+    for (const screen of [{ width: 390, height: 844, touch: true }, { width: 1440, height: 900 }]) {
+        const route = "/docs/changelog/"
+        const { context, page } = await openPage(screen)
+        await page.goto(site.url + route, { waitUntil: "load" })
+        const problems = await page.evaluate(() => {
+            const found = []
+            const tags = [...document.querySelectorAll("a.change-commit")]
+            if (!tags.length) return ["no commit tags"]
+            const others = [...document.querySelectorAll("a[href], button, summary, input")].filter((element) => !element.matches(".change-commit") && element.checkVisibility({ visibilityProperty: true }))
+            const boxes = others.flatMap((element) => [...element.getClientRects()].filter((rect) => rect.width && rect.height).map((rect) => ({ element, rect })))
+            for (const tag of tags) {
+                const own = tag.getBoundingClientRect()
+                const layer = getComputedStyle(tag, "::after")
+                const reach = (value) => Math.max(0, -(Number.parseFloat(value) || 0))
+                const hit = layer.content !== "none" && layer.position === "absolute"
+                    ? { left: own.left - reach(layer.left), right: own.right + reach(layer.right), top: own.top - reach(layer.top), bottom: own.bottom + reach(layer.bottom) }
+                    : { left: own.left, right: own.right, top: own.top, bottom: own.bottom }
+                if (hit.bottom - hit.top < 43.5 || hit.right - hit.left < 43.5) found.push(`a commit tag takes a touch of ${Math.round(hit.right - hit.left)}x${Math.round(hit.bottom - hit.top)} px: ${tag.textContent.trim()}`)
+                const covered = boxes.find(({ rect }) => Math.min(hit.right, rect.right) - Math.max(hit.left, rect.left) > 0.5 && Math.min(hit.bottom, rect.bottom) - Math.max(hit.top, rect.top) > 0.5)
+                if (covered) found.push(`a commit tag's touch area covers ${covered.element.textContent.trim().slice(0, 30)}: ${tag.textContent.trim()}`)
+            }
+            return found
+        })
+        for (const problem of problems.slice(0, 5)) report(`${problem} at ${screen.width}x${screen.height}`, route)
+        await context.close()
+    }
+
+    // A page on a phone or a wide screen, in Still or Motion
+    const openDocs = async ({ width, height, touch, dpr }, mode = "still") => {
+        const context = await newContext({ viewport: { width, height }, hasTouch: Boolean(touch), isMobile: Boolean(touch), deviceScaleFactor: dpr ?? 1 })
+        const page = await context.newPage()
+        page.on("pageerror", (error) => {
+            if (!/^Failed to load Pagefind metadata/.test(error.message)) report(`page error: ${error.message.slice(0, 120)}`, `${width}x${height}`)
+        })
+        await page.addInitScript(([key, value, tour]) => {
+            localStorage.setItem(key, value)
+            localStorage.setItem(tour, "1")
+        }, [experienceKey, mode, tourKey])
+        return { context, page }
+    }
+
+    // Waits until the page has stayed in one place for ten frames, so a smooth move has ended, and gives where it rests. Bounded only
+    // so a page that never stops can't hang the run
+    const rest = (page) =>
+        page.evaluate(async () => {
+            let last = -1
+            for (let frame = 0, same = 0; frame < 600 && same < 10; frame++) {
+                await new Promise((done) => requestAnimationFrame(() => done()))
+                same = scrollY === last ? same + 1 : 0
+                last = scrollY
+            }
+            return scrollY
+        })
+
+    // A link to a heading deep in a long page lands with the heading under the header, from another page, inside the page, and from
+    // the outline's smooth move in Motion
+    {
+        const reference = globSync("dist/docs/api/*/*/index.html")
+            .map((file) => ({ file, size: statSync(file).size }))
+            .sort((a, b) => b.size - a.size)[0]
+        const routes = ["/docs/changelog/", ...(reference ? [`/${reference.file.replaceAll("\\", "/").replace(/^dist\//, "").replace(/index\.html$/, "")}`] : [])]
+        const offset = (page, id) => page.evaluate((id) => {
+            const heading = document.getElementById(id)
+            return heading.getBoundingClientRect().top - Number.parseFloat(getComputedStyle(heading).scrollMarginTop)
+        }, id)
+        const wait = async (page) => {
+            await settle(page)
+            await frames(page)
+        }
+        for (const route of routes) {
+            const { context, page } = await openDocs({ width: 390, height: 844, touch: true, dpr: 3 })
+            await page.goto(site.url + route, { waitUntil: "load" })
+            await wait(page)
+            const ids = await page.evaluate(() => [...document.querySelectorAll(".docs-prose :is(h2, h3, h4)[id], .ref-row[id]")].map((heading) => heading.id))
+            const id = ids[Math.floor(ids.length * 0.8)]
+            await page.evaluate((id) => (location.hash = id), id)
+            await wait(page)
+            const inside = await offset(page, id)
+            if (Math.abs(inside) > 2) report(`a link inside the page leaves its heading ${Math.round(inside)} px from where it lands on a phone: #${id}`, route)
+            await page.goto(`${site.url}/docs/`, { waitUntil: "load" })
+            await page.goto(`${site.url}${route}#${id}`, { waitUntil: "load" })
+            await wait(page)
+            const arriving = await offset(page, id)
+            if (Math.abs(arriving) > 2) report(`a link from another page leaves its heading ${Math.round(arriving)} px from where it lands on a phone: #${id}`, route)
+            await context.close()
+        }
+        // The outline's smooth move in Motion, on a screen that shows the outline
+        const route = "/docs/changelog/"
+        const { context, page } = await openDocs({ width: 1440, height: 900 }, "immersive")
+        await page.goto(site.url + route, { waitUntil: "load" })
+        await wait(page)
+        const ids = await page.evaluate(() => [...document.querySelectorAll("[data-outline-link]")].map((link) => decodeURIComponent(link.hash.slice(1))))
+        const id = ids[Math.floor(ids.length * 0.8)]
+        const link = page.locator(`[data-outline-link][href="#${id}"]`)
+        if (!id || !(await link.isVisible())) report("the changelog's outline shows no entry deep in the page to follow", route)
+        else {
+            await link.click()
+            await page.waitForFunction((id) => location.hash === `#${id}`, id, { timeout: 60000 })
+            await page.waitForFunction(() => !document.documentElement.style.scrollBehavior, null, { timeout: 60000 })
+            await rest(page)
+            const outlined = await offset(page, id)
+            if (Math.abs(outlined) > 2) report(`the outline's smooth move leaves its heading ${Math.round(outlined)} px from where it lands: #${id}`, route)
+        }
+        await context.close()
+    }
+
+    // Back returns to the part of a long page the reader left, from another page, by the browser's own scroll restoration
+    {
+        const route = "/docs/changelog/"
+        const { context, page } = await openDocs({ width: 390, height: 844, touch: true, dpr: 3 })
+        await page.goto(site.url + route, { waitUntil: "load" })
+        await settle(page)
+        await page.evaluate(() => scrollTo({ top: document.documentElement.scrollHeight * 0.6, behavior: "instant" }))
+        await frames(page)
+        const parts = ".docs-article :is(h2, h3, p, li)"
+        const left = await page.evaluate((parts) => {
+            const x = document.querySelector(".docs-prose").getBoundingClientRect().left + 40
+            for (let y = innerHeight / 2; y < innerHeight; y += 10) {
+                const part = document.elementFromPoint(x, y)?.closest(parts)
+                if (part) return { index: [...document.querySelectorAll(parts)].indexOf(part), top: part.getBoundingClientRect().top }
+            }
+            return null
+        }, parts)
+        await page.goto(`${site.url}/docs/`, { waitUntil: "load" })
+        await page.goBack({ waitUntil: "load" })
+        await settle(page)
+        await frames(page)
+        const back = left && (await page.evaluate(([parts, index]) => document.querySelectorAll(parts)[index]?.getBoundingClientRect().top, [parts, left.index]))
+        if (!left) report("the Back check finds no paragraph in the middle of a phone's screen", route)
+        else if (!(Math.abs(back - left.top) <= 2)) report(`Back returns a phone to the changelog with the part the reader left ${Math.round(back - left.top)} px from where it was`, route)
+        await context.close()
+    }
+
+    // After an outline entry moved the page to a heading, Back returns to the exact place the reader was reading, and Forward to the
+    // heading again, in Still and Motion, on a page opened at no heading. A script that took over the browser's scroll restoration
+    // left Back at the heading, tens of thousands of pixels from the reader's place
+    {
+        const route = "/docs/changelog/"
+        for (const mode of ["still", "immersive"]) {
+            const where = mode === "still" ? "in Still" : "in Motion"
+            const { context, page } = await openDocs({ width: 1440, height: 900 }, mode)
+            await page.goto(site.url + route, { waitUntil: "load" })
+            await settle(page)
+            const ids = await page.evaluate(() => [...document.querySelectorAll("[data-outline-link]")].map((link) => decodeURIComponent(link.hash.slice(1))))
+            const id = ids[Math.floor(ids.length * 0.8)]
+            const link = page.locator(`[data-outline-link][href="#${id}"]`)
+            if (!id || !(await link.isVisible())) {
+                report(`the same-page Back check finds no outline entry deep in the page to follow ${where}`, route)
+                await context.close()
+                continue
+            }
+            await page.evaluate(() => scrollTo({ top: Math.round(document.documentElement.scrollHeight * 0.3), behavior: "instant" }))
+            const reading = await rest(page)
+            await link.click()
+            await page.waitForFunction((id) => decodeURIComponent(location.hash.slice(1)) === id, id, { timeout: 60000 })
+            await page.waitForFunction(() => !document.documentElement.style.scrollBehavior, null, { timeout: 60000 })
+            const heading = await rest(page)
+            if (Math.abs(heading - reading) < 1000) report(`the outline entry didn't move the page away from the reader's place ${where}`, route)
+            await page.goBack()
+            await page.waitForFunction(() => !location.hash, null, { timeout: 60000 })
+            const back = await rest(page)
+            if (Math.abs(back - reading) > 1) report(`Back after an outline entry leaves the page ${Math.round(back - reading)} px from the reader's place ${where}`, route)
+            await page.goForward()
+            await page.waitForFunction((id) => decodeURIComponent(location.hash.slice(1)) === id, id, { timeout: 60000 })
+            const forward = await rest(page)
+            if (Math.abs(forward - heading) > 1) report(`Forward to an outline entry's heading leaves the page ${Math.round(forward - heading)} px from it ${where}`, route)
+            await context.close()
+        }
+    }
+
+    // On a phone the changelog and the largest reference page: the Docs menu answers before the page has arrived, and every heading
+    // keeps its name for screen readers
+    {
+        const reference = globSync("dist/docs/api/*/*/index.html")
+            .map((file) => ({ file, size: statSync(file).size }))
+            .sort((a, b) => b.size - a.size)[0]
+        const routes = ["/docs/changelog/", ...(reference ? [`/${reference.file.replaceAll("\\", "/").replace(/^dist\//, "").replace(/index\.html$/, "")}`] : [])]
+        for (const route of routes) {
+            // The menu's handler ran in a module, which waits for the whole page, so the drawn button ignored taps for most of a
+            // second on a phone. A script placed right after the button presses it while the page is still being read
+            {
+                const { context, page } = await openDocs({ width: 390, height: 844, touch: true, dpr: 3 })
+                let placed = false
+                await page.route(`**${route}`, async (request) => {
+                    const response = await request.fetch()
+                    const html = await response.text()
+                    const body = html.replace(/(<button class="side-open"[^>]*>[\s\S]*?<\/button>)/, (button) => {
+                        placed = true
+                        return `${button}<script>document.querySelector("button[data-side-open]").click(); window.pressedEarly = { open: document.querySelector("[data-side]").hasAttribute("data-open"), article: Boolean(document.querySelector(".docs-prose")) }</script>`
+                    })
+                    await request.fulfill({ response, body })
+                })
+                await page.goto(site.url + route, { waitUntil: "load" })
+                const early = await page.evaluate(() => ({ ...window.pressedEarly, held: document.querySelector("main")?.inert }))
+                if (!placed || early.article) report("the early press check can't press the Docs menu before the article arrives", route)
+                else if (!early.open) report("the Docs menu doesn't open when pressed before the page has arrived", route)
+                else if (!early.held) report("the Docs menu opened before the page arrived leaves the page behind it in reach", route)
+                await context.close()
+            }
+            const { context, page } = await openDocs({ width: 390, height: 844, touch: true, dpr: 3 })
+            await page.goto(site.url + route, { waitUntil: "load" })
+            await settle(page)
+            // Screen readers move through a page by its headings, and Chromium gives no name to a heading whose layout it skipped
+            const cdp = await context.newCDPSession(page)
+            const { nodes } = await cdp.send("Accessibility.getFullAXTree")
+            const named = nodes.filter((node) => node.role?.value === "heading" && !node.ignored && node.name?.value?.trim()).length
+            const headings = await page.evaluate(() => [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")].filter((heading) => heading.checkVisibility()).length)
+            if (named < headings) report(`${headings - named} of ${headings} headings have no name for screen readers on a phone`, route)
+            await context.close()
+        }
+    }
+
+    // A pointer that only passes over a mark opens no card, also just after another card closed. Time is the page's fake clock, so
+    // the sweep moves at one pixel a millisecond however busy the machine is
+    {
+        const route = "/docs/commands/"
+        const { context, page } = await openPage({ width: 1440, height: 900 })
+        await page.clock.install()
+        await page.goto(site.url + route, { waitUntil: "load" })
+        const marks = await page.evaluate(() => {
+            const visible = [...document.querySelectorAll(".docs-prose a.peek")].filter((mark) => {
+                const rect = mark.getClientRects()[0]
+                return rect && mark.getClientRects().length === 1 && rect.top > 120 && rect.bottom < innerHeight - 40 && rect.width > 30
+            })
+            const first = visible[0]
+            const second = visible.find((mark) => mark.getBoundingClientRect().top > first.getBoundingClientRect().bottom + 40)
+            const rect = (mark) => {
+                const { left, top, right, bottom } = mark.getBoundingClientRect()
+                return { left, top, right, bottom }
+            }
+            return first && second ? { first: rect(first), second: rect(second) } : null
+        })
+        if (!marks) report("no two marks on one screen to sweep across", route)
+        else {
+            await page.evaluate(() => {
+                window.peeksShown = 0
+                const watch = new MutationObserver(() => {
+                    const peek = document.querySelector(".peek-card")
+                    if (peek && !peek.hidden) window.peeksShown++
+                })
+                watch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden"] })
+            })
+            const { first, second } = marks
+            await page.mouse.move((first.left + first.right) / 2, (first.top + first.bottom) / 2)
+            await page.clock.runFor(400)
+            // The index arrives over the network, which the fake clock doesn't hold, so this waits on the real clock for it
+            let opened = false
+            for (let tries = 0; tries < 100 && !opened; tries++) {
+                opened = await page.evaluate(() => window.peeksShown > 0)
+                if (!opened) await new Promise((done) => setTimeout(done, 50))
+            }
+            if (!opened) report("resting on a mark opens no card", route)
+            await page.mouse.move(first.left - 60, first.bottom + 30)
+            await page.clock.runFor(200)
+            const closed = await page.evaluate(() => document.querySelector(".peek-card")?.hidden !== false)
+            if (!closed) report("a card stays open after the pointer left its mark", route)
+            const before = await page.evaluate(() => window.peeksShown)
+            const y = (second.top + second.bottom) / 2
+            for (let x = second.left - 40; x <= second.right + 40; x += 8) {
+                await page.mouse.move(x, y)
+                await page.clock.runFor(8)
+            }
+            await page.mouse.move(second.right + 40, second.bottom + 60)
+            await page.clock.runFor(600)
+            if ((await page.evaluate(() => window.peeksShown)) > before) report("passing over a mark soon after a card closed opens its card", route)
+        }
+        await context.close()
+    }
+
     // Reading the Effect API, a name leads to the Effect API
     {
         const { context, page } = await openPage(wide)
@@ -1953,7 +2797,19 @@ serial("docs", ["/docs/"], async () => {
                 framed: notes.filter((note) => note.nextElementSibling?.matches("figure, .code-frame") || note.querySelector("figure")).length,
             }
         })
-        if (!defaults.nested.includes("Default 30000")) report("the nested startup option shows no default of 30000", "/docs/api/js-ts/options/")
+        // The startup deadline's default as the SDK documents it, read from the reference model, since it follows Fluxer's own timing
+        const findStartup = (node) => {
+            if (!node || typeof node !== "object") return undefined
+            if (node.name === "startupTimeoutMs" && typeof node.doc?.defaultValue === "string") return node.doc.defaultValue
+            for (const value of Object.values(node)) {
+                const found = findStartup(value)
+                if (found) return found
+            }
+            return undefined
+        }
+        const startupDefault = findStartup(JSON.parse(await readFile("content/reference/model.json", "utf8")))?.replace(/```\w*/g, "").trim()
+        if (!startupDefault) report("the reference model gives the startup deadline no default to check", "/docs/api/js-ts/options/")
+        else if (!defaults.nested.includes(`Default ${startupDefault}`)) report(`the nested startup option shows no default of ${startupDefault}`, "/docs/api/js-ts/options/")
         if (defaults.empty) report(`${defaults.empty} defaults show the word with no value`, "/docs/api/js-ts/options/")
         if (defaults.framed) report(`${defaults.framed} defaults sit in a code frame`, "/docs/api/js-ts/options/")
 
@@ -2006,9 +2862,26 @@ serial("docs", ["/docs/"], async () => {
         if (!(await page.evaluate(() => document.activeElement?.matches("[data-side-open]")))) report("closing the phone menu doesn't return focus to its button", "/docs/quick-start/")
         if ((await held()) !== before) report("closing the phone menu leaves the page out of reach", "/docs/quick-start/")
 
-        // A tap beside the sheet closes it
+        // Beside the open sheet the page recedes: Its header controls, Docs Menu button and text barely differ from a page with
+        // nothing on it. The strip is pictured once with the page and once with the page hidden, after the sheet has come to rest
         await page.click("[data-side-open]")
         await page.waitForSelector("[data-side][data-open]")
+        await page.waitForFunction(() => [".docs-side", ".side-scrim"].every((selector) => document.querySelector(selector).getAnimations().length === 0))
+        {
+            const sharp = (await import("sharp")).default
+            const right = await page.evaluate(() => Math.ceil(document.querySelector(".docs-side").getBoundingClientRect().right))
+            const strip = () => page.screenshot({ clip: { x: right + 1, y: 0, width: 390 - right - 1, height: 844 } }).then((png) => sharp(png).removeAlpha().raw().toBuffer())
+            const withPage = await strip()
+            const hide = await page.addStyleTag({ content: ".site-header, .docs-main, .docs-night { visibility: hidden !important }" })
+            await frames(page)
+            const without = await strip()
+            await hide.evaluate((style) => style.remove())
+            let clear = 0
+            for (let at = 0; at < withPage.length; at += 3) if (Math.max(...[0, 1, 2].map((channel) => Math.abs(withPage[at + channel] - without[at + channel]))) > 24) clear++
+            if (clear > 0) report(`the page beside the open phone menu shows clearly (${clear} pixels)`, "/docs/quick-start/")
+        }
+
+        // A tap beside the sheet closes it
         await page.mouse.click(380, 500)
         if (!(await page.waitForFunction(() => !document.querySelector("[data-side][data-open]"), null, { timeout: 5000 }).then(() => true, () => false))) report("a tap beside the phone menu doesn't close it", "/docs/quick-start/")
         if ((await held()) !== before) report("a tap beside the phone menu leaves the page out of reach", "/docs/quick-start/")
@@ -2053,9 +2926,12 @@ serial("pages", ["/", "/logs/", "/results/", "/no-such-page/"], async () => {
     for (const size of [{ width: 900, height: 700 }, { width: 1100, height: 700 }, { width: 1366, height: 768 }, { width: 2560, height: 1440 }]) {
         const { context, page } = await openPage(size)
         await page.goto(`${site.url}/no-such-page/`, { waitUntil: "load" })
-        await page.waitForFunction(() => document.querySelector("[data-lost]")?.style.getPropertyValue("--footer"), null, { timeout: 10000 }).catch(() => {})
+        // Until the page's script has measured its footer the page has the styles' guess, so a busy machine that ran the script late
+        // read the guess as a scroll. Bounded only so a broken page can't hang the run
+        const measured = await page.waitForFunction(() => document.querySelector("[data-lost]")?.style.getPropertyValue("--footer"), null, { timeout: 60000 }).then(() => true, () => false)
         const fit = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, screen: innerHeight }))
-        if (fit.page > fit.screen + 1) report(`the missing page scrolls by ${fit.page - fit.screen} px`, `${size.width}x${size.height}`)
+        if (!measured) report("the missing page never measures its footer", `${size.width}x${size.height}`)
+        else if (fit.page > fit.screen + 1) report(`the missing page scrolls by ${fit.page - fit.screen} px`, `${size.width}x${size.height}`)
         await context.close()
     }
 

@@ -10,8 +10,9 @@ interface Question {
     question: string
     // Static HTML, for inline code
     answer: string
-    href: string
-    link: string
+    // A question without a link ends with its answer
+    href?: string
+    link?: string
 }
 
 const code = (text: string) => `<code class="inline-code">${text}</code>`
@@ -20,7 +21,7 @@ const code = (text: string) => `<code class="inline-code">${text}</code>`
 const groups = [
     { title: "Using Fluxerly", ids: ["slash-commands", "effect", "intents", "node", "voice", "rate-limits"] },
     { title: "How It Behaves", ids: ["stable", "results", "testing", "message-methods", "missing-method"] },
-    { title: "Fluxerly and AI", ids: ["built-with-ai", "trust-ai-code", "avoid-ai", "ai-slop"] },
+    { title: "Fluxerly and AI", ids: ["built-with-ai", "avoid-ai", "trust-ai-code", "ai-slop"] },
 ]
 
 const questions: Question[] = [
@@ -76,30 +77,28 @@ const questions: Question[] = [
     {
         id: "built-with-ai",
         question: "Is Fluxerly Built with AI?",
-        answer: "Yes. AI helps write the code, and the maintainer decides what goes in. Code written with AI goes through the same check as every other change, and nothing is published unless that check passed",
+        answer: "Yes. Keeping an SDK on par with a platform that moves as fast as Fluxer takes a lot of work nobody sees, and AI is an underrated help with it. Human time, attention and energy are scarce and shouldn't be wasted, so AI writes the code while maintainers choose the direction. Their attention goes where mistakes cost the most",
         href: "#quality",
         link: "Quality, Speed and Security",
     },
     {
         id: "trust-ai-code",
         question: "Can Code Written with AI Be Trusted?",
-        answer: `It can, when the person using AI knows what to check. Tests and scanning look at the code itself, whoever typed it. Here the full check runs the whole test suite, and code scanning looks for security flaws`,
+        answer: "As far as it can be tested. Code is judged by what it does, not who wrote it, and which check catches each mistake matters more than whether someone read every line. Hard-to-test code, plus overconfidence in how well it's understood, fails whoever wrote it. Before work lands, AI reviewers check it with fresh eyes, and every finding is fixed or answered with a reason. A change must show evidence, such as passing tests, not claims, and stable ships only code a nightly already shipped",
         href: "#quality",
-        link: "What the Full Check Covers",
+        link: "Quality, Speed and Security",
     },
     {
         id: "avoid-ai",
         question: "Is Fluxerly for Me if I Avoid AI?",
-        answer: "Yes. Nothing in the SDK needs an AI tool, and every bot can be written by hand. The SDK itself is built with AI, so it suits you best if you see the value in that, or are willing to give it a fair look",
+        answer: "Yes. Nothing in the SDK needs an AI tool. The docs are designed so you can find what you need without one: Guides are organized by task with code you can copy, a task index points from a goal to the right guide, and hover cards explain terms where they appear. Every method is typed and documented, so your editor shows its options and errors as you write",
         href: guide("quick-start"),
         link: "Quick Start",
     },
     {
         id: "ai-slop",
         question: "Isn't Code Written by AI Slop?",
-        answer: "That depends on the person using it: What they know about their field and about AI, which models and workflows they pick, and how fast they keep learning. AI does not create carelessness, it exposes it, and it multiplies whatever skill and judgment it is given. Like clay, it shapes ideas faster, while judgment still decides what is worth keeping",
-        href: "#quality",
-        link: "How Security Is Checked",
+        answer: "Not by nature. Much of that image is misrepresented, though AI multiplies the bad as much as the good. People who put ego over growing and learning fast wrote careless code long before AI, as AI exposes that carelessness rather than creating it. The result depends on what the person knows about their field and about AI, and which models and workflows they choose. Slop grows where nobody tends the code",
     },
     {
         id: "rate-limits",
@@ -139,7 +138,7 @@ const questions: Question[] = [
     <div class="split">
         <div class="intro" data-rise>
             <h2 class="section-title" id="questions-title"><span class="station" data-station="questions" aria-hidden="true"></span>The Questions That <span class="hi">Come Up First</span></h2>
-            <p class="lead">Short answers to common questions, each with a link that goes deeper</p>
+            <p class="lead">Short answers to common questions, with links to go deeper</p>
             <p class="more">
                 <a class="prose-link" href={guide("faq")}>More Answers in the FAQ</a>
                 <a class="prose-link" href={guide("where-do-i")}>Where Do I…?</a>
@@ -161,10 +160,12 @@ const questions: Question[] = [
                             </summary>
                             <div class="answer">
                                 <p set:html={item.answer} />
-                                <a class="prose-link go-link" href={item.href}>
-                                    {item.link}
-                                    <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
-                                </a>
+                                {item.href && (
+                                    <a class="prose-link go-link" href={item.href}>
+                                        {item.link}
+                                        <ArrowRightIcon size={15} weight="bold" aria-hidden="true" />
+                                    </a>
+                                )}
                             </div>
                         </details>
                     ))}
@@ -234,7 +235,7 @@ const questions: Question[] = [
         font-weight: var(--weight-semibold);
         letter-spacing: var(--tracking-wide);
         color: var(--accent, var(--color-violet));
-        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+        border-bottom: 1px solid var(--color-divider);
     }
 
     /* The rows reach a little past the column on both sides, so an open row's highlight has room around its text
@@ -247,7 +248,7 @@ const questions: Question[] = [
     .item {
         padding-inline: 16px;
         scroll-margin-top: 120px;
-        border-bottom: 1px solid rgb(160 190 255 / 0.14);
+        border-bottom: 1px solid var(--color-divider);
     }
 
     .item[open] {

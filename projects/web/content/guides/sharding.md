@@ -230,7 +230,7 @@ A child that ran for `healthyResetMs` (default 60 seconds) after finishing `conf
 
 Each child has `startupTimeoutMs` (default 30 seconds) to accept its assignment and finish `configure`, and `shutdownTimeoutMs` (default 5 seconds) to exit after a stop request. The parent logs why before it acts: `supervisor.startupTimeout` when a child misses its startup time, `supervisor.terminated` before it force-terminates a child and `supervisor.identifyUnacknowledged` when a child does not confirm a session start, which stops that child
 
-The parent's Identify queue counts against each child's `connection.startupTimeoutMs`. With many shards, set it in `clientOptions` to at least 30,000 ms plus the total shard count times `identify.minimumSpacingMs`. The supervisor's `startupTimeoutMs` covers configuration and automatic shard counting, not gateway readiness
+The parent's Identify queue counts against each child's `connection.startupTimeoutMs`. With many shards, set it in `clientOptions` to at least 165,000 ms, which covers Fluxer's 135-second session start, plus the total shard count times `identify.minimumSpacingMs`. The supervisor's `startupTimeoutMs` covers configuration and automatic shard counting, not gateway readiness
 
 When reading a child's output fails, `supervisor.outputFailed` records the error and that stream is no longer forwarded. A replacement is a new process with a new client. A crash leaves no resumable session, so the replacement starts new sessions. The [`SupervisorOptions`](/docs/api/js-ts/sharding-and-supervision/#supervisoroptions) reference lists every setting, including `childOutput`, `childEnvironment` and `execArgv`
 

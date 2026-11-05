@@ -4,6 +4,7 @@
 // of its own after a leading | or &, and a function type keeps its parameters together and moves its result to the
 // next line. Pages print each type at two widths, one for wide columns and one for phones, and the styles show the one
 // that fits
+import { leavesSite } from "./external-links.mjs"
 import type { Member, ObjectType, Parameter, Signature, Type, TypeParameter } from "./reference"
 
 interface Token {
@@ -226,8 +227,9 @@ const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<",
 function tokenHtml(token: Token): string {
     const body = escape(token.s)
     if (token.h) {
-        const external = token.h.startsWith("http")
-        return `<a class="ty-${token.c ?? "t"}" href="${escape(token.h)}"${external ? ' rel="external"' : ""}>${body}</a>`
+        // A link that leaves the site opens in a new tab, as everywhere on the site
+        const external = leavesSite(token.h)
+        return `<a class="ty-${token.c ?? "t"}" href="${escape(token.h)}"${external ? ' target="_blank" rel="noopener external"' : ""}>${body}</a>`
     }
     return token.c ? `<span class="ty-${token.c}">${body}</span>` : body
 }

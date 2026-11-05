@@ -41,8 +41,9 @@ const compile = (gl: WebGL2RenderingContext, type: number, source: string) => {
     return shader
 }
 
-// Gives null where WebGL 2 is missing. If the GPU drops it later, it lets go and calls onLost
-export function createEndingFace(slot: HTMLElement, onLost: () => void): EndingFace | null {
+// Gives null where WebGL 2 is missing. If the GPU drops it later, it lets go and calls onLost. Building the program and taking in each
+// picture each wait for resting(), such as until the page has stopped scrolling, since each can cost a long frame
+export function createEndingFace(slot: HTMLElement, onLost: () => void, resting: () => Promise<void> = async () => {}): EndingFace | null {
     const canvas = document.createElement("canvas")
     const gl = canvas.getContext("webgl2", { alpha: true, antialias: false, depth: false, stencil: false, premultipliedAlpha: true })
     if (!gl) return null
@@ -138,6 +139,7 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void): EndingF
                     return picture
                 }),
             )
+            await resting()
             if (released) throw new Error("released")
 
             program = gl.createProgram()!
@@ -172,6 +174,8 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void): EndingF
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)
             gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE)
             for (const [index, name] of partNames.entries()) {
+                await resting()
+                if (released) throw new Error("released")
                 const texture = gl.createTexture()!
                 textures.push(texture)
                 gl.activeTexture(gl.TEXTURE0 + index)
@@ -190,6 +194,9 @@ export function createEndingFace(slot: HTMLElement, onLost: () => void): EndingF
             gl.disable(gl.BLEND)
             gl.clearColor(0, 0, 0, 0)
 
+            // Its first frame, where the GPU may finish building the program
+            await resting()
+            if (released) throw new Error("released")
             ready = true
             resize()
             resizeObserver.observe(slot)

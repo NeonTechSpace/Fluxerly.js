@@ -42,6 +42,8 @@ Creating the client checks and copies the credentials locally without a request,
 
 A send, reply or forward can supply `nonce` for best-effort duplicate suppression through the same webhook for five minutes. Use an application operation ID, not a new value for each attempt. Nonces do not guarantee exactly-once delivery, and omission sends no nonce. A forward can instead supply its nonce in `messageReference.source`, but supplying both locations fails before any request
 
+A forward copies its source message, so it carries no new text, embeds, uploads or stickers. As in Fluxer, it may still carry null, empty or blank `content`, empty `embeds`, `attachments` and `stickerIds` lists, and null `stickerIds`, which the SDK sends as given. Other text, an embed, an upload or a sticker fails with reason `input` before any request
+
 Webhook messages do not accept `tts`, and a send with it fails with reason `input` before any request. A rejected webhook token also logs one `rest.rejected` Warn record, even when the application handles the Result. The client prints Info and above to the console, and its `logging` option takes the same settings as a bot client's [logging](/docs/logging/)
 
 Shutdown releases the SDK's copy of the credentials and ends its active requests. It does not delete the webhook on Fluxer, and the application must still protect its stored credentials

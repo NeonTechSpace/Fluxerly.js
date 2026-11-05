@@ -18,6 +18,7 @@ Before production use, check how the application handles failures, restarts and 
 | Native Effect     | Effect 4.1.2 or a later Effect 4 release, in the range the installed package lists               |
 | Web browsers      | Not supported. A bot runs as a Node.js program, not inside a web page                            |
 | Operating systems | Hosted CI uses Ubuntu. A passing Ubuntu run does not qualify every operating system or container |
+| License           | Free and open source under the Apache License 2.0                                                |
 
 Check the installed package's manifest for its Node.js and Effect requirements. The default API needs Effect internally, and npm or pnpm normally installs that dependency automatically. Native Effect code must use a version within the Effect range listed there, not Effect 3 or an Effect 4 prerelease. Since SDK 1001.0.0 the range starts at Effect 4.1.2, because Effect 4.1.0 fails to type-check in a TypeScript project that has the Node.js types but no `DOM` library, and 4.1.2 is the newest Effect release
 

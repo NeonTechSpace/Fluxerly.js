@@ -1,7 +1,5 @@
-// The npm download history of the SDK package, fetched from npm's public APIs. One implementation serves the
-// snapshot script (scripts/fetch-downloads.mjs) and the edge endpoint (functions/api/npm-downloads.ts), and the
-// page checks what it receives with the same validator. Fetch and the current time are parameters so a test can
-// fake both
+// The npm download history of the SDK package, fetched from npm's public APIs by the snapshot script
+// (scripts/fetch-downloads.mjs). Fetch and the current time are parameters so a test can fake both
 
 export const packageName = "@neontechspace/fluxerly"
 

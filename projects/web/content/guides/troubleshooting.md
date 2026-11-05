@@ -75,7 +75,7 @@ The SDK checks the Node.js version when it loads. Run `node --version` to see th
 Error: Fluxerly is ESM-only. Use import, and set "type": "module" in package.json (or use .mjs files)
 ```
 
-The SDK ships only ECMAScript modules. Replace `require("@neontechspace/fluxerly")` with `import`, and either add `"type": "module"` to the project's `package.json` or name the file with `.mjs`
+The SDK ships only ECMAScript modules. Replace `require("@neontechspace/fluxerly")` with `import`, and either add `"type": "module"` to the project's `package.json` or name the file with `.mjs`. After that change, a `require` call left in any ES module fails with `require is not defined in ES module scope`, so replace each one with `import`
 
 ## TypeScript cannot find AbortSignal or AsyncDisposable
 

@@ -4,6 +4,8 @@ import { createMarkdownProcessor, type MarkdownRenderer } from "@astrojs/markdow
 import remarkGuides from "../../scripts/docs/remark-guides.mjs"
 import remarkEntries from "../../scripts/docs/remark-entries.mjs"
 import rehypeCodeBreaks, { collapseLongCode, remarkLongCode } from "../../scripts/docs/code-breaks.mjs"
+import rehypeExternalLinks from "./external-links.mjs"
+import remarkExampleAddresses from "../../scripts/docs/remark-example-addresses.mjs"
 import fluxerlyTheme from "../styles/shiki-fluxerly.json"
 import { gitignoreGrammar } from "../../scripts/docs/gitignore-grammar.mjs"
 import { peekData } from "./peek-data"
@@ -17,8 +19,8 @@ let processor: Promise<MarkdownRenderer> | undefined
 export async function renderMarkdown(markdown: string, options: { self?: string; entry?: string } = {}): Promise<string> {
     processor ??= createMarkdownProcessor({
         shikiConfig: { theme: fluxerlyTheme as never, langs: [gitignoreGrammar as never], transformers: [collapseLongCode] },
-        remarkPlugins: [remarkBareNames, remarkGuides, remarkLongCode, remarkFrameBars, remarkEntries],
-        rehypePlugins: [[rehypePeek, { terms: peekData().terms, comment: true }], rehypeCodeBreaks],
+        remarkPlugins: [remarkExampleAddresses, remarkBareNames, remarkGuides, remarkLongCode, remarkFrameBars, remarkEntries],
+        rehypePlugins: [[rehypePeek, { terms: peekData().terms, comment: true }], rehypeCodeBreaks, rehypeExternalLinks],
         smartypants: false,
     })
     return (await (await processor).render(markdown, { frontmatter: { ...(options.self && { peekSelf: options.self }), ...(options.entry && { peekEntry: options.entry }) } })).code
