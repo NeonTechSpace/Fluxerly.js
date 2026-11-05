@@ -359,7 +359,8 @@ test("outgoing byte budget applies independently of request count and queued dea
     const clock = sdkClock()
     const server = await fixture()
     server.control.hold = true
-    const client = defaultApi({ token })
+    // A 4 MiB budget, below the 64 MiB default, so two bodies of a few megabytes fill it
+    const client = defaultApi({ token, rest: { queuedJsonMaxBytes: 4_194_304 } })
     const active = Array.from({ length: 4 }, () => client.messages.send("20", { content: "active" }))
     await vi.waitFor(() => expect(server.requests).toHaveLength(4))
     const large = client.messages.send("20", { content: "x".repeat(3 * 1024 * 1024) }, { timeoutMs: 150 })

@@ -19,7 +19,7 @@ import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure }
 import { withDeadline } from "./effect-failures.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import type { InternalSubmission } from "./gateway/commands.js"
-import { gatewayIdentifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
+import { gatewayIdentifier, inputGatewayId, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 import type { RequestOptions } from "#sdk/client"
 
@@ -79,17 +79,19 @@ function copyIdentifiers(
 ): readonly string[] | InputValidationFailure {
     if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Must be a non-empty array of canonical IDs")
     // Copy once and validate the copy, so the validated IDs are the ones requested
-    const ids = snapshotArray(value, maximum)
-    if (ids === undefined || ids.length < 1)
+    const copied = snapshotArray(value, maximum)
+    if (copied === undefined || copied.length < 1)
         return inputValidationFailure(path, "length", `Must contain from 1 through ${maximum} IDs`)
-    if (!ids.every(gatewayIdentifier))
+    // The kept list holds the trimmed IDs, and uniqueness is checked on them
+    const ids = copied.map(inputGatewayId)
+    if (!ids.every((id) => id !== undefined))
         return inputValidationFailure(
             path,
             "format",
-            "Each ID must be a canonical positive decimal string no greater than 9223372036854775807",
+            "Each ID must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
     return new Set(ids).size === ids.length
-        ? (ids as readonly string[])
+        ? Object.freeze(ids)
         : inputValidationFailure(path, "unique", "Must not contain duplicate IDs")
 }
 
@@ -282,7 +284,7 @@ export class CountOwner implements CountGatewayOwner {
                 return Effect.fail(
                     new CountOperationError({ operation, reason: "input", inputValidation: duration.detail }),
                 )
-            const channelGuildId = guildRequest ? undefined : gatewayIdentifier(guildId) ? guildId : undefined
+            const channelGuildId = guildRequest ? undefined : inputGatewayId(guildId)
             if (!guildRequest && channelGuildId === undefined)
                 return Effect.fail(
                     new CountOperationError({
@@ -291,7 +293,7 @@ export class CountOwner implements CountGatewayOwner {
                         inputValidation: inputValidationFailure(
                             "guildId",
                             "format",
-                            "Must be a canonical positive decimal string no greater than 9223372036854775807",
+                            "Must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
                         ).detail,
                     }),
                 )

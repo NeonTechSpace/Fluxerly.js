@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest"
 import { InputValidationFailure } from "../../src/input-validation.js"
 import { count, identifier, int32, nonNegativeInteger, snapshotArray } from "../../src/internal/decode/primitives.js"
 import { timestamp } from "../../src/internal/decode/timestamp.js"
-import { guildEdit } from "../../src/internal/guild-settings.js"
+import { guildEdit, utcTimestamp } from "../../src/internal/guild-settings.js"
 import { decodeMember } from "../../src/internal/guilds.js"
 import { decodePinsUpdate, encodePinsQuery } from "../../src/internal/pins.js"
 
@@ -61,7 +61,10 @@ describe("timestamp boundaries share the grammar and preserve accepted values", 
             const request = guildEdit("20", { messageHistoryCutoff: value })
             expect(request, value).not.toBeInstanceOf(InputValidationFailure)
             const json = (request as Exclude<typeof request, InputValidationFailure>).json
-            expect(JSON.parse(json!).message_history_cutoff).toBe(value)
+            // Fluxer accepts only Z and hours 00 to 23, so other forms are sent as the same instant in UTC
+            expect(JSON.parse(json!).message_history_cutoff).toBe(utcTimestamp(value))
+            expect(Date.parse(JSON.parse(json!).message_history_cutoff)).toBe(Date.parse(value))
+            expect(JSON.parse(json!).message_history_cutoff).toMatch(/T(?:[01]\d|2[0-3]):.*Z$/)
         }
         for (const value of rejected)
             expect(guildEdit("20", { messageHistoryCutoff: value }), value).toBeInstanceOf(InputValidationFailure)

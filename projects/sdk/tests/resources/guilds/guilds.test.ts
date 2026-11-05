@@ -201,7 +201,11 @@ test("timeout reasons retain Unicode payloads, allow null, and never project ont
     expect(clear).not.toBeInstanceOf(InputValidationFailure)
     if (clear instanceof InputValidationFailure) throw Error("Expected clear-timeout request")
     expect(JSON.parse(clear.json!)).toEqual({ communication_disabled_until: null, timeout_reason: null })
-    for (const timeoutReason of ["", " ", "😀".repeat(257)]) {
+    // Fluxer reads an empty reason as null, the same as no reason, so it is sent as given
+    const empty = memberTimeout(target, 60_000, { timeoutReason: "" })
+    if (empty instanceof InputValidationFailure) throw Error("Expected an empty timeout reason to be sent")
+    expect(JSON.parse(empty.json!)).toMatchObject({ timeout_reason: "" })
+    for (const timeoutReason of [" ", "😀".repeat(257)]) {
         const result = memberTimeout(target, 60_000, { timeoutReason })
         expect(result).toBeInstanceOf(InputValidationFailure)
         expect((result as InputValidationFailure).detail.path).toBe("options.timeoutReason")
@@ -524,7 +528,6 @@ test.each(modes)("%s reads and writes role icons as an image, an emoji or a copy
     bodies.length = 0
     for (const input of [
         { name: "ok", icon: "https://example.com/icon.png" },
-        { name: "ok", unicodeEmoji: "" },
         { name: "ok", unicodeEmoji: "x".repeat(65) },
         { name: "ok", iconSourceRoleId: "not-an-id" },
         { name: "ok", icon: image, unicodeEmoji: "🛡️" },
@@ -537,9 +540,12 @@ test.each(modes)("%s reads and writes role icons as an image, an emoji or a copy
         })
     await expect(api.roles.edit({ iconSourceRoleId: "51" } as RoleEdit)).rejects.toMatchObject({ reason: "input" })
     expect(bodies).toEqual([])
-    // Null removes an icon, so it can accompany the other kind or a copy
+    // Null removes an icon, so it can accompany the other kind or a copy. Fluxer reads an empty string as null on the
+    // role routes (Validator.ts:59-63), so it clears the same way
     await api.roles.create({ name: "ok", icon: null, iconSourceRoleId: "51" })
-    expect(bodies).toHaveLength(1)
+    await api.roles.create({ name: "ok", icon: "", unicodeEmoji: "🛡️" })
+    await api.roles.create({ name: "ok", unicodeEmoji: "", iconSourceRoleId: "51" })
+    expect(bodies).toHaveLength(3)
 })
 
 test.each(modes)(

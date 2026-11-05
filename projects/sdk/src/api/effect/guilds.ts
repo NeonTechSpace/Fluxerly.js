@@ -20,7 +20,7 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
  *
  * Requests share the client's REST or upload slots across all assigned shards, four per local shard by default, up to 64 (rest.concurrency).
  * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
- * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
+ * Both pools together allow 256 waiting requests or 64 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
  *
  * The total deadline defaults to the client's rest.defaultTimeoutMs, 30,000 ms unless configured, including waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Retry delays are 125–250 ms, then 250–500 ms, or a longer valid Retry-After. Confirmed HTTP 429 waits are separate and never reset the deadline
@@ -81,7 +81,7 @@ export interface Guilds {
     /**
      * Fetch one page of communities this bot belongs to, ordered by ascending guild ID.
      * The limit option defaults to 200 and accepts 1–200.
-     * Choose either before or after, not both.
+     * Choose before or after. When both are set, Fluxer uses after and ignores before.
      * Those cursors refer to existing memberships, and if a cursor community was removed, Fluxer may restart the page.
      * The withCounts option defaults to false.
      * Permission bits or requested approximate counts may be omitted, and an omitted value means unavailable, not zero.
@@ -191,9 +191,13 @@ export interface Guilds {
      */
     fetchVanityUrl(guildId: string, options?: RequestOptions): Effect.Effect<GuildVanityUrlUsage, GuildOperationFailure>
     /**
-     * Set a community's custom invite code, replace it, or pass null to remove it.
-     * The code must already be lowercase, 2–32 ASCII letters or digits with single internal hyphens.
-     * No automatic normalization is performed
+     * Set a community's custom invite code, replace it, or pass null or an empty string to remove it, as Fluxer reads an
+     * empty code as null.
+     * The code is sent unchanged, and Fluxer stores its normalized form: U+000C and U+202E removed, surrounding
+     * whitespace trimmed, lowercased, each run of whitespace turned into one hyphen and repeated hyphens collapsed.
+     * That form must be 2–32 ASCII letters or digits with single internal hyphens, so "My Code" is accepted and
+     * becomes "my-code". A form that contains fluxer fails locally with reason input, as Fluxer refuses it. The
+     * returned code is the stored one
      *
      * ManageGuild is required.
      * Setting a code also requires the community's VANITY_URL feature.

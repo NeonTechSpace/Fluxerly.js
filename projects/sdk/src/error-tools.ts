@@ -104,6 +104,10 @@ function isRetryableError(error: unknown): boolean {
             if ((error as unknown as { phase?: unknown }).phase === "cleanup") return false
     }
     const fields = error as unknown as { reason?: unknown; outcome?: unknown }
+    // Fluxer's busy upload slots answer changed nothing and asks for a retry like a rate limit does, unless the call
+    // already read its caller's stream. The REST classifier marks it, since other rejected 503s, such as an OAuth read's,
+    // are no such answer
+    if (error.details.uploadSlotsBusy === true) return error.details.streamUsed !== true
     if (typeof fields.reason !== "string" || !retryableReasons.has(fields.reason)) return false
     // A rate-limited upload already read its caller's stream, so the same call would send it again empty
     if (error.details.streamUsed === true) return false
@@ -114,8 +118,10 @@ function isRetryableError(error: unknown): boolean {
 
 /** Whether repeating the same call is safe and may succeed. True for rate limits, except an upload that read a stream,
  * marked by details.streamUsed, for full local capacity, and for network
- * failures and timeouts of reads or of writes that were not sent. False for rejections, invalid input, writes with an
- * unknown outcome, cancellation and closed clients. An Effect Cause is retryable when it has a reason and every reason
+ * failures and timeouts of reads or of writes that were not sent. Also true for Fluxer's answer that its file upload
+ * slots stayed busy, marked by details.uploadSlotsBusy, which changed nothing, again except when the call read a
+ * stream. Wait its retryAfterMs, 5,000 ms, before repeating it. False for other
+ * rejections, invalid input, writes with an unknown outcome, cancellation and closed clients. An Effect Cause is retryable when it has a reason and every reason
  * is a retryable failure, so a defect or an interruption in it makes it false. A failed cleanup is never retryable,
  * because its plan works only once. A retryable failure from run needs a new client, because run always closes the
  * client when it ends. Create a new client and call run on it instead of repeating run on the same client
@@ -299,11 +305,15 @@ export interface ErrorTools {
     /** Whether repeating the same call is safe and may succeed, such as after a rate limit, full local capacity,
      * or a network failure or timeout of a read or of a write that was not sent.
      * A write whose outcome is unknown is not retryable, because Fluxer may already have applied it.
-     * Rejections, invalid input, cancellation and closed clients are never retryable, because a closed client
+     * Fluxer's answer that its file upload slots stayed busy, marked by details.uploadSlotsBusy, is the one retryable
+     * rejection, because Fluxer applied nothing. Wait its retryAfterMs, 5,000 ms, before repeating the call.
+     * Other rejections, invalid input, cancellation and closed clients are never retryable, because a closed client
      * cannot send again and a new client is needed.
      * A failed cleanup is never retryable, because its plan works only once.
-     * A rate-limited upload that read an attachment from a ReadableStream, marked by details.streamUsed, is not
-     * retryable, because the stream is used up. Send it again with a new stream or with the file as bytes.
+     * A rate-limited or busy-slot upload that read an attachment from a ReadableStream, marked by details.streamUsed, is
+     * not retryable, because the stream is used up. Send it again with a new stream or with the file as bytes.
+     * A retryable failure can still require a wait, so first wait errors.retryAfterMs(error) milliseconds when it returns
+     * a number.
      * A retryable failure from run needs a new client, because run always closes the client when it ends. Create a new
      * client and call run on it instead of repeating run on the same client.
      * An Effect Cause, such as that of a failed Exit, is retryable only when it has at least one reason and every reason
@@ -358,7 +368,12 @@ export interface ErrorTools {
  *
  * export async function sendWithOneRetry(client: Client, channelId: string) {
  *     let sent = await client.messages.send(channelId, { content: "Hello" })
- *     if (sent.isErr() && errors.isRetryable(sent.error)) sent = await client.messages.send(channelId, { content: "Hello" })
+ *     if (sent.isErr() && errors.isRetryable(sent.error)) {
+ *         // A rate limit or busy upload slots name a wait that must pass before the call is repeated
+ *         const waitMs = errors.retryAfterMs(sent.error)
+ *         if (waitMs !== undefined) await new Promise((resolve) => setTimeout(resolve, waitMs))
+ *         sent = await client.messages.send(channelId, { content: "Hello" })
+ *     }
  *     if (sent.isErr() && errors.isNotFound(sent.error, "channel")) return console.warn("The channel was not found")
  *     if (sent.isErr() && errors.apiCode(sent.error) === "missingPermissions") return console.warn("The bot cannot post here")
  *     if (sent.isErr() && errors.outcome(sent.error) === "rejected")

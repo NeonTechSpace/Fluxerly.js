@@ -102,7 +102,7 @@ test("history sends each explicit cursor and supports a full 100-message page wi
     expect(server.requests).toHaveLength(4)
 })
 
-test("invalid history inputs fail locally, including mixed cursors and non-integer or excessive limits", async () => {
+test("invalid history inputs fail locally, including bad cursors and non-integer or excessive limits", async () => {
     const server = await fixture()
     const client = defaultApi({ token })
     const queries: unknown[] = [
@@ -117,9 +117,7 @@ test("invalid history inputs fail locally, including mixed cursors and non-integ
         { before: "../other" },
         { after: 10 },
         { around: null },
-        { before: "10", after: "9" },
-        { before: "10", around: "9" },
-        { after: "10", around: "9" },
+        { before: "10", around: "../9" },
         { offset: 0 },
     ]
     for (const query of queries) {
@@ -139,6 +137,89 @@ test("invalid history inputs fail locally, including mixed cursors and non-integ
     const cancelled = await client.messages.fetchHistory("20", undefined, { signal: abort.signal })
     expect(cancelled.isErr() && cancelled.error).toMatchObject({ _tag: "CancelledError" })
     expect(server.requests).toHaveLength(0)
+})
+
+test("history bounded by both before and after sends both and checks the page lies between them", async () => {
+    const server = await fixture()
+    const client = defaultApi({ token })
+    server.control.respond = (response) => response.end(JSON.stringify([wire("14"), wire("12")]))
+    const page = await settle(client.messages.fetchHistory("20", { before: "15", after: "11", limit: 2 }))
+    expect(page.map((message) => message.id)).toEqual(["14", "12"])
+    expect([...server.requests[0]!.url.searchParams]).toEqual([
+        ["limit", "2"],
+        ["before", "15"],
+        ["after", "11"],
+    ])
+    for (const outside of [[wire("15")], [wire("11")]]) {
+        server.control.respond = (response) => response.end(JSON.stringify(outside))
+        const result = await client.messages.fetchHistory("20", { before: "15", after: "11" })
+        expect(result.isErr() && result.error).toMatchObject({ reason: "response", status: 200 })
+    }
+    const native = await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token })
+                server.control.respond = (response) => response.end(JSON.stringify([wire("13")]))
+                return yield* client.messages.fetchHistory("20", { before: "15", after: "11" })
+            }),
+        ),
+    )
+    expect(native.map((message) => message.id)).toEqual(["13"])
+    expect([...server.requests.at(-1)!.url.searchParams]).toEqual([
+        ["limit", "50"],
+        ["before", "15"],
+        ["after", "11"],
+    ])
+})
+
+test("history with around sends the other cursors too and does not bound the page by them, as Fluxer ignores them", async () => {
+    const server = await fixture()
+    const client = defaultApi({ token })
+    // Fluxer centers the page on around and ignores before and after for it, so messages outside them are valid
+    server.control.respond = (response) => response.end(JSON.stringify([wire("20"), wire("10"), wire("5")]))
+    for (const query of [
+        { around: "10", before: "8" },
+        { around: "10", after: "12" },
+        { around: "10", before: "8", after: "12" },
+    ] satisfies MessageHistoryQuery[]) {
+        const page = await settle(client.messages.fetchHistory("20", query))
+        expect(page.map((message) => message.id)).toEqual(["20", "10", "5"])
+        expect(Object.fromEntries(server.requests.at(-1)!.url.searchParams)).toEqual({
+            limit: "50",
+            ...query,
+        })
+    }
+    const native = await Effect.runPromise(
+        Effect.scoped(
+            Effect.gen(function* () {
+                const client = yield* createNative({ token })
+                return yield* client.messages.fetchHistory("20", { around: "10", before: "8", after: "12" })
+            }),
+        ),
+    )
+    expect(native.map((message) => message.id)).toEqual(["20", "10", "5"])
+    expect(server.requests).toHaveLength(4)
+})
+
+test("history between cursors in a thread accepts the starter message Fluxer adds below after", async () => {
+    const server = await fixture()
+    const client = defaultApi({ token })
+    // Fluxer adds the starter, whose ID is the thread ID, whenever after is below it, even at or above before
+    // (ThreadMessageResponses.ts:170-176)
+    server.control.respond = (response) => response.end(JSON.stringify([wire("20")]))
+    const page = await settle(client.messages.fetchHistory("20", { before: "20", after: "5" }))
+    expect(page.map((message) => message.id)).toEqual(["20"])
+    for (const [query, body] of [
+        // Any other message at or above before is still out of bounds
+        [{ before: "20", after: "5" }, [wire("21")]],
+        // Without an after below the thread ID, Fluxer does not add the starter
+        [{ before: "20", after: "20" }, [wire("20")]],
+        [{ before: "20" }, [wire("20")]],
+    ] as const) {
+        server.control.respond = (response) => response.end(JSON.stringify(body))
+        const result = await client.messages.fetchHistory("20", query)
+        expect(result.isErr() && result.error).toMatchObject({ reason: "response", status: 200 })
+    }
 })
 
 test("history rejects whole malformed, oversized, mismatched, duplicate or out-of-order pages", async () => {

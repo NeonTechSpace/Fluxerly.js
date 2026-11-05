@@ -157,7 +157,11 @@ export type GuildDefaultMessageNotification =
 export const GuildVerificationLevels: Readonly<{
     /** No community-level verification requirement, except that discoverable communities still enforce Low */
     None: 0
-    /** Require a verified email address for members who are not exempt */
+    /** Require a verified account for members who are not exempt. By default that is a verified email address on
+     * instances that send email. Fluxer also counts as verified single sign-on accounts, accounts with a password or
+     * passkey on instances that use usernames, and accounts with an email address and a password or passkey on instances
+     * that send no email or verify by password instead of email
+     */
     Low: 1
     /** Require Low and an account at least five minutes old */
     Medium: 2
@@ -365,7 +369,13 @@ export interface GuildVanityUrlUsage extends GuildVanityUrl {
  *
  * Omitted properties remain unchanged and null clears the applicable setting. Fluxer requires ManageGuild and can
  * reject feature-gated assets, invalid channel types, content, discoverability or historical-cutoff values after local
- * validation. The encoded JSON body, including data URIs, cannot exceed 4,194,304 bytes. This does not create,
+ * validation. Each image is base64 image data, alone or after a data URI header such as data:image/png;base64, since
+ * Fluxer reads the text after the first comma and detects the format from the decoded bytes. Base64 with nonzero bits
+ * before its = padding fails with reason input before sending, as Fluxer refuses it.
+ * The encoded JSON body, including the images, may hold up to 56,972,632 bytes, the most Fluxer accepts for
+ * this route, so each of the four images can be as large as Fluxer allows, 10 MiB by default. A larger body fails with
+ * reason input before sending, and the body also counts against rest.queuedJsonMaxBytes, 64 MiB by default, while it
+ * waits. This does not create,
  * delete, transfer ownership of, or change MFA requirements for a community
  *
  * @example
@@ -395,19 +405,23 @@ export interface GuildEdit {
      * Normalization is validation-only, and the original string is sent unchanged
      */
     readonly name?: string
-    /** Image data URI for the community icon, or null to clear it */
+    /** Base64 image data or data URI for the community icon, or null or an empty string to clear it */
     readonly icon?: string | null
-    /** Image data URI for the community banner, or null to clear it */
+    /** Base64 image data or data URI for the community banner, or null or an empty string to clear it */
     readonly banner?: string | null
-    /** Image data URI for the invite splash, or null to clear it */
+    /** Base64 image data or data URI for the invite splash, or null or an empty string to clear it */
     readonly splash?: string | null
-    /** Image data URI for the embedded-invite splash, or null to clear it */
+    /** Base64 image data or data URI for the embedded-invite splash, or null or an empty string to clear it */
     readonly embedSplash?: string | null
-    /** System-message channel ID, or null to disable system messages */
+    /** System-message channel ID, or null or an empty string to disable system messages, as Fluxer reads an empty
+     * string as null here
+     */
     readonly systemChannelId?: string | null
     /** Bitwise combination of GuildSystemChannelFlags. Zero clears all supported suppression flags */
     readonly systemChannelFlags?: number
-    /** AFK voice-channel ID, or null to disable automatic AFK moves */
+    /** AFK voice-channel ID, or null or an empty string to disable automatic AFK moves, as Fluxer reads an empty string
+     * as null here
+     */
     readonly afkChannelId?: string | null
     /** Integer AFK timeout in seconds from 60 through 3600 */
     readonly afkTimeoutSeconds?: number
@@ -422,6 +436,7 @@ export interface GuildEdit {
     /** Whether Fluxer displays a community-wide content warning before entry */
     readonly contentWarningLevel?: GuildContentWarningLevel
     /** Warning text with 0–200 raw UTF-16 code units, or null to restore Fluxer's localized default.
+     * Fluxer trims the text and stores an empty or blank text as null, so it also restores the default.
      * No text normalization is applied before validation
      */
     readonly contentWarningText?: string | null
@@ -443,8 +458,11 @@ export interface GuildEdit {
      */
     readonly featureToggles?: readonly GuildFeatureToggle[]
     /**
-     * ISO 8601 cutoff for members without Read Message History, or null to disable their historical access.
-     * The value needs seconds and a Z or ±hh:mm offset, may have any fraction, and is sent unchanged.
+     * ISO 8601 cutoff for members without Read Message History, or null or an empty string to disable their historical
+     * access, as Fluxer reads an empty string as null here.
+     * The value needs seconds and a Z or ±hh:mm offset and may have any fraction. Fluxer accepts only a Z suffix and
+     * hours 00 to 23, so a value with an offset such as `+01:00`, or an end-of-day `24:00:00`, is sent as the same
+     * instant in UTC with a Z suffix, keeping its fraction digits. Any other Z value is sent unchanged.
      * Other forms and impossible calendar dates are rejected before dispatch.
      * Fluxer rejects timestamps before community creation or in the future
      */
@@ -471,8 +489,8 @@ export interface MemberReference {
  */
 export interface VoiceConnectionReference extends MemberReference {
     /** Connection ID from a voice-state observation, 1–32 UTF-16 code units after U+000C and U+202E removal
-     * and surrounding-whitespace trimming. The original string is sent unchanged. Omit to target every active
-     * connection for this member
+     * and surrounding-whitespace trimming. The original string is sent unchanged. Omit it, or send an empty string,
+     * which Fluxer reads as null, to target every active connection for this member
      */
     readonly connectionId?: string
 }
@@ -604,27 +622,39 @@ export type MemberMentionPreference = (typeof MemberMentionPreferences)[keyof ty
  * Fluxer can silently ignore avatar, banner, bio and accentColor when its per-community-profile customization feature is
  * unavailable, so an HTTP success does not establish those changes. Its response does not expose bio or pronouns,
  * leaving those fields write-only through this SDK. Fluxer performs its own image, content, verification and
- * permission checks after this SDK validates the input shape
+ * permission checks after this SDK validates the input shape. Images are base64 image data, alone or as a data URI, and
+ * base64 with nonzero bits before its = padding fails locally, as Fluxer refuses it. The encoded JSON body, including
+ * the images, may hold up
+ * to 29,010,604 bytes, the most Fluxer accepts for this route, so both images can be as large as Fluxer allows, 10 MiB
+ * by default. A larger body fails with reason input before sending
  *
  * @category Guilds and members
  */
 export interface MemberProfileEdit {
-    /** Community nickname, or null to clear. A raw empty string fails. A nonempty string containing only trim whitespace
-     * is accepted as Fluxer's clear value. Otherwise, validation removes U+000C and U+202E, trims surrounding
-     * whitespace, and requires 1–32 UTF-16 code units. The original string is sent unchanged.
+    /** Community nickname, or null, an empty string or only whitespace to clear it, as Fluxer reads each of them as
+     * null. Otherwise, validation removes U+000C and U+202E, trims surrounding whitespace, and requires 1–32 UTF-16
+     * code units. The original string is sent unchanged.
      * Fluxer names it nick
      */
     readonly nickname?: string | null
-    /** Image data URI, or null to clear. Fluxer validates the decoded image and may silently ignore it */
+    /** Base64 image data or data URI, or null or an empty string to clear. Fluxer validates the decoded image and may
+     * silently ignore it
+     */
     readonly avatar?: string | null
-    /** Image data URI, or null to clear. Fluxer validates the decoded image and may silently ignore it */
+    /** Base64 image data or data URI, or null or an empty string to clear. Fluxer validates the decoded image and may
+     * silently ignore it
+     */
     readonly banner?: string | null
-    /** Community-profile biography, 1–320 normalized UTF-16 code units, or null to clear. The response does not return it.
-     * Validation removes U+000C and U+202E and trims surrounding whitespace. The original string is sent unchanged
+    /** Community-profile biography, 1–320 normalized UTF-16 code units, or null or an empty string to clear it, as
+     * Fluxer reads an empty string as null here. The response does not return it.
+     * Validation removes U+000C and U+202E and trims surrounding whitespace, so a blank bio fails, as Fluxer refuses it.
+     * The original string is sent unchanged
      */
     readonly bio?: string | null
-    /** Community-profile pronouns, 1–40 normalized UTF-16 code units, or null to clear. The response does not return them.
-     * Validation removes U+000C and U+202E and trims surrounding whitespace. The original string is sent unchanged
+    /** Community-profile pronouns, 1–40 normalized UTF-16 code units, or null or an empty string to clear them, as
+     * Fluxer reads an empty string as null here. The response does not return them.
+     * Validation removes U+000C and U+202E and trims surrounding whitespace, so blank pronouns fail, as Fluxer refuses
+     * them. The original string is sent unchanged
      */
     readonly pronouns?: string | null
     /** RGB integer from 0 through 16,777,215, or null to clear. Fluxer may silently ignore it */
@@ -675,11 +705,11 @@ export interface GuildListSummary extends Guild {
 export interface GuildListQuery {
     /** Page size, integer 1–200, default 200 */
     readonly limit?: number
-    /** Existing membership cursor before which to list. Cannot be combined with after.
+    /** Existing membership cursor before which to list. Fluxer ignores it when after is also set.
      * If the cursor membership no longer exists, Fluxer can restart the page from the beginning
      */
     readonly before?: string
-    /** Existing membership cursor after which to list. Cannot be combined with before.
+    /** Existing membership cursor after which to list. When before is also set, Fluxer uses after and ignores before.
      * If the cursor membership no longer exists, Fluxer can restart the page from the beginning
      */
     readonly after?: string
@@ -707,8 +737,9 @@ export interface CanManageOptions extends RequestOptions {
  * @category Options
  */
 export interface TimeoutOptions extends AuditedRequestOptions {
-    /** Optional timeout audit metadata. Null or omission sends no meaningful reason. A string must contain 1–512
-     * UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace trimming. The original string is sent unchanged
+    /** Optional timeout audit metadata. Null, an empty string, which Fluxer reads as null, or omission sends no
+     * reason. Another string must contain 1–512 UTF-16 code units after U+000C and U+202E removal and
+     * surrounding-whitespace trimming. The original string is sent unchanged
      */
     readonly timeoutReason?: string | null
 }
@@ -739,7 +770,9 @@ export interface TimeoutStateOptions {
  */
 export interface BanInput {
     /** Stored ban reason, up to 512 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
-     * trimming. The original string is sent unchanged. Omit to use auditReason when supplied, otherwise no reason
+     * trimming. The original string is sent unchanged. Omit it, or send an empty string, which Fluxer reads as null,
+     * to use auditReason when supplied, otherwise no reason. A blank reason is stored as no reason without falling
+     * back to auditReason
      */
     readonly reason?: string
     /** Ban length in milliseconds, in whole seconds: 0 or omitted for a permanent ban, or 60,000–63,072,000,000 (two years)
@@ -835,11 +868,14 @@ export interface RoleCreate {
     readonly color?: number
     /** Bigint from 0n through 9_223_372_036_854_775_807n, default 0n: Unlike raw Fluxer, never inherit everyone's grants implicitly. Explicit ViewChannelMembers replacements are advertised to Fluxer by the SDK */
     readonly permissions?: bigint
-    /** Image data URI for the role's icon, or null for none. Fluxer accepts a still image of at most 256 KiB and from 32 through
-     * 1024 pixels on each side. It cannot be combined with an emoji or iconSourceRoleId
+    /** Base64 image data or data URI for the role's icon, or null or an empty string for none. Fluxer accepts a still image of at most
+     * 256 KiB and from 32 through 1024 pixels on each side. Base64 with nonzero bits before its = padding fails locally.
+     * It cannot be combined with an emoji or iconSourceRoleId
      */
     readonly icon?: string | null
-    /** A single Unicode emoji to show as the role's icon, or null for none. Fluxer refuses text and more than one emoji */
+    /** A single Unicode emoji to show as the role's icon, or null or an empty string for none. Fluxer refuses text and
+     * more than one emoji
+     */
     readonly unicodeEmoji?: string | null
     /** ID of a role in this community whose icon the new role copies. An image is stored again, so the copy outlives the source */
     readonly iconSourceRoleId?: string
@@ -866,11 +902,13 @@ export interface RoleEdit {
     readonly hoistPosition?: number | null
     /** Allow anyone to mention this role */
     readonly mentionable?: boolean
-    /** Image data URI for the role's icon, under the same limits as RoleCreate.icon, or null to remove the image.
+    /** Base64 image data or data URI for the role's icon, under the same limits as RoleCreate.icon, or null or an empty string to remove the image.
      * Setting an image replaces an emoji icon, and both together fail
      */
     readonly icon?: string | null
-    /** A single Unicode emoji to show as the role's icon, or null to remove it. Setting an emoji replaces an image icon */
+    /** A single Unicode emoji to show as the role's icon, or null or an empty string to remove it. Setting an emoji
+     * replaces an image icon
+     */
     readonly unicodeEmoji?: string | null
 }
 

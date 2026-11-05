@@ -20,7 +20,7 @@ import { MemberChunkError, type MemberChunk, type MemberChunkFailure } from "#sd
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import type { InternalSubmission } from "./gateway/commands.js"
 import { decodeMember } from "./guilds.js"
-import { fieldsOnce, gatewayIdentifier, record, snapshotArray } from "./decode/primitives.js"
+import { fieldsOnce, gatewayIdentifier, inputGatewayId, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller, suspendMarked, thrownCause } from "./defects.js"
 import { decodePresenceUpdate } from "./presence.js"
 import { maxClientPayloadBytes, Opcode } from "./protocol/gateway.js"
@@ -95,13 +95,15 @@ function memberSelection(
         const copied = snapshotArray(userIdsInput, 100)
         if (copied === undefined || copied.length < 1)
             return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
-        if (!copied.every(gatewayIdentifier))
+        // The kept list holds the trimmed IDs, and uniqueness is checked on them
+        const trimmed = copied.map(inputGatewayId)
+        if (!trimmed.every((id) => id !== undefined))
             return inputValidationFailure(
                 "query.userIds",
                 "format",
-                "Each ID must be a canonical positive decimal string no greater than 9223372036854775807",
+                "Each ID must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
             )
-        const userIds = copied as readonly string[]
+        const userIds = Object.freeze(trimmed)
         if (new Set(userIds).size !== userIds.length)
             return inputValidationFailure("query.userIds", "unique", "Must not contain duplicate user IDs")
         return { userIds, maximumMembers: userIds.length, selection: { user_ids: userIds } }
@@ -125,12 +127,13 @@ function memberSelection(
 }
 
 /** Validate one request, reading each caller query and option field once so the validated value is the one sent */
-function settings(guildId: unknown, query: unknown, options: unknown): Settings | InputValidationFailure {
-    if (!gatewayIdentifier(guildId))
+function settings(rawGuildId: unknown, query: unknown, options: unknown): Settings | InputValidationFailure {
+    const guildId = inputGatewayId(rawGuildId)
+    if (guildId === undefined)
         return inputValidationFailure(
             "guildId",
             "format",
-            "Must be a canonical positive decimal string no greater than 9223372036854775807",
+            "Must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
     if (!record(query)) return inputValidationFailure("query", "type", "Must be a member-chunk query object")
     const unsupported = unsupportedKeyFailure(

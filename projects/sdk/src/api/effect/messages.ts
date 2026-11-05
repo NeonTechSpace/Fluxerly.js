@@ -45,7 +45,7 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
  * A collector with guildId requires that community's local shard to be ready. A channel-only collector requires the client to be Connected. Closing or Closed clients reject new work
  *
  * By default this client runs four REST or upload requests at once per local shard, up to 64 (rest.concurrency), and four separate attachment downloads (rest.mediaConcurrency).
- * Both pools together allow at most 256 waiting requests or 4 MiB of queued JSON bodies by default.
+ * Both pools together allow at most 256 waiting requests or 64 MiB of queued JSON bodies by default.
  * The rest client option changes these limits.
  * Each remote call has a total deadline of rest.defaultTimeoutMs by default (30,000 ms unless configured). Queue, retry and rate-limit waits count toward it. Cleanup is awaited afterward
  *
@@ -444,6 +444,7 @@ export interface Messages<M extends MessageCore = Message> {
      * Pass Unicode such as "👍", custom markup such as "<a:party:123>", a parsed custom emoji, or a received emoji snapshot.
      * ReactionEmojiInput defines accepted identities and local validation, and custom emoji are encoded as name:id.
      * Fluxer decides emoji availability and permissions.
+     * It refuses a new reaction with a custom emoji from an age-restricted community outside that community with apiError code missingPermissions whatever the bot's permissions.
      * Adding the same own reaction again leaves it present.
      * Success follows HTTP 204, without waiting for or synthesizing a gateway event, and no gateway connection is required.
      * The request uses a per-channel reaction rate limit separate from message operations, the client's request limits and the client's default deadline (rest.defaultTimeoutMs, 30,000 ms unless configured).
@@ -573,7 +574,7 @@ export interface Messages<M extends MessageCore = Message> {
      * The target and options are copied at registration.
      * After message selection, the pending queue allows 256 payloads or 4 MiB of full source JSON.
      * Optional emoji uses addReaction's input shape and is checked after queueing, before the synchronous filter.
-     * Unicode emoji match exact text without a custom ID, and custom emoji match by ID, ignoring name changes.
+     * Unicode emoji match the exact text left by Fluxer's normalization without a custom ID, and custom emoji match by ID, ignoring name changes.
      * An invalid emoji selector fails with ConfigurationError for emoji
      *
      * Single events and batch entries follow receive order.
@@ -696,9 +697,11 @@ export interface Messages<M extends MessageCore = Message> {
      * A finite stream is consumed at most once and must match its declared size.
      * A path string or URL alone is not accepted, and the SDK owns only the readers it acquires
      *
-     * All sources have a 50 MiB per-file maximum and share the client uploads.maxBytes reservation budget.
+     * All sources share the client uploads.maxBytes reservation budget.
      * A full upload or request queue fails with busy before copying or reading.
-     * Fluxer can impose lower limits.
+     * Fluxer decides how large each file may be: A bot gets the lower of the instance's attachment limit and its bot attachment limit, which is 50 MiB unless the instance raises it for that bot or community.
+     * A larger file fails with reason rejected and an apiError with code fileSizeTooLarge, and no message is created.
+     * With an inline multipart upload more than 64 MiB over that limit, Fluxer may close the connection instead, which fails with reason network.
      * Uploads use presigned planning or an inline multipart fallback.
      * Upload-plan and completion responses have their own 1 MiB limit, and neither response limit caps total memory use.
      * Cleanup releases copied bytes and cancels and releases acquired readers on failure.
@@ -707,7 +710,7 @@ export interface Messages<M extends MessageCore = Message> {
      *
      * The default total deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes waiting for request capacity and rate limits.
      * The request uses the shared limits and failure rules of this namespace.
-     * By default one client admits four REST and upload requests per local shard, up to 64, plus four independent attachment downloads, and both pools share at most 256 pending requests or 4 MiB of pending JSON.
+     * By default one client admits four REST and upload requests per local shard, up to 64, plus four independent attachment downloads, and both pools share at most 256 pending requests or 64 MiB of pending JSON.
      * The rest client option changes these limits.
      * Only confirmed rate-limit rejections can retry automatically, and sends with unknown outcomes never retry.
      * With inline multipart uploads, a confirmed HTTP 429 can replay copied data bytes only, while file and stream inputs fail with rateLimit instead of being read again
@@ -826,7 +829,8 @@ export interface Messages<M extends MessageCore = Message> {
      * Pass a decimal channel ID.
      * With no query, this reads the latest 50 messages.
      * The limit option accepts 1–100.
-     * Choose at most one before, after or around message-ID cursor.
+     * Choose one before, after or around message-ID cursor, or both before and after to read the newest messages
+     * between them. When around is set, Fluxer ignores before and after for the page.
      * Use the oldest returned ID as before to request an older page
      *
      * The entire page is validated before returning a frozen array of frozen snapshots.
@@ -910,17 +914,20 @@ export interface Messages<M extends MessageCore = Message> {
      * No hidden fetch or cache merge is performed.
      * Mentions default off.
      * Existing stickers are preserved and cannot be replaced here.
-     * An empty content string requests removal of text, subject to Fluxer's validation.
-     * To remove embeds, send nonempty content with embeds: [].
-     * An otherwise empty edit is rejected by Fluxer.
+     * Unless flags are supplied, the edit itself must contain visible content, an embed or an attachment, as Fluxer
+     * checks the edit rather than the message it leaves, or it fails locally with reason input.
+     * Empty or null content clears the text, so it needs a nonempty embeds or attachments list, or flags, in the same
+     * edit. Supplied flags replace the writable flags, so send the message's current flags to keep them.
+     * To remove embeds, send visible content, attachments or flags with embeds: [].
      * Omitted rich embeds remain, but link previews may be regenerated
      *
      * To keep existing files while adding new uploads, include their IDs in attachments.
      * The supplied list replaces the old one.
-     * An empty list clears files when nonempty text or embeds remain.
+     * An empty list clears files when the edit also has visible text, embeds or flags.
      * Retained file title or description can be replaced or cleared with null.
      * Unknown IDs may be ignored, and a stale list can remove concurrent additions.
-     * An attachment:// image or thumbnail URL must match a new image or video upload, not a retained attachment.
+     * An attachment:// image or thumbnail URL must match a new image or video upload when attachments is supplied, not a retained attachment.
+     * When the edit omits attachments, it may name an image or video file the message already has, which Fluxer moves into the embed and checks remotely.
      * New uploads use send's copying, attachment source, size, budget and cleanup rules, and inline multipart 429 responses do not replay file or stream sources.
      * Failed edits may leave temporary server data, without physical-erasure guarantees.
      * A flags-only edit is allowed.

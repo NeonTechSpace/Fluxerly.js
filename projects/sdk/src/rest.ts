@@ -42,7 +42,8 @@ export interface RestOptions {
     /** JSON request-body bytes that waiting requests may hold together, excluding attachment transfers.
      * A request whose JSON does not fit beside the bodies already waiting fails immediately with reason busy. A single
      * JSON body larger than this limit can never be sent and fails with reason input and inputValidation.path body
-     * An integer from 65,536 (64 KiB) through 268,435,456 (256 MiB), default 4,194,304 (4 MiB)
+     * An integer from 65,536 (64 KiB) through 268,435,456 (256 MiB), default 67,108,864 (64 MiB), which holds the
+     * largest JSON body Fluxer accepts, a community settings edit with four images of 10 MiB each
      */
     readonly queuedJsonMaxBytes?: number
     /** Deadline in milliseconds for a REST operation or attachment download that omits timeoutMs. It covers local
@@ -186,8 +187,8 @@ export interface RestRequest {
      * Not allowed with GET
      */
     readonly files?: readonly AttachmentInput[]
-    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after trimming.
-     * Any language works, because the header carries its UTF-8 bytes. Control characters, line separators and lone
+    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after
+     * U+000C and U+202E removal and trimming, which Fluxer otherwise drops silently. Any language works, because the header carries its UTF-8 bytes. Control characters, line separators and lone
      * surrogates fail before dispatch. Omission sends no header. Never included in errors, logs or diagnostics
      */
     readonly auditReason?: string
@@ -218,7 +219,9 @@ export interface RestResponse<T = unknown> {
 /**
  * A route that client.rest.call accepts, written as its method and path template the way Fluxer's documentation
  * writes them, such as `GET /channels/{channel_id}/messages`. The routes are those of Fluxer's API description at the
- * commit this release pins that accept a bot token, which {@link RestRoutes} lists
+ * commit this release pins that accept a bot token, together with some public read routes Fluxer serves without
+ * authentication, such as `GET /invites/{invite_code}` and `GET /.well-known/fluxer`, which {@link RestRoutes} lists.
+ * Other routes that need no token, such as Fluxer's report flows, go through client.rest.request
  *
  * @category Client and lifecycle
  */
@@ -247,7 +250,8 @@ export type RestRouteResponse<R extends RestRoute> = RestRoutes[R]["response"]
  * @category Client and lifecycle
  */
 export interface RestRouteOptions {
-    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after trimming.
+    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after
+     * U+000C and U+202E removal and trimming, which Fluxer otherwise drops silently.
      * Control characters, line separators and lone surrogates fail before dispatch. Omission sends no header.
      * Never included in errors, logs or diagnostics
      */

@@ -26,12 +26,13 @@ import type {
 import type { GatewayMessageDispatch, MessageObservation } from "./message-fields.js"
 import { MessageError } from "#sdk/message-errors"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { decodeEmbeds, encodeEmbeds } from "./embeds.js"
+import { decodeEmbeds, encodeEmbeds, type EmbedAttachmentFiles } from "./embeds.js"
 import { decodeAttachments, encodeAttachments, type EncodedBody, type WaveformTarget } from "./attachments.js"
 import { decodeThread } from "./channel-decode.js"
 import { decodeDeletionMember, decodeDispatchMember } from "./guilds.js"
-import { count, fieldsOnce, identifier, int32, record } from "./decode/primitives.js"
+import { count, fieldsOnce, identifier, inputId, inputIds, int32, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
+import { normalizedText } from "./field-text.js"
 
 const writableMessageFlags = MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications
 /** Whether a flags value is a whole number Fluxer reads as a nonnegative 32-bit integer */
@@ -175,41 +176,42 @@ function validMessageFields(value: unknown): value is MessageWire {
     return !(value.webhook_id != null && !identifier(value.webhook_id))
 }
 
-/** Decode a message's nested objects in wire order, returning undefined when any of them is invalid */
+/** Decode a message's nested objects in wire order, returning undefined at the first invalid one. Each part is checked
+ * before the next is read, so failingFieldPath names the part that failed rather than a later one
+ */
 function decodeMessageParts(
     value: MessageWire,
     selected: (field: MessageField) => boolean,
     allowReferencedMessage: boolean,
 ) {
     const embeds = decodeEmbeds(value.embeds, selected("embeds"))
+    if (embeds === undefined) return undefined
     const attachments = decodeAttachments(value.attachments, selected("attachments"))
+    if (attachments === undefined) return undefined
     const stickers = decodeStickers(value.stickers, selected("stickers"))
-    if (embeds === undefined || attachments === undefined || stickers === undefined) return undefined
+    if (stickers === undefined) return undefined
     const mentions = decodeMentions(value.mentions, selected("mentions"))
+    if (mentions === undefined) return undefined
     const referencedUsers = decodeReferencedUsers(value.users, selected("referencedUsers"))
+    if (referencedUsers === undefined) return undefined
     const mentionRoles = decodeIdentifiers(value.mention_roles, selected("mentionRoleIds"))
+    if (mentionRoles === undefined) return undefined
     const nsfwEmojiIds = decodeIdentifiers(value.nsfw_emojis, selected("nsfwEmojiIds"))
+    if (nsfwEmojiIds === undefined) return undefined
     const mentionChannels = decodeMentionChannels(value.mention_channels, selected("mentionChannels"))
+    if (mentionChannels === undefined) return undefined
     const reactions = decodeReactionSummaries(value.reactions, selected("reactions"))
+    if (reactions === undefined) return undefined
     const messageReference = decodeMessageReference(value.message_reference, selected("messageReference"))
+    if (messageReference === undefined) return undefined
     const messageSnapshots = decodeMessageSnapshots(value.message_snapshots, selected("messageSnapshots"))
+    if (messageSnapshots === undefined) return undefined
     const referencedMessage = allowReferencedMessage
         ? decodeReferencedMessage(value.referenced_message, selected("referencedMessage"))
         : "referenced_message" in value
           ? undefined
           : unobserved
-    if (
-        mentions === undefined ||
-        referencedUsers === undefined ||
-        mentionRoles === undefined ||
-        nsfwEmojiIds === undefined ||
-        mentionChannels === undefined ||
-        reactions === undefined ||
-        messageReference === undefined ||
-        messageSnapshots === undefined ||
-        referencedMessage === undefined
-    )
-        return undefined
+    if (referencedMessage === undefined) return undefined
     const thread = value.thread === undefined ? undefined : decodeThread(value.thread)
     if (value.thread !== undefined && thread === undefined) return undefined
     return {
@@ -478,21 +480,19 @@ function decodeMessageSnapshot(value: unknown, construct = true): MessageSnapsho
         (value.edited_timestamp !== undefined && value.edited_timestamp !== null && !timestamp(value.edited_timestamp))
     )
         return undefined
+    // Each part is checked before the next is read, so failingFieldPath names the part that failed
     const mentionUserIds = decodeSnapshotField(value.mentions, decodeSnapshotIdentifiers, construct)
+    if (mentionUserIds === undefined) return undefined
     const mentionRoleIds = decodeSnapshotField(value.mention_roles, decodeSnapshotIdentifiers, construct)
+    if (mentionRoleIds === undefined) return undefined
     const mentionChannels = decodeSnapshotField(value.mention_channels, decodeSnapshotMentionChannels, construct)
+    if (mentionChannels === undefined) return undefined
     const embeds = decodeSnapshotField(value.embeds, decodeEmbeds, construct)
+    if (embeds === undefined) return undefined
     const attachments = decodeSnapshotField(value.attachments, decodeAttachments, construct)
+    if (attachments === undefined) return undefined
     const stickers = decodeSnapshotField(value.stickers, decodeStickers, construct)
-    if (
-        mentionUserIds === undefined ||
-        mentionRoleIds === undefined ||
-        mentionChannels === undefined ||
-        embeds === undefined ||
-        attachments === undefined ||
-        stickers === undefined
-    )
-        return undefined
+    if (stickers === undefined) return undefined
     if (!construct) return true
     return Object.freeze({
         ...(value.content === undefined ? {} : { content: value.content }),
@@ -547,12 +547,22 @@ export function snapshotReference(value: unknown): MessageReference | undefined 
     if (!record(value)) return undefined
     const id = value.id
     const channelId = value.channelId
-    return identifier(id) && identifier(channelId) ? Object.freeze({ id, channelId }) : undefined
+    const trimmedId = inputId(id)
+    const trimmedChannelId = inputId(channelId)
+    return trimmedId !== undefined && trimmedChannelId !== undefined
+        ? Object.freeze({ id: trimmedId, channelId: trimmedChannelId })
+        : undefined
 }
 
-export function encodeHistory(channelId: unknown, query: unknown) {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+/** Validate the channel and query. The result carries the trimmed channel ID, which the request and its decoding use */
+export function encodeHistory(rawChannelId: unknown, query: unknown) {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const input = query === undefined ? {} : query
     if (!record(input)) return inputValidationFailure("query", "type", "History query must be an object")
     const unsupported = unsupportedKeyFailure(
@@ -565,21 +575,23 @@ export function encodeHistory(channelId: unknown, query: unknown) {
     const limit = input.limit === undefined ? 50 : input.limit
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
         return inputValidationFailure("query.limit", "range", "History limit must be an integer from 1 through 100")
+    // Fluxer returns the window between before and after when both are sent, and ignores both for the page when around
+    // is present (fluxer_messages/src/shard_impl.rs:792-809 at 0098958f). In a thread they still decide whether the
+    // starter message is added (fluxer_api/src/api/channel/services/message/ThreadMessageResponses.ts:170-193), so every
+    // cursor is sent as given
     const cursors = ["before", "after", "around"].filter((key) => input[key] !== undefined)
-    if (cursors.length > 1)
-        return inputValidationFailure(
-            "query",
-            "relationship",
-            "History query may contain at most one of before, after, and around",
-        )
     const params = new URLSearchParams({ limit: String(limit) })
     for (const key of cursors) {
-        const id = input[key]
-        if (!identifier(id))
-            return inputValidationFailure(`query.${key}`, "format", "History cursor IDs must be decimal strings")
+        const id = inputId(input[key])
+        if (id === undefined)
+            return inputValidationFailure(
+                `query.${key}`,
+                "format",
+                "History cursor IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            )
         params.set(key, id)
     }
-    return { limit, params }
+    return { channelId, limit, params }
 }
 
 export function decodeDeletion(value: unknown): MessageDeletion | undefined {
@@ -614,16 +626,25 @@ export function decodeBulkDeletion(value: unknown): MessageBulkDeletion | undefi
     })
 }
 
-function encodeStickerIds(stickerInput: unknown): readonly unknown[] | undefined | InputValidationFailure {
-    if (stickerInput === undefined) return undefined
+/**
+ * Fluxer's message, webhook and forum post schemas take null stickers as none, so the SDK sends null as given
+ * (packages/schema/src/domains/message/MessageRequestSchemas.ts:354, WebhookRequestSchemas.ts:104 and
+ * ForumRequestSchemas.ts:126 at 0098958f)
+ */
+function encodeStickerIds(stickerInput: unknown): readonly string[] | null | undefined | InputValidationFailure {
+    if (stickerInput === undefined || stickerInput === null) return stickerInput
     if (!Array.isArray(stickerInput))
         return inputValidationFailure("stickerIds", "type", "Sticker IDs must be an array")
     const count = stickerInput.length
     if (count > 3)
         return inputValidationFailure("stickerIds", "length", "A message may contain at most three sticker IDs")
-    const stickerIds = snapshotArray(stickerInput, count)
-    if (!stickerIds.every(identifier))
-        return inputValidationFailure("stickerIds[]", "format", "Sticker IDs must be decimal strings")
+    const stickerIds = inputIds(stickerInput, count)
+    if (stickerIds === undefined)
+        return inputValidationFailure(
+            "stickerIds[]",
+            "format",
+            "Sticker IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return stickerIds
 }
 
@@ -636,24 +657,26 @@ function encodeStickerIds(stickerInput: unknown): readonly unknown[] | undefined
 function voiceNoteFailure(
     content: unknown,
     body: { readonly embeds?: readonly unknown[] } | undefined,
-    stickerIds: readonly unknown[] | undefined,
+    stickerIds: readonly unknown[] | null | undefined,
     attachments: readonly Record<string, unknown>[] | undefined,
 ): InputValidationFailure | undefined {
-    if (typeof content === "string" && content.length > 0)
-        return inputValidationFailure("content", "relationship", "A voice note cannot have message content")
+    if (visibleContent(content))
+        return inputValidationFailure("content", "relationship", "A voice note cannot have visible message content")
     if (body?.embeds?.length) return inputValidationFailure("embeds", "relationship", "A voice note cannot have embeds")
     if (stickerIds?.length)
         return inputValidationFailure("stickerIds", "relationship", "A voice note cannot have stickers")
     if (attachments?.length !== 1)
         return inputValidationFailure("attachments", "length", "A voice note needs exactly one attachment")
     const [attachment] = attachments
-    if (attachment!.waveform === undefined)
+    // Fluxer needs a waveform and a duration that are present and not null
+    // (fluxer_api/src/api/channel/services/message/MessageValidationService.ts:223-234 at 0098958f)
+    if (attachment!.waveform === undefined || attachment!.waveform === null)
         return inputValidationFailure(
             "attachments[].waveform",
             "required",
             "A voice note's attachment needs a waveform",
         )
-    if (attachment!.duration === undefined)
+    if (attachment!.duration === undefined || attachment!.duration === null)
         return inputValidationFailure(
             "attachments[].duration",
             "required",
@@ -662,19 +685,55 @@ function voiceNoteFailure(
     return undefined
 }
 
+/** Code points Fluxer does not count as visible content (packages/schema/src/primitives/MessageValidators.ts:60-80 at
+ * 0098958f)
+ */
+function invisibleCodePoint(codePoint: number): boolean {
+    return (
+        codePoint === 0x0000 ||
+        codePoint === 0x00ad ||
+        codePoint === 0x034f ||
+        codePoint === 0x061c ||
+        codePoint === 0x115f ||
+        codePoint === 0x1160 ||
+        codePoint === 0x17b4 ||
+        codePoint === 0x17b5 ||
+        codePoint === 0x180e ||
+        (codePoint >= 0x200b && codePoint <= 0x200f) ||
+        (codePoint >= 0x202a && codePoint <= 0x202e) ||
+        (codePoint >= 0x2060 && codePoint <= 0x2069) ||
+        codePoint === 0x2800 ||
+        codePoint === 0x3164 ||
+        (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+        codePoint === 0xfeff ||
+        codePoint === 0xffa0 ||
+        (codePoint >= 0xe0100 && codePoint <= 0xe01ef)
+    )
+}
+
+/** Whether Fluxer counts message content as present: A string with a character that is neither whitespace nor
+ * invisible. An empty, blank or invisible string counts as no content, as null does
+ * (packages/schema/src/primitives/MessageValidators.ts:82-94 and
+ * fluxer_api/src/api/channel/services/message/MessageValidationService.ts:47 at 0098958f)
+ */
+function visibleContent(content: unknown): boolean {
+    if (typeof content !== "string") return false
+    for (const character of content)
+        if (character.trim().length > 0 && !invisibleCodePoint(character.codePointAt(0)!)) return true
+    return false
+}
+
 function hasMessageContent(
     content: unknown,
     body: { readonly embeds?: readonly unknown[] },
     fileCount: number,
-    stickerIds: readonly unknown[] | undefined,
+    stickerIds: readonly unknown[] | null | undefined,
 ): boolean {
-    return (
-        (typeof content === "string" && content.length > 0) ||
-        !!body.embeds?.length ||
-        !!fileCount ||
-        !!stickerIds?.length
-    )
+    return visibleContent(content) || !!body.embeds?.length || !!fileCount || !!stickerIds?.length
 }
+
+/** An encoded message request with the trimmed destination channel ID, which the request path and result decoding use */
+export type EncodedMessage = EncodedBody & { readonly channelId: string }
 
 function encodeReplyReference(rawReference: unknown, channelId: string) {
     const ref = rawReference === undefined ? undefined : snapshotReference(rawReference)
@@ -712,17 +771,24 @@ const messageInputKeys: readonly string[] = [
  * message is sent, which sets the longest waveform, or false for a webhook forward, which carries no voice note
  */
 export function encodeMessage(
-    channelId: unknown,
+    rawChannelId: unknown,
     input: unknown,
     defaultNonce: string,
     replyTarget?: MessageReference,
     directMessage = false,
     voiceNotes: WaveformTarget | false = "message",
-): EncodedBody | MessageError {
+): EncodedMessage | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError({ reason: "input", outcome: "notDispatched", inputValidation: failure.detail })
-    if (!identifier(channelId))
-        return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return invalid(
+            inputValidationFailure(
+                "channelId",
+                "format",
+                "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            ),
+        )
     input = messageObject(input)
     if (!record(input))
         return invalid(inputValidationFailure("input", "type", "Message input must be a string or an object"))
@@ -774,7 +840,7 @@ export function encodeMessage(
             inputValidationFailure(
                 "input",
                 "required",
-                "A message must contain non-empty content, an embed, an attachment, or a sticker",
+                "A message must contain visible content, an embed, an attachment, or a sticker",
             ),
         )
     if (!hasMessageContent(field("content"), body, attachments.files.length, stickerIds))
@@ -782,14 +848,20 @@ export function encodeMessage(
             inputValidationFailure(
                 "input",
                 "required",
-                "A message must contain non-empty content, an embed, an attachment, or a sticker",
+                "A message must contain visible content, an embed, an attachment, or a sticker",
             ),
         )
-    const mentions = encodeAllowedMentions(field("allowedMentions"))
+    // Fluxer reads the mention settings of a send only when it has content or a reply reference
+    // (fluxer_api/src/api/channel/services/message/MessageSendService.ts:757-759, 1083-1085 at 0098958f)
+    const mentions = encodeAllowedMentions(
+        field("allowedMentions"),
+        field("content") !== undefined || (replyTarget ?? field("messageReference")) !== undefined,
+    )
     if (mentions instanceof InputValidationFailure) return invalid(mentions)
     const ref = encodeReplyReference(replyTarget ?? field("messageReference"), channelId)
     if (ref instanceof InputValidationFailure) return invalid(ref)
     return {
+        channelId,
         files: attachments.files,
         json: JSON.stringify({
             ...body,
@@ -807,11 +879,22 @@ export function encodeMessage(
 }
 
 /** Forward inputs encode only Fluxer's source reference and optional media selectors */
-export function encodeForward(channelId: unknown, input: unknown, defaultNonce: string): EncodedBody | MessageError {
+export function encodeForward(
+    rawChannelId: unknown,
+    input: unknown,
+    defaultNonce: string,
+): EncodedMessage | MessageError {
     const invalid = (failure: InputValidationFailure) =>
         new MessageError({ reason: "input", outcome: "notDispatched", inputValidation: failure.detail })
-    if (!identifier(channelId))
-        return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return invalid(
+            inputValidationFailure(
+                "channelId",
+                "format",
+                "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            ),
+        )
     if (!record(input)) return invalid(inputValidationFailure("input", "type", "Forward input must be an object"))
     const unsupported = unsupportedKeyFailure(
         input,
@@ -829,7 +912,7 @@ export function encodeForward(channelId: unknown, input: unknown, defaultNonce: 
         )
     const attachmentIdsInput = input.attachmentIds
     const embedIndicesInput = input.embedIndices
-    let attachmentIds: readonly unknown[] | undefined
+    let attachmentIds: readonly string[] | undefined
     if (attachmentIdsInput !== undefined) {
         if (!Array.isArray(attachmentIdsInput))
             return invalid(inputValidationFailure("attachmentIds", "type", "Forward attachment IDs must be an array"))
@@ -838,10 +921,14 @@ export function encodeForward(channelId: unknown, input: unknown, defaultNonce: 
             return invalid(
                 inputValidationFailure("attachmentIds", "length", "A forward may select at most ten attachments"),
             )
-        attachmentIds = snapshotArray(attachmentIdsInput, count)
-        if (!attachmentIds.every(identifier))
+        attachmentIds = inputIds(attachmentIdsInput, count)
+        if (attachmentIds === undefined)
             return invalid(
-                inputValidationFailure("attachmentIds[]", "format", "Forward attachment IDs must be decimal strings"),
+                inputValidationFailure(
+                    "attachmentIds[]",
+                    "format",
+                    "Forward attachment IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                ),
             )
     }
     let embedIndices: readonly unknown[] | undefined
@@ -867,6 +954,7 @@ export function encodeForward(channelId: unknown, input: unknown, defaultNonce: 
             )
     }
     return {
+        channelId,
         files: [],
         json: JSON.stringify({
             nonce,
@@ -881,11 +969,19 @@ export function encodeForward(channelId: unknown, input: unknown, defaultNonce: 
     }
 }
 
+/** Fluxer checks a nonce string after removing U+000C and U+202E and trimming it, so a blank nonce fails and surrounding
+ * whitespace does not count toward the 32 units. The string is sent as given
+ * (packages/schema/src/domains/message/MessageRequestSchemas.ts:314-324 at 0098958f)
+ */
 function encodeNonce(value: unknown, defaultNonce: string): string | InputValidationFailure {
     if (value === undefined) return defaultNonce
     if (typeof value === "string") {
-        if (value.length >= 1 && value.length <= 32) return value
-        return inputValidationFailure("nonce", "length", "Message nonces must contain 1 through 32 UTF-16 code units")
+        if (normalizedText(value, 1, 32)) return value
+        return inputValidationFailure(
+            "nonce",
+            "length",
+            "Message nonces must contain 1 through 32 UTF-16 code units after Fluxer removes form feeds and U+202E and trims surrounding whitespace, so a blank nonce fails",
+        )
     }
     if (typeof value === "number") {
         if (Number.isSafeInteger(value) && value >= 0) return String(value)
@@ -894,7 +990,10 @@ function encodeNonce(value: unknown, defaultNonce: string): string | InputValida
     return inputValidationFailure("nonce", "type", "Message nonces must be strings or nonnegative safe integers")
 }
 
-function encodeAllowedMentions(value: unknown) {
+/** Encode the mention settings. Mixed is whether Fluxer reads them on this request, where it refuses everyone together
+ * with users or roles
+ */
+function encodeAllowedMentions(value: unknown, mixedChecked: boolean) {
     const mentions = value === undefined ? {} : value
     if (!record(mentions))
         return inputValidationFailure("allowedMentions", "type", "Allowed mentions must be an object")
@@ -906,7 +1005,7 @@ function encodeAllowedMentions(value: unknown) {
     )
     if (unsupported) return unsupported
     const field = fieldsOnce(mentions)
-    const selections: Record<"users" | "roles", readonly unknown[] | undefined> = { users: undefined, roles: undefined }
+    const selections: Record<"users" | "roles", readonly string[] | undefined> = { users: undefined, roles: undefined }
     for (const key of ["users", "roles"] as const) {
         const list = field(key)
         if (list !== undefined && !Array.isArray(list))
@@ -919,18 +1018,30 @@ function encodeAllowedMentions(value: unknown) {
                 "length",
                 "Mention selections may contain at most 100 IDs",
             )
-        const selection = snapshotArray(list, count)
-        if (!selection.every(identifier))
+        const selection = inputIds(list, count)
+        if (selection === undefined)
             return inputValidationFailure(
                 `allowedMentions.${key}[]`,
                 "format",
-                "Mention selection IDs must be decimal strings",
+                "Mention selection IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
             )
         selections[key] = selection
     }
     for (const key of ["everyone", "repliedUser"])
         if (field(key) !== undefined && typeof field(key) !== "boolean")
             return inputValidationFailure(`allowedMentions.${key}`, "type", "Mention switches must be booleans")
+    // Where Fluxer reads them, it refuses parse together with users or roles, PARSE_AND_USERS_OR_ROLES_CANNOT_BE_USED_TOGETHER
+    // (fluxer_api/src/api/channel/services/message/MessageMentionService.ts:231-236 at 0098958f)
+    if (
+        mixedChecked &&
+        field("everyone") === true &&
+        ((selections.users?.length ?? 0) > 0 || (selections.roles?.length ?? 0) > 0)
+    )
+        return inputValidationFailure(
+            "allowedMentions",
+            "relationship",
+            "Fluxer doesn't accept everyone together with users or roles. Allow everyone alone, or list IDs without everyone",
+        )
     return {
         parse: field("everyone") === true ? ["everyone"] : [],
         users: selections.users ?? [],
@@ -947,7 +1058,8 @@ function snapshotArray(value: readonly unknown[], count: number): readonly unkno
 }
 
 /** Each top-level edit field is read at most once, in validation order, so the validated value is the one sent */
-export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure {
+/** EmptyIsAbsent applies the empty-string handling of Fluxer's webhook message edit route to embeds, see encodeEmbeds */
+export function encodeEdit(input: unknown, emptyIsAbsent = false): EncodedBody | InputValidationFailure {
     input = messageObject(input)
     if (!record(input))
         return inputValidationFailure("input", "type", "Message edit input must be a string or an object")
@@ -961,9 +1073,17 @@ export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure
     const field = fieldsOnce(input)
     const attachments = encodeAttachments(field("attachments"), true)
     if (attachments instanceof InputValidationFailure) return attachments
-    const body = encodeBody(field, attachments.uploadedFilenames)
+    // Without an attachments list, an attachment:// URL may name a file the message already has
+    const body = encodeBody(
+        field,
+        field("attachments") === undefined ? "existing" : attachments.uploadedFilenames,
+        emptyIsAbsent,
+    )
     if (body instanceof InputValidationFailure) return body
-    const mentions = encodeAllowedMentions(field("allowedMentions"))
+    // A channel message edit always sends allowed_mentions, so Fluxer always reads them
+    // (fluxer_api/src/api/channel/services/message/MessageEditService.ts:128-130 at 0098958f). A webhook message edit,
+    // the only caller with emptyIsAbsent, never reads them (MessageSendService.ts:1178-1240)
+    const mentions = encodeAllowedMentions(field("allowedMentions"), !emptyIsAbsent)
     if (mentions instanceof InputValidationFailure) return mentions
     const hasBodyInput =
         field("content") !== undefined || field("embeds") !== undefined || field("attachments") !== undefined
@@ -976,11 +1096,20 @@ export function encodeEdit(input: unknown): EncodedBody | InputValidationFailure
         )
     if (!body && (hasBodyInput || flags === undefined))
         return inputValidationFailure("input", "required", "A message edit must contain at least one editable field")
-    if (attachments.metadata?.length === 0 && !field("content") && !body?.embeds?.length)
+    // Fluxer checks the edit request, not the message it leaves: Without flags, the request itself needs visible
+    // content, an embed or an attachment, so empty content alone, which would clear the text, is refused
+    // (fluxer_api/src/api/channel/services/message/MessageValidationService.ts:47-68 at 0098958f). On a webhook message
+    // edit Fluxer reads empty content as null first, with the same result
+    if (
+        flags === undefined &&
+        !visibleContent(field("content")) &&
+        !body?.embeds?.length &&
+        !attachments.metadata?.length
+    )
         return inputValidationFailure(
             "input",
             "required",
-            "A message edit must retain non-empty content, an embed, or an attachment",
+            "A message edit without flags must contain visible content, an embed or an attachment, as Fluxer checks the edit itself rather than the message it leaves",
         )
     return {
         files: attachments.files,
@@ -1037,7 +1166,7 @@ function builtEmbeds(value: unknown): unknown {
 }
 
 /** Encode content and embeds from fields read through the caller's single-read field reader */
-function encodeBody(field: (key: string) => unknown, uploadedFilenames?: readonly string[]) {
+function encodeBody(field: (key: string) => unknown, uploadedFilenames?: EmbedAttachmentFiles, emptyIsAbsent = false) {
     if (
         field("content") === undefined &&
         field("embeds") === undefined &&
@@ -1045,11 +1174,16 @@ function encodeBody(field: (key: string) => unknown, uploadedFilenames?: readonl
         field("stickerIds") === undefined
     )
         return undefined
+    // Fluxer accepts null content on sends, edits and webhook messages. A send then has no text and an edit clears it, as
+    // with an empty string, and Fluxer still reads the mention settings because content is present
+    // (packages/schema/src/domains/message/MessageRequestSchemas.ts:336, WebhookRequestSchemas.ts:90, 158-160,
+    // fluxer_api/src/api/channel/services/message/MessagePersistenceService.ts:435-449 at 0098958f)
     const content = field("content")
-    if (content !== undefined && typeof content !== "string")
-        return inputValidationFailure("content", "type", "Message content must be a string")
+    if (content !== undefined && content !== null && typeof content !== "string")
+        return inputValidationFailure("content", "type", "Message content must be a string or null")
     const embedInput = field("embeds")
-    const embeds = embedInput === undefined ? undefined : encodeEmbeds(builtEmbeds(embedInput), uploadedFilenames)
+    const embeds =
+        embedInput === undefined ? undefined : encodeEmbeds(builtEmbeds(embedInput), uploadedFilenames, emptyIsAbsent)
     if (embeds instanceof InputValidationFailure) return embeds
     return {
         ...(content === undefined ? {} : { content }),

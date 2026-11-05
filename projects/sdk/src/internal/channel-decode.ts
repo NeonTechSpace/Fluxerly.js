@@ -47,8 +47,8 @@ const forumTypes: ReadonlySet<number> = new Set([ChannelType.Forum, ChannelType.
 /** Channels that can hold threads besides forum and media channels, on which Fluxer sends stored thread defaults */
 const threadDefaultsTypes: ReadonlySet<number> = new Set([ChannelType.Text, ChannelType.Announcement])
 
-/** An absolute URL. Channel validation shares this rule with decoding */
-export function url(value: unknown): value is string {
+/** An absolute URL, the rule for received channel URLs. Channel input checks Fluxer's own URL rule instead */
+function url(value: unknown): value is string {
     if (typeof value !== "string" || value.length === 0) return false
     try {
         new URL(value)

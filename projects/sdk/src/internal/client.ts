@@ -43,7 +43,7 @@ import { automaticIgnoredEvents, suppressedRegistrations } from "./gateway/event
 import { maxClientPayloadBytes, Opcode, reservedClientOpcodes } from "./protocol/gateway.js"
 import { MessageError, MessageOperationError, type MessageOperationFailure, type SendError } from "#sdk/message-errors"
 import { replyInput, snapshotReference } from "./message.js"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, inputId, record } from "./decode/primitives.js"
 import { MessageCache } from "./cache.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { GuildCache, type ResourceKind, type Resources } from "./guild-cache.js"
@@ -772,8 +772,9 @@ export class ClientOwner<M extends MessageCore = Message> {
     deleteCacheEntry(kind: CacheKind, key: string) {
         const valid = validCacheKind(kind)
         const format = cachePairKeys[valid as keyof typeof cachePairKeys] as string | undefined
-        const parts = typeof key === "string" ? key.split(":") : []
-        if (parts.length !== (format === undefined ? 1 : 2) || !parts.every(identifier))
+        const split = typeof key === "string" ? key.split(":") : []
+        const parts = split.map(inputId)
+        if (parts.length !== (format === undefined ? 1 : 2) || parts.some((part) => part === undefined))
             throw new ConfigurationError("key", `A ${valid} cache key must be ${format ?? "a decimal ID"}`)
         const [first, second] = parts as [string, string | undefined]
         switch (valid) {
@@ -817,8 +818,13 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
     /** The public client.shardIdForGuild: shardIdForGuild after checking the caller's ID */
     ownedShardForGuild(guildId: unknown): number | undefined {
-        if (!identifier(guildId)) throw new ConfigurationError("guildId", "Guild IDs must be decimal strings")
-        return this.shardIdForGuild(guildId)
+        const id = inputId(guildId)
+        if (id === undefined)
+            throw new ConfigurationError(
+                "guildId",
+                "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            )
+        return this.shardIdForGuild(id)
     }
     gatewayState(guildId?: string): ConnectionState {
         if (guildId === undefined) return this.#state
@@ -1233,12 +1239,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         return this.#open((token) => this.rest.application(token, operation, build, options))
     }
 
-    getUserResource<K extends "users" | "directMessages">(kind: K, id: string) {
+    getUserResource<K extends "users" | "directMessages">(kind: K, rawId: string) {
         return Effect.suspend(
             (): Effect.Effect<UserResources[K] | undefined, ClientClosedError | UserOperationError> => {
                 if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                     return Effect.fail(new ClientClosedError())
-                if (!identifier(id))
+                const id = inputId(rawId)
+                if (id === undefined)
                     return Effect.fail(
                         new UserOperationError({
                             operation: `${kind}.get`,
@@ -1248,8 +1255,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                                 kind === "users" ? "userId" : "channelId",
                                 "format",
                                 kind === "users"
-                                    ? "User IDs must be decimal strings"
-                                    : "Channel IDs must be decimal strings",
+                                    ? "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly"
+                                    : "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
                             ).detail,
                         }),
                     )
@@ -1356,7 +1363,7 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     leaveGuild(guildId: string, options?: RequestOptions) {
         return this.guild("guilds.leave", () => guildLeave(guildId), options).pipe(
-            Effect.tap(() => Effect.sync(() => this.presence.forgetMembers(guildId))),
+            Effect.tap(() => Effect.sync(() => this.presence.forgetMembers(inputId(guildId) ?? guildId))),
         )
     }
 
@@ -1377,12 +1384,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         return this.#open((token) => this.rest.channel(token, operation, build, options))
     }
 
-    getChannel(id: string) {
+    getChannel(rawId: string) {
         return Effect.suspend(
             (): Effect.Effect<GuildChannel | undefined, ClientClosedError | ChannelOperationError> => {
                 if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                     return Effect.fail(new ClientClosedError())
-                if (!identifier(id))
+                const id = inputId(rawId)
+                if (id === undefined)
                     return Effect.fail(
                         new ChannelOperationError({
                             operation: "channels.get",
@@ -1391,7 +1399,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                             inputValidation: inputValidationFailure(
                                 "channelId",
                                 "format",
-                                "Channel IDs must be decimal strings",
+                                "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
                             ).detail,
                         }),
                     )
@@ -1404,16 +1412,14 @@ export class ClientOwner<M extends MessageCore = Message> {
         return suspendInput((): Effect.Effect<Resources[K] | undefined, ClientClosedError | GuildOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
-            const guildId = kind === "guilds" ? target : record(target) ? target.guildId : undefined
+            const guildId = inputId(kind === "guilds" ? target : record(target) ? target.guildId : undefined)
             const id =
                 kind === "guilds"
                     ? guildId
                     : record(target)
-                      ? kind === "members"
-                          ? target.userId
-                          : target.id
+                      ? inputId(kind === "members" ? target.userId : target.id)
                       : undefined
-            if (!identifier(guildId) || !identifier(id))
+            if (guildId === undefined || id === undefined)
                 return Effect.fail(
                     new GuildOperationError({
                         operation: `${kind}.get`,
@@ -1423,7 +1429,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                             kind === "guilds" ? "guildId" : "target",
                             "format",
                             kind === "guilds"
-                                ? "Guild IDs must be decimal strings"
+                                ? "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly"
                                 : "Resource targets require decimal guild and resource IDs",
                         ).detail,
                     }),
@@ -1434,22 +1440,23 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     /** A guild's cached role list for roles.getAll, when it is known complete */
     getRoleList(guildId: string) {
-        return this.#guildLookup("roles.getAll", guildId, () => this.resources?.getRoles(guildId))
+        return this.#guildLookup("roles.getAll", guildId, (id) => this.resources?.getRoles(id))
     }
 
     /** The bot's own cached member for members.getSelf, once READY or members.fetchSelf supplied the bot's account ID */
     getSelfMember(guildId: string) {
-        return this.#guildLookup("members.getSelf", guildId, () => {
+        return this.#guildLookup("members.getSelf", guildId, (id) => {
             const self = this.#selfUserId ?? this.#selfMemberUserId
-            return self === undefined ? undefined : this.resources?.get("members", guildId, self)
+            return self === undefined ? undefined : this.resources?.get("members", id, self)
         })
     }
 
-    #guildLookup<A>(operation: GuildOperation, guildId: string, read: () => A | undefined) {
+    #guildLookup<A>(operation: GuildOperation, rawGuildId: string, read: (guildId: string) => A | undefined) {
         return suspendInput((): Effect.Effect<A | undefined, ClientClosedError | GuildOperationError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(new ClientClosedError())
-            if (!identifier(guildId))
+            const guildId = inputId(rawGuildId)
+            if (guildId === undefined)
                 return Effect.fail(
                     new GuildOperationError({
                         operation,
@@ -1458,11 +1465,11 @@ export class ClientOwner<M extends MessageCore = Message> {
                         inputValidation: inputValidationFailure(
                             "guildId",
                             "format",
-                            "Guild IDs must be decimal strings",
+                            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
                         ).detail,
                     }),
                 )
-            return Effect.sync(read)
+            return Effect.sync(() => read(guildId))
         })
     }
 
@@ -1508,17 +1515,21 @@ export class ClientOwner<M extends MessageCore = Message> {
         return this.#open((token) => this.rest.forward(token, channelId, input, options))
     }
 
-    sendDirectMessage(userId: string, input: MessageInput | string, options?: RequestOptions) {
+    sendDirectMessage(rawUserId: string, input: MessageInput | string, options?: RequestOptions) {
         return suspendInput((): Effect.Effect<M, SendError> => {
             if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
                 return Effect.fail(closedBeforeSend())
-            if (!identifier(userId))
+            const userId = inputId(rawUserId)
+            if (userId === undefined)
                 return Effect.fail(
                     new MessageError({
                         reason: "input",
                         outcome: "notDispatched",
-                        inputValidation: inputValidationFailure("userId", "format", "User IDs must be decimal strings")
-                            .detail,
+                        inputValidation: inputValidationFailure(
+                            "userId",
+                            "format",
+                            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                        ).detail,
                     }),
                 )
             if (typeof input !== "string" && !record(input))
@@ -1578,11 +1589,13 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     keepTyping<A, E, R>(
-        channelId: string,
+        rawChannelId: string,
         task: Effect.Effect<A, E, R>,
         options?: RequestOptions,
     ): Effect.Effect<A, E | MessageOperationFailure, R> {
         const owner = this
+        // A valid ID is trimmed for the refreshes and the log, and an invalid one fails in the first typing request
+        const channelId = inputId(rawChannelId) ?? rawChannelId
         if (!Effect.isEffect(task))
             return Effect.fail(
                 new MessageOperationError({
@@ -1828,16 +1841,20 @@ export class ClientOwner<M extends MessageCore = Message> {
                     level: "info",
                     category: "lifecycle",
                     code: "lifecycle.startupDeadline",
-                    message: `Startup of ${plan.shardIds.length} shards may take up to ${formatDuration(startupTimeoutMs)}: The configured ${formatDuration(configuration.startupTimeoutMs)} (connection.startupTimeoutMs) plus ${identifySpacingMs / 1_000} s per additional shard, because the SDK starts shard sessions ${identifySpacingMs / 1_000} s apart`,
+                    message: `Startup of ${plan.shardIds.length} shards may take up to ${formatDuration(startupTimeoutMs)}: The configured ${formatDuration(configuration.startupTimeoutMs)} (connection.startupTimeoutMs) plus ${identifySpacingMs / 1_000} s per additional shard, because the SDK starts shard sessions ${identifySpacingMs / 1_000} s apart${configuration.startupIdentifyWaitMs > 0 ? `. Sending Identify adds up to ${formatDuration(configuration.startupIdentifyWaitMs)} while Fluxer starts the session` : ""}`,
                     fields: {
                         startupTimeoutMs,
                         configuredMs: configuration.startupTimeoutMs,
                         shards: plan.shardIds.length,
+                        ...(configuration.startupIdentifyWaitMs > 0
+                            ? { identifyWaitMs: configuration.startupIdentifyWaitMs }
+                            : {}),
                     },
                 })
             return yield* superviseShards({
                 shards: [...owner.#shards.values()],
                 startupTimeoutMs,
+                identifyWaitMs: configuration.startupIdentifyWaitMs,
                 attributeShards: plan.identifyShards,
                 startup,
                 runShard: (shard, deadline) =>
@@ -1848,7 +1865,6 @@ export class ClientOwner<M extends MessageCore = Message> {
                         shard,
                         plan,
                         deadline,
-                        startupTimeoutMs,
                         established: owner.#groupReady,
                         loadSessions,
                     }),

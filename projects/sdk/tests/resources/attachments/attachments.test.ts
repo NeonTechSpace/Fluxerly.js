@@ -694,11 +694,6 @@ test.each(modes)("%s links same-message image uploads through embed image and th
             attachments: [upload("file.txt")],
             embeds: [{ image: { url: "attachment://file.txt" } }],
         },
-        {
-            content: "Duplicate",
-            attachments: [upload("same.png"), upload("same.png")],
-            embeds: [{ image: { url: "attachment://same.png" } }],
-        },
         // Fluxer renames these uploads, so the reference would not match
         { content: "Dots", attachments: [upload("plot..png")], embeds: [{ image: { url: "attachment://plot..png" } }] },
         { content: "Device", attachments: [upload("CON.png")], embeds: [{ image: { url: "attachment://CON.png" } }] },
@@ -724,6 +719,48 @@ test.each(modes)("%s links same-message image uploads through embed image and th
     await expect(
         api.edit({ attachments: [{ id: attachment.id }], embeds: [{ image: { url: "attachment://retained.png" } }] }),
     ).rejects.toMatchObject({ _tag: "MessageOperationError", operation: "edit", ...inputRejected })
+    expect(fetch).toHaveBeenCalledTimes(before)
+})
+
+test.each(modes)("%s lets an edit without attachments name a file the message already has", async (mode) => {
+    const messages: any[] = []
+    const fetch = transport({
+        message: async (json) => {
+            messages.push(json)
+            return Response.json({
+                ...wire([]),
+                embeds: (json.embeds ?? []).map((embed: any) => ({
+                    ...embed,
+                    type: "rich",
+                    ...(embed.image ? { image: { ...embed.image, flags: 0 } } : {}),
+                })),
+            })
+        },
+    })
+    const api = await driver(mode)
+    // Fluxer resolves the name against the message's own files and moves that file into the embed
+    // (MessageEmbedAttachmentResolver.ts:49-58, MessageEditService.ts:119-123 at 0098958f)
+    await api.edit({ embeds: [{ image: { url: "attachment://existing.png" } }] })
+    expect(messages).toEqual([expect.objectContaining({ embeds: [{ image: { url: "attachment://existing.png" } }] })])
+    expect(messages[0]).not.toHaveProperty("attachments")
+    const before = fetch.mock.calls.length
+    for (const input of [
+        // An attachments list, even one keeping the file by ID, limits the names to its new uploads
+        { attachments: [{ id: attachment.id }], embeds: [{ image: { url: "attachment://existing.png" } }] },
+        { attachments: [], content: "x", embeds: [{ image: { url: "attachment://existing.png" } }] },
+        // The format checks still apply
+        { embeds: [{ image: { url: "attachment://existing.txt" } }] },
+        { embeds: [{ image: { url: "attachment://bad name.png" } }] },
+    ])
+        await expect(api.edit(input as EditMessageInput)).rejects.toMatchObject({
+            _tag: "MessageOperationError",
+            operation: "edit",
+            ...inputRejected,
+        })
+    // A send still needs a matching new upload
+    await expect(
+        api.send({ content: "x", embeds: [{ image: { url: "attachment://existing.png" } }] }),
+    ).rejects.toMatchObject({ _tag: "MessageError", ...inputRejected })
     expect(fetch).toHaveBeenCalledTimes(before)
 })
 
@@ -807,7 +844,7 @@ test.each(modes)("%s validates metadata and projects nullable fields across fetc
 })
 
 test.each(modes)(
-    "%s rejects invalid uploads locally and accepts an exact 50 MiB file in bounded chunks",
+    "%s rejects invalid uploads locally and leaves the size limit to Fluxer, uploading a file over 50 MiB in bounded chunks",
     async (mode) => {
         const parts: { declared: number; total: number; largest: number }[] = []
         const fetch = transport({
@@ -835,7 +872,8 @@ test.each(modes)(
             { ...valid, filename: "x\r\ny" },
             { ...valid, contentType: "text/plain\r\nx:y" },
             { ...valid, title: "" },
-            { ...valid, description: null },
+            // Fluxer trims a content type before its length check, so a blank one fails
+            { ...valid, contentType: " " },
             { ...valid, spoiler: 1 },
             { ...valid, extra: true },
             { id: "40" },
@@ -845,20 +883,149 @@ test.each(modes)(
                 _tag: "MessageError",
                 ...inputRejected,
             })
-        const oversized = { attachments: [{ ...valid, data: new Uint8Array(52_428_801) }] }
-        await expect(api.send(oversized)).rejects.toMatchObject({ _tag: "MessageError", ...inputRejected })
         expect(fetch).not.toHaveBeenCalled()
-        await api.send({ attachments: [{ ...valid, data: new Uint8Array(52_428_800) }] })
-        expect(fetch).toHaveBeenCalledTimes(9)
-        expect(parts).toHaveLength(5)
+        // An instance can raise a bot's attachment limit above Fluxer's 50 MiB default, so a larger file is sent
+        await api.send({ attachments: [{ ...valid, data: new Uint8Array(52_428_801) }] })
+        expect(fetch).toHaveBeenCalledTimes(10)
+        expect(parts).toHaveLength(6)
         for (const part of parts) {
             expect(part.total).toBe(part.declared)
             expect(part.total).toBeLessThanOrEqual(10_485_760)
             expect(part.largest).toBeLessThanOrEqual(65_536)
         }
-        expect(parts.reduce((sum, part) => sum + part.total, 0)).toBe(52_428_800)
+        expect(parts.reduce((sum, part) => sum + part.total, 0)).toBe(52_428_801)
     },
 )
+
+test.each(modes)("%s reports Fluxer's file size rejection for every source kind and upload path", async (mode) => {
+    const tooLarge = () =>
+        Response.json({ code: "FILE_SIZE_TOO_LARGE", message: "File size too large" }, { status: 400 })
+    let reads = 0
+    const huge = 2 ** 40
+    // Structural sources declare a size no instance accepts. Fluxer refuses the plan, so neither is read
+    const file = {
+        size: huge,
+        slice: () => file,
+        stream: () => {
+            reads++
+            return new ReadableStream<Uint8Array>()
+        },
+    }
+    const stream = {
+        getReader: () => {
+            reads++
+            return new ReadableStream<Uint8Array>().getReader()
+        },
+    }
+    let messages = 0
+    const fetch = transport({
+        plan: tooLarge,
+        message: async () => {
+            messages++
+            return Response.json(wire())
+        },
+    })
+    // The client's own upload budget is a separate local limit, raised here so only Fluxer's answer decides
+    const api = await driver(mode, { uploads: { maxBytes: 2 ** 41 } })
+    for (const attachment of [
+        { data: new Uint8Array(52_428_801), filename: "large.bin" },
+        { file, filename: "large.bin" },
+        { stream, size: huge, filename: "large.bin" },
+    ])
+        await expect(api.send({ attachments: [attachment] } as MessageInput)).rejects.toMatchObject({
+            _tag: "MessageError",
+            reason: "rejected",
+            outcome: "notDispatched",
+            status: 400,
+            apiError: { code: "fileSizeTooLarge", providerCode: "FILE_SIZE_TOO_LARGE" },
+        })
+    expect(reads).toBe(0)
+    expect(messages).toBe(0)
+    expect(fetch.mock.calls.filter(([, init]) => init.method === "PUT")).toEqual([])
+    // Without presigned uploads, Fluxer refuses the inline multipart message request itself, with HTTP 400 from its
+    // size check or 413 when the declared body exceeds every file's limit together
+    let inlineStatus = 413
+    transport({
+        presignedAttachmentUploads: false,
+        message: async () =>
+            Response.json({ code: "FILE_SIZE_TOO_LARGE", message: "File size too large" }, { status: inlineStatus }),
+    })
+    const inline = await driver(mode)
+    await expect(
+        inline.send({ attachments: [{ data: new Uint8Array([1]), filename: "large.bin" }] }),
+    ).rejects.toMatchObject({
+        reason: "rejected",
+        outcome: "rejected",
+        status: 413,
+        apiError: { code: "fileSizeTooLarge" },
+    })
+    inlineStatus = 400
+    await expect(
+        inline.send({ attachments: [{ data: new Uint8Array([1]), filename: "large.bin" }] }),
+    ).rejects.toMatchObject({
+        _tag: "MessageError",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 400,
+        apiError: { code: "fileSizeTooLarge" },
+    })
+})
+
+test.each(modes)("%s uploads a signed plan whose parts are larger than 50 MiB", async (mode) => {
+    const sizes: number[] = []
+    transport({
+        // Fluxer plans parts of a twentieth of the file, so a file over 1,000 MiB gets parts over 50 MiB
+        plan: (value) => {
+            const item = value.attachments[0]
+            item.part_size = 52_428_801
+            item.parts = item.parts.slice(0, 2)
+            return value
+        },
+        put: async (init) => {
+            sizes.push((await readBytes(init)).byteLength)
+            return new Response(null)
+        },
+    })
+    const api = await driver(mode)
+    await api.send({ attachments: [{ data: new Uint8Array(52_428_802), filename: "large.bin" }] })
+    expect(sizes).toEqual([52_428_801, 1])
+})
+
+test.each(modes)("%s reports busy upload slots as rejected only on an inline multipart send", async (mode) => {
+    const busy = () =>
+        Response.json({ code: "SERVICE_UNAVAILABLE", message: "x" }, { status: 503, headers: { "retry-after": "5" } })
+    let messages = 0
+    transport({
+        presignedAttachmentUploads: false,
+        message: async () => {
+            messages++
+            return busy()
+        },
+    })
+    const inline = await driver(mode)
+    const input = { attachments: [{ data: new Uint8Array([1]), filename: "file.bin" }] }
+    // Fluxer answers this way while it reads the files, before anything is applied
+    for (const operation of [() => inline.send(input), () => inline.edit(input)]) {
+        const failure = await operation().then(
+            () => expect.fail("Expected the busy answer"),
+            (error: unknown) => error,
+        )
+        expect(failure).toMatchObject({ reason: "rejected", outcome: "rejected", status: 503, retryAfterMs: 5000 })
+        // Nothing was applied, so the call may run again after the wait
+        expect((failure as { details: Record<string, unknown> }).details.uploadSlotsBusy).toBe(true)
+        expect(errors.isRetryable(failure)).toBe(true)
+    }
+    expect(messages).toBe(2)
+    // With signed uploads the message request is JSON, which never waits for an upload slot
+    transport({ message: async () => busy() })
+    const signed = await driver(mode)
+    const unknown = await signed.send(input).then(
+        () => expect.fail("Expected the server error"),
+        (error: unknown) => error,
+    )
+    expect(unknown).toMatchObject({ status: 503, outcome: "unknown" })
+    expect(errors.isRetryable(unknown)).toBe(false)
+})
 
 test.each(modes)("%s holds upload admission through active work and cancellation cleanup", async (mode) => {
     let release!: () => void
@@ -3610,7 +3777,8 @@ test.each(modes)("%s rejects invalid download options before any request", async
     const api = await driver(mode)
     const input = mediaInput()
     const invalid: readonly (readonly [string, unknown, string, string])[] = [
-        ["a byte limit above 50 MiB", { maxBytes: 52_428_801 }, "options.maxBytes", "range"],
+        ["a negative byte limit", { maxBytes: -1 }, "options.maxBytes", "range"],
+        ["a byte limit above the safe integers", { maxBytes: 2 ** 53 }, "options.maxBytes", "range"],
         ["a fractional byte limit", { maxBytes: 1.5 }, "options.maxBytes", "range"],
         ["a byte limit given as text", { maxBytes: "10" }, "options.maxBytes", "range"],
         ["a missing byte limit", {}, "options.maxBytes", "range"],
@@ -3625,8 +3793,17 @@ test.each(modes)("%s rejects invalid download options before any request", async
         expect(await drain(api, mode, input, options as never), name).toMatchObject({ error: expected })
     }
     expect(fetch).not.toHaveBeenCalled()
-    // The largest accepted byte limit is a valid limit
-    await expect(api.download(input, 52_428_800)).resolves.toEqual(new Uint8Array([1]))
+    // Fluxer decides attachment sizes, so any safe byte limit is valid, including ones above 50 MiB
+    await expect(api.download(input, Number.MAX_SAFE_INTEGER)).resolves.toEqual(new Uint8Array([1]))
+})
+
+test.each(modes)("%s downloads a file over 50 MiB, as Fluxer lets bots and people send them", async (mode) => {
+    const size = 52_428_801
+    transport({ download: async () => new Response(new Uint8Array(size)) })
+    const api = await driver(mode)
+    const bytes = (await api.download(mediaInput(), size)) as Uint8Array
+    expect(bytes.byteLength).toBe(size)
+    await expect(api.download(mediaInput(), size - 1)).rejects.toMatchObject({ reason: "tooLarge" })
 })
 
 test.each(modes)("%s reports a rejected download status and releases the body and slot", async (mode) => {

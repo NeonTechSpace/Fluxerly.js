@@ -5,8 +5,8 @@
  * Implements [SDK contracts: Validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements)
  */
 import { type InputValidationConstraint, InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
-import { identifier, integerInRange, snapshotArray } from "./decode/primitives.js"
-import { rawText } from "./field-text.js"
+import { inputId, integerInRange, snapshotArray } from "./decode/primitives.js"
+import { normalizedText, rawText } from "./field-text.js"
 
 /** One field's accepted shape and the failure reported when a supplied value does not match it */
 export interface FieldRule {
@@ -29,7 +29,13 @@ export function field(
     return { accept: (value) => (guard(value) ? value : undefined), constraint, explanation, suffix: "" }
 }
 
-export const idField = (explanation: string) => field(identifier, "format", explanation)
+/** A caller ID, kept trimmed as inputId returns it */
+export const idField = (explanation: string): FieldRule => ({
+    accept: inputId,
+    constraint: "format",
+    explanation,
+    suffix: "",
+})
 
 export const booleanField = (explanation: string) => field((value) => typeof value === "boolean", "type", explanation)
 
@@ -43,6 +49,13 @@ export const integerField = (minimum: number, maximum: number, explanation: stri
 /** A string of minimum through maximum raw UTF-16 code units */
 export const textField = (minimum: number, maximum: number, explanation: string) =>
     field((value) => rawText(value, minimum, maximum), "length", explanation)
+
+/** A string of minimum through maximum UTF-16 code units after Fluxer's normalization, which removes U+000C and U+202E
+ * and trims surrounding whitespace (packages/schema/src/primitives/SchemaPrimitives.ts:20-22, 176-183 at 0098958f). The
+ * string is kept as given
+ */
+export const normalizedTextField = (minimum: number, maximum: number, explanation: string) =>
+    field((value) => normalizedText(value, minimum, maximum), "length", explanation)
 
 /** An array of at most maximum items that each pass item, kept as a frozen copy read once */
 export function listField(
@@ -78,8 +91,16 @@ export function nullable(rule: FieldRule): FieldRule {
     return { ...rule, accept: (value) => (value === null ? null : rule.accept(value)) }
 }
 
-/** Predicate for list items of 1 through maximum raw UTF-16 code units */
-export const textOf = (maximum: number) => (value: unknown) => rawText(value, 1, maximum)
+/** The same rule, also accepting null and an empty string, which is sent as given. Routes that read their body through
+ * Fluxer's Validator turn an empty string into null before checking it (fluxer_api/src/api/Validator.ts:59-63 at
+ * 0098958f), so on a nullable field it means the same as null
+ */
+export function nullOrEmpty(rule: FieldRule): FieldRule {
+    return { ...rule, accept: (value) => (value === null || value === "" ? value : rule.accept(value)) }
+}
+
+/** Predicate for list items of 1 through maximum UTF-16 code units after Fluxer's normalization, see normalizedTextField */
+export const normalizedTextOf = (maximum: number) => (value: unknown) => normalizedText(value, 1, maximum)
 
 /** Predicate for list items in values */
 export const oneOf = (values: ReadonlySet<unknown>) => (value: unknown) => values.has(value)

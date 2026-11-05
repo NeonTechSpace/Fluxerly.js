@@ -27,25 +27,22 @@ import {
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import type { Message, MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
-import { identifier, record } from "./decode/primitives.js"
+import { inputGatewayId, inputId, record } from "./decode/primitives.js"
 import { readCaller, readInput, suspendMarked, thrownCause } from "./defects.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import type { LogicalScheduler, LogicalTimer } from "./logical-scheduler.js"
 
 type Settings<M extends MessageCore> = Required<Omit<CollectorLimits<M>, "filter" | "guildId" | "idleMs">> &
-    Pick<CollectorLimits<M>, "filter" | "guildId"> & { readonly idleMs: number | undefined } & OperationOptions
+    Pick<CollectorLimits<M>, "filter" | "guildId"> & {
+        readonly channelId: string
+        readonly idleMs: number | undefined
+    } & OperationOptions
 
-const maximumGuildId = "18446744073709551615"
-
-/** Whether a value is a community ID a collector can filter on: Decimal, nonzero and at most the largest 64-bit ID */
-export function guildId(value: unknown): value is string {
-    return (
-        typeof value === "string" &&
-        /^[1-9][0-9]{0,19}$/.test(value) &&
-        (value.length < maximumGuildId.length || value <= maximumGuildId)
-    )
-}
+/** The trimmed community ID a collector can filter on, or undefined when the value is not one: A nonzero decimal no
+ * greater than 9223372036854775807, the largest ID Fluxer issues, as gateway commands read it
+ */
+export const guildId = (value: unknown): string | undefined => inputGatewayId(value)
 
 /** Why a collector limit option is invalid, naming the option and, for the timers, the largest accepted value */
 export function collectorBudgetMessage(key: string): string {
@@ -57,7 +54,12 @@ function settings<M extends MessageCore>(
     options: unknown,
     defaultApi: boolean,
 ): Settings<M> | ConfigurationError {
-    if (!identifier(channelId)) return new ConfigurationError("channelId", "Channel ID must be a decimal string")
+    const trimmedChannelId = inputId(channelId)
+    if (trimmedChannelId === undefined)
+        return new ConfigurationError(
+            "channelId",
+            "Channel ID must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const input = options === undefined ? {} : options
     if (!record(input)) return new ConfigurationError("collectorOptions", "Collector options must be an object")
     const result = {
@@ -92,8 +94,12 @@ function settings<M extends MessageCore>(
     }
     if (input.filter !== undefined && typeof input.filter !== "function")
         return new ConfigurationError("filter", "Collector filter must be a function")
-    if (input.guildId !== undefined && !guildId(input.guildId))
-        return new ConfigurationError("guildId", "Guild ID must be a positive uint64 decimal string")
+    const trimmedGuildId = input.guildId === undefined ? undefined : guildId(input.guildId)
+    if (input.guildId !== undefined && trimmedGuildId === undefined)
+        return new ConfigurationError(
+            "guildId",
+            "Guild ID must be a positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (input.onMessage !== undefined && typeof input.onMessage !== "function")
         return new ConfigurationError("onMessage", 'The collector option "onMessage" must be a function')
     const signal = input.signal
@@ -107,7 +113,8 @@ function settings<M extends MessageCore>(
         return new ConfigurationError("signal", "Collector signal must be an AbortSignal")
     return {
         ...result,
-        ...(input.guildId === undefined ? {} : { guildId: input.guildId }),
+        channelId: trimmedChannelId,
+        ...(trimmedGuildId === undefined ? {} : { guildId: trimmedGuildId }),
         ...(input.filter === undefined ? {} : { filter: input.filter as (message: M) => boolean }),
         ...(signal === undefined ? {} : { signal: signal as unknown as NonNullable<OperationOptions["signal"]> }),
     }
@@ -450,7 +457,7 @@ export function collect<E = never, R = never, M extends MessageCore = Message>(
         if (handler) yield* collector.run(owner, handler)
         // The caller signal methods are marked reads, so their throws are application faults
         yield* suspendMarked(() => {
-            collector.start(owner, channelId)
+            collector.start(owner, config.channelId)
             return Effect.void
         })
         return collector

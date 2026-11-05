@@ -62,6 +62,33 @@ export async function defaultCalls(client: DefaultClient, channelId: string, sig
     const thread: RestRouteResponse<"POST /channels/{channel_id}/threads">["type"] = 11
     void thread
 
+    // Public read routes that Fluxer serves without a token are listed too
+    const invite = await client.rest.call("GET /invites/{invite_code}", { params: { invite_code: "fixture" } })
+    if (invite.isOk()) void invite.value.body.code
+    void client.rest.call("GET /.well-known/fluxer")
+    void client.rest.call("GET /instance/badges", { query: { limit: 50 } })
+    void client.rest.call("GET /ip")
+    void client.rest.call("GET /oauth2/applications/{id}/public", { params: { id: "1" } })
+
+    // Reviewed corrections follow what Fluxer's server sends and accepts
+    // Thread member user_id is required, so reading it needs no undefined check
+    const threadMember = {} as RestRouteResponse<"GET /channels/{channel_id}/thread-members/{user_id}">
+    const memberUserId: string = threadMember.user_id
+    void memberUserId
+    const change: NonNullable<
+        RestRouteResponse<"GET /guilds/{guild_id}/audit-logs">["audit_log_entries"][number]["changes"]
+    >[number]["new_value"] = [{ id: "1", name: "tag", moderated: false, emoji_id: null, emoji_name: null }]
+    void change
+    void client.rest.call("POST /search/messages", {
+        // @ts-expect-error Fluxer refuses every scope but current from a bot
+        body: { content: "x", scope: "all" },
+    })
+    void client.rest.call("PATCH /channels/{channel_id}/messages/{message_id}", {
+        params: { channel_id: channelId, message_id: "2" },
+        // @ts-expect-error Fluxer refuses every edit that sends message_snapshots
+        body: { message_snapshots: [] },
+    })
+
     // @ts-expect-error A route Fluxer's API description does not list for bots
     void client.rest.call("GET /channels/{channel_id}/nonexistent", { params: { channel_id: channelId } })
     // @ts-expect-error The method belongs to the route

@@ -58,7 +58,9 @@ export type MessageSearchEmbedType = "image" | "video" | "sound" | "article"
  * Omit a filter to leave that criterion unspecified. Fluxer combines and interprets the supplied search criteria.
  * Unknown properties, invalid values and lists exceeding the documented limits are rejected locally.
  * The SDK copies each filter array when the operation starts, so later changes to the array do not affect this request.
- * All ID filters use decimal strings. Text limits count UTF-16 code units, the units used by JavaScript string.length
+ * All ID filters use decimal strings. Text limits count UTF-16 code units, the units used by JavaScript string.length.
+ * Fluxer measures every search text after removing form feeds and U+202E and trimming surrounding whitespace, so the
+ * SDK checks the same view and a blank text fails locally with reason input. The text is sent as given
  *
  * @category Messages
  */
@@ -71,7 +73,7 @@ export interface MessageSearchQuery {
     readonly maxId?: string
     /** Include message IDs greater than this decimal ID */
     readonly minId?: string
-    /** Text for Fluxer to search, from 1 through 1,024 UTF-16 code units, without local trimming */
+    /** Text for Fluxer to search, from 1 through 1,024 UTF-16 code units after trimming. Blank text fails locally */
     readonly content?: string
     /** Multiple search texts, at most 100 strings, each from 1 through 1,024 UTF-16 code units */
     readonly contents?: readonly string[]

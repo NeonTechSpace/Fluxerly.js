@@ -11,7 +11,7 @@ import { composedStepFacts } from "#sdk/api-errors"
 import type { ClientOwner } from "./client.js"
 import { failures, mapFailureCause } from "./effect-failures.js"
 import { guildFetch, memberFetch, memberSelf, roleList } from "./guilds.js"
-import { identifier, record } from "./decode/primitives.js"
+import { inputId, record } from "./decode/primitives.js"
 import { suspendInput } from "./defects.js"
 import { evaluateMemberHierarchy } from "./role-hierarchy.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
@@ -32,12 +32,20 @@ function target(value: unknown): MemberReference | InputValidationFailure {
     const unsupported = unsupportedKeyFailure(value, ["guildId", "userId"], "target", "the hierarchy target")
     if (unsupported) return unsupported
     // Read each field once, so the validated IDs are the ones fetched
-    const guildId = value.guildId
-    if (!identifier(guildId))
-        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
-    const userId = value.userId
-    if (!identifier(userId))
-        return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
+    const guildId = inputId(value.guildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "target.guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const userId = inputId(value.userId)
+    if (userId === undefined)
+        return inputValidationFailure(
+            "target.userId",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return { guildId, userId }
 }
 
@@ -51,9 +59,13 @@ function options(value: unknown): CanManageOptions | InputValidationFailure {
         "the hierarchy options",
     )
     if (unsupported) return unsupported
-    const actorUserId = value.actorUserId
-    if (actorUserId !== undefined && !identifier(actorUserId))
-        return inputValidationFailure("options.actorUserId", "format", "User IDs must be decimal strings")
+    const actorUserId = value.actorUserId === undefined ? undefined : inputId(value.actorUserId)
+    if (value.actorUserId !== undefined && actorUserId === undefined)
+        return inputValidationFailure(
+            "options.actorUserId",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const timeoutMs = value.timeoutMs
     if (
         timeoutMs !== undefined &&

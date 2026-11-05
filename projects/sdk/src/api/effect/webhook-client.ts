@@ -78,7 +78,7 @@ export interface WebhookClient {
      * A supplied nonce requests best-effort duplicate suppression for five minutes, not exactly-once delivery. It is shared across all channels for this webhook, and repeating it with threadName fails, as WebhookForumPostOptions explains.
      * Without a nonce, none is sent unless a forward source supplies one, and a nonce on both the message and its forward source fails before dispatch.
      * Reply references can include files.
-     * Forward references preserve only the source snapshot and reject new content or uploads
+     * Forward references preserve only the source snapshot and reject new content or uploads. Null, empty or blank content, empty embed, upload and sticker lists and null stickers count as none, as in Fluxer
      *
      * Set threadId to post into an existing thread. In a forum or media channel, set threadName, with optional
      * appliedTagIds, to start a new post instead. The result is then the post's first message, whose channelId is the
@@ -89,10 +89,12 @@ export interface WebhookClient {
      * File and stream sources are read when the multipart upload begins, without copying or spooling.
      * Keep file data stable, and supply a fresh stream for each operation because a stream is consumed at most once and must deliver exactly its declared size.
      * Cleanup cancels unfinished readers and awaits lock release, without closing caller paths or FileHandles.
-     * Multipart file uploads are streamed with a maximum of 50 MiB per file and share the configured upload-byte budget.
+     * Multipart file uploads are streamed and share the configured upload-byte budget.
+     * Fluxer decides how large each file may be from the limits of the webhook's creator. A larger file fails with reason rejected and an apiError with code fileSizeTooLarge.
+     * When the upload runs more than 64 MiB over that limit, Fluxer may close the connection instead, which fails with reason network.
      * An attachment:// image or thumbnail URL must match one new upload whose filename maps to an image or video MIME type.
      * The flags input accepts MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and MessageFlags.VoiceMessage.
-     * A voice note needs one new attachment with duration and waveform and no content, embeds or stickers, and its waveform may hold at most 256 characters, the limit of Fluxer's multipart webhook schema.
+     * A voice note needs one new attachment with duration and waveform and no visible content, embeds or stickers, and its waveform may hold at most 256 characters, the limit of Fluxer's multipart webhook schema.
      * A forward accepts only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications.
      * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed and fail locally before dispatch
      *
@@ -118,7 +120,10 @@ export interface WebhookClient {
      * and clear MessageFlags.VoiceMessage, which an edit cannot set again. Omit flags to preserve an existing voice note.
      * Crossposted, IsCrosspost and SourceMessageDeleted are server-managed.
      * Those bits and VoiceMessage fail locally before dispatch.
-     * Embed input cannot resolve existing file references.
+     * An embed image or thumbnail may use attachment://filename for a file the message already has, which Fluxer moves into the embed and refuses with reason rejected when no such file exists.
+     * Fluxer reads empty content as null here, and null content clears the text. As for channel message edits, Fluxer
+     * refuses an edit without flags that has no visible content and no embed, so such an edit fails locally with reason input.
+     * Fluxer treats empty embed text as absent here, unlike on sends, so an author, footer, image or thumbnail with empty required text is dropped, and an embed left with nothing fails locally with reason input, as EmbedInput describes.
      * For a message in a thread, including a forum post, set options.threadId to the thread's ID
      */
     editMessage(

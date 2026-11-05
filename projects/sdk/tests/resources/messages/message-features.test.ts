@@ -452,7 +452,91 @@ test.each(modes)(
     },
 )
 
+test.each(modes)(
+    "allowing everyone together with listed users or roles fails locally through the %s API",
+    async (surface) => {
+        const requests = fixture()
+        const target = { id: "99", channelId: "20" }
+        const mixed = [
+            { everyone: true, users: ["30"] },
+            { everyone: true, roles: ["40"] },
+            { everyone: true, users: ["30"], roles: ["40"], repliedUser: true },
+        ]
+        const accepted = [
+            { everyone: true },
+            { everyone: true, users: [], roles: [] },
+            { users: ["30"], roles: ["40"] },
+        ]
+        const failures: unknown[] = []
+        if (surface === "default") {
+            const client = createClient({ token: "fixture" })
+            try {
+                for (const allowedMentions of mixed) {
+                    for (const result of [
+                        await client.messages.send("20", { content: "mixed", allowedMentions }),
+                        await client.messages.reply(target, { content: "mixed", allowedMentions }),
+                        await client.messages.edit(target, { content: "mixed", allowedMentions }),
+                    ])
+                        failures.push(result.isErr() ? result.error : result)
+                }
+                for (const allowedMentions of accepted)
+                    unwrap(await client.messages.send("20", { content: "accepted", allowedMentions }))
+                // Fluxer reads the mention settings of a send only when it has content or a reply reference
+                unwrap(
+                    await client.messages.send("20", { embeds: [{ title: "Embed only" }], allowedMentions: mixed[0]! }),
+                )
+            } finally {
+                unwrap(await client.shutdown())
+            }
+        } else {
+            await Effect.runPromise(
+                Effect.scoped(
+                    Effect.gen(function* () {
+                        const client = yield* createNative({ token: "fixture" })
+                        for (const allowedMentions of mixed) {
+                            failures.push(
+                                yield* client.messages
+                                    .send("20", { content: "mixed", allowedMentions })
+                                    .pipe(Effect.flip),
+                                yield* client.messages
+                                    .reply(target, { content: "mixed", allowedMentions })
+                                    .pipe(Effect.flip),
+                                yield* client.messages
+                                    .edit(target, { content: "mixed", allowedMentions })
+                                    .pipe(Effect.flip),
+                            )
+                        }
+                        for (const allowedMentions of accepted)
+                            yield* client.messages.send("20", { content: "accepted", allowedMentions })
+                        yield* client.messages.send("20", {
+                            embeds: [{ title: "Embed only" }],
+                            allowedMentions: mixed[0]!,
+                        })
+                    }),
+                ),
+            )
+        }
+        expect(failures).toHaveLength(9)
+        for (const failure of failures)
+            expect(failure).toMatchObject({
+                reason: "input",
+                outcome: "notDispatched",
+                inputValidation: { path: "allowedMentions", constraint: "relationship" },
+            })
+        expect(requests.map((request) => request.body.allowed_mentions)).toEqual([
+            { parse: ["everyone"], users: [], roles: [], replied_user: false },
+            { parse: ["everyone"], users: [], roles: [], replied_user: false },
+            { parse: [], users: ["30"], roles: ["40"], replied_user: false },
+            { parse: ["everyone"], users: ["30"], roles: [], replied_user: false },
+        ])
+    },
+)
+
 test("flags do not bypass edit body validation", () => {
     expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, content: 42 })).toBeInstanceOf(InputValidationFailure)
-    expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, attachments: [] })).toBeInstanceOf(InputValidationFailure)
+    // With flags, Fluxer accepts an edit that has no visible content, embed or attachment, such as one that clears the
+    // files (fluxer_api/src/api/channel/services/message/MessageValidationService.ts:66 at 0098958f)
+    expect(encodeEdit({ flags: MessageFlags.SuppressEmbeds, attachments: [] })).not.toBeInstanceOf(
+        InputValidationFailure,
+    )
 })

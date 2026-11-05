@@ -57,6 +57,7 @@ export interface ClientCache<M extends MessageCore = Message> {
      * Remove one entry from a cache category by its key, without fetching, refreshing or changing the remote resource.
      * The key uses the format described on CacheChange: `channelId:messageId` for messages, `guildId:userId` for members,
      * `guildId:id` for roles, emojis and stickers, and the resource ID alone for communities, channels, users and direct messages.
+     * Each ID in the key may carry surrounding whitespace, which is trimmed, as for every ID the SDK accepts.
      * Objects already returned to the caller stay unchanged.
      * Reads of this category already in flight cannot restore the removed entry and some may skip caching their other results,
      * while later reads and events can cache it again.

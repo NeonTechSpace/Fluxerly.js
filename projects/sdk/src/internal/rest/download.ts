@@ -22,8 +22,6 @@ import { completeCleanup } from "../transfer-source.js"
 import { discoveryFailures, RestFailure, restFailures } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 
-/** Largest accepted maxBytes, 50 MiB */
-const maximumDownloadBytes = 52_428_800
 /** Longest single timer delay */
 const maximumTimerMs = 2_147_483_647
 /** Longest accepted attachment URL */
@@ -361,17 +359,9 @@ function downloadInput(
         )
             return invalid("options.signal", "type", "Attachment signal must be AbortSignal-compatible")
     }
-    if (
-        typeof maxBytes !== "number" ||
-        !Number.isSafeInteger(maxBytes) ||
-        maxBytes <= 0 ||
-        maxBytes > maximumDownloadBytes
-    )
-        return invalid(
-            "options.maxBytes",
-            "range",
-            "Attachment maxBytes must be an integer from 1 through 52,428,800 bytes (50 MiB)",
-        )
+    // Fluxer decides how large an attachment may be, per instance, bot and person, so the caller's limit is the only one
+    if (typeof maxBytes !== "number" || !Number.isSafeInteger(maxBytes) || maxBytes <= 0)
+        return invalid("options.maxBytes", "range", "Attachment maxBytes must be a positive safe integer")
     const timeoutMs = options.timeoutMs
     const timeout = timeoutMs === undefined ? defaultTimeoutMs : timeoutMs
     if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout <= 0 || timeout > maximumTimerMs)

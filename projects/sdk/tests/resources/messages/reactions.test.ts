@@ -1904,6 +1904,39 @@ test.each(modes)("%s encodes own reactions, leaves message cache intact and synt
     expect(calls).toHaveLength(8)
 })
 
+test.each(modes)("%s sends and collects the Unicode emoji Fluxer keeps after normalization", async (mode) => {
+    await gateway()
+    const calls: string[] = []
+    mockRest(async (url, init) => {
+        calls.push(`${init.method} ${new URL(url).pathname}`)
+        return new Response(null, { status: 204 })
+    })
+    const api = await setup(mode)
+    await api.connect()
+    // Fluxer removes U+000C and U+202E from the emoji path segment and trims it, then stores what remains as the emoji
+    // name (packages/schema/src/primitives/SchemaPrimitives.ts:15-22 and 176-182,
+    // fluxer_api/src/api/channel/services/interaction/MessageReactionService.ts:397-431 at 0098958f)
+    // Fails on the old code: U+202E stayed in the path, and padding was refused
+    await api.add("\u202e👍")
+    await api.add(" 👍 ")
+    await api.add({ name: "\u000c👍\n" })
+    await api.remove("\t👍 ")
+    const path = `/api/v1/channels/20/messages/10/reactions/${encodeURIComponent("👍")}/@me`
+    expect(calls).toEqual([`PUT ${path}`, `PUT ${path}`, `PUT ${path}`, `DELETE ${path}`])
+
+    // Fails on the old code: The selector kept U+202E, so it skipped Fluxer's 👍 and took an emoji carrying U+202E,
+    // which Fluxer never stores and which serves here only to end that collector
+    const stripped = await api.collect({ emoji: "\u202e👍", maxReactions: 1 })
+    deliverReaction(addition("31", "👎")).deliver()
+    deliverReaction(addition("30", "👍")).deliver()
+    deliverReaction(addition("32", "\u202e👍")).deliver()
+    expect(await stripped.wait()).toMatchObject({ reason: "limit", reactions: [observed("30", "👍")] })
+    // Fails on the old code: A padded selector was refused at registration
+    const padded = await api.collect({ emoji: " 👍\u000c", maxReactions: 1 })
+    deliverReaction(addition("30", "👍")).deliver()
+    expect(await padded.wait()).toMatchObject({ reason: "limit", reactions: [observed("30", "👍")] })
+})
+
 test.each(modes)("%s reports rejection and uncertain outcomes without unsafe replay", async (mode) => {
     let status = 403,
         calls = 0

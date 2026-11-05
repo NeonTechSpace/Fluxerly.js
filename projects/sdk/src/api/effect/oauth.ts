@@ -119,7 +119,7 @@ export interface OAuthClient {
     /**
      * Fetch one bounded page of the delegated user's community memberships.
      * Use an access token with Fluxer's guilds scope.
-     * Optionally supply pagination settings in GuildListQuery, where limit defaults to 200 and accepts 1–200, and before and after are mutually exclusive cursors.
+     * Optionally supply pagination settings in GuildListQuery, where limit defaults to 200 and accepts 1–200, and when both before and after are set, Fluxer uses after and ignores before.
      * This uses bearer authentication with the supplied access token, never the bot token.
      * Failures identify a read in details.read for errors.isRetryable. Requests are not retried automatically,
      * and network causes retain only sanitized transport facts

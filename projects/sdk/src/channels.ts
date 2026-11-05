@@ -566,7 +566,7 @@ export type GuildChannel =
 /** Settings shared by new text, announcement, voice, category and link channels.
  * Supply the matching ChannelCreate type. Fluxer decides which settings apply to that channel type and
  * enforces permissions. Omitted permissionOverwrites inherit from the parent category, while [] requests none.
- * Unknown input keys fail locally. The encoded request body must fit within 4,194,304 bytes
+ * Unknown input keys fail locally. The encoded request body must fit within 15,029,592 bytes, Fluxer's default body limit
  *
  * @category Channels
  */
@@ -578,12 +578,18 @@ export interface ChannelCreateBase {
      */
     readonly name: string
     /** Description shown for the channel, 1–1,024 UTF-16 code units after U+000C and U+202E removal and
-     * surrounding-whitespace trimming, or null to clear. The original string is sent unchanged
+     * surrounding-whitespace trimming, or null or an empty string for none, as Fluxer reads an empty string as null
+     * here. The original string is sent unchanged
      */
     readonly topic?: string | null
-    /** Absolute URL for a link channel, or null to clear. The SDK does not open or fetch the URL */
+    /** Link-channel URL, or null or an empty string for none. After Fluxer's normalization it must hold 1–2,048 UTF-16
+     * code units, start with http:// or https:// and carry no credentials, and its host must be an IP address or a domain
+     * name with a top-level domain, such as example.com, not localhost, as hosted Fluxer requires. A client for a custom
+     * instance skips only the top-level domain rule locally and leaves it to that server. The original string is sent
+     * unchanged. The SDK does not open or fetch the URL
+     */
     readonly url?: string | null
-    /** Parent category, with null or omission creating a top-level channel */
+    /** Parent category, with null, an empty string or omission creating a top-level channel */
     readonly parentId?: string | null
     /** Voice audio bitrate in bits per second, integer 8,000–384,000 or null, default 64,000 for voice channels.
      * Fluxer clamps the requested value to the community's enabled bitrate tier. Read the returned channel for the applied value
@@ -593,7 +599,9 @@ export interface ChannelCreateBase {
     readonly userLimit?: number | null
     /** Voice connections per user from 1 through 100, default 5 for voice channels */
     readonly voiceConnectionLimit?: number | null
-    /** Explicit overrides, omitted to inherit a parent category and [] to create no overrides */
+    /** Explicit overrides, omitted to inherit a parent category and [] to create no overrides. Fluxer takes at most
+     * 10,000, and a longer list fails before sending
+     */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
     /** Adult-content setting using Fluxer's older NSFW field. True marks the channel adult-only, while false inherits
      * the parent category or community setting like omission. Use nsfwOverride false to mark it not adult-only.
@@ -604,8 +612,8 @@ export interface ChannelCreateBase {
     readonly nsfwOverride?: boolean | null
     /** 0 inherits the content-warning level, 1 requests a channel content warning */
     readonly contentWarningLevel?: number
-    /** Warning shown before viewing content, with 0–200 raw UTF-16 code units and null inheriting.
-     * No text normalization is applied before validation
+    /** Warning shown before viewing content, with 0–200 raw UTF-16 code units and null inheriting. Fluxer stores an
+     * empty or blank text as null, so it inherits too. No text normalization is applied before validation
      */
     readonly contentWarningText?: string | null
     /** Delay between a user's messages in seconds, integer 0–21,600 or null. Zero disables slowmode */
@@ -701,25 +709,29 @@ export interface ForumTagInput {
     readonly name: string
     /** Whether only members who can manage threads may apply or remove the tag. Omission means false */
     readonly moderated?: boolean
-    /** Decimal ID of a custom emoji of this community, or null for none. Fluxer rejects an emoji that the community
-     * does not have. Set at most one of emojiId and emojiName
+    /** Decimal ID of a custom emoji of this community, or null or an empty string for none. Fluxer rejects an emoji
+     * that the community does not have. Set at most one of emojiId and emojiName
      */
     readonly emojiId?: string | null
-    /** A single Unicode emoji, or null for none, up to 64 UTF-16 code units. Fluxer rejects other text.
-     * Set at most one of emojiId and emojiName
+    /** A single Unicode emoji, or null or an empty string for none, up to 64 UTF-16 code units. Fluxer rejects other
+     * text. Set at most one of emojiId and emojiName
      */
     readonly emojiName?: string | null
 }
 
 /** The reaction that clients show on each post of a forum or media channel.
- * Set at most one of emojiId and emojiName. A received ForumDefaultReaction is also valid input
+ * Set at most one of emojiId and emojiName. A received ForumDefaultReaction is also valid input.
+ * Fluxer reads an empty string as null here, and an input whose values are all null or empty, or an empty object, as
+ * null for the whole field, which clears the default reaction
  *
  * @category Channels
  */
 export interface ForumDefaultReactionInput {
-    /** Decimal ID of a custom emoji of this community, or null. Fluxer rejects an emoji that the community does not have */
+    /** Decimal ID of a custom emoji of this community, or null or an empty string. Fluxer rejects an emoji that the
+     * community does not have
+     */
     readonly emojiId?: string | null
-    /** A single Unicode emoji, or null, up to 64 UTF-16 code units. Fluxer rejects other text */
+    /** A single Unicode emoji, or null or an empty string, up to 64 UTF-16 code units. Fluxer rejects other text */
     readonly emojiName?: string | null
 }
 
@@ -733,7 +745,7 @@ export interface ForumDefaultReactionInput {
  */
 export interface ForumChannelCreateBase extends ChannelCreateBase, ThreadParentDefaults {
     /** Posting guidelines, 1–4,096 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
-     * trimming, or null for none. The original string is sent unchanged
+     * trimming, or null or an empty string for none. The original string is sent unchanged
      */
     readonly topic?: string | null
     /** Tags that posts can carry, at most 20. Fluxer rejects two tags with the same name. Omission creates none */
@@ -808,15 +820,21 @@ export interface ChannelEdit {
     /** Channel name. Raw input may contain at most 10,000 UTF-16 code units. For validation, Fluxer's general-name
      * rules remove U+000C and U+202E, trim surrounding whitespace, strip provider-defined invisible characters,
      * normalize whitespace and collapse its runs, then require 1–100 UTF-16 code units. The SDK sends the original
-     * string without lowercasing or hyphenating it
+     * string without lowercasing or hyphenating it. Fluxer reads an empty name as null and leaves the name unchanged
      */
     readonly name?: string
     /** Channel description, 1–1,024 UTF-16 code units after U+000C and U+202E removal and
-     * surrounding-whitespace trimming, or null to clear. A forum or media channel allows up to 4,096 code units,
-     * which Fluxer checks against the channel's type. The original string is sent unchanged
+     * surrounding-whitespace trimming, or null or an empty string to clear it, as Fluxer reads an empty string as null
+     * here. A forum or media channel allows up to 4,096 code units, which Fluxer checks against the channel's type.
+     * The original string is sent unchanged
      */
     readonly topic?: string | null
-    /** Absolute link-channel URL, or null to clear. No URL is fetched by this request */
+    /** Link-channel URL, or null or an empty string to clear it. After Fluxer's normalization it must hold 1–2,048
+     * UTF-16 code units, start with http:// or https:// and carry no credentials, and its host must be an IP address or a
+     * domain name with a top-level domain, such as example.com, not localhost, as hosted Fluxer requires. A client for a
+     * custom instance skips only the top-level domain rule locally and leaves it to that server. The original string is
+     * sent unchanged. No URL is fetched by this request
+     */
     readonly url?: string | null
     /** Voice bitrate in bits per second, integer 8,000–384,000, or null.
      * Fluxer clamps the requested value to the community's enabled bitrate tier. Read the returned channel for the applied value
@@ -835,16 +853,18 @@ export interface ChannelEdit {
     readonly nsfwOverride?: boolean | null
     /** 0 inherits the content-warning level, 1 requests a channel content warning */
     readonly contentWarningLevel?: number
-    /** Warning text with 0–200 raw UTF-16 code units, with null inheriting.
-     * No text normalization is applied before validation
+    /** Warning text with 0–200 raw UTF-16 code units, with null inheriting. Fluxer stores an empty or blank text as
+     * null, so it inherits too. No text normalization is applied before validation
      */
     readonly contentWarningText?: string | null
     /** Delay between a user's messages in seconds, integer 0–21,600, or null. Zero disables slowmode */
     readonly rateLimitPerUser?: number | null
-    /** Replace all explicit overwrites, with [] clearing them and omission preserving them */
+    /** Replace all explicit overwrites, with [] clearing them and omission preserving them. Fluxer takes at most
+     * 10,000, and a longer list fails before sending
+     */
     readonly permissionOverwrites?: readonly PermissionOverwrite[]
     /** Voice region ID of 1–64 UTF-16 code units after U+000C and U+202E removal and surrounding-whitespace
-     * trimming, with null selecting automatic routing. The original string is sent unchanged
+     * trimming, with null or an empty string selecting automatic routing. The original string is sent unchanged
      */
     readonly rtcRegion?: string | null
     /** Auto-archive period in minutes that a text, announcement, forum or media channel stores for its threads: One of
@@ -901,9 +921,9 @@ export interface ChannelPosition {
     readonly id: string
     /** Nonnegative requested sibling position */
     readonly position?: number
-    /** New parent category, with null moving to the top level and omission preserving the parent */
+    /** New parent category, with null or an empty string moving to the top level and omission preserving the parent */
     readonly parentId?: string | null
-    /** Sibling directly preceding this channel, with null placing it first */
+    /** Sibling directly preceding this channel, with null or an empty string placing it first */
     readonly precedingSiblingId?: string | null
     /** Copy destination overwrites only when moving into a new category, default false and no sync for the same parent */
     readonly syncPermissionsOnMove?: boolean

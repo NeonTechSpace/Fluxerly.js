@@ -179,7 +179,7 @@ test.each(modes)(
         try {
             const target = { guildId: "20", userId: "30" }
             await api.fetchSelf()
-            await expect(api.edit({ nickname: "" })).rejects.toMatchObject({
+            await expect(api.edit({ nickname: "x".repeat(33) })).rejects.toMatchObject({
                 _tag: "GuildOperationError",
                 operation: "members.editSelf",
                 reason: "input",
@@ -277,13 +277,12 @@ test("rejects malformed member-profile requests and profile response fields", ()
         { roles: [] },
         { mute: true },
         { communicationDisabledUntil: null },
-        { nickname: "" },
         { nickname: "x".repeat(33) },
-        { avatar: "data:text/plain;base64,AA==" },
+        { avatar: "data:image/png;base64,AB==" },
         { banner: "not-a-data-uri" },
-        { bio: "" },
+        { bio: " " },
         { bio: "x".repeat(321) },
-        { pronouns: "" },
+        { pronouns: " " },
         { pronouns: "x".repeat(41) },
         { accentColor: -1 },
         { accentColor: 0x1000000 },

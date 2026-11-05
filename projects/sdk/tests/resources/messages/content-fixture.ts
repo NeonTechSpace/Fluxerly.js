@@ -89,7 +89,7 @@ export async function fixture() {
             const base = init.method === "POST" ? wire([]) : message
             message = {
                 ...base,
-                ...(body.sticker_ids === undefined
+                ...(body.sticker_ids === undefined || body.sticker_ids === null
                     ? {}
                     : { stickers: body.sticker_ids.map((id: string) => ({ id, name: "Fixture", animated: false })) }),
                 ...(body.content === undefined ? {} : { content: body.content }),

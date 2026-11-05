@@ -15,7 +15,7 @@ import type { MessageReaction } from "#sdk/reactions"
 import type { PageInput, PageTurners, PaginateFailure, PaginateOptions, PaginateResult } from "#sdk/reaction-pages"
 import type { ClientOwner } from "./client.js"
 import { collectorBudgetMessage } from "./collector.js"
-import { record } from "./decode/primitives.js"
+import { inputGatewayId, record } from "./decode/primitives.js"
 import { readInput } from "./defects.js"
 import { collectReactions, type ReactionCollector } from "./reaction-collector.js"
 import { unsupportedKeyHint } from "./suggest.js"
@@ -40,6 +40,18 @@ interface Settings {
 }
 
 const optionKeys = ["users", "idleMs", "timeoutMs", "removeClicks", "signal"]
+
+/** A frozen copy of a list of user IDs, each trimmed, nonzero and no greater than the largest ID Fluxer issues */
+function pageUsers(users: unknown): readonly string[] | undefined {
+    if (!Array.isArray(users)) return undefined
+    const ids: string[] = []
+    for (const item of users as unknown[]) {
+        const id = inputGatewayId(item)
+        if (id === undefined) return undefined
+        ids.push(id)
+    }
+    return Object.freeze(ids)
+}
 
 /** Copy and check the pages once. Page bodies are checked by send and edit, so only their shape is checked here */
 function copyPages(pages: unknown): readonly Page[] | ConfigurationError {
@@ -94,12 +106,9 @@ function settings(pages: unknown, options: unknown): Settings | ConfigurationErr
     if (typeof removeClicks !== "boolean")
         return new ConfigurationError("removeClicks", 'The page option "removeClicks" must be true or false')
     let turners: PageTurners
+    let trimmedUsers: readonly string[] | undefined
     if (typeof users === "function") turners = users as PageTurners
-    else if (
-        Array.isArray(users) &&
-        users.every((id: unknown) => typeof id === "string" && /^[1-9][0-9]{0,19}$/.test(id))
-    )
-        turners = Object.freeze([...(users as string[])])
+    else if ((trimmedUsers = pageUsers(users)) !== undefined) turners = trimmedUsers
     else
         return new ConfigurationError(
             "users",

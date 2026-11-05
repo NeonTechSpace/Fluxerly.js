@@ -88,7 +88,7 @@ function reaction(userId: string, guildId?: string): MessageReaction {
 test("message collectors isolate owned shard intake and recovery without channel lookup", async () => {
     const { events, owner } = fixture()
 
-    for (const guildId of [null, "0", "01", "18446744073709551616"])
+    for (const guildId of [null, "0", "01", "9223372036854775808", "18446744073709551616"])
         await expect(Effect.runPromise(collect(owner, "20", { guildId } as never))).rejects.toMatchObject({
             _tag: "ConfigurationError",
             field: "guildId",
@@ -97,7 +97,7 @@ test("message collectors isolate owned shard intake and recovery without channel
         _tag: "CollectorError",
         reason: "notConnected",
     })
-    await expect(Effect.runPromise(collect(owner, "20", { guildId: "18446744073709551615" }))).rejects.toMatchObject({
+    await expect(Effect.runPromise(collect(owner, "20", { guildId: " 9223372036854775807 " }))).rejects.toMatchObject({
         _tag: "CollectorError",
         reason: "notConnected",
     })

@@ -79,8 +79,8 @@ export const harnessWatchdogs = Object.freeze({
     // 3 identity, 2 discoveries, 15 requests per expression kind, the webhook section and 14 cleanup
     "expressions.js": { "": { baseMs: 240_000, requests: 59, clients: 2 } },
     // 3 identity, 2 discoveries, the webhook, message, edit, delete and lost-send sections, a CDN read and 7 cleanup,
-    // plus a webhook a failed run left
-    "webhooks.js": { "": { baseMs: 180_000, requests: 52, clients: 2 } },
+    // plus a webhook a failed run left, and the empty-body forwards of 3 requests for each API
+    "webhooks.js": { "": { baseMs: 180_000, requests: 58, clients: 2 } },
     // 3 identity, 1 discovery, a feature read, 4 requests for each of 5 edits and 3 cleanup
     "guild-feature-toggles.js": { "": { baseMs: 180_000, requests: 28, clients: 1 } },
     // 3 identity, 1 discovery, and up to 20 raw membership pages and 20 SDK pages for a bot in up to 4,000 servers.
@@ -152,11 +152,14 @@ export const harnessWatchdogs = Object.freeze({
         "--recover": { baseMs: 120_000, requests: 14, clients: 1 },
         "--manage": { baseMs: 120_000, requests: 27, clients: 1 },
         "--events": { baseMs: 120_000, requests: 24, clients: 1 },
-        "--history": { baseMs: 120_000, requests: 35, clients: 1 },
+        // Two between-cursor pages of 2 requests each, and the stored embed read of up to 7 requests
+        "--history": { baseMs: 120_000, requests: 46, clients: 1 },
         "--pagination": { baseMs: 120_000, requests: 44, clients: 1 },
-        "--cache": { baseMs: 120_000, requests: 70, clients: 1 },
+        "--cache": { baseMs: 120_000, requests: 74, clients: 1 },
         "--collectors": { baseMs: 120_000, requests: 35, clients: 1 },
-        "--embeds": { baseMs: 120_000, requests: 27, clients: 1 },
+        // The existing attachment edit: an upload of up to 4 requests, the edit and its readback, and the URL host and
+        // padded ID checks of 3 requests
+        "--embeds": { baseMs: 120_000, requests: 36, clients: 1 },
         "--attachments": { baseMs: 240_000, requests: 45, clients: 1 },
         "--attachments-small": { baseMs: 240_000, requests: 36, clients: 1 },
         "--attachment-sources": { baseMs: 240_000, requests: 68, clients: 1 },

@@ -16,7 +16,7 @@ import type {
 } from "#sdk/discovery"
 import type { GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, inputId, record } from "./decode/primitives.js"
 import { nonNegativeInteger as integer } from "./decode/primitives.js"
 import { nullableTimestamp as nullableTime, timestamp } from "./decode/timestamp.js"
 import { checkFields, choiceField, field, type FieldRules, integerField, textField } from "./field-rules.js"
@@ -59,8 +59,14 @@ function application(value: unknown, guildId: string): DiscoveryApplication | un
     })
 }
 
-export function discoveryStatus(guildId: string): GuildRequest<DiscoveryStatus> | InputValidationFailure {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function discoveryStatus(rawGuildId: string): GuildRequest<DiscoveryStatus> | InputValidationFailure {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         guildId,
         bucket: "guild:discovery:status",
@@ -170,10 +176,13 @@ export function discoverySearch(
     const limit = search.limit ?? 24
     const offset = search.offset ?? 0
     const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset) })
-    if (search.query !== undefined) parameters.set("query", search.query)
+    // Fluxer turns an empty query value into null and then refuses it (fluxer_api/src/api/Validator.ts:220,
+    // packages/schema/src/domains/guild/GuildDiscoverySchemas.ts:64 and :67 at 0098958f), so empty query and tag values
+    // are omitted
+    if (search.query !== undefined && search.query !== "") parameters.set("query", search.query)
     if (search.categoryId !== undefined) parameters.set("category", String(search.categoryId))
     if (search.primaryLanguage !== undefined) parameters.set("language", search.primaryLanguage)
-    if (search.tag !== undefined) parameters.set("tag", search.tag)
+    if (search.tag !== undefined && search.tag !== "") parameters.set("tag", search.tag)
     if (search.sortBy !== undefined) parameters.set("sort_by", sortByWire[search.sortBy])
     return {
         guildId: "discovery",
@@ -189,11 +198,16 @@ export function discoverySearch(
                 !Array.isArray(value.category_counts)
             )
                 return undefined
-            const guilds = value.guilds.map(discoveryGuild)
-            if (guilds.length > limit || guilds.some((guild) => guild === undefined)) return undefined
+            if (value.guilds.length > limit) return undefined
+            // Each guild is checked before the next is read, so failingFieldPath names the guild that failed
+            const guilds: DiscoveryGuild[] = []
             const guildIds = new Set<string>()
-            if (guilds.some((guild) => !guild || guildIds.has(guild.id) || (guildIds.add(guild.id), false)))
-                return undefined
+            for (const item of value.guilds) {
+                const guild = discoveryGuild(item)
+                if (!guild || guildIds.has(guild.id)) return undefined
+                guildIds.add(guild.id)
+                guilds.push(guild)
+            }
             const categoryIds = new Set<number>()
             const categoryCounts: DiscoveryCategoryCount[] = []
             for (const item of value.category_counts) {
@@ -208,7 +222,7 @@ export function discoverySearch(
                 categoryCounts.push(Object.freeze({ categoryId: item.category_type, count: item.count }))
             }
             return Object.freeze({
-                guilds: Object.freeze(guilds as DiscoveryGuild[]),
+                guilds: Object.freeze(guilds),
                 total: value.total,
                 categoryCounts: Object.freeze(categoryCounts),
                 offset,
@@ -279,14 +293,15 @@ function body(input: DiscoveryApplicationInput | DiscoveryApplicationEdit, patch
 }
 
 export function discoveryWrite(
-    guildId: string,
+    rawGuildId: string,
     input: DiscoveryApplicationInput | DiscoveryApplicationEdit,
     patch = false,
 ): GuildRequest<DiscoveryApplication> | InputValidationFailure {
-    const base = discoveryStatus(guildId),
+    const base = discoveryStatus(rawGuildId),
         json = body(input, patch)
     if (base instanceof InputValidationFailure) return base
     if (json instanceof InputValidationFailure) return json
+    const { guildId } = base
     return {
         ...base,
         bucket: "guild:discovery:update",
@@ -297,9 +312,10 @@ export function discoveryWrite(
     }
 }
 
-export function discoveryWithdraw(guildId: string): GuildRequest<void> | InputValidationFailure {
-    const base = discoveryStatus(guildId)
+export function discoveryWithdraw(rawGuildId: string): GuildRequest<void> | InputValidationFailure {
+    const base = discoveryStatus(rawGuildId)
     if (base instanceof InputValidationFailure) return base
+    const { guildId } = base
     return {
         ...base,
         bucket: "guild:discovery:update",

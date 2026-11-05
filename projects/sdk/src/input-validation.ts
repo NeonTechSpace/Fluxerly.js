@@ -26,6 +26,10 @@ export type InputValidationConstraint =
  * Every operation input, query and options object rejects keys it does not support before sending, with constraint
  * allowedFields. The explanation names the key when it is a short identifier, such as a misspelled field name,
  * suggests the closest supported key and lists the supported keys.
+ * An ID may carry surrounding whitespace, which the SDK trims before use, as Fluxer trims IDs, so the request, the result
+ * and cache lookups use the trimmed ID. After trimming it must be a decimal from 0 through 9223372036854775807 without
+ * leading zeros, and other values fail with constraint format. A number ID fails too, even though Fluxer accepts JSON
+ * integers, because real Fluxer IDs are larger than JavaScript numbers can hold exactly.
  * Write application-specific user-facing messages rather than displaying this diagnostic as application copy
  *
  * @example

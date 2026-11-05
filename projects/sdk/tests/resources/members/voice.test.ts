@@ -102,7 +102,6 @@ test("rejects invalid voice mutation inputs without constructing a request", () 
         memberVoiceMove({ guildId: "20", userId: "bad" }, "50"),
         memberVoiceMove(target, "0"),
         memberVoiceMove(target, "voice"),
-        memberVoiceMove({ ...target, connectionId: "" }, "50"),
         memberVoiceMove({ ...target, connectionId: "x".repeat(33) }, null),
         memberVoiceFlag(target, "mute", undefined),
         memberVoiceFlag(target, "mute", true),

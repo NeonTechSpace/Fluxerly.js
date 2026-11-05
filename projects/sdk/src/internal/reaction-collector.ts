@@ -96,8 +96,12 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
     if (invalidBudget) return invalidBudget
     if (input.filter !== undefined && typeof input.filter !== "function")
         return new ConfigurationError("filter", "Collector filter must be a function")
-    if (input.guildId !== undefined && !guildId(input.guildId))
-        return new ConfigurationError("guildId", "Guild ID must be a positive uint64 decimal string")
+    const trimmedGuildId = input.guildId === undefined ? undefined : guildId(input.guildId)
+    if (input.guildId !== undefined && trimmedGuildId === undefined)
+        return new ConfigurationError(
+            "guildId",
+            "Guild ID must be a positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const emojiInput = input.emoji as ReactionEmojiInput | undefined
     const emoji = emojiInput === undefined ? undefined : resolveReactionEmoji(emojiInput)
     if (emojiInput !== undefined && emoji === undefined)
@@ -118,7 +122,7 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
         return new ConfigurationError("signal", "Collector signal must be an AbortSignal")
     return {
         ...result,
-        ...(input.guildId === undefined ? {} : { guildId: input.guildId }),
+        ...(trimmedGuildId === undefined ? {} : { guildId: trimmedGuildId }),
         ...(emoji === undefined ? {} : { emoji }),
         ...(input.filter === undefined ? {} : { filter: input.filter as (message: MessageReaction) => boolean }),
         ...(signal === undefined ? {} : { signal: signal as unknown as NonNullable<OperationOptions["signal"]> }),

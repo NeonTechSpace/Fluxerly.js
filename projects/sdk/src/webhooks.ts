@@ -174,7 +174,9 @@ export interface WebhookCreate {
      * trimming. The original string is sent unchanged
      */
     readonly name: string
-    /** Base64 image data URI, or null for the default avatar. Fluxer validates image format and size */
+    /** Base64 image data or data URI, or null or an empty string for the default avatar. Fluxer reads the text after the first comma and
+     * validates image format and size. Base64 with nonzero bits before its = padding fails locally, as Fluxer refuses it
+     */
     readonly avatar?: string | null
 }
 
@@ -193,7 +195,9 @@ export interface WebhookEdit {
      * trimming. The original string is sent unchanged
      */
     readonly name?: string
-    /** Base64 image data URI, or null to remove the avatar. Follower webhooks reject any supplied avatar change */
+    /** Base64 image data or data URI, as for WebhookCreate.avatar, or null or an empty string to remove the avatar. Follower webhooks reject
+     * any supplied avatar change
+     */
     readonly avatar?: string | null
     /** Move future messages within the same community, subject to Fluxer's permissions. Followers require a text channel, while incoming webhooks allow text, voice, announcement, forum or media channels */
     readonly channelId?: string
@@ -249,11 +253,17 @@ export type WebhookMessageOptions = {
     /** Which mentions may notify people. By default, mention text does not enable notifications */
     readonly allowedMentions?: AllowedMentions
     /** Override the sender name for this message only, using 1–80 UTF-16 code units after U+000C and U+202E removal
-     * and surrounding-whitespace trimming. The original string is sent unchanged
+     * and surrounding-whitespace trimming. The original string is sent unchanged. Null keeps the webhook's own name
      */
-    readonly username?: string
-    /** Override the avatar for this message only. Use an HTTP(S) URL without credentials, at most 8,192 characters, fetched by Fluxer */
-    readonly avatarUrl?: string
+    readonly username?: string | null
+    /** Override the avatar for this message only. Use a URL that starts with http:// or https:// in lowercase, without
+     * a user name, password or other @ before its path, fetched by Fluxer, of 1 through 2,048 UTF-16 code units after
+     * U+000C and U+202E removal and surrounding-whitespace trimming. The original string is sent unchanged. As in hosted
+     * Fluxer, the host must be an IP address or a domain name with a top-level domain, such as example.com, not localhost.
+     * A client for a custom instance skips only the top-level domain rule locally and leaves it to that server.
+     * Null keeps the webhook's own avatar
+     */
+    readonly avatarUrl?: string | null
     /** Decimal ID of a thread in the webhook's channel, sent as the thread_id query parameter so the message goes to
      * that thread instead of the channel. Fluxer rejects a thread that belongs to another channel, and a forum or media
      * channel needs either this or threadName. It cannot be combined with threadName
@@ -288,8 +298,9 @@ export interface WebhookForumPostOptions {
  * A message to send through a webhook client, using the webhook's token rather than a bot token.
  * For a new message, supply text, embeds, uploads or stickers and omit messageReference.
  * For a reply, add a reply reference and write the content or attachments normally.
- * For a forward, supply only a forward reference and optional nonce, sender, flags or mention overrides.
- * Forwards cannot also contain new text, embeds, stickers or uploads.
+ * For a forward, supply a forward reference and optional nonce, sender, flags or mention overrides.
+ * Forwards cannot also contain new text, embeds, stickers or uploads. As in Fluxer, null, empty or blank content,
+ * empty embed, upload and sticker lists and null stickers count as none, so a forward may carry them.
  * Fluxer rejects missing or cross-channel reply/forward targets. New messages do not require the destination channel ID.
  * Fluxer never sends a webhook message as text-to-speech, so a tts property fails with reason input before dispatch, like any other unknown property
  *
@@ -310,6 +321,16 @@ export type WebhookMessageInput =
     | (WebhookMessageOptions & {
           /** Copy this source message as a forward instead of supplying new message content */
           readonly messageReference: WebhookForwardReference
+          /** No text: Fluxer accepts a forward whose content is null, empty or blank after removing U+000C and U+202E
+           * and trimming, and the SDK sends it as given. Other text fails locally with reason input
+           */
+          readonly content?: string | null
+          /** No embeds: Omit the list or leave it empty, which the SDK sends as given */
+          readonly embeds?: readonly []
+          /** No uploads: Omit the list or leave it empty, which the SDK sends as given */
+          readonly attachments?: readonly []
+          /** No stickers: Omit the list, leave it empty or use null, which the SDK sends as given */
+          readonly stickerIds?: readonly [] | null
       })
 
 /**
@@ -324,13 +345,16 @@ export interface WebhookTokenEdit {
      * trimming. The original string is sent unchanged
      */
     readonly name?: string
-    /** Base64 image data URI, or null to remove the avatar */
+    /** Base64 image data or data URI, as for WebhookCreate.avatar, or null or an empty string to remove the avatar */
     readonly avatar?: string | null
 }
 
 /**
  * Changes to a message previously sent by this webhook.
  * Supply content, embeds or flags. Omitted values stay unchanged, while empty text or an empty embed array clears that part.
+ * Fluxer checks the edit itself, not the message it leaves: Unless flags are supplied, the edit needs visible content or
+ * an embed, so clearing the text or the embeds alone fails locally with reason input. Send flags, such as the message's
+ * current flags, in the same edit to clear one of them alone.
  * This operation cannot upload or replace attachments
  *
  * @category Invites and webhooks
@@ -338,8 +362,10 @@ export interface WebhookTokenEdit {
 export interface WebhookMessageEdit {
     /** Replacement flags containing only MessageFlags.SuppressEmbeds and MessageFlags.SuppressNotifications. Supplying flags, including 0, also clears MessageFlags.VoiceMessage, which an edit cannot set again. Omit flags to preserve the existing flags, including a voice note's flag. Crossposted, IsCrosspost and SourceMessageDeleted are server-managed. Those bits and VoiceMessage fail locally before dispatch */
     readonly flags?: number
-    /** New message text, or an empty string to remove the existing text */
-    readonly content?: string
+    /** New message text, or null or an empty string, which Fluxer reads as null here, to remove the existing text. Text
+     * that is blank or only invisible characters counts as no content
+     */
+    readonly content?: string | null
     /** New rich-message cards as plain objects or EmbedBuilder instances, or an empty array to remove the existing embeds */
     readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
     /** Which mentions in the edited message may notify people. Notifications are disabled by default for this edit */
@@ -371,7 +397,9 @@ export type WebhookClientOptions = (
     | {
           /** Decimal ID of the webhook to use */
           readonly id: string
-          /** Webhook secret, not a bot token. Keep it out of logs and public source code */
+          /** Webhook secret, not a bot token, of 1–256 letters, digits, underscores or hyphens, the limit Fluxer
+           * applies to the token in a path. Keep it out of logs and public source code
+           */
           readonly token: string
       }
     | WebhookCredentials
@@ -387,7 +415,7 @@ export type WebhookClientOptions = (
      * Limit the combined declared size of attachments waiting to upload or currently uploading, in bytes.
      * Defaults to 104,857,600 bytes (100 MiB). Supply a positive safe integer.
      * Each upload counts its byte-array length, file size or declared stream size until its connection and body are cleaned up.
-     * This is separate from the 4 MiB queued JSON budget and is not a limit on the application's total memory use
+     * This is separate from the 64 MiB queued JSON budget and is not a limit on the application's total memory use
      */
     readonly uploadMaxBytes?: number
     /**

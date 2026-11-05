@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect"
 import type { MessageCore } from "#sdk/messages"
 import type { PaginationError } from "#sdk/pagination"
 import type { ClientOwner } from "#sdk/internal/client"
+import { withInstanceUrlRule } from "#sdk/internal/field-text"
 import { paginationStream, type Pagination } from "#sdk/internal/pagination"
 import { isClientClosed, localValue } from "./execute.js"
 import { eachEntry, operationTable, type OperationTable } from "./operations.js"
@@ -49,6 +50,8 @@ export function bindNative<M extends MessageCore>(owner: ClientOwner<M>): Native
     const namespaces = eachEntry(operationTable<M>(), (entry, id) => {
         switch (entry.kind) {
             case "op":
+                return (...args: readonly unknown[]) =>
+                    withInstanceUrlRule(entry.run(owner, ...args), owner.instance.hosted)
             case "lookup":
                 return (...args: readonly unknown[]) => entry.run(owner, ...args)
             case "get":

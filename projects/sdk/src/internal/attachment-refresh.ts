@@ -25,11 +25,13 @@ export function attachmentRefresh(urls: readonly string[]): AttachmentRefreshReq
     const original = Array.from({ length }, (_, index) => urls[index])
     if (!original.every((url) => typeof url === "string"))
         return inputValidationFailure("urls[]", "type", "Each attachment URL must be a string")
-    if (!original.every((url) => url.length <= 2_048))
+    // Fluxer reads an empty URL as null and refuses the whole request (fluxer_api/src/api/Validator.ts:59-67 and
+    // packages/schema/src/domains/message/AttachmentSchemas.ts:58-63 at 0098958f)
+    if (!original.every((url) => url.length >= 1 && url.length <= 2_048))
         return inputValidationFailure(
             "urls[]",
             "length",
-            "Each attachment URL must contain at most 2,048 UTF-16 code units",
+            "Each attachment URL must contain 1 through 2,048 UTF-16 code units",
         )
     return {
         path: "/attachments/refresh-urls",

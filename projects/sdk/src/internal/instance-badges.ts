@@ -5,7 +5,7 @@
  */
 import type { InstanceBadge, InstanceBadgePage } from "#sdk/instance"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { fieldsOnce, identifier, integerInRange, record, snapshotArray } from "./decode/primitives.js"
+import { fieldsOnce, identifier, inputId, integerInRange, record, snapshotArray } from "./decode/primitives.js"
 import type { GuildRequest } from "./guilds.js"
 
 /** Fluxer's lookup and page limits for community badges */
@@ -57,9 +57,14 @@ export function instanceBadges(query: unknown): GuildRequest<InstanceBadgePage> 
         const items = snapshotArray(ids, maxLookupIds)
         if (items === undefined || items.length === 0)
             return inputValidationFailure("query.ids", "length", `Send 1 through ${maxLookupIds} badge IDs`)
-        if (!items.every(identifier))
-            return inputValidationFailure("query.ids[]", "format", "Badge IDs must be decimal strings")
-        parameters.set("ids", items.join(","))
+        const trimmed = items.map(inputId)
+        if (!trimmed.every((id) => id !== undefined))
+            return inputValidationFailure(
+                "query.ids[]",
+                "format",
+                "Badge IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            )
+        parameters.set("ids", trimmed.join(","))
         maximum = items.length
     } else {
         if (after !== undefined && (typeof after !== "string" || after === ""))

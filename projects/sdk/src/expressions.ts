@@ -77,10 +77,13 @@ export interface ExpressionMetadata extends GuildEmoji {
  * @category Emoji and stickers
  */
 export interface EmojiCreate {
-    /** 2–32 ASCII letters, digits or underscores */
+    /** 2–32 ASCII letters, digits or underscores after U+000C and U+202E removal and surrounding-whitespace trimming.
+     * The original string is sent unchanged
+     */
     readonly name: string
-    /** Base64 image data or an image data URI, at most 512 KiB decoded.
-     * Fluxer validates the actual format, dimensions, moderation and community capacity.
+    /** Base64 image data or a data URI. Base64 with nonzero bits before its = padding fails locally, as Fluxer refuses it.
+     * Fluxer applies the community's emoji or sticker size limit, 512 KiB decoded by default and higher where the
+     * instance allows it, and validates the actual format, dimensions, moderation and community capacity.
      * No file is read implicitly. Callers own encoding and the lifetime of their original bytes
      */
     readonly image: string
@@ -97,7 +100,8 @@ export interface StickerCreate {
      * The original string is sent unchanged
      */
     readonly name: string
-    /** Omitted/null means no description. Otherwise the value must contain 1–500 normalized UTF-16 code units.
+    /** Omitted, null or an empty string means no description, as Fluxer reads an empty string as null here, and the
+     * SDK sends null for it. Otherwise the value must contain 1–500 normalized UTF-16 code units.
      * Validation removes U+000C and U+202E and trims surrounding whitespace. The original string is sent unchanged
      */
     readonly description?: string | null
@@ -105,7 +109,7 @@ export interface StickerCreate {
      * U+202E and trims surrounding whitespace without changing the strings sent. Entries are copied by index when the operation starts
      */
     readonly tags?: readonly string[]
-    /** Base64 image data or image data URI, at most 512 KiB decoded */
+    /** Base64 image data or a data URI, checked as for EmojiCreate.image */
     readonly image: string
 }
 
@@ -115,7 +119,9 @@ export interface StickerCreate {
  * @category Emoji and stickers
  */
 export interface EmojiEdit {
-    /** Replacement name, 2–32 ASCII letters, digits or underscores */
+    /** Replacement name, 2–32 ASCII letters, digits or underscores after U+000C and U+202E removal and
+     * surrounding-whitespace trimming. The original string is sent unchanged
+     */
     readonly name: string
 }
 

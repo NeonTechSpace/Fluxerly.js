@@ -1,7 +1,7 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "f50792ae705cbba28fecace477253de534c627ef",
+        "commit": "0098958f94ba4cd80c0dac25129d568be7759bd3",
         "path": "fluxer_docs/src/content/docs/gateway",
         "sha256": "d7ccd93c4e4db0eb8ccc33c9ecd9e15b40392f8b55350d2125d8852b750dd167"
     },
@@ -67,10 +67,7 @@
                     "optional": false,
                     "type": "array[voice state object]",
                     "description": "Participants",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "voice-state-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "voice-state-object" } }
                 },
                 {
                     "name": "recipients",
@@ -145,10 +142,7 @@
                     "optional": false,
                     "type": "array[channel count entry object]",
                     "description": "One entry per channel",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "channel-count-entry-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "channel-count-entry-object" } }
                 },
                 {
                     "name": "nonce",
@@ -228,11 +222,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The user that joined",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 }
             ]
         },
@@ -254,11 +244,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The user that left",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 }
             ]
         },
@@ -290,11 +276,7 @@
                     "description": "Every changed channel",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "channel",
-                            "link": "/http-api/channels/#channel-object"
-                        }
+                        "item": { "kind": "rest", "name": "channel", "link": "/http-api/channels/#channel-object" }
                     }
                 }
             ]
@@ -419,10 +401,7 @@
                     "optional": false,
                     "type": "array[forum unread object]",
                     "description": "One entry for each requested post found in the channel",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "named", "name": "forum unread" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "named", "name": "forum unread" } }
                 }
             ]
         },
@@ -431,9 +410,7 @@
             "anchor": "guild-audit-log-entry-create",
             "scope": "Holders of `VIEW_AUDIT_LOG`",
             "prose": "An audit log entry was written. Every session with `VIEW_AUDIT_LOG` gets it. The payload is the audit log entry with `guild_id` added and any `ip` entry left out of `changes`. Treat a missing `options` or `changes` as empty.",
-            "payload": {
-                "link": "/http-api/guild-audit-logs/#guild-audit-log-entry-object"
-            },
+            "payload": { "link": "/http-api/guild-audit-logs/#guild-audit-log-entry-object" },
             "fields": []
         },
         "GUILD_BAN_ADD": {
@@ -491,10 +468,7 @@
                     "optional": false,
                     "type": "array[guild count entry object]",
                     "description": "One entry per guild",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "guild-count-entry-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "guild-count-entry-object" } }
                 },
                 {
                     "name": "nonce",
@@ -624,10 +598,7 @@
                     "optional": true,
                     "type": "array[presence object]",
                     "description": "Visible presences, when the request set `presences`",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "presence-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "presence-object" } }
                 },
                 {
                     "name": "nonce",
@@ -692,20 +663,14 @@
                     "optional": false,
                     "type": "array[member list group object]",
                     "description": "Group headers in list order",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "member-list-group-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "member-list-group-object" } }
                 },
                 {
                     "name": "ops",
                     "optional": false,
                     "type": "array[member list operation object]",
                     "description": "Operations to apply",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "member-list-operation-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "member-list-operation-object" } }
                 }
             ]
         },
@@ -996,11 +961,7 @@
                     "optional": true,
                     "type": "map[snowflake, string]",
                     "description": "Group direct message nicknames, when the group has any",
-                    "shape": {
-                        "kind": "map",
-                        "key": { "kind": "snowflake" },
-                        "value": { "kind": "string" }
-                    }
+                    "shape": { "kind": "map", "key": { "kind": "snowflake" }, "value": { "kind": "string" } }
                 },
                 {
                     "name": "mention_here",
@@ -1205,10 +1166,7 @@
                     "optional": false,
                     "type": "array[reaction addition object]",
                     "description": "The reactions, oldest first",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "reaction-addition-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "reaction-addition-object" } }
                 }
             ]
         },
@@ -1364,21 +1322,14 @@
                     "optional": false,
                     "type": "map[snowflake, snowflake]",
                     "description": "New `last_message_id` for each changed channel the session can view",
-                    "shape": {
-                        "kind": "map",
-                        "key": { "kind": "snowflake" },
-                        "value": { "kind": "snowflake" }
-                    }
+                    "shape": { "kind": "map", "key": { "kind": "snowflake" }, "value": { "kind": "snowflake" } }
                 },
                 {
                     "name": "voice_states",
                     "optional": true,
                     "type": "array[voice state object]",
                     "description": "Changed voice states, with a null `channel_id` for someone who left",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "voice-state-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "voice-state-object" } }
                 }
             ]
         },
@@ -1408,10 +1359,7 @@
                     "optional": false,
                     "type": "array[presence object]",
                     "description": "Up to 500 presences, split across several events when there are more",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "presence-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "presence-object" } }
                 }
             ]
         },
@@ -1469,21 +1417,14 @@
                     "optional": false,
                     "type": "user object",
                     "description": "The authenticated account in its private representation",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "user",
-                        "link": "/http-api/users/#user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "user", "link": "/http-api/users/#user-object" }
                 },
                 {
                     "name": "guilds",
                     "optional": false,
                     "type": "array[guild ready object]",
                     "description": "The session's guilds",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "guild-ready-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "guild-ready-object" } }
                 },
                 {
                     "name": "private_channels",
@@ -1492,11 +1433,7 @@
                     "description": "Direct message and group direct message channels",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "channel",
-                            "link": "/http-api/channels/#channel-object"
-                        }
+                        "item": { "kind": "rest", "name": "channel", "link": "/http-api/channels/#channel-object" }
                     }
                 },
                 {
@@ -1518,10 +1455,7 @@
                     "optional": false,
                     "type": "array[presence object]",
                     "description": "Visible presences at connection time",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "presence-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "presence-object" } }
                 },
                 {
                     "name": "users",
@@ -1542,10 +1476,7 @@
                     "optional": false,
                     "type": "array[session presence object]",
                     "description": "Every live session of the account, after a combined `all` entry",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "session-presence-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "session-presence-object" } }
                 },
                 {
                     "name": "read_states",
@@ -1592,11 +1523,7 @@
                     "optional": false,
                     "type": "map[snowflake, string]",
                     "description": "Private notes keyed by user ID",
-                    "shape": {
-                        "kind": "map",
-                        "key": { "kind": "snowflake" },
-                        "value": { "kind": "string" }
-                    }
+                    "shape": { "kind": "map", "key": { "kind": "snowflake" }, "value": { "kind": "string" } }
                 },
                 {
                     "name": "pinned_dms",
@@ -1612,11 +1539,7 @@
                     "description": "Saved memes",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "meme",
-                            "link": "/http-api/memes/#meme-object"
-                        }
+                        "item": { "kind": "rest", "name": "meme", "link": "/http-api/memes/#meme-object" }
                     }
                 },
                 {
@@ -1624,20 +1547,14 @@
                     "optional": false,
                     "type": "array[WebAuthn credential object]",
                     "description": "Registered WebAuthn credentials",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "webauthn-credential-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "webauthn-credential-object" } }
                 },
                 {
                     "name": "rtc_regions",
                     "optional": false,
                     "type": "array[RTC region object]",
                     "description": "Voice regions, nearest first",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "rtc-region-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "rtc-region-object" } }
                 },
                 {
                     "name": "country_code",
@@ -1730,11 +1647,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The other user",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 },
                 {
                     "name": "since",
@@ -1925,11 +1838,7 @@
                     "description": "The active threads the session can view",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "thread",
-                            "link": "/http-api/threads/#thread-object"
-                        }
+                        "item": { "kind": "rest", "name": "thread", "link": "/http-api/threads/#thread-object" }
                     }
                 },
                 {
@@ -2023,10 +1932,7 @@
                     "optional": false,
                     "type": "array[thread member list item object]",
                     "description": "The members of the thread, at most 1,000",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "named", "name": "thread member list item" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "named", "name": "thread member list item" } }
                 }
             ]
         },
@@ -2104,10 +2010,7 @@
                     "optional": false,
                     "type": "array[connection object]",
                     "description": "Every connection on the account",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "named", "name": "connection" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "named", "name": "connection" } }
                 }
             ]
         },
@@ -2116,9 +2019,7 @@
             "anchor": "user-guild-settings-update",
             "scope": "Current user",
             "prose": "The notification settings for one guild changed. The payload is that guild's user guild settings object.",
-            "payload": {
-                "link": "/http-api/users/settings/#user-guild-settings-object"
-            },
+            "payload": { "link": "/http-api/users/settings/#user-guild-settings-object" },
             "fields": []
         },
         "USER_NOTE_UPDATE": {
@@ -2198,10 +2099,7 @@
                     "optional": true,
                     "type": "array[ICE server object]",
                     "description": "STUN servers for the peer connections, empty when the instance has none",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "ice-server-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "ice-server-object" } }
                 },
                 {
                     "name": "connection_id",
@@ -2434,11 +2332,7 @@
                     "optional": false,
                     "type": "guild object",
                     "description": "Guild record without its roles, channels, emojis, stickers or members",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "guild",
-                        "link": "/http-api/guilds/#guild-object"
-                    }
+                    "shape": { "kind": "rest", "name": "guild", "link": "/http-api/guilds/#guild-object" }
                 },
                 {
                     "name": "roles",
@@ -2461,11 +2355,7 @@
                     "description": "Channels the session can view",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "channel",
-                            "link": "/http-api/channels/#channel-object"
-                        }
+                        "item": { "kind": "rest", "name": "channel", "link": "/http-api/channels/#channel-object" }
                     }
                 },
                 {
@@ -2529,20 +2419,14 @@
                     "optional": false,
                     "type": "array[presence object]",
                     "description": "Always an empty array",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "presence-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "presence-object" } }
                 },
                 {
                     "name": "voice_states",
                     "optional": false,
                     "type": "array[voice state object]",
                     "description": "Voice states in channels the session can view",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "voice-state-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "voice-state-object" } }
                 },
                 {
                     "name": "joined_at",
@@ -2579,11 +2463,7 @@
                     "description": "Active threads, as Guild threads describes",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "thread",
-                            "link": "/http-api/threads/#thread-object"
-                        }
+                        "item": { "kind": "rest", "name": "thread", "link": "/http-api/threads/#thread-object" }
                     }
                 }
             ]
@@ -2668,10 +2548,7 @@
                     "optional": false,
                     "type": "array[member list item object]",
                     "description": "Replacement items for the range",
-                    "shape": {
-                        "kind": "array",
-                        "item": { "kind": "ref", "object": "member-list-item-object" }
-                    }
+                    "shape": { "kind": "array", "item": { "kind": "ref", "object": "member-list-item-object" } }
                 }
             ]
         },
@@ -2684,11 +2561,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The user the presence belongs to",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 },
                 {
                     "name": "status",
@@ -2716,11 +2589,7 @@
                     "optional": false,
                     "type": "?custom status object",
                     "description": "The user's custom status, null when `offline`",
-                    "shape": {
-                        "kind": "ref",
-                        "object": "custom-status-object",
-                        "nullable": true
-                    }
+                    "shape": { "kind": "ref", "object": "custom-status-object", "nullable": true }
                 },
                 {
                     "name": "guild_id",
@@ -3240,11 +3109,7 @@
                     "optional": true,
                     "type": "map[snowflake, string]",
                     "description": "The group direct message nicknames by user ID (1-32 characters each)",
-                    "shape": {
-                        "kind": "map",
-                        "key": { "kind": "snowflake" },
-                        "value": { "kind": "string" }
-                    }
+                    "shape": { "kind": "map", "key": { "kind": "snowflake" }, "value": { "kind": "string" } }
                 },
                 {
                     "name": "flags",
@@ -3331,11 +3196,7 @@
                     "description": "The tags a post can use (max 20, forum and media channels)",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "forum tag",
-                            "link": "/http-api/forums/#forum-tag-object"
-                        }
+                        "item": { "kind": "rest", "name": "forum tag", "link": "/http-api/forums/#forum-tag-object" }
                     }
                 },
                 {
@@ -3702,11 +3563,7 @@
                     "optional": true,
                     "type": "partial user object",
                     "description": "The account that uploaded the emoji",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 }
             ]
         },
@@ -3719,11 +3576,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The account the membership belongs to",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 },
                 {
                     "name": "nick",
@@ -3848,11 +3701,7 @@
                     "optional": true,
                     "type": "partial user object",
                     "description": "The account that uploaded the sticker, only on List guild stickers",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 }
             ]
         },
@@ -4140,11 +3989,7 @@
                     "description": "Guild channels you can view, without threads",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "channel",
-                            "link": "/http-api/channels/#channel-object"
-                        }
+                        "item": { "kind": "rest", "name": "channel", "link": "/http-api/channels/#channel-object" }
                     }
                 },
                 {
@@ -4658,6 +4503,13 @@
                     "type": "?string",
                     "description": "The thumbhash placeholder recorded at save time",
                     "shape": { "kind": "string", "nullable": true }
+                },
+                {
+                    "name": "nsfw",
+                    "optional": false,
+                    "type": "boolean",
+                    "description": "Whether the media is flagged as explicit, from the source message or the media scan",
+                    "shape": { "kind": "boolean" }
                 }
             ]
         },
@@ -4925,44 +4777,28 @@
                     "optional": true,
                     "type": "embed media object",
                     "description": "The thumbnail",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "embed media",
-                        "link": "/http-api/messages/#embed-media-object"
-                    }
+                    "shape": { "kind": "rest", "name": "embed media", "link": "/http-api/messages/#embed-media-object" }
                 },
                 {
                     "name": "image",
                     "optional": true,
                     "type": "embed media object",
                     "description": "The main image",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "embed media",
-                        "link": "/http-api/messages/#embed-media-object"
-                    }
+                    "shape": { "kind": "rest", "name": "embed media", "link": "/http-api/messages/#embed-media-object" }
                 },
                 {
                     "name": "video",
                     "optional": true,
                     "type": "embed media object",
                     "description": "The video",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "embed media",
-                        "link": "/http-api/messages/#embed-media-object"
-                    }
+                    "shape": { "kind": "rest", "name": "embed media", "link": "/http-api/messages/#embed-media-object" }
                 },
                 {
                     "name": "audio",
                     "optional": true,
                     "type": "embed media object",
                     "description": "The audio",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "embed media",
-                        "link": "/http-api/messages/#embed-media-object"
-                    }
+                    "shape": { "kind": "rest", "name": "embed media", "link": "/http-api/messages/#embed-media-object" }
                 },
                 {
                     "name": "footer",
@@ -5024,11 +4860,7 @@
                     "description": "At most one nested embed",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "embed",
-                            "link": "/http-api/messages/#embed-object"
-                        }
+                        "item": { "kind": "rest", "name": "embed", "link": "/http-api/messages/#embed-object" }
                     }
                 }
             ]
@@ -5255,11 +5087,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The user who sent the message",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 },
                 {
                     "name": "webhook_id",
@@ -5380,11 +5208,7 @@
                     "description": "The embeds, empty while `SUPPRESS_EMBEDS` is set",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "embed",
-                            "link": "/http-api/messages/#embed-object"
-                        }
+                        "item": { "kind": "rest", "name": "embed", "link": "/http-api/messages/#embed-object" }
                     }
                 },
                 {
@@ -5422,11 +5246,7 @@
                     "description": "The reactions on the message",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "reaction",
-                            "link": "/http-api/messages/#reaction-object"
-                        }
+                        "item": { "kind": "rest", "name": "reaction", "link": "/http-api/messages/#reaction-object" }
                     }
                 },
                 {
@@ -5489,11 +5309,7 @@
                     "optional": true,
                     "type": "thread object",
                     "description": "The thread started from this message",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "thread",
-                        "link": "/http-api/threads/#thread-object"
-                    }
+                    "shape": { "kind": "rest", "name": "thread", "link": "/http-api/threads/#thread-object" }
                 }
             ]
         },
@@ -5591,11 +5407,7 @@
                     "description": "The embeds",
                     "shape": {
                         "kind": "array",
-                        "item": {
-                            "kind": "rest",
-                            "name": "embed",
-                            "link": "/http-api/messages/#embed-object"
-                        }
+                        "item": { "kind": "rest", "name": "embed", "link": "/http-api/messages/#embed-object" }
                     }
                 },
                 {
@@ -5651,11 +5463,7 @@
                     "optional": false,
                     "type": "emoji object",
                     "description": "The emoji",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "emoji",
-                        "link": "/http-api/messages/#emoji-object"
-                    }
+                    "shape": { "kind": "rest", "name": "emoji", "link": "/http-api/messages/#emoji-object" }
                 },
                 {
                     "name": "count",
@@ -6863,6 +6671,13 @@
                     "shape": { "kind": "integer" }
                 },
                 {
+                    "name": "allow_mature_content_on_ios",
+                    "optional": false,
+                    "type": "boolean",
+                    "description": "Whether the iOS app allows 18+ communities, channels and the \"Show\" media option. Only adults can turn it on",
+                    "shape": { "kind": "boolean" }
+                },
+                {
                     "name": "suppress_unprivileged_self_mentions",
                     "optional": false,
                     "type": "boolean",
@@ -6943,11 +6758,7 @@
                     "optional": false,
                     "type": "partial user object",
                     "description": "The related account",
-                    "shape": {
-                        "kind": "rest",
-                        "name": "partial user",
-                        "link": "/http-api/users/#partial-user-object"
-                    }
+                    "shape": { "kind": "rest", "name": "partial user", "link": "/http-api/users/#partial-user-object" }
                 },
                 {
                     "name": "since",

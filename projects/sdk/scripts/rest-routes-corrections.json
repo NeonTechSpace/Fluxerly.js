@@ -7,6 +7,31 @@
                 "fluxer_api/src/api/gateway/GatewayController.ts:11",
                 "fluxer_api/src/api/gateway/GatewayRequestService.ts:32-41"
             ]
+        },
+        {
+            "route": "GET /.well-known/fluxer",
+            "reason": "Fluxer serves this public route without authentication, so the document lists no token, and it answers a request with a bot token the same way",
+            "evidence": ["fluxer_api/src/api/instance/InstanceController.ts:250-262"]
+        },
+        {
+            "route": "GET /instance/badges",
+            "reason": "Fluxer serves this public route without authentication, so the document lists no token, and it answers a request with a bot token the same way",
+            "evidence": ["fluxer_api/src/api/instance/InstanceController.ts:371-384"]
+        },
+        {
+            "route": "GET /invites/{invite_code}",
+            "reason": "Fluxer serves this public route without authentication, so the document lists no token, and it answers a request with a bot token the same way. The server reads the caller only when one is present",
+            "evidence": ["fluxer_api/src/api/invite/InviteController.ts:21-40"]
+        },
+        {
+            "route": "GET /ip",
+            "reason": "Fluxer serves this public route without authentication, so the document lists no token, and it answers a request with a bot token the same way",
+            "evidence": ["fluxer_api/src/api/geolocation/GeolocationController.ts:14-30"]
+        },
+        {
+            "route": "GET /oauth2/applications/{id}/public",
+            "reason": "Fluxer serves this public route without authentication, so the document lists no token, and it answers a request with a bot token the same way. The server reads the caller only when one is present",
+            "evidence": ["fluxer_api/src/api/oauth/OAuth2Controller.ts:241-260"]
         }
     ],
     "query": [
@@ -51,8 +76,8 @@
             "name": "limit",
             "type": "integer",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/MessageController.ts:55",
-                "packages/schema/src/domains/message/MessageRequestSchemas.ts:394"
+                "fluxer_api/src/api/channel/controllers/MessageController.ts:56",
+                "packages/schema/src/domains/message/MessageRequestSchemas.ts:399"
             ]
         },
         {
@@ -60,7 +85,7 @@
             "name": "with_member",
             "type": "boolean",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/ThreadController.ts:357",
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:369",
                 "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:72"
             ]
         },
@@ -69,7 +94,7 @@
             "name": "limit",
             "type": "integer",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/ThreadController.ts:357",
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:369",
                 "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:74"
             ]
         },
@@ -78,7 +103,7 @@
             "name": "with_member",
             "type": "boolean",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/ThreadController.ts:442",
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:454",
                 "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:84"
             ]
         },
@@ -87,7 +112,7 @@
             "name": "limit",
             "type": "integer",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/ThreadController.ts:294",
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:306",
                 "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:87-95"
             ]
         },
@@ -96,7 +121,7 @@
             "name": "limit",
             "type": "integer",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/ThreadController.ts:263",
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:275",
                 "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:87-95"
             ]
         },
@@ -142,7 +167,7 @@
             "name": "limit",
             "type": "integer",
             "evidence": [
-                "fluxer_api/src/api/channel/controllers/ThreadController.ts:325",
+                "fluxer_api/src/api/channel/controllers/ThreadController.ts:337",
                 "packages/schema/src/domains/channel/ThreadRequestSchemas.ts:100-102"
             ]
         },
@@ -187,8 +212,8 @@
             "name": "with_mutual_friends",
             "type": "boolean",
             "evidence": [
-                "fluxer_api/src/api/user/controllers/UserAccountController.ts:659",
-                "packages/schema/src/domains/user/UserRequestSchemas.ts:511"
+                "fluxer_api/src/api/user/controllers/UserAccountController.ts:661",
+                "packages/schema/src/domains/user/UserRequestSchemas.ts:516"
             ]
         },
         {
@@ -196,8 +221,17 @@
             "name": "with_mutual_guilds",
             "type": "boolean",
             "evidence": [
-                "fluxer_api/src/api/user/controllers/UserAccountController.ts:659",
-                "packages/schema/src/domains/user/UserRequestSchemas.ts:512"
+                "fluxer_api/src/api/user/controllers/UserAccountController.ts:661",
+                "packages/schema/src/domains/user/UserRequestSchemas.ts:517"
+            ]
+        },
+        {
+            "route": "GET /instance/badges",
+            "name": "limit",
+            "type": "integer",
+            "evidence": [
+                "fluxer_api/src/api/instance/InstanceController.ts:374",
+                "packages/schema/src/domains/instance/InstanceSchemas.ts:463-467"
             ]
         }
     ],
@@ -235,6 +269,73 @@
                 "fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts:463-464",
                 "fluxer_api/src/api/channel/services/thread/ThreadCreationService.ts:292"
             ]
+        },
+        {
+            "schema": "AuditLogChangeSchema",
+            "property": "old_value",
+            "branches": [
+                {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                }
+            ],
+            "reason": "The document lists only scalars, scalar arrays and added and removed lists, but the server records any value of the audited snapshot, such as the forum tag objects and default reaction emoji object of a channel update",
+            "evidence": [
+                "fluxer_api/src/api/guild/GuildAuditLogTypes.ts:3-7",
+                "fluxer_api/src/api/channel/services/thread/ThreadParentSettings.ts:198-211",
+                "fluxer_api/src/api/channel/services/thread/ThreadParentSettings.ts:224-230",
+                "fluxer_api/src/api/channel/services/channel_data/ChannelOperationsService.ts:533-541"
+            ]
+        },
+        {
+            "schema": "AuditLogChangeSchema",
+            "property": "new_value",
+            "branches": [
+                {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    }
+                }
+            ],
+            "reason": "The document lists only scalars, scalar arrays and added and removed lists, but the server records any value of the audited snapshot, such as the forum tag objects and default reaction emoji object of a channel update",
+            "evidence": [
+                "fluxer_api/src/api/guild/GuildAuditLogTypes.ts:3-7",
+                "fluxer_api/src/api/channel/services/thread/ThreadParentSettings.ts:198-211",
+                "fluxer_api/src/api/channel/services/thread/ThreadParentSettings.ts:224-230",
+                "fluxer_api/src/api/channel/services/channel_data/ChannelOperationsService.ts:533-541"
+            ]
+        },
+        {
+            "schema": "MessageUpdateRequestSchema",
+            "remove": ["message_snapshots"],
+            "reason": "The document offers snapshot attachment edits, but the server refuses every edit that sends message_snapshots with MISSING_PERMISSIONS",
+            "evidence": ["fluxer_api/src/api/channel/services/message/MessageEditService.ts:110-112"]
+        },
+        {
+            "schema": "GlobalSearchMessagesRequest",
+            "property": "scope",
+            "values": ["current"],
+            "reason": "The document allows every scope, but the server refuses any scope other than current from a bot with BOT_SEARCH_SCOPE_UNAVAILABLE",
+            "evidence": ["fluxer_api/src/api/search/controllers/SearchController.ts:35-37"]
+        },
+        {
+            "schema": "ThreadMemberResponse",
+            "required": ["id", "user_id"],
+            "reason": "The document makes id and user_id optional, but the thread member serializer always writes both",
+            "evidence": ["fluxer_api/src/api/channel/services/thread/ThreadMappers.ts:19-28"]
         }
     ]
 }

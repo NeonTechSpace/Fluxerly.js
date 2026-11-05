@@ -1,0 +1,278 @@
+{
+    "objects": [
+        {
+            "object": "/http-api/users/#user-object",
+            "reason": "The document lists only the private fields of the account, but the server sends the partial user fields first and the private ones after them, so id and username are present",
+            "evidence": [
+                "fluxer_api/src/api/user/UserMappers.ts:140-150",
+                "fluxer_api/src/api/user/UserMappers.ts:93-121"
+            ],
+            "addFieldsFrom": "/http-api/users/#partial-user-object"
+        },
+        {
+            "object": "/http-api/guild-audit-logs/#audit-log-options-object",
+            "reason": "The document requires every option, but the server adds only the options the entry has and sends none when it has no option",
+            "evidence": [
+                "fluxer_api/src/api/guild/GuildAuditLogEntryMapper.ts:288-300",
+                "fluxer_api/src/api/guild/GuildAuditLogEntryMapper.ts:343-349"
+            ],
+            "optional": [
+                "channel_id",
+                "count",
+                "delete_member_days",
+                "delete_message_seconds",
+                "id",
+                "integration_type",
+                "inviter_id",
+                "max_age",
+                "max_uses",
+                "members_removed",
+                "message_id",
+                "role_name",
+                "temporary",
+                "type",
+                "uses"
+            ]
+        },
+        {
+            "object": "/http-api/channels/#channel-object",
+            "reason": "A group direct message sends its name as null when it has none, and the document types the name as a string",
+            "evidence": ["fluxer_api/src/api/channel/ChannelMappers.ts:159"],
+            "nullable": ["name"]
+        },
+        {
+            "object": "/http-api/guild-emojis/#guild-emoji-object",
+            "reason": "The server sends nsfw on every guild emoji, always false, and the document lacks it",
+            "evidence": [
+                "fluxer_api/src/api/guild/GuildModel.ts:98-105",
+                "fluxer_api/src/api/guild/GuildModel.ts:161-168"
+            ],
+            "addFields": [
+                {
+                    "name": "nsfw",
+                    "optional": false,
+                    "description": "Deprecated. Always false",
+                    "shape": {
+                        "kind": "boolean"
+                    }
+                }
+            ]
+        },
+        {
+            "object": "/http-api/guild-stickers/#guild-sticker-object",
+            "reason": "The server sends nsfw on every guild sticker, always false, and the document lacks it",
+            "evidence": [
+                "fluxer_api/src/api/guild/GuildModel.ts:108-117",
+                "fluxer_api/src/api/guild/GuildModel.ts:184-194"
+            ],
+            "addFields": [
+                {
+                    "name": "nsfw",
+                    "optional": false,
+                    "description": "Deprecated. Always false",
+                    "shape": {
+                        "kind": "boolean"
+                    }
+                }
+            ]
+        },
+        {
+            "object": "member-list-item-object",
+            "reason": "The server adds the presence of every listed member to the member, as a default offline presence when it has none, and the document does not mention it",
+            "evidence": [
+                "fluxer_gateway/src/guild/guild_member_list_read.erl:468-473",
+                "fluxer_gateway/src/guild/guild_member_list_connected.erl:39-44"
+            ],
+            "replaceFields": [
+                {
+                    "name": "member",
+                    "optional": true,
+                    "description": "A member of the list, with its presence",
+                    "shape": {
+                        "kind": "rest",
+                        "name": "guild member",
+                        "link": "/http-api/guild-members/#guild-member-object",
+                        "with": [
+                            {
+                                "name": "presence",
+                                "optional": false,
+                                "description": "The presence of the member, offline when it has none",
+                                "shape": {
+                                    "kind": "object"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "object": "guild-ready-object",
+            "reason": "In the first Guild Create burst the server replaces each member's user with a reference that holds only the id",
+            "evidence": [
+                "fluxer_gateway/src/session/session_ready_collect.erl:178-205",
+                "fluxer_gateway/src/session/session_ready_collect.erl:222-227"
+            ],
+            "replaceFields": [
+                {
+                    "name": "members",
+                    "optional": false,
+                    "description": "The members the session needs immediately. In the first Guild Create burst after Ready, each member's `user` holds only the `id`",
+                    "shape": {
+                        "kind": "array",
+                        "item": {
+                            "kind": "rest",
+                            "name": "guild member",
+                            "link": "/http-api/guild-members/#guild-member-object",
+                            "with": [
+                                {
+                                    "name": "user",
+                                    "optional": false,
+                                    "description": "The account the membership belongs to, with only the `id` in the first Guild Create burst",
+                                    "shape": {
+                                        "kind": "partial",
+                                        "of": {
+                                            "kind": "rest",
+                                            "name": "partial user",
+                                            "link": "/http-api/users/#partial-user-object"
+                                        },
+                                        "require": ["id"]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "object": "custom-status-object",
+            "reason": "The document makes expires_at and emoji_id required, but at session start the gateway takes the custom status from the stored user settings, which leave both out when they are unset",
+            "evidence": [
+                "fluxer_gateway/src/session/session_manager_shard_drain.erl:252-259",
+                "fluxer_api/src/api/rpc/RpcService.ts:1154-1159",
+                "fluxer_api/src/api/user/UserMappers.ts:345-353"
+            ],
+            "optional": ["expires_at", "emoji_id"]
+        }
+    ],
+    "events": [
+        {
+            "event": "READY",
+            "reason": "The server sends a placeholder with only the id and unavailable true for every guild on a bot session and for a guild that has no state yet on any session, and the document types every entry as a full guild",
+            "evidence": [
+                "fluxer_gateway/src/session/session_ready_dispatch.erl:195-197",
+                "fluxer_gateway/src/session/session_ready_dispatch.erl:226-227"
+            ],
+            "replaceFields": [
+                {
+                    "name": "guilds",
+                    "optional": false,
+                    "description": "The session's guilds. A guild without state yet, and every guild on a bot session, is only a placeholder with `id` and `unavailable` true",
+                    "shape": {
+                        "kind": "array",
+                        "item": {
+                            "kind": "union",
+                            "members": [
+                                {
+                                    "kind": "ref",
+                                    "object": "guild-ready-object"
+                                },
+                                {
+                                    "kind": "struct",
+                                    "fields": [
+                                        {
+                                            "name": "id",
+                                            "optional": false,
+                                            "description": "Guild ID",
+                                            "shape": {
+                                                "kind": "snowflake"
+                                            }
+                                        },
+                                        {
+                                            "name": "unavailable",
+                                            "optional": false,
+                                            "description": "Always true",
+                                            "shape": {
+                                                "kind": "true"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            ],
+            "addFields": [
+                {
+                    "name": "geoip_country_code",
+                    "optional": false,
+                    "description": "Country of the connecting address from the address lookup, null when the lookup found none",
+                    "shape": {
+                        "kind": "string",
+                        "nullable": true
+                    }
+                }
+            ]
+        },
+        {
+            "event": "THREAD_MEMBERS_UPDATE",
+            "reason": "The member of an added user is null when the guild has no such member, and the overlay typed it as always present",
+            "evidence": [
+                "fluxer_gateway/src/guild/guild_thread_dispatch.erl:359",
+                "fluxer_gateway/src/guild/guild_thread_dispatch.erl:363"
+            ],
+            "nullable": {
+                "added_members": ["member"]
+            }
+        },
+        {
+            "event": "INVITE_CREATE",
+            "reason": "The server adds the guild ID to an invite created in a guild, and a group direct message invite has none",
+            "evidence": [
+                "fluxer_gateway/src/guild/guild_dispatch.erl:91",
+                "fluxer_api/src/api/invite/InviteService.ts:480-500"
+            ],
+            "addFields": [
+                {
+                    "name": "guild_id",
+                    "optional": true,
+                    "description": "The ID of the guild, absent on a group direct message invite",
+                    "shape": {
+                        "kind": "snowflake"
+                    }
+                }
+            ]
+        }
+    ],
+    "newEvents": [
+        {
+            "event": "GUILD_HEALTH_UPDATE",
+            "reason": "The documents never mention this event, and the server sends it to a session when the health of one of its guilds changes",
+            "evidence": [
+                "fluxer_gateway/src/utils/event_atoms.erl:91",
+                "fluxer_gateway/src/session/session_guild_health.erl:51-54"
+            ],
+            "scope": "Guild connection",
+            "fields": [
+                {
+                    "name": "guild_id",
+                    "optional": false,
+                    "description": "The ID of the guild",
+                    "shape": {
+                        "kind": "snowflake"
+                    }
+                },
+                {
+                    "name": "degraded",
+                    "optional": false,
+                    "description": "Whether the guild is degraded",
+                    "shape": {
+                        "kind": "boolean"
+                    }
+                }
+            ]
+        }
+    ]
+}

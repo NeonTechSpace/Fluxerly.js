@@ -175,7 +175,7 @@ export interface SupervisorOptions {
     readonly diagnosticsIntervalMs?: number
     /** Time allowed for each child to receive its assignment and finish configure, in milliseconds, including replacement children.
      * This does not wait for the gateway READY event that establishes a connected session.
-     * The parent's Identify queue counts against each child's connection.startupTimeoutMs instead. With many shards, set it in the child's clientOptions to at least 30,000 ms plus the total shard count times identify.minimumSpacingMs.
+     * The parent's Identify queue counts against each child's connection.startupTimeoutMs instead. With many shards, set it in the child's clientOptions to at least 165,000 ms, which covers Fluxer's 135-second session start, plus the total shard count times identify.minimumSpacingMs.
      * With totalShards "auto" the community count before the first child starts has its own deadline of the same length.
      * A positive safe integer no greater than 2,147,483,647. Timeout fails the supervisor, which stops its children and awaits their exit
      * @defaultValue 30000

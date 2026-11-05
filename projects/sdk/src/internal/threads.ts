@@ -34,7 +34,7 @@ import type { ClientOwner } from "./client.js"
 import { channelFetch, type ChannelRequest } from "./channels.js"
 import { decodeThread, decodeThreadList, decodeThreadMember } from "./channel-decode.js"
 import { decodeMember } from "./guilds.js"
-import { count, fieldsOnce, identifier, integerInRange, record, snapshotArray } from "./decode/primitives.js"
+import { count, fieldsOnce, inputId, inputIds, integerInRange, record, snapshotArray } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { timestamp } from "./decode/timestamp.js"
 import { suspendInput } from "./defects.js"
@@ -60,8 +60,18 @@ const autoArchivePeriods: ReadonlySet<unknown> = new Set([60, 1440, 4320, 10_080
 const maxAppliedTags = 5
 const maxSearchTags = 20
 
-const channelIdFailure = () => inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-const threadIdFailure = () => inputValidationFailure("threadId", "format", "Thread IDs must be decimal strings")
+const channelIdFailure = () =>
+    inputValidationFailure(
+        "channelId",
+        "format",
+        "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    )
+const threadIdFailure = () =>
+    inputValidationFailure(
+        "threadId",
+        "format",
+        "Thread IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    )
 
 /** Validate the name, archive period and slowmode that thread creation and editing share, reading each field once */
 function threadFields(
@@ -100,12 +110,17 @@ function threadFields(
 /** Copy a list of decimal forum tag IDs once by index */
 function tagIds(value: unknown, path: string, maximum: number): readonly string[] | InputValidationFailure {
     if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Forum tag IDs must be an array")
-    const items = snapshotArray(value, maximum)
-    if (items === undefined)
+    const listed = snapshotArray(value, maximum)
+    if (listed === undefined)
         return inputValidationFailure(path, "length", `At most ${maximum} forum tag IDs are accepted`)
-    if (!items.every(identifier))
-        return inputValidationFailure(`${path}[]`, "format", "Forum tag IDs must be decimal strings")
-    return items as readonly string[]
+    const items = inputIds(listed, maximum)
+    if (items === undefined)
+        return inputValidationFailure(
+            `${path}[]`,
+            "format",
+            "Forum tag IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    return items
 }
 
 function booleanField(field: (key: string) => unknown, key: string): boolean | undefined | InputValidationFailure {
@@ -115,8 +130,9 @@ function booleanField(field: (key: string) => unknown, key: string): boolean | u
     return value
 }
 
-export function threadCreate(channelId: string, input: ThreadCreate): ThreadValidationResult<GuildThreadChannel> {
-    if (!identifier(channelId)) return channelIdFailure()
+export function threadCreate(rawChannelId: string, input: ThreadCreate): ThreadValidationResult<GuildThreadChannel> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined) return channelIdFailure()
     if (!record(input)) return inputValidationFailure("input", "type", "Thread input must be an object")
     const unsupported = unsupportedKeyFailure(
         input,
@@ -202,11 +218,12 @@ export function threadCreateFromMessage(
 const postMessageKeys = ["content", "embeds", "attachments", "stickerIds", "allowedMentions", "flags"]
 
 export function threadPost<M extends MessageCore>(
-    channelId: string,
+    rawChannelId: string,
     input: ForumPostCreate,
     decodeMessage: MessageDecoder<M>,
 ): ThreadValidationResult<ForumPost<M>> {
-    if (!identifier(channelId)) return channelIdFailure()
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined) return channelIdFailure()
     if (!record(input)) return inputValidationFailure("input", "type", "Forum post input must be an object")
     const unsupported = unsupportedKeyFailure(
         input,
@@ -266,8 +283,9 @@ export function threadPost<M extends MessageCore>(
     }
 }
 
-export function threadEdit(threadId: string, input: ThreadEdit): ThreadValidationResult<GuildThreadChannel> {
-    if (!identifier(threadId)) return threadIdFailure()
+export function threadEdit(rawThreadId: string, input: ThreadEdit): ThreadValidationResult<GuildThreadChannel> {
+    const threadId = inputId(rawThreadId)
+    if (threadId === undefined) return threadIdFailure()
     if (!record(input)) return inputValidationFailure("input", "type", "Thread edit input must be an object")
     const unsupported = unsupportedKeyFailure(
         input,
@@ -324,8 +342,14 @@ export function threadEdit(threadId: string, input: ThreadEdit): ThreadValidatio
     }
 }
 
-export function threadActive(guildId: string): ThreadValidationResult<readonly GuildThreadChannel[]> {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function threadActive(rawGuildId: string): ThreadValidationResult<readonly GuildThreadChannel[]> {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: guildId,
         bucket: "guild:threads:active",
@@ -349,10 +373,11 @@ const archivedPaths = {
 } as const
 
 export function threadArchived(
-    channelId: string,
+    rawChannelId: string,
     query?: ArchivedThreadQuery,
 ): ThreadValidationResult<ArchivedThreadPage> {
-    if (!identifier(channelId)) return channelIdFailure()
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined) return channelIdFailure()
     const input = query === undefined ? {} : query
     if (!record(input)) return inputValidationFailure("query", "type", "Archived thread query must be an object")
     const unsupported = unsupportedKeyFailure(input, ["scope", "before", "limit"], "query", "the archived thread query")
@@ -372,8 +397,10 @@ export function threadArchived(
             "range",
             "Archived thread limit must be an integer from 2 through 100",
         )
-    const before = field("before")
-    if (before !== undefined && (scope === "joinedPrivate" ? !identifier(before) : !timestamp(before)))
+    const suppliedBefore = field("before")
+    // A joinedPrivate cursor is a thread ID, so it is trimmed. A timestamp cursor is sent as given
+    const before = scope === "joinedPrivate" && suppliedBefore !== undefined ? inputId(suppliedBefore) : suppliedBefore
+    if (suppliedBefore !== undefined && (scope === "joinedPrivate" ? before === undefined : !timestamp(suppliedBefore)))
         return inputValidationFailure(
             "query.before",
             "format",
@@ -415,8 +442,12 @@ const searchRules: FieldRules = {
     sortOrder: choiceField(["asc", "desc"], 'Thread search sortOrder must be "asc" or "desc"'),
     limit: integerField(1, 25, "Thread search limit must be an integer from 1 through 25"),
     offset: integerField(0, 9975, "Thread search offset must be an integer from 0 through 9,975"),
-    maxId: idField("Thread search cursor IDs must be decimal strings"),
-    minId: idField("Thread search cursor IDs must be decimal strings"),
+    maxId: idField(
+        "Thread search cursor IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    ),
+    minId: idField(
+        "Thread search cursor IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    ),
 }
 const searchWireNames: Readonly<Record<string, string>> = {
     name: "name",
@@ -432,11 +463,12 @@ const searchWireNames: Readonly<Record<string, string>> = {
 }
 
 export function threadSearch<M extends MessageCore>(
-    channelId: string,
+    rawChannelId: string,
     query: ThreadSearchQuery | undefined,
     decodeMessage: MessageDecoder<M>,
 ): ThreadValidationResult<ThreadSearchPage<M>> {
-    if (!identifier(channelId)) return channelIdFailure()
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined) return channelIdFailure()
     const input = query === undefined ? {} : query
     if (!record(input)) return inputValidationFailure("query", "type", "Thread search query must be an object")
     const keys = Object.keys(searchRules)
@@ -448,7 +480,17 @@ export function threadSearch<M extends MessageCore>(
     const checked = checkFields({ ...supplied, limit: supplied.limit ?? 25 }, searchRules, "query.")
     if (checked instanceof InputValidationFailure) return checked
     const limit = checked.limit as number
-    const sent = wireFields({ ...checked, limit: supplied.limit === undefined ? undefined : limit }, searchWireNames)
+    // Fluxer turns an empty query value into null and then refuses it (fluxer_api/src/api/Validator.ts:220,
+    // packages/schema/src/domains/channel/ForumRequestSchemas.ts:225-229 at 0098958f), so an empty name is omitted,
+    // which matches every name
+    const sent = wireFields(
+        {
+            ...checked,
+            name: checked.name === "" ? undefined : checked.name,
+            limit: supplied.limit === undefined ? undefined : limit,
+        },
+        searchWireNames,
+    )
     const params = new URLSearchParams()
     for (const [wire, value] of Object.entries(sent))
         for (const item of Array.isArray(value) ? value : [value]) params.append(wire, String(item))
@@ -506,18 +548,23 @@ const maxPostDataIds = 100
  * entry makes the response malformed. The owner is a community member, decoded with the channel's own community
  */
 function threadPostData<M extends MessageCore>(
-    channelId: string,
+    rawChannelId: string,
     threadIds: unknown,
     decodeMessage: MessageDecoder<M>,
 ): MemberRead<readonly ForumPostData<M>[]> | InputValidationFailure {
-    if (!identifier(channelId)) return channelIdFailure()
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined) return channelIdFailure()
     if (!Array.isArray(threadIds)) return inputValidationFailure("threadIds", "type", "Post IDs must be an array")
-    const ids = snapshotArray(threadIds, maxPostDataIds)
-    if (ids === undefined || ids.length === 0)
+    const listed = snapshotArray(threadIds, maxPostDataIds)
+    if (listed === undefined || listed.length === 0)
         return inputValidationFailure("threadIds", "length", `Send 1 through ${maxPostDataIds} post IDs`)
-    if (!ids.every(identifier))
-        return inputValidationFailure("threadIds[]", "format", "Post IDs must be decimal strings")
-    const requested = ids as readonly string[]
+    const requested = inputIds(listed, maxPostDataIds)
+    if (requested === undefined)
+        return inputValidationFailure(
+            "threadIds[]",
+            "format",
+            "Post IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const distinct = new Set(requested)
     return {
         withMember: true,
@@ -542,9 +589,11 @@ function threadPostData<M extends MessageCore>(
                     const entry = threads[threadId]
                     if (!record(entry) || entry.owner === undefined || entry.first_message === undefined)
                         return undefined
+                    // The owner is checked before the first message is read, so failingFieldPath names the owner
                     const owner = entry.owner === null ? null : decodeMember(entry.owner, guildId!)
+                    if (owner === undefined) return undefined
                     const firstMessage = entry.first_message === null ? null : decodeMessage(entry.first_message)
-                    if (owner === undefined || firstMessage === undefined) return undefined
+                    if (firstMessage === undefined) return undefined
                     if (firstMessage !== null && firstMessage.channelId !== threadId)
                         return rejectCheck("targetMismatch")
                     entries.set(threadId, Object.freeze({ threadId, owner, firstMessage }))
@@ -557,13 +606,19 @@ function threadPostData<M extends MessageCore>(
 
 /** Join or leave a thread as the bot, or add or remove another member */
 export function threadMembership(
-    threadId: string,
-    userId: string | undefined,
+    rawThreadId: string,
+    rawUserId: string | undefined,
     method: "PUT" | "DELETE",
 ): ThreadValidationResult<void> {
-    if (!identifier(threadId)) return threadIdFailure()
-    if (userId !== undefined && !identifier(userId))
-        return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
+    const threadId = inputId(rawThreadId)
+    if (threadId === undefined) return threadIdFailure()
+    const userId = rawUserId === undefined ? undefined : inputId(rawUserId)
+    if (rawUserId !== undefined && userId === undefined)
+        return inputValidationFailure(
+            "userId",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: threadId,
         bucket: method === "PUT" ? "channel:thread:member:put" : "channel:thread:member:delete",
@@ -606,12 +661,19 @@ interface MemberRead<A> {
 }
 
 function threadMemberFetch(
-    threadId: string,
-    userId: string,
+    rawThreadId: string,
+    rawUserId: string,
     query: unknown,
 ): MemberRead<ThreadMember> | InputValidationFailure {
-    if (!identifier(threadId)) return threadIdFailure()
-    if (!identifier(userId)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
+    const threadId = inputId(rawThreadId)
+    if (threadId === undefined) return threadIdFailure()
+    const userId = inputId(rawUserId)
+    if (userId === undefined)
+        return inputValidationFailure(
+            "userId",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const validated = memberQuery(query, ["withMember"])
     if (validated instanceof InputValidationFailure) return validated
     const { withMember } = validated
@@ -632,10 +694,11 @@ function threadMemberFetch(
 }
 
 export function threadMemberPage(
-    threadId: string,
+    rawThreadId: string,
     query: unknown,
 ): MemberRead<readonly ThreadMember[]> | InputValidationFailure {
-    if (!identifier(threadId)) return threadIdFailure()
+    const threadId = inputId(rawThreadId)
+    if (threadId === undefined) return threadIdFailure()
     const validated = memberQuery(query, ["after", "limit", "withMember"])
     if (validated instanceof InputValidationFailure) return validated
     const { field, withMember } = validated
@@ -646,8 +709,9 @@ export function threadMemberPage(
             "range",
             "Thread member limit must be an integer from 1 through 100",
         )
-    const after = field("after")
-    if (after !== undefined && !identifier(after))
+    const suppliedAfter = field("after")
+    const after = suppliedAfter === undefined ? undefined : inputId(suppliedAfter)
+    if (suppliedAfter !== undefined && after === undefined)
         return inputValidationFailure("query.after", "format", "Thread member cursor must be a decimal user ID string")
     const params = new URLSearchParams({ limit: String(limit) })
     if (after !== undefined) params.set("after", after)
@@ -740,9 +804,11 @@ export function readThreadMembers<A>(
                           )
                 })
             // Thread member and post data payloads carry no community ID, and a channel never moves to another community
-            let guildId = resolved.guildId ?? owner.channelCache?.get(threadId)?.guildId
+            // The validated read accepted threadId, so its trimmed form is the ID the cache and the fetch use
+            const trimmedThreadId = inputId(threadId) ?? threadId
+            let guildId = resolved.guildId ?? owner.channelCache?.get(trimmedThreadId)?.guildId
             if (guildId === undefined) {
-                const thread = yield* owner.channel(operation, () => channelFetch(threadId), yield* remaining())
+                const thread = yield* owner.channel(operation, () => channelFetch(trimmedThreadId), yield* remaining())
                 guildId = thread.guildId
             }
             resolved.guildId = guildId

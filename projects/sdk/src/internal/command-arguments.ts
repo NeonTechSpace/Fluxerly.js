@@ -15,13 +15,12 @@ import type {
 } from "#sdk/command-arguments"
 import { ConfigurationError } from "#sdk/errors"
 import { readCaller } from "./defects.js"
-import { snowflakes } from "#sdk/helpers"
+import { inputGatewayId } from "./decode/primitives.js"
 import * as Effect from "effect/Effect"
 import { throwIfErr } from "./failures.js"
 import { unsupportedKeyHint } from "./suggest.js"
 
 const argumentName = /^[A-Za-z][A-Za-z0-9_]*$/
-const decimalId = /^(?:0|[1-9]\d*)$/
 const integer = /^-?(?:0|[1-9]\d*)$/
 const number = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/
 const maxCandidates = 100
@@ -167,8 +166,9 @@ function parseOptions(options: unknown): CommandArgumentContext {
                     : "The parse options must not have symbol keys",
                 { hint: "The only supported key is guildId" },
             )
-    const guildId = readCaller(() => options.guildId)
-    if (guildId !== undefined && (typeof guildId !== "string" || !isArgumentId(guildId)))
+    const rawGuildId = readCaller(() => options.guildId)
+    const guildId = rawGuildId === undefined ? undefined : argumentId(rawGuildId)
+    if (rawGuildId !== undefined && guildId === undefined)
         throw new ConfigurationError("guildId", 'The option "guildId" must be a community ID string')
     return { guildId }
 }
@@ -426,19 +426,18 @@ function copyCandidates<T extends CommandArgumentUser | CommandArgumentChannel |
         if (!Object.hasOwn(value, index))
             throw new ConfigurationError("command", "Resource candidates cannot be sparse")
         const candidate = value[index]
+        // A candidate ID is trimmed and checked as every other ID the SDK accepts, and the trimmed ID is kept
+        const id = isObject(candidate) ? argumentId(candidate.id) : undefined
         if (
             !isObject(candidate) ||
-            typeof candidate.id !== "string" ||
-            !decimalId.test(candidate.id) ||
+            id === undefined ||
             typeof candidate[nameKey] !== "string" ||
             candidate[nameKey].length === 0
         )
             throw new ConfigurationError("command", "Resource candidates require decimal IDs and nonempty names")
         copied.push(
             Object.freeze(
-                nameKey === "username"
-                    ? { id: candidate.id, username: candidate.username }
-                    : { id: candidate.id, name: candidate.name },
+                nameKey === "username" ? { id, username: candidate.username } : { id, name: candidate.name },
             ) as T,
         )
     }
@@ -482,16 +481,18 @@ function convertDescriptor(
             return withinBounds(descriptor, value)
         }
         case "member": {
-            const userId = /^<@!?(\d+)>$/.exec(raw)?.[1] ?? raw
-            if (!isArgumentId(userId) || context.guildId === undefined) return invalid()
+            const userId = argumentId(/^<@!?(\d+)>$/.exec(raw)?.[1] ?? raw)
+            if (userId === undefined || context.guildId === undefined) return invalid()
             return converted(Object.freeze({ guildId: context.guildId, userId }))
         }
         case "custom":
             return customValue(descriptor.parse(raw))
         case "boolean":
             return raw === "true" ? converted(true) : raw === "false" ? converted(false) : invalid()
-        case "id":
-            return isArgumentId(raw) ? converted(raw) : selectIdMention(raw, descriptor.mention)
+        case "id": {
+            const id = argumentId(raw)
+            return id !== undefined ? converted(id) : selectIdMention(raw, descriptor.mention)
+        }
         case "choice":
             return descriptor.choices.includes(raw) ? converted(raw) : invalid()
         case "userChoice":
@@ -515,13 +516,14 @@ function selectIdMention(
               : kind === "role"
                 ? /^<@&(\d+)>$/.exec(raw)
                 : undefined
-    return match === null || match === undefined || !isArgumentId(match[1]) ? invalid() : converted(match[1]!)
+    const id = argumentId(match?.[1])
+    return id === undefined ? invalid() : converted(id)
 }
 
-/** A nonzero decimal ID without leading zeroes, no larger than the largest 64-bit ID, as `id` and `member` accept */
-function isArgumentId(value: string | undefined): value is string {
-    return value !== "0" && snowflakes.isValid(value)
-}
+/** The trimmed ID of a nonzero decimal without leading zeroes, no larger than the largest 64-bit ID, as `id` and
+ * `member` accept, or undefined. Surrounding whitespace is trimmed, as for every ID the SDK accepts
+ */
+const argumentId = (value: unknown): string | undefined => inputGatewayId(value)
 
 /**
  * Keep a custom parse result, rejecting undefined as Invalid.
@@ -565,7 +567,7 @@ function selectResource<N extends "username" | "name", T extends { readonly id: 
     | { readonly _tag: "Converted"; readonly value: T }
     | { readonly _tag: "Rejected"; readonly reason: CommandArgumentRejectionReason } {
     const mentionId = mention.exec(raw)?.[1]
-    const id = mentionId ?? (decimalId.test(raw) ? raw : undefined)
+    const id = mentionId ?? argumentId(raw)
     let matches = candidates.filter((candidate) =>
         id === undefined ? candidate[nameKey] === raw : candidate.id === id,
     )

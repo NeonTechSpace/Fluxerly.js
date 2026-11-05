@@ -11,7 +11,7 @@ import {
     type MemberSearchQuery,
 } from "#sdk/member-search"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
+import { identifier, inputId, inputIds, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import {
     booleanField,
@@ -53,14 +53,16 @@ const queryRules: FieldRules = {
     query: textField(0, 100, "Member search text must contain at most 100 UTF-16 code units"),
     offset: integerField(0, Number.MAX_SAFE_INTEGER, "Member search offset must be a nonnegative safe integer"),
     limit: integerField(1, 100, "Member search limit must be an integer from 1 through 100"),
-    roleIds: distinct(
-        listField(
-            10,
-            identifier,
-            "format",
-            "Member search role IDs must be an array of at most 10 unique decimal strings",
-        ),
-    ),
+    roleIds: {
+        // The kept list holds the trimmed IDs, and uniqueness is checked on them
+        accept: (value) => {
+            const ids = inputIds(value, 10)
+            return ids !== undefined && new Set(ids).size === ids.length ? ids : undefined
+        },
+        constraint: "format",
+        explanation: "Member search role IDs must be an array of at most 10 unique decimal strings",
+        suffix: "[]",
+    },
     joinedAtAfterSeconds: seconds("Joined-after time must be a nonnegative safe integer in Unix seconds"),
     joinedAtBeforeSeconds: seconds("Joined-before time must be a nonnegative safe integer in Unix seconds"),
     userCreatedAtAfterSeconds: seconds("User-created-after time must be a nonnegative safe integer in Unix seconds"),
@@ -76,9 +78,11 @@ const queryRules: FieldRules = {
     sourceInviteCodes: distinct(
         listField(
             10,
-            (value) => typeof value === "string",
+            // Fluxer reads an empty code as null and refuses it (fluxer_api/src/api/Validator.ts:59-67 and
+            // packages/schema/src/domains/guild/GuildMemberSearchSchemas.ts:18 at 0098958f)
+            (value) => typeof value === "string" && value !== "",
             "unique",
-            "Source invite codes must be an array of at most 10 unique strings",
+            "Source invite codes must be an array of at most 10 unique nonempty strings",
         ),
     ),
     isBot: booleanField("Member search filter isBot must be a boolean"),
@@ -133,6 +137,10 @@ export function encodeMemberSearchQuery(query?: unknown): EncodedMemberSearchQue
     input.roleIds = checked.roleIds
     input.joinSourceTypes = checked.joinSourceTypes
     input.sourceInviteCodes = checked.sourceInviteCodes
+    // Fluxer turns "" into null and then refuses it (fluxer_api/src/api/Validator.ts:63,
+    // packages/schema/src/domains/guild/GuildMemberSearchSchemas.ts:7 at 0098958f), so empty search text is omitted,
+    // which matches every member as the caller means
+    if (checked.query === "") delete checked.query
     return Object.freeze({
         limit: limit as number,
         offset: offset as number,
@@ -218,11 +226,17 @@ function decodeMemberSearchPage(
 
 /** Builds a remote-only POST page request. It omits cache admission and therefore cannot populate partial indexed hits */
 export function memberSearch(
-    guildId: string,
+    rawGuildId: string,
     query?: MemberSearchQuery,
 ): GuildRequest<MemberSearchPage> | InputValidationFailure {
     const encoded = encodeMemberSearchQuery(query)
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (encoded instanceof InputValidationFailure) return encoded
     return {
         guildId,

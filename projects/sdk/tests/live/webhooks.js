@@ -23,7 +23,7 @@ const mode = process.argv[2]
 assert.ok(mode === "default" || mode === "effect")
 const rawFetch = globalThis.fetch
 const journalFile = openJournal("webhooks")
-let lock, journal, bot, hook, scope, token, guildId, botId
+let lock, journal, bot, hook, scope, token, webhookToken, guildId, botId
 let stage = "configuration",
     verified = false
 const report = createReporter({ mode }, { passed: true })
@@ -83,6 +83,29 @@ async function cleanup() {
     journal = undefined
     report("webhook_and_channels_cleanup_verified")
 }
+/**
+ * Name the check that failed: Its lines in this file, innermost first, so a failure inside a helper also names the
+ * caller, the error name and the assertion text. The text is cut short and has the bot token and webhook token removed.
+ * Attachment URLs carry signatures, so every query string is removed too, including a printed URL's search field
+ */
+function failedCheck(error) {
+    const lines = [...String(error?.stack ?? "").matchAll(/webhooks\.js:(\d+):/g)].map((match) => Number(match[1]))
+    let text = String(error?.message ?? error)
+    for (const secret of [token, webhookToken]) if (secret) text = text.replaceAll(secret, "[redacted]")
+    text = text.replace(/\?[^\s'"]*=[^\s'"]*/g, "?[redacted]")
+    return {
+        check: lines.length
+            ? lines
+                  .slice(0, 3)
+                  .map((line) => `webhooks.js:${line}`)
+                  .join(" < ")
+            : "unknown",
+        error: error?.name ?? typeof error,
+        ...(error?.code ? { code: error.code } : {}),
+        ...(error?.operator ? { operator: error.operator } : {}),
+        assertion: text.length > 600 ? `${text.slice(0, 600)}...` : text,
+    }
+}
 // Local checks of the deadline path can shorten the sized deadline, never extend it
 const watchdogOverride = Number(process.env.FLUXERLY_LIVE_WATCHDOG_MS)
 const sizedWatchdogMs = harnessWatchdogMs()
@@ -130,7 +153,10 @@ try {
             mode === "default"
                 ? operation
                 : Effect.runPromise(operation.pipe(Effect.provideService(Scope.Scope, scope)))
-        bot = await create(sdk.createClient({ token, cache: { messages: true } }))
+        // The channel cache places this check's messages. Without it, another check deleting its own text channel
+        // makes the SDK drop every cached message in the community, because a message does not record whether its
+        // channel was a thread of the deleted one (src/internal/client/intake.ts, applyThreadEffects)
+        bot = await create(sdk.createClient({ token, cache: { channels: true, messages: true } }))
         const webhookUpdates = []
         let observationOverflow
         const observeWebhookUpdate = (update) => {
@@ -178,6 +204,7 @@ try {
         assert.equal(created.webhook.channelId, journal.channels[0].id)
         await waitWebhookUpdate(journal.channels[0].id)
         const credential = created.credentials.revealToken()
+        webhookToken = credential
         assert.ok(!JSON.stringify(created).includes(credential) && !inspect(created).includes(credential))
         hook = await create(sdk.createWebhookClient(created.credentials))
         report(stage)
@@ -306,6 +333,47 @@ try {
                 ),
             (error) => error?._tag === "WebhookOperationError" && error.reason === "notFound" && error.status === 404,
         )
+        report(stage)
+        // Fluxer refuses a forward only beside truthy content or a nonempty embed, attachment or sticker list, trims
+        // IDs, and refuses a URL host without a top-level domain (MessageSendService.ts:395-413,
+        // SchemaPrimitives.ts:39-52, UrlValidators.ts:44-49). The SDK sends these empty fields and the trimmed IDs
+        stage = "webhook_forward_empty_body_and_padded_ids"
+        const emptyForward = await value(
+            hook.send({
+                content: null,
+                embeds: [],
+                attachments: [],
+                stickerIds: null,
+                messageReference: {
+                    type: "forward",
+                    source: { source: { id: ` ${source.id} `, channelId: `\t${source.channelId}\n` } },
+                },
+            }),
+        )
+        const emptyForwardRemote = (await api("GET", `/channels/${emptyForward.channelId}/messages/${emptyForward.id}`))
+            .data
+        assert.equal(emptyForwardRemote.message_reference?.type, 1)
+        assert.equal(emptyForwardRemote.message_reference?.message_id, source.id)
+        assert.equal(emptyForwardRemote.message_snapshots?.[0]?.content, "SDK webhook reference source")
+        // Blank content and an empty sticker list pass too. The send succeeding is the check, without another readback
+        await value(
+            hook.send({
+                content: "   ",
+                stickerIds: [],
+                messageReference: {
+                    type: "forward",
+                    source: { source: { id: source.id, channelId: source.channelId } },
+                },
+            }),
+        )
+        await assert.rejects(
+            () => value(hook.send({ content: "SDK webhook host", avatarUrl: "http://localhost/avatar.png" })),
+            (error) =>
+                error?._tag === "WebhookOperationError" &&
+                error.reason === "input" &&
+                error.outcome === "notDispatched",
+        )
+        report(stage)
         stage = "webhook_permission_error_classification"
         await assert.rejects(
             () => value(hook.editMessage(source.id, { content: "Must not replace bot message" })),
@@ -334,6 +402,75 @@ try {
         const clearedFlags = await value(hook.editMessage(sent.id, { flags: 0 }))
         assert.equal(clearedFlags.flags & 4100, 0)
         assert.equal((await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data.flags & 4100, 0)
+        report(stage)
+        // A webhook message edit reads its body through Validator('json'), which turns empty strings into null, and Fluxer
+        // then drops an author, footer or media object without its required text, unread (WebhookController.ts:462,
+        // Validator.ts:59-80, MessageRequestSchemas.ts:34-81)
+        stage = "webhook_message_edit_empty_embed_text"
+        const keptTitle = `${journal.marker}-embed`
+        await value(
+            hook.editMessage(sent.id, {
+                embeds: [
+                    {
+                        title: keptTitle,
+                        url: "",
+                        timestamp: "",
+                        author: { name: "", url: "not a URL" },
+                        footer: { text: "", iconUrl: "" },
+                        image: { url: "", description: "Unchecked" },
+                    },
+                ],
+            }),
+        )
+        const emptied = (await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data
+        assert.equal(emptied.embeds?.length, 1)
+        assert.equal(emptied.embeds[0].title, keptTitle)
+        for (const key of ["url", "timestamp", "author", "footer", "image"])
+            assert.equal(emptied.embeds[0][key] ?? undefined, undefined, key)
+        report(stage)
+        // The same route reads empty content as null. Without flags Fluxer refuses an edit with no visible content or
+        // embed, which the SDK checks locally, and with flags the edit clears the text and keeps the embed
+        // (MessageValidationService.ts:47-68, MessagePersistenceService.ts:435-449)
+        stage = "webhook_message_edit_empty_content"
+        let emptyEdit
+        try {
+            await value(hook.editMessage(sent.id, { content: "" }))
+        } catch (error) {
+            emptyEdit = error
+        }
+        assert.equal(emptyEdit?.reason, "input")
+        assert.equal(emptyEdit?.outcome, "notDispatched")
+        // Fluxer never reads the mention settings of a webhook message edit, so everyone with listed users is sent
+        // (MessageSendService.ts:1178-1240)
+        const textCleared = await value(
+            hook.editMessage(sent.id, { content: "", flags: 0, allowedMentions: { everyone: true, users: [botId] } }),
+        )
+        assert.equal(textCleared.content, "")
+        assert.equal(textCleared.embeds[0]?.title, keptTitle)
+        const clearedReadback = (await api("GET", `/channels/${sent.channelId}/messages/${sent.id}`)).data
+        assert.equal(clearedReadback.content ?? "", "")
+        assert.equal(clearedReadback.embeds?.[0]?.title, keptTitle)
+        report(stage)
+        // Fluxer accepts null content on webhook sends and edits, a padded nonce it trims and a null attachment title,
+        // which its multipart webhook schema allows unlike a null description (WebhookRequestSchemas.ts:64-102, 158-160)
+        stage = "webhook_null_content_and_title"
+        const nullSent = await value(
+            hook.send({
+                content: null,
+                embeds: [{ title: keptTitle }],
+                nonce: `  ${randomUUID().slice(0, 8)}  `,
+                attachments: [{ filename: "null-title.txt", data: new TextEncoder().encode("null"), title: null }],
+            }),
+        )
+        assert.equal(nullSent.content, "")
+        assert.equal(nullSent.attachments.length, 1)
+        await value(hook.editMessage(nullSent.id, { content: "Text before null", flags: 0 }))
+        const nullCleared = await value(hook.editMessage(nullSent.id, { content: null, flags: 0 }))
+        assert.equal(nullCleared.content, "")
+        assert.equal(nullCleared.embeds[0]?.title, keptTitle)
+        const nullReadback = (await api("GET", `/channels/${nullSent.channelId}/messages/${nullSent.id}`)).data
+        assert.equal(nullReadback.content ?? "", "")
+        assert.equal(nullReadback.embeds?.[0]?.title, keptTitle)
         report(stage)
         stage = "webhook_unknown_send_reconciliation"
         let attempts = 0
@@ -378,14 +515,16 @@ try {
         report(stage)
     }
 } catch (error) {
+    const category = ["WebhookOperationError", "ConfigurationError"].includes(error?._tag) ? error._tag : "check"
     console.error(
         JSON.stringify({
             mode,
             stage,
             passed: false,
-            category: ["WebhookOperationError", "ConfigurationError"].includes(error?._tag) ? error._tag : "check",
+            category,
             reason: error?._tag === "WebhookOperationError" ? error.reason : undefined,
             status: error?._tag === "WebhookOperationError" ? error.status : undefined,
+            ...(category === "check" ? failedCheck(error) : {}),
         }),
     )
     process.exitCode = 1

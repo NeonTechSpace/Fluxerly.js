@@ -45,7 +45,7 @@ import { ChannelOperationError, type ChannelOperation } from "#sdk/channels"
 import { WebhookOperationError, type WebhookOperation } from "#sdk/webhooks"
 import { UserOperationError, type UserOperation } from "#sdk/users"
 import { BotApplicationOperationError, type BotApplicationOperation } from "#sdk/application"
-import { identifier, record, snapshotArray } from "../decode/primitives.js"
+import { inputId, inputIds, record, snapshotArray } from "../decode/primitives.js"
 import { failingFieldPath } from "../decode/trace.js"
 import { inputDefect, suspendInput } from "../defects.js"
 import { mapFailureCause, withDeadline } from "../effect-failures.js"
@@ -309,8 +309,14 @@ async function readHistory<M extends MessageCore>(
     if (!Array.isArray(body)) throw invalid("body")
     if (body.length > query.limit) throw invalid("tooMany")
     const messages: M[] = []
-    const before = query.params.get("before")
-    const after = query.params.get("after")
+    // Fluxer ignores before and after for the page when around is present, so only a page without around is bounded
+    const around = query.params.has("around")
+    const before = around ? null : query.params.get("before")
+    const after = around ? null : query.params.get("after")
+    // With after set, Fluxer adds a thread's starter message, whose ID is the thread ID, whenever after is below it, even
+    // when before is at or below it (fluxer_api/src/api/channel/services/message/ThreadMessageResponses.ts:170-176,
+    // 214-220 at 0098958f), so the starter is not bounded by before then
+    const starterUnbounded = after !== null && BigInt(after) < BigInt(channel)
     let previous: bigint | undefined
     for (const [index, item] of body.entries()) {
         const message = decode(item)
@@ -319,7 +325,7 @@ async function readHistory<M extends MessageCore>(
         const id = BigInt(message.id)
         if (
             (previous !== undefined && id >= previous) ||
-            (before !== null && id >= BigInt(before)) ||
+            (before !== null && id >= BigInt(before) && !(starterUnbounded && message.id === channel)) ||
             (after !== null && id <= BigInt(after))
         )
             throw invalid("order")
@@ -464,10 +470,12 @@ export class RestOwner<M extends MessageCore = Message> {
 
     reply(
         token: Redacted.Redacted<string>,
-        target: MessageReference,
+        rawTarget: MessageReference,
         input: MessageInput | string,
         options?: RequestOptions,
     ) {
+        // A target that is not valid stays as given, so the encoder refuses it with the reply failure
+        const target = snapshotReference(rawTarget) ?? rawTarget
         return this.#send(
             token,
             target.channelId,
@@ -478,11 +486,13 @@ export class RestOwner<M extends MessageCore = Message> {
 
     send(
         token: Redacted.Redacted<string>,
-        channel: string,
+        rawChannel: string,
         input: MessageInput | string,
         options?: RequestOptions,
         directMessageUser?: string,
     ): Effect.Effect<M, SendError> {
+        // An ID that is not valid stays as given, so the encoder refuses it with the channel failure
+        const channel = inputId(rawChannel) ?? rawChannel
         return this.#send(
             token,
             channel,
@@ -499,7 +509,13 @@ export class RestOwner<M extends MessageCore = Message> {
         )
     }
 
-    forward(token: Redacted.Redacted<string>, channel: string, input: ForwardMessageInput, options?: RequestOptions) {
+    forward(
+        token: Redacted.Redacted<string>,
+        rawChannel: string,
+        input: ForwardMessageInput,
+        options?: RequestOptions,
+    ) {
+        const channel = inputId(rawChannel) ?? rawChannel
         return this.#send(
             token,
             channel,
@@ -548,6 +564,7 @@ export class RestOwner<M extends MessageCore = Message> {
                                   providerCode: error.providerCode,
                                   responseField: error.responseField,
                                   ...(error.streamUsed ? { streamUsed: true } : {}),
+                                  ...(error.uploadSlotsBusy ? { uploadSlotsBusy: true } : {}),
                                   // Keep the transport failure visible, as the other operation errors do
                                   ...(error.cause === undefined ? {} : { cause: error.cause }),
                               }),
@@ -591,13 +608,20 @@ export class RestOwner<M extends MessageCore = Message> {
 
     typing(
         token: Redacted.Redacted<string>,
-        channel: string,
+        rawChannel: string,
         options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
-            if (!identifier(channel))
-                return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
+            const channel = inputId(rawChannel)
+            if (channel === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "channelId",
+                        "format",
+                        "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
+                )
             return this.#execute(
                 token,
                 {
@@ -617,12 +641,14 @@ export class RestOwner<M extends MessageCore = Message> {
 
     fetchHistory(
         token: Redacted.Redacted<string>,
-        channel: string,
+        rawChannel: string,
         query?: MessageHistoryQuery,
         options?: RequestOptions,
     ): Effect.Effect<readonly M[], MessageOperationFailure> {
         return suspendInput((): Effect.Effect<readonly M[], RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
+            // An ID that is not valid stays as given, so the encoder refuses it with the channel failure
+            const channel = inputId(rawChannel) ?? rawChannel
             const encoded = encodeHistory(channel, query)
             if (encoded instanceof InputValidationFailure) return Effect.fail(inputFailure(encoded.detail))
             return this.#execute(
@@ -701,7 +727,7 @@ export class RestOwner<M extends MessageCore = Message> {
     deleteAttachment(
         token: Redacted.Redacted<string>,
         target: MessageReference,
-        attachmentId: string,
+        rawAttachmentId: string,
         options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
@@ -711,9 +737,14 @@ export class RestOwner<M extends MessageCore = Message> {
                 return Effect.fail(
                     localInputFailure("target", "format", "Message targets require decimal id and channelId strings"),
                 )
-            if (!identifier(attachmentId))
+            const attachmentId = inputId(rawAttachmentId)
+            if (attachmentId === undefined)
                 return Effect.fail(
-                    localInputFailure("attachmentId", "format", "Attachment IDs must be decimal strings"),
+                    localInputFailure(
+                        "attachmentId",
+                        "format",
+                        "Attachment IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
                 )
             return this.#execute(
                 token,
@@ -737,24 +768,38 @@ export class RestOwner<M extends MessageCore = Message> {
 
     deleteMany(
         token: Redacted.Redacted<string>,
-        channelId: string,
+        rawChannelId: string,
         ids: readonly string[],
         options?: AuditedRequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
-            if (!identifier(channelId))
-                return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
+            const channelId = inputId(rawChannelId)
+            if (channelId === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "channelId",
+                        "format",
+                        "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
+                )
             if (!Array.isArray(ids))
                 return Effect.fail(localInputFailure("messageIds", "type", "Message IDs must be an array"))
             // Copy the caller array once and validate the copy, so the validated IDs are the ones sent
-            const snapshot = snapshotArray(ids, 100)
-            if (snapshot === undefined || snapshot.length < 1)
+            const items = snapshotArray(ids, 100)
+            if (items === undefined || items.length < 1)
                 return Effect.fail(
                     localInputFailure("messageIds", "length", "Bulk deletion requires 1 through 100 message IDs"),
                 )
-            if (!snapshot.every(identifier))
-                return Effect.fail(localInputFailure("messageIds[]", "format", "Message IDs must be decimal strings"))
+            const snapshot = inputIds(items, 100)
+            if (snapshot === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "messageIds[]",
+                        "format",
+                        "Message IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
+                )
             if (new Set(snapshot).size !== snapshot.length)
                 return Effect.fail(localInputFailure("messageIds", "unique", "Message IDs must be unique"))
             const audit = auditSettings(options)
@@ -781,13 +826,20 @@ export class RestOwner<M extends MessageCore = Message> {
 
     deleteOwnMessages(
         token: Redacted.Redacted<string>,
-        channelId: string,
+        rawChannelId: string,
         options?: RequestOptions,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
-            if (!identifier(channelId))
-                return Effect.fail(localInputFailure("channelId", "format", "Channel IDs must be decimal strings"))
+            const channelId = inputId(rawChannelId)
+            if (channelId === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "channelId",
+                        "format",
+                        "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
+                )
             return this.#execute(
                 token,
                 {
@@ -828,12 +880,19 @@ export class RestOwner<M extends MessageCore = Message> {
         token: Redacted.Redacted<string>,
         target: MessageReference,
         emoji: ReactionEmojiInput,
-        userId: string,
+        rawUserId: string,
         options?: RequestOptions,
     ): Effect.Effect<boolean, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<boolean, RestFailure | ClientClosedError> => {
-            if (!identifier(userId))
-                return Effect.fail(localInputFailure("userId", "format", "User IDs must be decimal strings"))
+            const userId = inputId(rawUserId)
+            if (userId === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "userId",
+                        "format",
+                        "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
+                )
             // Reactors are listed by ascending ID after an exclusive cursor, so the first one after the ID below
             // this user's is this user exactly when this user reacted
             const below = BigInt(userId) - 1n
@@ -893,12 +952,14 @@ export class RestOwner<M extends MessageCore = Message> {
 
     fetchPins(
         token: Redacted.Redacted<string>,
-        channel: string,
+        rawChannel: string,
         query?: MessagePinsQuery,
         options?: RequestOptions,
     ): Effect.Effect<MessagePinsPage<M>, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<MessagePinsPage<M>, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
+            // An ID that is not valid stays as given, so the encoder refuses it with the channel failure
+            const channel = inputId(rawChannel) ?? rawChannel
             const page = encodePinsQuery(channel, query)
             if (page instanceof InputValidationFailure) return Effect.fail(inputFailure(page.detail))
             return this.#execute(
@@ -961,7 +1022,7 @@ export class RestOwner<M extends MessageCore = Message> {
         target: MessageReference,
         emoji: ReactionEmojiInput | undefined,
         options?: RequestOptions,
-        userId?: string,
+        rawUserId?: string,
     ): Effect.Effect<void, MessageOperationFailure> {
         return suspendInput((): Effect.Effect<void, RestFailure | ClientClosedError> => {
             if (this.#runtime.closed) return Effect.fail(closedBeforeSend())
@@ -979,8 +1040,15 @@ export class RestOwner<M extends MessageCore = Message> {
                         "Reaction emoji must be Unicode text or a custom emoji with a decimal ID",
                     ),
                 )
-            if (operation === "removeUserReaction" && !identifier(userId))
-                return Effect.fail(localInputFailure("userId", "format", "User IDs must be decimal strings"))
+            const userId = inputId(rawUserId)
+            if (operation === "removeUserReaction" && userId === undefined)
+                return Effect.fail(
+                    localInputFailure(
+                        "userId",
+                        "format",
+                        "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
+                )
             const suffix =
                 operation === "clearReactions"
                     ? ""
@@ -1930,8 +1998,8 @@ export class RestOwner<M extends MessageCore = Message> {
             )
         }).pipe(
             // A read that failed after dispatch cannot have changed remote state, so its unknown outcome stays retryable.
-            // A rate limit after the operation read a caller's stream, inline or through a presigned upload, cannot be
-            // repeated with that stream. Mark both in place: The failure's Cause, including any cleanup defects beside
+            // A rate limit or Fluxer's busy upload slots answer after the operation read a caller's stream, inline or
+            // through a presigned upload, cannot be repeated with that stream. Mark both in place: The failure's Cause, including any cleanup defects beside
             // it, stays unchanged
             Effect.onExit((exit) =>
                 Effect.sync(() => {
@@ -1941,7 +2009,8 @@ export class RestOwner<M extends MessageCore = Message> {
                     for (const reason of exit.cause.reasons)
                         if (reason._tag === "Fail" && reason.error instanceof RestFailure) {
                             if (read) reason.error.read = true
-                            if (streamRead && reason.error.reason === "rateLimit") reason.error.streamUsed = true
+                            if (streamRead && (reason.error.reason === "rateLimit" || reason.error.uploadSlotsBusy))
+                                reason.error.streamUsed = true
                         }
                 }),
             ),

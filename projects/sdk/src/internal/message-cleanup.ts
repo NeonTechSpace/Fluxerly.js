@@ -30,7 +30,7 @@ import { MessageOperationError } from "#sdk/message-errors"
 import type { Message, MessageCore } from "#sdk/messages"
 import type { ClientOwner } from "./client.js"
 import { failures, mapFailureCause } from "./effect-failures.js"
-import { identifier, record } from "./decode/primitives.js"
+import { inputId, record } from "./decode/primitives.js"
 import { readCaller, suspendInput, suspendMarked } from "./defects.js"
 import type { RequestOptions } from "#sdk/client"
 
@@ -204,9 +204,14 @@ function selection<M extends MessageCore>(value: unknown): ValidSelection<M> | I
     )
     if (unsupported) return unsupported
     // Read each field once, so the validated values are the ones used
-    const authorId = value.authorId
-    if (authorId !== undefined && !identifier(authorId))
-        return inputValidationFailure("selection.authorId", "format", "Cleanup author ID must be a decimal string")
+    const suppliedAuthorId = value.authorId
+    const authorId = suppliedAuthorId === undefined ? undefined : inputId(suppliedAuthorId)
+    if (suppliedAuthorId !== undefined && authorId === undefined)
+        return inputValidationFailure(
+            "selection.authorId",
+            "format",
+            "Cleanup author ID must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const filter = value.filter
     if (filter !== undefined && typeof filter !== "function")
         return inputValidationFailure("selection.filter", "type", "Cleanup filter must be a function")
@@ -319,7 +324,7 @@ const batch = (batchIndex: number, ids: readonly string[]): MessageCleanupBatch 
 /** Builds an owned, immutable, exact message selection without submitting a deletion */
 export function previewCleanup<M extends MessageCore = Message>(
     owner: ClientOwner<M>,
-    channelId: string,
+    suppliedChannelId: string,
     suppliedSelection: MessageCleanupSelection<M>,
     suppliedOptions?: RequestOptions,
 ): Effect.Effect<MessageCleanupPlan<M>, MessageCleanupError> {
@@ -331,8 +336,15 @@ export function previewCleanup<M extends MessageCore = Message>(
             Effect.fail(
                 error({ phase: "preview", reason: "input", outcome: "notDispatched", inputValidation: failure.detail }),
             )
-        if (!identifier(channelId))
-            return invalid(inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings"))
+        const channelId = inputId(suppliedChannelId)
+        if (channelId === undefined)
+            return invalid(
+                inputValidationFailure(
+                    "channelId",
+                    "format",
+                    "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                ),
+            )
         if (selected instanceof InputValidationFailure) return invalid(selected)
         if (requestOptions instanceof InputValidationFailure) return invalid(requestOptions)
         return Effect.gen(function* () {

@@ -11,8 +11,8 @@ import type {
     TimeoutOptions,
     VoiceConnectionReference,
 } from "#sdk/guilds"
-import { identifier, integerInRange as integer, record } from "./decode/primitives.js"
-import { decodeMember, memberFetch, type GuildRequest } from "./guilds.js"
+import { identifier, inputId, integerInRange as integer, record } from "./decode/primitives.js"
+import { decodeMember, memberFetch, memberIds, type GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
 import { decodeUser } from "./users.js"
@@ -33,11 +33,13 @@ function timeoutSettings(
     const settings = auditSettings(options)
     if (settings instanceof InputValidationFailure) return settings
     const reason = options?.timeoutReason
-    if (reason !== undefined && reason !== null && !text(reason, 1, 512))
+    // Fluxer reads an empty reason as null, the same as no reason (fluxer_api/src/api/Validator.ts:59-63 and
+    // fluxer_api/src/api/guild/services/GuildMemberService.ts:176-178 at 0098958f)
+    if (reason !== undefined && reason !== null && reason !== "" && !text(reason, 1, 512))
         return inputValidationFailure(
             "options.timeoutReason",
             "length",
-            "Timeout reason must contain 1 through 512 UTF-16 code units after Fluxer's normalization",
+            "Timeout reason must be empty or contain 1 through 512 UTF-16 code units after Fluxer's normalization",
         )
     return settings
 }
@@ -58,7 +60,7 @@ export function memberTimeout(
             "range",
             "Timeout duration must be an integer from 1 through 31,536,000,000 ms (365 days)",
         )
-    const { guildId, userId } = target
+    const { guildId, userId } = memberIds(target) as { guildId: string; userId: string }
     return {
         ...request,
         ...extra,
@@ -84,24 +86,27 @@ export function memberKick(
     const extra = auditSettings(options)
     if (request instanceof InputValidationFailure) return request
     if (extra instanceof InputValidationFailure) return extra
+    const { guildId, userId } = memberIds(target) as { guildId: string; userId: string }
     return {
         ...request,
         ...extra,
         method: "DELETE",
         status: 204,
         decode: () => undefined,
-        cache: { selection: { kind: "members", guildId: target.guildId, id: target.userId }, mutation: true },
+        cache: { selection: { kind: "members", guildId, id: userId }, mutation: true },
     }
 }
 
 function voiceConnectionId(target: VoiceConnectionReference): string | undefined | InputValidationFailure {
     const connectionId = target.connectionId
     if (connectionId === undefined) return undefined
-    if (!text(connectionId, 1, 32))
+    // Fluxer reads an empty connection ID as null, which targets every connection of the member like an omitted one
+    // (fluxer_api/src/api/guild/services/member/GuildMemberOperationsService.ts:918-928 at 0098958f)
+    if (connectionId !== "" && !text(connectionId, 1, 32))
         return inputValidationFailure(
             "target.connectionId",
             "length",
-            "Voice connection IDs must contain 1 through 32 UTF-16 code units after Fluxer's normalization",
+            "Voice connection IDs must be empty or contain 1 through 32 UTF-16 code units after Fluxer's normalization",
         )
     return connectionId
 }
@@ -115,11 +120,14 @@ export function memberVoiceMove(
     const extra = auditSettings(options)
     if (request instanceof InputValidationFailure) return request
     if (extra instanceof InputValidationFailure) return extra
-    if (channelId !== null && (!identifier(channelId) || channelId === "0"))
+    // Fluxer reads an empty channel ID as null, which disconnects the member
+    // (fluxer_api/src/api/guild/services/member/GuildMemberOperationsService.ts:918-928 at 0098958f)
+    const voiceChannelId = channelId === null || channelId === "" ? channelId : inputId(channelId)
+    if (voiceChannelId === "0" || voiceChannelId === undefined)
         return inputValidationFailure(
             "channelId",
             "format",
-            "Voice channel IDs must be positive decimal strings or null",
+            "Voice channel IDs must be positive decimal strings, or null or empty to disconnect, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
     const connectionId = voiceConnectionId(target)
     if (connectionId instanceof InputValidationFailure) return connectionId
@@ -129,7 +137,7 @@ export function memberVoiceMove(
         bucket: "guild:member:voice:update",
         method: "PATCH",
         json: JSON.stringify({
-            channel_id: channelId,
+            channel_id: voiceChannelId,
             ...(connectionId === undefined ? {} : { connection_id: connectionId }),
         }),
         cache: { ...request.cache!, mutation: true },
@@ -220,17 +228,18 @@ export function guildBan(
             "range",
             "Ban reason must be a string of at most 512 UTF-16 code units after Fluxer's normalization",
         )
+    const { guildId, userId } = memberIds(target) as { guildId: string; userId: string }
     return {
         ...request,
         method: "PUT",
         bucket: "guild:bans",
-        path: `/guilds/${target.guildId}/bans/${target.userId}`,
+        path: `/guilds/${guildId}/bans/${userId}`,
         json: JSON.stringify({
             ban_duration_seconds: duration,
             delete_message_seconds: removal,
             ...(value.reason === undefined ? {} : { reason: value.reason }),
         }),
-        ...(removal === 0 ? {} : { deleteAuthorId: target.userId }),
+        ...(removal === 0 ? {} : { deleteAuthorId: userId }),
     }
 }
 
@@ -240,11 +249,18 @@ export function guildUnban(
 ): GuildRequest<void> | InputValidationFailure {
     const request = memberKick(target, options)
     if (request instanceof InputValidationFailure) return request
-    return { ...request, bucket: "guild:bans", path: `/guilds/${target.guildId}/bans/${target.userId}` }
+    const { guildId, userId } = memberIds(target) as { guildId: string; userId: string }
+    return { ...request, bucket: "guild:bans", path: `/guilds/${guildId}/bans/${userId}` }
 }
 
-export function guildBans(guildId: string): GuildRequest<readonly GuildBan[]> | InputValidationFailure {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function guildBans(rawGuildId: string): GuildRequest<readonly GuildBan[]> | InputValidationFailure {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         guildId,
         bucket: "guild:bans",

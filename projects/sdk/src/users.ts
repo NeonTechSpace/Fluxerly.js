@@ -114,6 +114,10 @@ export interface ProfileBadge {
         /** Further tooltip lines, in order */
         readonly lines: readonly string[]
     }
+    /** The holder's quote from Fluxer's Operators' wall, absent while the wall does not show it or Fluxer sends null.
+     * It is plain text: Show it in straight double quotes after the other tooltip lines and never parse it as markup
+     */
+    readonly quote?: string
 }
 
 /** Result of users.fetchProfile, combining public identity with the profile information Fluxer allowed this caller to see.
@@ -181,20 +185,29 @@ export interface DirectMessageChannel {
  * @category Users and DMs
  */
 export interface DirectMessageGroupEdit {
-    /** Group name, or null to clear it. Raw input may contain at most 10,000 UTF-16 code units. For validation,
+    /** Group name, or null or an empty string to clear it, as Fluxer reads an empty string as null here. Raw input may
+     * contain at most 10,000 UTF-16 code units. For validation,
      * Fluxer's general-name rules remove U+000C and U+202E, trim surrounding whitespace, strip provider-defined
      * invisible characters, normalize whitespace and collapse its runs, then require 1–100 UTF-16 code units. The SDK
      * sends the original string without lowercasing or hyphenating it
      */
     readonly name?: string | null
-    /** Image data URI, or null to clear. Fluxer validates the image */
+    /** Base64 image data or data URI, or null or an empty string to clear. Fluxer validates the image, and base64 with nonzero bits before
+     * its = padding fails locally. The encoded edit may hold up to 15,029,592 bytes,
+     * the most Fluxer accepts for this route, so the icon can be as large as Fluxer allows, 10 MiB by default
+     */
     readonly icon?: string | null
-    /** Transfer ownership to an existing non-bot recipient. Requires current ownership */
+    /** Transfer ownership to an existing non-bot recipient. Requires current ownership. Fluxer reads an empty string
+     * as null and then ignores the field, so it changes nothing
+     */
     readonly ownerId?: string
-    /** Nicknames keyed by user ID. A nickname must be a nonempty raw string and contain at most 32 UTF-16 code units
-     * after U+000C and U+202E removal and surrounding-whitespace trimming. A normalized-empty string is allowed.
-     * The original string is sent unchanged, and null clears a nickname. Non-owners may change only their own.
-     * Fluxer names it nicks
+    /** Nicknames keyed by user ID. A nickname must contain at most 32 UTF-16 code units after U+000C and U+202E removal
+     * and surrounding-whitespace trimming. The original string is sent unchanged, and null, an empty string or a blank
+     * string clears that nickname. Non-owners may change only their own.
+     * Fluxer reads an empty object, or one whose values are all null or empty strings, as null for the whole field,
+     * which clears every nickname in the group and needs ownership, so a non-owner's request then fails with reason
+     * `rejected`. To clear only the listed nicknames, use a blank string such as `" "`, which Fluxer keeps until it
+     * trims it and clears that nickname. Fluxer names it nicks
      */
     readonly nicknames?: Readonly<Record<string, string | null>> | null
 }

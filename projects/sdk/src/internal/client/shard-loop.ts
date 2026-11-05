@@ -49,7 +49,7 @@ import type { IdentifyFields, SubmitFailure } from "../gateway/commands.js"
 import { checkSnapshot, usedSnapshot, type ShardPlan } from "../sharding.js"
 import { backoffCeiling, retryDelay, stayedHealthy } from "./backoff.js"
 import { invalidateDispatch, shardIntake, type ClientCaches } from "./intake.js"
-import { formatDuration } from "./lifetime.js"
+import { formatDuration, type StartupDeadline } from "./lifetime.js"
 import { emitObservation } from "../observer.js"
 import { retryableConnection } from "../retryable-connection.js"
 
@@ -120,10 +120,8 @@ export interface ShardLoopOptions<M extends MessageCore> {
     readonly shard: ShardRuntime
     /** The client's known shard plan */
     readonly plan: ShardPlan
-    /** Logical group startup deadline, including Identify waits */
-    readonly deadline: number
-    /** The group's startup budget that the deadline was derived from, reported when startup times out */
-    readonly startupTimeoutMs: number
+    /** Logical group startup deadline, including Identify waits, which the group's first Identify may extend */
+    readonly deadline: StartupDeadline
     /** Whether the group was ready before this loop started, as after a move to a larger plan, so failures recover */
     readonly established?: boolean
     /** Whether to offer the session store's snapshot, default true. A move to a larger plan starts new sessions */
@@ -233,7 +231,7 @@ function failureClassification(failure: AttemptFailure): string {
 
 /** Run one shard until its connection fails permanently. The loop never succeeds */
 export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>) {
-    const { host, configuration, startup, shard, plan, deadline, startupTimeoutMs } = options
+    const { host, configuration, startup, shard, plan, deadline } = options
     const recovery = configuration.recovery
     return Effect.gen(function* () {
         const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
@@ -277,7 +275,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             code: "lifecycle.sessionLoadFailed" | "lifecycle.sessionSaveFailed",
             message: string,
         ) => {
-            const budgetMs = Math.max(1, Math.min(sessionStoreTimeoutMs, deadline - now()))
+            const budgetMs = Math.max(1, Math.min(sessionStoreTimeoutMs, deadline.at - now()))
             // @effect-diagnostics-next-line unknownInEffectCatch:off
             return Effect.tryPromise({ try: () => Promise.resolve(run()), catch: (error) => error }).pipe(
                 Effect.timeoutOrElse({
@@ -411,9 +409,9 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                 logger.count("reconnects")
                 emitObservation(logger, { type: "reconnect", shardId: shard.shardId })
             }
-            const budget = established ? recovery.attemptTimeoutMs : Math.max(0, deadline - now())
+            const budget = established ? recovery.attemptTimeoutMs : Math.max(0, deadline.at - now())
             const attempt = Effect.gen(function* () {
-                const attemptDeadline = now() + budget
+                let attemptDeadline = now() + budget
                 if (!url) {
                     const endpoint = yield* host.instance.resolve().pipe(
                         mapFailureCause(
@@ -447,6 +445,15 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     token: configuration.token,
                     session: shard.session,
                     timeoutMs: Math.max(0, attemptDeadline - now()),
+                    // Only Identify can wait in Fluxer's session start queue, so only Identify extends the deadline
+                    onIdentify: () => {
+                        if (established) attemptDeadline += recovery.identifyWaitMs
+                        else {
+                            deadline.identifySent()
+                            attemptDeadline = Math.max(attemptDeadline, deadline.at)
+                        }
+                        return Math.max(0, attemptDeadline - now())
+                    },
                     onReady: (readyMode) => {
                         const connectedAtMs = now()
                         const outage = disconnectedAt === undefined ? undefined : connectedAtMs - disconnectedAt
@@ -630,7 +637,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
             if (!established && discoveryLimit(failure)) limitedDiscoveries += 1
             const reported =
                 !established && failure.failure instanceof ConnectionTimeoutError
-                    ? new ConnectionTimeoutError(startupTimeoutMs)
+                    ? new ConnectionTimeoutError(deadline.timeoutMs)
                     : failure.failure
             if (stopRetrying(failure, outcome, reported)) return yield* Effect.fail(reported)
             if (established) enterRecovery()
@@ -655,11 +662,11 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     : backoffCeiling(Math.max(0, attempts - limitedDiscoveries - 1))
                 delay = retryDelay(ceiling, yield* Random.next, requiredWait)
             }
-            if (!established && delay >= deadline - now()) {
-                const ended = requiredWait > 0 ? failure.failure : new ConnectionTimeoutError(startupTimeoutMs)
+            if (!established && delay >= deadline.at - now()) {
+                const ended = requiredWait > 0 ? failure.failure : new ConnectionTimeoutError(deadline.timeoutMs)
                 logConnectionEnded(
                     failure,
-                    `${outcome}. The startup deadline of ${formatDuration(startupTimeoutMs)} leaves no time for another attempt`,
+                    `${outcome}. The startup deadline of ${formatDuration(deadline.timeoutMs)} leaves no time for another attempt`,
                     ended,
                 )
                 return yield* Effect.fail(ended)

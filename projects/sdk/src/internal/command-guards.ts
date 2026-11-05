@@ -11,6 +11,7 @@ import { Permissions } from "#sdk/guilds"
 import type { PermissionName } from "#sdk/helpers"
 import type { MessageCore } from "#sdk/messages"
 import { UserOperationError } from "#sdk/users"
+import { inputId } from "./decode/primitives.js"
 import { permissionLabel } from "./permission-labels.js"
 
 /** Deny reasons the built-in guards return, written for a reply to the invoking user */
@@ -28,10 +29,18 @@ export function ownerIds(value: unknown): ReadonlySet<string> {
     const list = typeof value === "string" ? [value] : value
     if (!Array.isArray(list) || list.length === 0)
         throw new ConfigurationError("command", "The ownerOnly guard needs one or more owner user IDs")
-    for (const id of list)
-        if (typeof id !== "string" || !/^[1-9]\d*$/.test(id))
-            throw new ConfigurationError("command", "The ownerOnly guard needs each owner user ID as a decimal string")
-    return new Set(list as string[])
+    const ids = new Set<string>()
+    for (const item of list) {
+        // Fluxer trims a user ID it receives, so a padded owner ID is kept as its trimmed form
+        const id = inputId(item)
+        if (id === undefined || id === "0")
+            throw new ConfigurationError(
+                "command",
+                "The ownerOnly guard needs each owner user ID as a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            )
+        ids.add(id)
+    }
+    return ids
 }
 
 /**

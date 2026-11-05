@@ -13,6 +13,7 @@ import type { OperationOptions } from "#sdk/client"
 import { InputValidationFailure } from "#sdk/input-validation"
 import type { ClientOwner } from "#sdk/internal/client"
 import { readInput } from "#sdk/internal/defects"
+import { withInstanceUrlRule } from "#sdk/internal/field-text"
 import { operationSignalError } from "#sdk/internal/operation-signal"
 import { iterationOptions, type Pagination } from "#sdk/internal/pagination"
 import { executeOperation, localValue, lookup, type DefaultContext, type OperationFailure } from "./execute.js"
@@ -122,7 +123,10 @@ export function bindDefault<M extends MessageCore>(context: DefaultContext<M>): 
             case "op":
                 return (...args: readonly unknown[]) =>
                     context.execute(
-                        entry.run(owner, ...args) as Effect.Effect<unknown, OperationFailure>,
+                        withInstanceUrlRule(
+                            entry.run(owner, ...args) as Effect.Effect<unknown, OperationFailure>,
+                            owner.instance.hosted,
+                        ),
                         id,
                         args[entry.optionsAt] as OperationOptions | undefined,
                     )

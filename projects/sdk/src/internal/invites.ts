@@ -6,11 +6,12 @@
 import type { Invite, InviteCreate, InviteMetadata } from "#sdk/invites"
 import type { InviteDeleteEvent } from "#sdk/events"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, nonNegativeInteger as integer, record } from "./decode/primitives.js"
+import { identifier, inputId, nonNegativeInteger as integer, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { auditSettings } from "./moderation.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
+import { normalizeText } from "./field-text.js"
 import { decodeUser } from "./users.js"
 import type { AuditedRequestOptions } from "#sdk/client"
 
@@ -138,36 +139,48 @@ export function decodeInviteDelete(value: unknown): InviteDeleteEvent | undefine
 }
 
 export function inviteFetch(code: string, inviteBase = hostedInvite): GuildRequest<Invite> | InputValidationFailure {
-    if (!codeValue(code))
+    // Fluxer reads the code path segment as createStringType(), which removes U+000C and U+202E and trims the code before
+    // its value must hold 1 through 256 UTF-16 code units (packages/schema/src/domains/common/CommonParamSchemas.ts:37-39
+    // and packages/schema/src/primitives/SchemaPrimitives.ts:15-22 and 176-182 at 0098958f, applied by
+    // fluxer_api/src/api/invite/InviteController.ts:24, 47 and 76). The SDK checks and sends that normalized code, and
+    // compares the stored code Fluxer returns with it (fluxer_api/src/api/invite/InviteRequestService.ts:64-65). The
+    // check is input-only, since received codes keep their wider decoding
+    const normalized = typeof code === "string" ? normalizeText(code) : code
+    if (!codeValue(normalized) || normalized.length > 256)
         return inputValidationFailure(
             "code",
             "format",
-            "Invite code must be nonempty well-formed text without whitespace, control characters or URL path/query/fragment separators, and cannot be . or ..",
+            "Invite code must be well-formed text of 1 through 256 UTF-16 code units after Fluxer's normalization, without inner whitespace, control characters or URL path/query/fragment separators, and cannot be . or ..",
         )
     return {
         guildId: "invites",
         bucket: "invites:code",
-        path: `/invites/${encodeURIComponent(code)}`,
+        path: `/invites/${encodeURIComponent(normalized)}`,
         method: "GET",
         status: 200,
         // Fluxer can resolve a vanity code using a lowercase fallback
         decode: (value, instance) => {
             const item = decode(value, instance?.invite ?? inviteBase)
-            return item && (item.code === code || item.code === code.toLowerCase()) ? item : undefined
+            return item === undefined || item.code === normalized || item.code === normalized.toLowerCase()
+                ? item
+                : rejectCheck("targetMismatch")
         },
     }
 }
 
 export function inviteList(
     kind: "guilds" | "channels",
-    id: string,
+    rawId: string,
     inviteBase = hostedInvite,
 ): GuildRequest<readonly InviteMetadata[]> | InputValidationFailure {
-    if (!identifier(id))
+    const id = inputId(rawId)
+    if (id === undefined)
         return inputValidationFailure(
             kind === "guilds" ? "guildId" : "channelId",
             "format",
-            kind === "guilds" ? "Guild IDs must be decimal strings" : "Channel IDs must be decimal strings",
+            kind === "guilds"
+                ? "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly"
+                : "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
     return {
         guildId: id,
@@ -237,7 +250,8 @@ export function inviteCreate(
         json: JSON.stringify({ max_age: maxAgeSeconds, max_uses: maxUses, unique, temporary }),
         decode: (value, instance) => {
             const item = metadata(value, instance?.invite ?? inviteBase)
-            return item === undefined || item.channel.id === channelId ? item : rejectCheck("targetMismatch")
+            // The list request holds the trimmed channel ID under its major ID
+            return item === undefined || item.channel.id === base.guildId ? item : rejectCheck("targetMismatch")
         },
     }
 }

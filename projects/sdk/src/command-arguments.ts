@@ -224,7 +224,7 @@ export interface CommandArgumentDuration {
 
 /**
  * Select a member of the message's community by complete user mention or decimal user ID, without a roster lookup.
- * The ID must be nonzero, without leading zeroes and no larger than `9223372036854775807`, the largest 64-bit ID. Other tokens are rejected as Invalid.
+ * The ID must be nonzero, without leading zeroes and no larger than `9223372036854775807`, the largest 64-bit ID. Surrounding whitespace is trimmed and the trimmed ID is returned. Other tokens are rejected as Invalid.
  * The value is a frozen `{ guildId, userId }` reference that member operations such as members.kick accept directly.
  * Whether that user is still a member is not checked. A message outside a community rejects this argument as Invalid
  *
@@ -281,7 +281,7 @@ export interface CommandArgumentBoolean {
  * @category Commands
  */
 export interface CommandArgumentId {
-    /** Return the accepted nonzero decimal ID string rather than a number or resource object */
+    /** Return the accepted nonzero decimal ID string rather than a number or resource object, trimmed of surrounding whitespace */
     readonly type: "id"
     /** Also accept this mention kind as a complete token. Omitted means accept decimal ID strings only */
     readonly mention?: CommandArgumentMention

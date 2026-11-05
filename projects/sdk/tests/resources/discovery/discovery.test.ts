@@ -480,3 +480,26 @@ test.each(modes)(
         expect(await settle(local)).toBeUndefined()
     },
 )
+
+test.each(modes)("%s leaves empty query and tag values out of the request, as Fluxer refuses them", async (mode) => {
+    const client = await setup(mode)
+    const urls: string[] = []
+    stubFetchWithHostedDiscovery(async (url: string) => {
+        urls.push(url)
+        return Response.json({ guilds: [], total: 0, category_counts: [] })
+    })
+    await settle(client.discovery.search({ query: "", tag: "" }))
+    await settle(client.discovery.search({ query: "q", tag: "t" }))
+    expect(urls.map((url) => [...new URL(url).searchParams])).toEqual([
+        [
+            ["limit", "24"],
+            ["offset", "0"],
+        ],
+        [
+            ["limit", "24"],
+            ["offset", "0"],
+            ["query", "q"],
+            ["tag", "t"],
+        ],
+    ])
+})

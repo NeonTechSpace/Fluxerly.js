@@ -18,7 +18,7 @@ import {
 } from "./support/harness.js"
 import { createReporter, recoveredOnly } from "./support/reporting.js"
 import { settle as value } from "./support/results.js"
-import { createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
+import { anyStatus, createSandboxApi, successOrNotFound } from "./support/sandbox-api.js"
 import { harnessWatchdogMs } from "./support/watchdogs.js"
 
 const mode = process.argv[2]
@@ -34,6 +34,7 @@ const hash = (code) => createHash("sha256").update(code).digest("hex")
 const report = createReporter({ mode }, { passed: true })
 const save = () => journalFile.save(journal)
 const api = createSandboxApi({ fetch: rawFetch, token: () => token, accept: successOrNotFound })
+const rawApi = createSandboxApi({ fetch: rawFetch, token: () => token, accept: anyStatus })
 async function state() {
     const guild = (await api("GET", `/guilds/${guildId}`)).data
     assert.equal(guild.id, guildId)
@@ -122,7 +123,9 @@ try {
         if (!mutate) {
             if (!guild.features.includes("VANITY_URL")) {
                 stage = "disabled_server_write_rejected"
-                // This reserved spelling is also rejected if the feature is enabled concurrently
+                // Fluxer refuses every code that contains fluxer, even if the feature is enabled concurrently, so neither
+                // request can set a code (GuildVanityService.ts:62-72). The SDK refuses it before sending, and the raw
+                // request shows that hosted Fluxer refuses it too
                 let failure
                 try {
                     await value(client.guilds.editVanityUrl(guildId, "fluxer-vanity-test"))
@@ -130,7 +133,11 @@ try {
                     failure = error
                 }
                 assert.equal(failure?._tag, "GuildOperationError")
-                assert.equal(failure?.status, 400)
+                assert.equal(failure?.reason, "input")
+                assert.equal(failure?.outcome, "notDispatched")
+                const raw = await rawApi("PATCH", `/guilds/${guildId}/vanity-url`, { code: "fluxer-vanity-test" })
+                assert.equal(raw.status, 400)
+                console.log(JSON.stringify({ mode, check: stage, informational: true, rawCode: raw.data?.code }))
                 assert.equal((await state()).code, before.code)
                 report(stage)
             }

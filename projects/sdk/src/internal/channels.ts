@@ -25,10 +25,11 @@ import {
 } from "#sdk/channels"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { EncodedBody } from "./attachments.js"
-import { decodeGuildChannel, decodeGuildChannels, url } from "./channel-decode.js"
-import { count as nonNegativeInt32, fieldsOnce, identifier, record } from "./decode/primitives.js"
+import { decodeGuildChannel, decodeGuildChannels } from "./channel-decode.js"
+import { count as nonNegativeInt32, fieldsOnce, identifier, inputId, record } from "./decode/primitives.js"
+import { defaultBodyLimit } from "./request-body-limits.js"
 import { rejectCheck } from "./decode/trace.js"
-import { channelName, normalizedText } from "./field-text.js"
+import { channelName, fluxerHttpUrl, normalizedText } from "./field-text.js"
 import {
     booleanField,
     checkFields,
@@ -38,6 +39,7 @@ import {
     idField,
     integerField,
     nullable,
+    nullOrEmpty,
     textField,
 } from "./field-rules.js"
 
@@ -90,9 +92,21 @@ export interface ChannelRequest<A> {
 type ChannelValidationResult<A> = ChannelRequest<A> | InputValidationFailure
 
 const maxWritablePermission = 9_223_372_036_854_775_807n
-const maxRequestBytes = 4_194_304
+// Channel create and edit routes have no limit of their own, so Fluxer applies its default body limit
+const maxRequestBytes = defaultBodyLimit
+/** Fluxer refuses more than 10,000 permission overwrites on channel create and edit, and more than 10,000 entries in a
+ * channel position update (packages/schema/src/domains/channel/ChannelRequestSchemas.ts:96-99, 464-476 at 0098958f).
+ * 10,000 position entries stay far below the default body limit, so positions need no byte check of their own
+ */
+const maxListEntries = 10_000
 
-const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
+/** Channel, position and forum routes read their body through Fluxer's Validator, which turns an empty string into null
+ * (fluxer_api/src/api/Validator.ts:59-63 and fluxer_api/src/api/channel/threads/GatedJsonValidator.ts:21-22 at
+ * 0098958f), so an empty ID is sent as given where null is accepted. Returns the value to send, which is null, the
+ * empty string or the trimmed ID, or undefined when the value is none of them
+ */
+const absentOrInputId = (value: unknown): string | null | undefined =>
+    value === null || value === "" ? value : inputId(value)
 const writablePermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxWritablePermission
 
@@ -108,14 +122,29 @@ const forumLayoutValues: readonly unknown[] = Object.values(ForumLayout)
 const forumFlagBits = ChannelFlags.RequireTag
 const mediaFlagBits = ChannelFlags.RequireTag | ChannelFlags.HideMediaDownloadOptions
 
+/**
+ * The link channel URL to send. Fluxer reads it as URLType and checks its normalized value: 1 through 2,048 UTF-16 code
+ * units, a start of http:// or https:// that parses as a URL with that protocol, then validator.isURL with a required
+ * TLD outside development mode, no credentials and no protocol-relative form
+ * (packages/schema/src/domains/channel/ChannelRequestSchemas.ts:66 with packages/schema/src/primitives/UrlValidators.ts:28-31,
+ * 44-49 and 77-80 at 0098958f). fluxerHttpUrl applies all of these rules, the TLD rule only for hosted Fluxer. Received
+ * channel URLs keep the looser decoding rule
+ */
+const linkUrl = fluxerHttpUrl
+
 const topic = (maximum: number) =>
-    nullable(
+    nullOrEmpty(
         field(
             (value) => normalizedText(value, 1, maximum),
             "length",
-            `Channel topic must be null or contain 1 through ${maximum.toLocaleString("en-US")} UTF-16 code units after Fluxer's normalization`,
+            `Channel topic must be null, empty or contain 1 through ${maximum.toLocaleString("en-US")} UTF-16 code units after Fluxer's normalization`,
         ),
     )
+const createName = field(
+    channelName,
+    "length",
+    "Channel name must contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
+)
 const flags = (settable: number, explanation: string) =>
     field((value) => nonNegativeInt32(value) && (value & ~settable) === 0, "allowedValue", explanation)
 const nsfwExplanation = "Channel nsfw must be boolean, or null when editing"
@@ -125,14 +154,27 @@ const nsfwExplanation = "Channel nsfw must be boolean, or null when editing"
  * the channel, so it accepts the longer forum topic and the flags of either forum type, and Fluxer checks them
  */
 const editRules: FieldRules = {
-    name: field(
-        channelName,
-        "length",
-        "Channel name must contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
-    ),
+    // Fluxer reads an empty name in an edit as null and then leaves the name unchanged
+    // (fluxer_api/src/api/channel/services/ChannelDataService.ts:191 at 0098958f)
+    name: {
+        ...createName,
+        accept: (value) => (value === "" ? value : createName.accept(value)),
+        explanation:
+            "Channel name must be empty, which Fluxer ignores, or contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
+    },
     topic: topic(forumTopicMaxLength),
-    url: nullable(field(url, "format", "Channel URL must be null or a valid absolute URL")),
-    parentId: nullable(idField("Channel parentId must be null or a decimal string")),
+    url: nullOrEmpty(
+        field(
+            linkUrl,
+            "format",
+            "Channel URL must be null, empty or an http or https URL of 1 through 2,048 UTF-16 code units after Fluxer's normalization, without credentials, whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer",
+        ),
+    ),
+    parentId: nullOrEmpty(
+        idField(
+            "Channel parentId must be null, empty or a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        ),
+    ),
     bitrate: nullable(
         integerField(
             8_000,
@@ -153,11 +195,11 @@ const editRules: FieldRules = {
     rateLimitPerUser: nullable(
         integerField(0, 21_600, "Channel rateLimitPerUser must be null or an integer from 0 through 21,600 seconds"),
     ),
-    rtcRegion: nullable(
+    rtcRegion: nullOrEmpty(
         field(
             (value) => normalizedText(value, 1, 64),
             "length",
-            "Channel rtcRegion must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
+            "Channel rtcRegion must be null, empty or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
         ),
     ),
     defaultAutoArchiveMinutes: nullable(
@@ -190,8 +232,10 @@ const editRules: FieldRules = {
         "Channel flags must be a nonnegative integer that sets only ChannelFlags.RequireTag or ChannelFlags.HideMediaDownloadOptions",
     ),
 }
-/** A created channel cannot set nsfw to null. A created media channel keeps the longer topic and both flag bits */
-const mediaCreateRules: FieldRules = { ...editRules, nsfw: booleanField(nsfwExplanation) }
+/** A created channel cannot set nsfw to null and needs a name. A created media channel keeps the longer topic and both
+ * flag bits
+ */
+const mediaCreateRules: FieldRules = { ...editRules, name: createName, nsfw: booleanField(nsfwExplanation) }
 /** Other created channels have the shorter text topic */
 const createRules: FieldRules = { ...mediaCreateRules, topic: topic(textTopicMaxLength) }
 /** A created forum channel can set only the flag bits of its own type */
@@ -203,7 +247,11 @@ const forumCreateRules: FieldRules = {
     ),
 }
 
-function validateOptionalFields(input: Record<string, unknown>, create: boolean): true | InputValidationFailure {
+/** The kept values of the optional fields that have rules, such as the trimmed parentId, or the first failure */
+function validateOptionalFields(
+    input: Record<string, unknown>,
+    create: boolean,
+): Record<string, unknown> | InputValidationFailure {
     // A created channel's type selects which thread and forum settings it can have. An edit cannot tell the type of
     // the channel, so it accepts every setting and leaves the type check to Fluxer
     const type = input.type
@@ -295,7 +343,7 @@ function validateOptionalFields(input: Record<string, unknown>, create: boolean)
               : createRules
         : editRules
     const checked = checkFields(input, rules, "")
-    return checked instanceof InputValidationFailure ? checked : true
+    return checked
 }
 
 /**
@@ -319,13 +367,18 @@ function encodeForumTag(
     )
     if (unsupported) return unsupported
     const read = fieldsOnce(value)
-    const id = read("id")
+    const rawId = read("id")
     const name = read("name")
     const moderated = read("moderated")
     const emojiId = read("emojiId")
     const emojiName = read("emojiName")
-    if (id !== undefined && !identifier(id))
-        return inputValidationFailure(field("id"), "format", "Forum tag IDs must be decimal strings")
+    const id = rawId === undefined ? undefined : inputId(rawId)
+    if (rawId !== undefined && id === undefined)
+        return inputValidationFailure(
+            field("id"),
+            "format",
+            "Forum tag IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (name === undefined) return inputValidationFailure(field("name"), "required", "A forum tag needs a name")
     if (!normalizedText(name, 1, 50))
         return inputValidationFailure(
@@ -352,18 +405,26 @@ function encodeEmoji(
     path: (field: string) => string,
     container: string,
 ): Record<string, string | null> | InputValidationFailure {
-    if (emojiId !== undefined && !nullableIdentifier(emojiId))
-        return inputValidationFailure(path("emojiId"), "format", "Emoji IDs must be null or decimal strings")
-    if (emojiName !== undefined && !(emojiName === null || normalizedText(emojiName, 1, 64)))
+    // Fluxer reads an empty emoji ID or name as null on these routes, so it counts as unset
+    // (fluxer_api/src/api/Validator.ts:59-63 and fluxer_api/src/api/channel/services/thread/ThreadParentSettings.ts:126-127,
+    // 162-168 at 0098958f)
+    const emojiIdToSend = emojiId === undefined ? undefined : absentOrInputId(emojiId)
+    if (emojiId !== undefined && emojiIdToSend === undefined)
+        return inputValidationFailure(
+            path("emojiId"),
+            "format",
+            "Emoji IDs must be null, empty or decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    if (emojiName !== undefined && !(emojiName === null || emojiName === "" || normalizedText(emojiName, 1, 64)))
         return inputValidationFailure(
             path("emojiName"),
             "length",
-            "An emoji name must be null or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
+            "An emoji name must be null, empty or contain 1 through 64 UTF-16 code units after Fluxer's normalization",
         )
-    if (emojiId != null && emojiName != null)
+    if (emojiIdToSend != null && emojiIdToSend !== "" && emojiName != null && emojiName !== "")
         return inputValidationFailure(container, "relationship", "Set at most one of emojiId and emojiName")
     return {
-        ...(emojiId === undefined ? {} : { emoji_id: emojiId }),
+        ...(emojiIdToSend === undefined ? {} : { emoji_id: emojiIdToSend }),
         ...(emojiName === undefined ? {} : { emoji_name: emojiName }),
     }
 }
@@ -412,6 +473,12 @@ function encodeDefaultReaction(value: unknown): Record<string, string | null> | 
 function encodeOverwrites(value: unknown): readonly Record<string, string | number>[] | InputValidationFailure {
     if (!Array.isArray(value))
         return inputValidationFailure("permissionOverwrites", "type", "Permission overwrites must be an array")
+    if (value.length > maxListEntries)
+        return inputValidationFailure(
+            "permissionOverwrites",
+            "length",
+            "A channel may contain at most 10,000 permission overwrites",
+        )
     const overwrites: Array<Record<string, string | number>> = []
     const ids = new Set<string>()
     for (const item of value) {
@@ -424,13 +491,14 @@ function encodeOverwrites(value: unknown): readonly Record<string, string | numb
             "A permission overwrite",
         )
         if (unsupported) return unsupported
-        if (!identifier(item.id))
+        const id = inputId(item.id)
+        if (id === undefined)
             return inputValidationFailure(
                 "permissionOverwrites[].id",
                 "format",
-                "Permission overwrite IDs must be decimal strings",
+                "Permission overwrite IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
             )
-        if (ids.has(item.id))
+        if (ids.has(id))
             return inputValidationFailure(
                 "permissionOverwrites[].id",
                 "unique",
@@ -454,9 +522,9 @@ function encodeOverwrites(value: unknown): readonly Record<string, string | numb
                 "range",
                 "Permission overwrite deny must be a bigint from 0 through 9,223,372,036,854,775,807",
             )
-        ids.add(item.id)
+        ids.add(id)
         overwrites.push({
-            id: item.id,
+            id,
             type: item.type === "role" ? 0 : 1,
             allow: item.allow.toString(),
             deny: item.deny.toString(),
@@ -470,6 +538,7 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
     if (!record(input)) return inputValidationFailure("input", "type", "Channel input must be an object")
     const validated = validateOptionalFields(input, create)
     if (validated instanceof InputValidationFailure) return validated
+    const parentId = validated.parentId
     const permissionOverwrites =
         input.permissionOverwrites === undefined ? undefined : encodeOverwrites(input.permissionOverwrites)
     if (permissionOverwrites instanceof InputValidationFailure) return permissionOverwrites
@@ -483,7 +552,7 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
         ...(input.name === undefined ? {} : { name: input.name }),
         ...(input.topic === undefined ? {} : { topic: input.topic }),
         ...(input.url === undefined ? {} : { url: input.url }),
-        ...(create && input.parentId !== undefined ? { parent_id: input.parentId } : {}),
+        ...(create && parentId !== undefined ? { parent_id: parentId } : {}),
         ...(input.bitrate === undefined ? {} : { bitrate: input.bitrate }),
         ...(input.userLimit === undefined ? {} : { user_limit: input.userLimit }),
         ...(input.voiceConnectionLimit === undefined ? {} : { voice_connection_limit: input.voiceConnectionLimit }),
@@ -510,13 +579,18 @@ function channelBody(input: ChannelCreate | ChannelEdit, create: boolean): strin
     const json = JSON.stringify(body)
     if (json === "{}") return inputValidationFailure("input", "required", "Channel edit must contain a change")
     return Buffer.byteLength(json) > maxRequestBytes
-        ? inputValidationFailure("input", "size", "Channel input must not exceed 4,194,304 encoded bytes")
+        ? inputValidationFailure("input", "size", "Channel input must not exceed 15,029,592 encoded bytes")
         : json
 }
 
-export function channelFetch(channelId: string): ChannelValidationResult<GuildChannel> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+export function channelFetch(rawChannelId: string): ChannelValidationResult<GuildChannel> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: channelId,
         bucket: "channel:read",
@@ -531,15 +605,27 @@ export function channelFetch(channelId: string): ChannelValidationResult<GuildCh
     }
 }
 
-export function channelFollow(channelId: string, input: ChannelFollowInput): ChannelValidationResult<FollowedChannel> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+export function channelFollow(
+    rawChannelId: string,
+    input: ChannelFollowInput,
+): ChannelValidationResult<FollowedChannel> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (!record(input)) return inputValidationFailure("input", "type", "Channel follow input must be an object")
     const unsupported = unsupportedKeyFailure(input, ["targetChannelId"], "input", "the channel follow input")
     if (unsupported) return unsupported
-    const targetChannelId = input.targetChannelId
-    if (!identifier(targetChannelId))
-        return inputValidationFailure("targetChannelId", "format", "Target channel IDs must be decimal strings")
+    const targetChannelId = inputId(input.targetChannelId)
+    if (targetChannelId === undefined)
+        return inputValidationFailure(
+            "targetChannelId",
+            "format",
+            "Target channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: channelId,
         bucket: "channel:follow",
@@ -556,9 +642,14 @@ export function channelFollow(channelId: string, input: ChannelFollowInput): Cha
     }
 }
 
-export function channelFollowerStats(channelId: string): ChannelValidationResult<ChannelFollowerStats> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+export function channelFollowerStats(rawChannelId: string): ChannelValidationResult<ChannelFollowerStats> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: channelId,
         bucket: "channel:follower_stats",
@@ -572,8 +663,14 @@ export function channelFollowerStats(channelId: string): ChannelValidationResult
     }
 }
 
-export function channelList(guildId: string): ChannelValidationResult<readonly GuildChannel[]> {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function channelList(rawGuildId: string): ChannelValidationResult<readonly GuildChannel[]> {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: guildId,
         bucket: "guild:channels:list",
@@ -585,8 +682,14 @@ export function channelList(guildId: string): ChannelValidationResult<readonly G
     }
 }
 
-export function channelCreate(guildId: string, input: ChannelCreate): ChannelValidationResult<GuildChannel> {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function channelCreate(rawGuildId: string, input: ChannelCreate): ChannelValidationResult<GuildChannel> {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const json = channelBody(input, true)
     if (json instanceof InputValidationFailure) return json
     return {
@@ -608,13 +711,23 @@ export function channelCreate(guildId: string, input: ChannelCreate): ChannelVal
 
 /** The tags an edit's availableTags removes: Every existing tag that no entry names by ID */
 function tagsRemovedBy(tags: readonly ForumTagInput[]) {
-    const kept = new Set(tags.flatMap((tag) => (typeof tag.id === "string" ? [tag.id] : [])))
+    const kept = new Set(
+        tags.flatMap((tag) => {
+            const id = inputId(tag.id)
+            return id === undefined ? [] : [id]
+        }),
+    )
     return (tagId: string) => !kept.has(tagId)
 }
 
-export function channelEdit(channelId: string, input: ChannelEdit): ChannelValidationResult<GuildChannel> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+export function channelEdit(rawChannelId: string, input: ChannelEdit): ChannelValidationResult<GuildChannel> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const json = channelBody(input, false)
     if (json instanceof InputValidationFailure) return json
     return {
@@ -673,11 +786,16 @@ function forumTagRequest(
 }
 
 export function forumTagCreate(
-    channelId: string,
+    rawChannelId: string,
     input: ForumTagInput,
 ): ChannelValidationResult<GuildForumChannel | GuildMediaChannel> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const tag = encodeForumTag(input, false, true)
     if (tag instanceof InputValidationFailure) return tag
     // Fluxer assigns the ID of a new tag, so a received tag's own ID is dropped instead of sent
@@ -686,13 +804,24 @@ export function forumTagCreate(
 }
 
 export function forumTagEdit(
-    channelId: string,
-    tagId: string,
+    rawChannelId: string,
+    rawTagId: string,
     input: ForumTagInput,
 ): ChannelValidationResult<GuildForumChannel | GuildMediaChannel> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-    if (!identifier(tagId)) return inputValidationFailure("tagId", "format", "Forum tag IDs must be decimal strings")
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const tagId = inputId(rawTagId)
+    if (tagId === undefined)
+        return inputValidationFailure(
+            "tagId",
+            "format",
+            "Forum tag IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const tag = encodeForumTag(input, false, true)
     if (tag instanceof InputValidationFailure) return tag
     // The route names the tag, and Fluxer would ignore another ID in the body, so a different one is a mistake
@@ -703,18 +832,34 @@ export function forumTagEdit(
 }
 
 export function forumTagDelete(
-    channelId: string,
-    tagId: string,
+    rawChannelId: string,
+    rawTagId: string,
 ): ChannelValidationResult<GuildForumChannel | GuildMediaChannel> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-    if (!identifier(tagId)) return inputValidationFailure("tagId", "format", "Forum tag IDs must be decimal strings")
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const tagId = inputId(rawTagId)
+    if (tagId === undefined)
+        return inputValidationFailure(
+            "tagId",
+            "format",
+            "Forum tag IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return forumTagRequest(channelId, tagId, "DELETE")
 }
 
-export function channelDelete(channelId: string): ChannelValidationResult<void> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+export function channelDelete(rawChannelId: string): ChannelValidationResult<void> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: channelId,
         bucket: "channel:delete",
@@ -732,9 +877,10 @@ function channelPositionBody(positions: readonly ChannelPosition[]): string | In
         return inputValidationFailure("positions", "type", "Channel positions must be an array")
     if (positions.length === 0)
         return inputValidationFailure("positions", "length", "Channel positions must contain at least one entry")
+    if (positions.length > maxListEntries)
+        return inputValidationFailure("positions", "length", "Channel positions must contain at most 10,000 entries")
     const ids = new Set<string>()
     const updates: Array<Record<string, string | number | boolean | null>> = []
-    let bytes = 2
     for (const item of positions) {
         const unsupported = record(item)
             ? unsupportedKeyFailure(
@@ -745,43 +891,49 @@ function channelPositionBody(positions: readonly ChannelPosition[]): string | In
               )
             : undefined
         if (unsupported) return unsupported
+        const id = record(item) ? inputId(item.id) : undefined
+        const parentId = record(item) && item.parentId !== undefined ? absentOrInputId(item.parentId) : undefined
+        const precedingSiblingId =
+            record(item) && item.precedingSiblingId !== undefined ? absentOrInputId(item.precedingSiblingId) : undefined
         if (
             !record(item) ||
-            !identifier(item.id) ||
-            ids.has(item.id) ||
+            id === undefined ||
+            ids.has(id) ||
             (item.position !== undefined &&
                 (typeof item.position !== "number" || !Number.isSafeInteger(item.position) || item.position < 0)) ||
-            (item.parentId !== undefined && !nullableIdentifier(item.parentId)) ||
-            (item.precedingSiblingId !== undefined && !nullableIdentifier(item.precedingSiblingId)) ||
+            (item.parentId !== undefined && parentId === undefined) ||
+            (item.precedingSiblingId !== undefined && precedingSiblingId === undefined) ||
             (item.syncPermissionsOnMove !== undefined && typeof item.syncPermissionsOnMove !== "boolean")
         )
             return inputValidationFailure(
                 "positions[]",
                 "format",
-                "Each channel position entry must be an object with a unique decimal id, and may also contain only position (a nonnegative integer), parentId and precedingSiblingId (decimal IDs or null), and syncPermissionsOnMove (a boolean)",
+                "Each channel position entry must be an object with a unique decimal id, and may also contain only position (a nonnegative integer), parentId and precedingSiblingId (decimal IDs, null or empty), and syncPermissionsOnMove (a boolean)",
             )
         const update = {
-            id: item.id,
+            id,
             ...(item.position === undefined ? {} : { position: item.position }),
-            ...(item.parentId === undefined ? {} : { parent_id: item.parentId }),
-            ...(item.precedingSiblingId === undefined ? {} : { preceding_sibling_id: item.precedingSiblingId }),
+            ...(parentId === undefined ? {} : { parent_id: parentId }),
+            ...(precedingSiblingId === undefined ? {} : { preceding_sibling_id: precedingSiblingId }),
             ...(item.syncPermissionsOnMove === undefined ? {} : { lock_permissions: item.syncPermissionsOnMove }),
         }
-        bytes += Buffer.byteLength(JSON.stringify(update)) + (updates.length ? 1 : 0)
-        if (bytes > maxRequestBytes)
-            return inputValidationFailure(
-                "positions",
-                "size",
-                "Channel positions must not exceed 4,194,304 encoded bytes",
-            )
-        ids.add(item.id)
+        ids.add(id)
         updates.push(update)
     }
     return JSON.stringify(updates)
 }
 
-export function channelReorder(guildId: string, positions: readonly ChannelPosition[]): ChannelValidationResult<void> {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function channelReorder(
+    rawGuildId: string,
+    positions: readonly ChannelPosition[],
+): ChannelValidationResult<void> {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const json = channelPositionBody(positions)
     if (json instanceof InputValidationFailure) return json
     return {
@@ -797,7 +949,8 @@ export function channelReorder(guildId: string, positions: readonly ChannelPosit
     }
 }
 
-function permissionSetBody(input: PermissionOverwrite): string | InputValidationFailure {
+/** The trimmed overwrite ID and the request body */
+function permissionSetBody(input: PermissionOverwrite): { id: string; json: string } | InputValidationFailure {
     const unsupported = record(input)
         ? unsupportedKeyFailure(
               input,
@@ -807,9 +960,10 @@ function permissionSetBody(input: PermissionOverwrite): string | InputValidation
           )
         : undefined
     if (unsupported) return unsupported
+    const id = record(input) ? inputId(input.id) : undefined
     if (
         !record(input) ||
-        !identifier(input.id) ||
+        id === undefined ||
         (input.type !== "role" && input.type !== "member") ||
         !writablePermission(input.allow) ||
         !writablePermission(input.deny)
@@ -819,23 +973,32 @@ function permissionSetBody(input: PermissionOverwrite): string | InputValidation
             "format",
             "Permission overwrite requires a decimal ID, role or member type, and allow and deny values from 0 through 9,223,372,036,854,775,807",
         )
-    return JSON.stringify({
-        type: input.type === "role" ? 0 : 1,
-        allow: input.allow.toString(),
-        deny: input.deny.toString(),
-    })
+    return {
+        id,
+        json: JSON.stringify({
+            type: input.type === "role" ? 0 : 1,
+            allow: input.allow.toString(),
+            deny: input.deny.toString(),
+        }),
+    }
 }
 
-export function permissionSet(channelId: string, input: PermissionOverwrite): ChannelValidationResult<void> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-    const json = permissionSetBody(input)
-    if (json instanceof InputValidationFailure) return json
+export function permissionSet(rawChannelId: string, input: PermissionOverwrite): ChannelValidationResult<void> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const body = permissionSetBody(input)
+    if (body instanceof InputValidationFailure) return body
+    const { id, json } = body
     return {
         majorId: channelId,
         bucket: "channel:update",
         audited: true,
-        path: `/channels/${channelId}/permissions/${input.id}`,
+        path: `/channels/${channelId}/permissions/${id}`,
         method: "PUT",
         status: 204,
         json,
@@ -845,11 +1008,21 @@ export function permissionSet(channelId: string, input: PermissionOverwrite): Ch
     }
 }
 
-export function permissionRemove(channelId: string, targetId: string): ChannelValidationResult<void> {
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-    if (!identifier(targetId))
-        return inputValidationFailure("targetId", "format", "Permission target IDs must be decimal strings")
+export function permissionRemove(rawChannelId: string, rawTargetId: string): ChannelValidationResult<void> {
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const targetId = inputId(rawTargetId)
+    if (targetId === undefined)
+        return inputValidationFailure(
+            "targetId",
+            "format",
+            "Permission target IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: channelId,
         bucket: "channel:update",

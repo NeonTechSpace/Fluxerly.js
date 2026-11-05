@@ -774,8 +774,10 @@ export function rejectedMessageShapes(client: Client): void {
     const page: readonly Message[] = []
     // @ts-expect-error History arrays cannot be mutated
     page.push(page[0]!)
-    // @ts-expect-error History cursor modes are mutually exclusive
+    // Fluxer accepts around with the other cursors and ignores them for the page
     client.messages.fetchHistory("20", { before: "10", around: "9" })
+    // @ts-expect-error History IDs remain strings
+    client.messages.fetchHistory("20", { before: "10", around: 9 })
     // @ts-expect-error Native history cancellation uses interruption
     client.messages.fetchHistory("20", {}, { signal: new AbortController().signal })
     // @ts-expect-error Native registration retains its owning scope requirement

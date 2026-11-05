@@ -40,6 +40,9 @@ const opcodeNames = new Map<number, string>([
     [Opcode.memberSubscriptions, "MEMBER_SUBSCRIPTIONS"],
     [Opcode.requestGuildCounts, "REQUEST_GUILD_COUNTS"],
     [Opcode.requestChannelMemberCounts, "REQUEST_CHANNEL_MEMBER_COUNTS"],
+    // Fluxer's gateway names opcode 28 request_forum_unreads (fluxer_gateway/src/utils/constants.erl:52, :73). Only the log name
+    // is known here, so the opcode stays out of Opcode and the commands the SDK sends
+    [28, "REQUEST_FORUM_UNREADS"],
 ])
 
 /** Readable opcode name for logs, or null for an opcode this SDK does not know */

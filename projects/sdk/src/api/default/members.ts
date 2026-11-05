@@ -198,7 +198,8 @@ export interface Members {
     >
     /**
      * Change this bot's community profile, not its global account or another member.
-     * Omitted fields stay unchanged, and null clears an override.
+     * Omitted fields stay unchanged, and null clears an override. An empty string clears nickname, bio, pronouns,
+     * avatar and banner too, as Fluxer reads it as null on this route.
      * An empty input or unknown key fails locally.
      * Fluxer checks permissions and field-specific rate limits.
      * Changing the bot's own nickname requires ChangeNickname. Without it, Fluxer can return success with the old nickname, so inspect the returned member.
@@ -214,7 +215,7 @@ export interface Members {
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set one member's nickname, or pass null to clear it.
-     * A raw empty string fails, while a nonempty string containing only trim whitespace is accepted as Fluxer's clear value.
+     * An empty string or one containing only whitespace also clears it, as Fluxer reads each as null.
      * Otherwise, validation removes U+000C and U+202E, trims surrounding whitespace, and requires 1–32 UTF-16 code units.
      * The original string is sent unchanged.
      * Other profile fields and roles stay unchanged.
@@ -242,8 +243,9 @@ export interface Members {
     ): ResultAsync<GuildMember, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Move a member who is already in voice to a positive decimal voice-channel ID.
+     * An empty channel ID, which Fluxer reads as null, disconnects the member as disconnect does.
      * The target.connectionId value selects one observed connection.
-     * Omit it to move every active connection for that member.
+     * Omit it, or pass an empty string, which Fluxer reads as null, to move every active connection for that member.
      * Fluxer requires MoveMembers and checks hierarchy, destination visibility and permission to connect.
      * Fluxer refuses a move into an occupied voice channel whose participants all use peer-to-peer voice, and the member stays in its current channel.
      * The call then fails with reason rejected, HTTP 400 and apiError.code userNotInVoice (Fluxer code USER_NOT_IN_VOICE) even though the member is in voice.

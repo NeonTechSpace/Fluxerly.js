@@ -5,7 +5,7 @@
  */
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
 import { decodeGuild, type GuildRequest } from "./guilds.js"
-import { count, identifier, record } from "./decode/primitives.js"
+import { count, inputId, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 
@@ -47,20 +47,30 @@ export function guildList(
         "the guild list query",
     )
     if (unsupported) return unsupported
-    if (query.before !== undefined && !identifier(query.before))
-        return inputValidationFailure("query", "format", "Guild list cursor IDs must be decimal strings")
-    if (query.after !== undefined && !identifier(query.after))
-        return inputValidationFailure("query", "format", "Guild list cursor IDs must be decimal strings")
-    if (query.before !== undefined && query.after !== undefined)
-        return inputValidationFailure("query", "format", "Guild list query cannot combine before and after")
+    const before = query.before === undefined ? undefined : inputId(query.before)
+    if (query.before !== undefined && before === undefined)
+        return inputValidationFailure(
+            "query",
+            "format",
+            "Guild list cursor IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const after = query.after === undefined ? undefined : inputId(query.after)
+    if (query.after !== undefined && after === undefined)
+        return inputValidationFailure(
+            "query",
+            "format",
+            "Guild list cursor IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (query.withCounts !== undefined && typeof query.withCounts !== "boolean")
         return inputValidationFailure("query", "format", "Guild list withCounts must be a boolean")
     const limit = query.limit === undefined ? 200 : query.limit
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 200)
         return inputValidationFailure("query.limit", "range", "Guild list limit must be an integer from 1 through 200")
     const params = new URLSearchParams({ limit: String(limit), with_counts: String(query.withCounts === true) })
-    if (query.before !== undefined) params.set("before", query.before)
-    if (query.after !== undefined) params.set("after", query.after)
+    // Fluxer accepts both cursors, uses after and ignores before when both are sent
+    // (fluxer_api/src/api/guild/services/data/GuildOperationsService.ts:248-259 at 0098958f), so both are sent as given
+    if (before !== undefined) params.set("before", before)
+    if (after !== undefined) params.set("after", after)
     return {
         guildId: "@me",
         bucket: "user:guilds:list",
@@ -83,8 +93,14 @@ export function guildList(
     }
 }
 
-export function guildLeave(guildId: string): GuildRequest<void> | InputValidationFailure {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function guildLeave(rawGuildId: string): GuildRequest<void> | InputValidationFailure {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         guildId,
         bucket: "user:guilds:leave",
@@ -114,8 +130,14 @@ export function ownDeletionOptions<O extends object>(options: unknown): O | Inpu
 }
 
 /** Builds the authenticated member's whole-guild message deletion request without changing membership or roles */
-export function guildDeleteOwnMessages(guildId: string): GuildRequest<void> | InputValidationFailure {
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+export function guildDeleteOwnMessages(rawGuildId: string): GuildRequest<void> | InputValidationFailure {
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         guildId,
         bucket: "user:guilds:bulk-delete-mine",

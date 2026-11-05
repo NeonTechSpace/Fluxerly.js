@@ -16,11 +16,20 @@ import type {
 import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
 import { decodeMessage, mentionPreferenceKnown } from "./message.js"
-import { identifier, imageDataUri, record, safeInteger as integer } from "./decode/primitives.js"
+import {
+    base64Image,
+    base64ImageExplanation,
+    clearsImage,
+    identifier,
+    inputId,
+    record,
+    safeInteger as integer,
+} from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { timestamp } from "./decode/timestamp.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { channelName, normalizedText } from "./field-text.js"
+import { defaultBodyLimit } from "./request-body-limits.js"
 
 /** Validated requests executed by the client's shared REST scheduler */
 export interface UserRequest<A> {
@@ -137,9 +146,14 @@ export function decodeDirectMessage(value: unknown): DirectMessageChannel | unde
     }) as DirectMessageChannel
 }
 
-export function userFetch(id: string): UserValidationResult<User> {
-    if (id !== "@me" && !identifier(id))
-        return inputValidationFailure("userId", "format", "User IDs must be decimal strings or @me")
+export function userFetch(rawId: string): UserValidationResult<User> {
+    const id = rawId === "@me" ? rawId : inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "userId",
+            "format",
+            "User IDs must be decimal strings or @me, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: id,
         path: `/users/${id}`,
@@ -155,17 +169,27 @@ export function userFetch(id: string): UserValidationResult<User> {
 }
 
 /** Build one explicit profile read with only a caller-selected guild context and no relationship-expansion flags */
-export function userProfile(id: string, query?: UserProfileQuery): UserValidationResult<UserProfile> {
-    if (!identifier(id)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
+export function userProfile(rawId: string, query?: UserProfileQuery): UserValidationResult<UserProfile> {
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "userId",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (query !== undefined && !record(query))
         return inputValidationFailure("query", "type", "User profile query must be an object")
     const unsupported = record(query)
         ? unsupportedKeyFailure(query, ["guildId"], "query", "the user profile query")
         : undefined
     if (unsupported) return unsupported
-    if (record(query) && query.guildId !== undefined && !identifier(query.guildId))
-        return inputValidationFailure("query.guildId", "format", "Guild IDs must be decimal strings")
-    const guildId = typeof query?.guildId === "string" ? query.guildId : undefined
+    const guildId = record(query) && query.guildId !== undefined ? inputId(query.guildId) : undefined
+    if (record(query) && query.guildId !== undefined && guildId === undefined)
+        return inputValidationFailure(
+            "query.guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const path = `/users/${id}/profile${guildId === undefined ? "" : `?guild_id=${encodeURIComponent(guildId)}`}`
     return {
         majorId: id,
@@ -246,6 +270,7 @@ function decodeProfileBadge(value: unknown): ProfileBadge | undefined {
     if (value.small_asset !== undefined && typeof value.small_asset !== "string") return undefined
     if (value.count !== undefined && value.count !== null && !integer(value.count)) return undefined
     if (value.accessible_label !== undefined && !nullableText(value.accessible_label)) return undefined
+    if (value.quote !== undefined && !nullableText(value.quote)) return undefined
     let details: ProfileBadge["details"]
     if (value.details !== undefined && value.details !== null) {
         const { title, lines } = record(value.details) ? value.details : {}
@@ -266,6 +291,7 @@ function decodeProfileBadge(value: unknown): ProfileBadge | undefined {
         ...(typeof value.count === "number" ? { count: value.count } : {}),
         ...(typeof value.accessible_label === "string" ? { accessibleLabel: value.accessible_label } : {}),
         ...(details === undefined ? {} : { details }),
+        ...(typeof value.quote === "string" ? { quote: value.quote } : {}),
     })
 }
 
@@ -293,15 +319,16 @@ function decodeUserProfileFields(value: unknown, accountProfile: boolean): UserP
     return Object.freeze(profile)
 }
 
-export function directMessageOpen(id: string): UserValidationResult<DirectMessageChannel> {
-    if (!identifier(id)) return inputValidationFailure("userId", "format", "User IDs must be decimal strings")
-    const json = JSON.stringify({ recipient_id: id })
-    if (Buffer.byteLength(json) > 4_194_304)
+export function directMessageOpen(rawId: string): UserValidationResult<DirectMessageChannel> {
+    const id = inputId(rawId)
+    if (id === undefined)
         return inputValidationFailure(
             "userId",
-            "size",
-            "Direct message request must not exceed 4,194,304 encoded bytes",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
+    // The ID is at most 19 digits, so this body stays far below Fluxer's default limit
+    const json = JSON.stringify({ recipient_id: id })
     return {
         majorId: "@me",
         path: "/users/@me/channels",
@@ -319,8 +346,14 @@ export function directMessageOpen(id: string): UserValidationResult<DirectMessag
     }
 }
 
-export function directMessageFetch(id: string): UserValidationResult<DirectMessageChannel> {
-    if (!identifier(id)) return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+export function directMessageFetch(rawId: string): UserValidationResult<DirectMessageChannel> {
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: id,
         id,
@@ -377,11 +410,17 @@ export function directMessageLatestMessages(
     // oxlint-disable-next-line unicorn/no-new-array -- preallocates the counted length once, and the loop below assigns every index
     const channelIds = new Array<string>(count)
     for (let index = 0; index < count; index++) channelIds[index] = ids[index]
-    if (channelIds.some((id) => !identifier(id)))
-        return inputValidationFailure("channelIds[]", "format", "Channel IDs must be decimal strings")
-    if (new Set(channelIds).size !== channelIds.length)
+    const trimmedIds = channelIds.map(inputId)
+    if (!trimmedIds.every((id) => id !== undefined))
+        return inputValidationFailure(
+            "channelIds[]",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    if (new Set(trimmedIds).size !== trimmedIds.length)
         return inputValidationFailure("channelIds", "unique", "Channel IDs must be unique")
-    const json = JSON.stringify({ channels: channelIds })
+    const requested = trimmedIds as readonly string[]
+    const json = JSON.stringify({ channels: requested })
     return {
         majorId: "@me",
         path: "/users/@me/channels/messages/preload",
@@ -393,7 +432,7 @@ export function directMessageLatestMessages(
         // Fluxer only reads here (user/services/UserChannelService.ts:257-289 at 5f3fc0b1)
         read: true,
         decode: (value) => {
-            if (!record(value) || Object.keys(value).some((id) => !channelIds.includes(id))) return undefined
+            if (!record(value) || Object.keys(value).some((id) => !requested.includes(id))) return undefined
             const messages: Record<string, MessageCore | null> = {}
             for (const [id, item] of Object.entries(value)) {
                 if (item === null) {
@@ -404,7 +443,7 @@ export function directMessageLatestMessages(
                 if (!message || message.channelId !== id) return undefined
                 messages[id] = message
             }
-            const omittedChannelIds = channelIds.filter((id) => !(id in messages))
+            const omittedChannelIds = requested.filter((id) => !(id in messages))
             return Object.freeze({
                 messages: Object.freeze(messages),
                 omittedChannelIds: Object.freeze(omittedChannelIds),
@@ -414,10 +453,16 @@ export function directMessageLatestMessages(
 }
 
 export function directMessageEdit(
-    id: string,
+    rawId: string,
     input: DirectMessageGroupEdit,
 ): UserValidationResult<DirectMessageChannel> {
-    if (!identifier(id)) return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (!record(input)) return inputValidationFailure("input", "type", "Group DM input must be an object")
     if (Object.keys(input).length === 0)
         return inputValidationFailure("input", "required", "Group DM input must contain at least one field")
@@ -428,38 +473,61 @@ export function directMessageEdit(
         "the group DM input",
     )
     if (unsupported) return unsupported
-    if (input.name !== undefined && input.name !== null && !channelName(input.name))
+    // Fluxer reads an empty name as null, which clears it, and an empty owner ID as null, which changes nothing
+    // (fluxer_api/src/api/Validator.ts:59-63, fluxer_api/src/api/channel/services/ChannelDataService.ts:183 and
+    // fluxer_api/src/api/channel/services/channel_data/GroupDmUpdateService.ts:69-84 at 0098958f)
+    if (input.name !== undefined && input.name !== null && input.name !== "" && !channelName(input.name))
         return inputValidationFailure(
             "input",
             "format",
-            "Group DM name must be null or contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
+            "Group DM name must be null or empty to clear it, or contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
         )
-    if (input.icon !== undefined && input.icon !== null && !imageDataUri(input.icon))
-        return inputValidationFailure("input", "format", "Group DM icon must be null or a base64 image data URI")
-    if (input.ownerId !== undefined && !identifier(input.ownerId))
-        return inputValidationFailure("input", "format", "Group DM owner IDs must be decimal strings")
-    if (
-        input.nicknames !== undefined &&
-        input.nicknames !== null &&
-        (!record(input.nicknames) ||
-            Object.entries(input.nicknames).some(
-                ([id, value]) => !identifier(id) || (value !== null && (value === "" || !normalizedText(value, 0, 32))),
-            ))
-    )
+    if (input.icon !== undefined && !clearsImage(input.icon) && !base64Image(input.icon))
+        return inputValidationFailure("input", "format", base64ImageExplanation("Group DM icon", input.icon))
+    const ownerId = input.ownerId === undefined || input.ownerId === "" ? input.ownerId : inputId(input.ownerId)
+    if (input.ownerId !== undefined && ownerId === undefined)
+        return inputValidationFailure(
+            "input",
+            "format",
+            "Group DM owner IDs must be decimal strings or empty, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    // Nickname keys are caller IDs, so the body carries them trimmed, and two keys that trim to one ID are refused
+    let nicknames: Record<string, unknown> | null | undefined
+    if (input.nicknames === undefined || input.nicknames === null) nicknames = input.nicknames
+    else if (record(input.nicknames)) {
+        nicknames = {}
+        for (const [key, value] of Object.entries(input.nicknames)) {
+            const nicknameId = inputId(key)
+            if (
+                nicknameId === undefined ||
+                Object.hasOwn(nicknames, nicknameId) ||
+                (value !== null && !normalizedText(value, 0, 32))
+            ) {
+                nicknames = undefined
+                break
+            }
+            nicknames[nicknameId] = value
+        }
+    }
+    if (input.nicknames !== undefined && input.nicknames !== null && nicknames === undefined)
         return inputValidationFailure(
             "nicknames",
             "format",
-            "Group DM nicknames must map decimal user IDs to null or nonempty strings of at most 32 UTF-16 code units after Fluxer's normalization",
+            "Group DM nicknames must map decimal user IDs to null or strings of at most 32 UTF-16 code units after Fluxer's normalization",
         )
-    const json = JSON.stringify({ name: input.name, icon: input.icon, owner_id: input.ownerId, nicks: input.nicknames })
+    const json = JSON.stringify({ name: input.name, icon: input.icon, owner_id: ownerId, nicks: nicknames })
     if (json === "{}")
         return inputValidationFailure(
             "input",
             "required",
             "Group DM input must set at least one field to a defined value",
         )
-    if (Buffer.byteLength(json) > 4_194_304)
-        return inputValidationFailure("input", "size", "Group DM input must not exceed 4,194,304 encoded bytes")
+    if (Buffer.byteLength(json) > defaultBodyLimit)
+        return inputValidationFailure(
+            "input",
+            "size",
+            "Group DM input must not exceed 15,029,592 encoded bytes, the most Fluxer accepts",
+        )
     const current = directMessageFetch(id)
     if (current instanceof InputValidationFailure) return current
     return {
@@ -474,10 +542,21 @@ export function directMessageEdit(
     }
 }
 
-export function directMessageClose(id: string, recipient?: string): UserValidationResult<void> {
-    if (!identifier(id)) return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
-    if (recipient !== undefined && !identifier(recipient))
-        return inputValidationFailure("recipientId", "format", "Recipient IDs must be decimal strings")
+export function directMessageClose(rawId: string, rawRecipient?: string): UserValidationResult<void> {
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const recipient = rawRecipient === undefined ? undefined : inputId(rawRecipient)
+    if (rawRecipient !== undefined && recipient === undefined)
+        return inputValidationFailure(
+            "recipientId",
+            "format",
+            "Recipient IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: id,
         id,

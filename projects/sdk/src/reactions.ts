@@ -71,7 +71,8 @@ export interface ReactionUsersPage {
  * Markup must occupy the whole string. Shortcodes such as `:wave:` and URL-encoded text are rejected.
  * Custom animation flags are optional and do not change the request identity or collector match
  *
- * Unicode input is limited to 128 UTF-16 code units and rejects spaces, control characters and reserved markup characters.
+ * Unicode input receives Fluxer's normalization, which removes U+000C and U+202E and trims whitespace, and the normalized emoji is what the SDK checks, sends and matches in collectors.
+ * It is limited to 64 UTF-16 code units and rejects spaces, control characters and reserved markup characters.
  * Fluxer checks that the emoji is supported and that the bot may use it. The SDK does not fetch the emoji or decide whether the bot has permission to use it
  *
  * @category Messages

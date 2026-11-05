@@ -444,11 +444,21 @@ export interface MessageBulkDeletion {
  * @category Messages
  */
 export interface AllowedMentions {
-    /** Permit notifications for textual mentions of these account IDs, at most 100. Omit to permit none */
+    /** Permit notifications for textual mentions of these account IDs, at most 100. Omit to permit none.
+     * Where Fluxer reads mentions, it refuses a nonempty list together with `everyone: true`, as `everyone` describes
+     */
     readonly users?: readonly string[]
-    /** Permit notifications for textual mentions of these role IDs, at most 100. Fluxer's community permissions still apply */
+    /** Permit notifications for textual mentions of these role IDs, at most 100. Fluxer's community permissions still apply.
+     * Where Fluxer reads mentions, it refuses a nonempty list together with `everyone: true`, as `everyone` describes
+     */
     readonly roles?: readonly string[]
-    /** Permit @everyone and @here notifications, default false */
+    /** Permit @everyone and @here notifications, default false.
+     * Fluxer reads the mention settings of a channel message edit, and of a send, reply or webhook send that has content
+     * or replies to a message. There it accepts this only without listed users or roles, so `everyone: true` with a
+     * nonempty `users` or `roles` list fails with reason `input`, constraint `relationship` and path `allowedMentions`,
+     * before any request. Elsewhere, such as a send with only embeds or files or a webhook message edit, Fluxer ignores
+     * the combination, so it is sent. Empty lists are fine
+     */
     readonly everyone?: boolean
     /** Permit notification of the reply target's author, default false */
     readonly repliedUser?: boolean
@@ -567,6 +577,8 @@ export type MessageFlag = (typeof MessageFlags)[keyof typeof MessageFlags]
 
 /** Correlation identifier attached to a send, reply or forward.
  * Use a string of 1 through 32 UTF-16 code units, or a nonnegative safe integer encoded as a decimal string.
+ * Fluxer counts a string after removing form feeds and U+202E and trimming surrounding whitespace, and keeps that form,
+ * so a blank nonce fails locally with reason input. The SDK sends the string as given
  * This is not the message ID returned after creation
  *
  * @category Messages
@@ -574,7 +586,8 @@ export type MessageFlag = (typeof MessageFlags)[keyof typeof MessageFlags]
 export type MessageNonce = string | number
 
 /** Content for a new message: Text, embeds, file uploads, stickers, or a combination.
- * At least one of these must be nonempty when the operation runs, even if TypeScript accepts an empty value.
+ * At least one of these must be nonempty when the operation runs, even if TypeScript accepts an empty value. Text
+ * that is blank or only invisible characters, such as a zero-width space, counts as none, as in Fluxer.
  * Stickers can be sent by bots and webhooks, but cannot be replaced in message edits
  * @example
  * ```ts
@@ -589,8 +602,8 @@ export type MessageNonce = string | number
 export type MessageBody = (
     | MessageContent<AttachmentInput>
     | {
-          /** Text to send alongside stickers, without trimming */
-          readonly content?: string
+          /** Text to send alongside stickers, without trimming, or null for none */
+          readonly content?: string | null
           /** Embeds to display alongside stickers, as plain objects or EmbedBuilder instances */
           readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
           /** New files to upload alongside stickers */
@@ -600,10 +613,12 @@ export type MessageBody = (
       }
 ) & {
     /** Sticker IDs to send, at most three decimal strings in display order.
-     * Omit or use [] for no stickers. The SDK copies IDs by index before dispatch without uploading or looking up images.
-     * Fluxer checks sticker availability and external-sticker permissions
+     * Omit, use [] or use null for no stickers, and the SDK sends null as given, since Fluxer reads it as none. The SDK copies IDs by index before dispatch without uploading or looking up images.
+     * Fluxer checks sticker availability and external-sticker permissions.
+     * It refuses a sticker from an age-restricted community outside that community with apiError code missingPermissions whatever the bot's permissions.
+     * In a direct message Fluxer first requires its global expressions feature for any custom sticker, so a sender without it gets a validation refusal instead
      */
-    readonly stickerIds?: readonly string[]
+    readonly stickerIds?: readonly string[] | null
 }
 
 /** Text, embeds and files of a message body, where at least one of content, embeds or attachments is required.
@@ -613,24 +628,31 @@ export type MessageBody = (
  */
 export type MessageContent<A> =
     | {
-          /** Message text without trimming. Fluxer checks its applicable content-length limit */
-          readonly content: string
+          /** Message text without trimming. Fluxer checks its applicable content-length limit. Null means no text in a
+           * send and clears the text in an edit, as an empty string does, so a send or an edit without flags then
+           * needs an embed, a file or, on a send, a sticker
+           */
+          readonly content: string | null
           /** Embeds in display order, subject to Fluxer's applicable count limit. An EmbedBuilder is built when the operation reads its input */
           readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
           /** New uploads when sending or replying, or the complete replacement file list when editing */
           readonly attachments?: readonly A[]
       }
     | {
-          /** Optional text. Omit for an embed-only send or to leave existing text unchanged in an edit */
-          readonly content?: string
+          /** Optional text. Omit for an embed-only send or to leave existing text unchanged in an edit. Null means
+           * no text in a send and clears the text in an edit
+           */
+          readonly content?: string | null
           /** Embeds to send in display order, or the replacement embed collection in an edit. An EmbedBuilder is built when the operation reads its input */
           readonly embeds: readonly (EmbedInput | EmbedBuilder)[]
           /** New uploads when sending or replying, or the complete replacement file list when editing */
           readonly attachments?: readonly A[]
       }
     | {
-          /** Optional text. Omit for a file-only send or to leave existing text unchanged in an edit */
-          readonly content?: string
+          /** Optional text. Omit for a file-only send or to leave existing text unchanged in an edit. Null means no
+           * text in a send and clears the text in an edit
+           */
+          readonly content?: string | null
           /** Optional embeds, as plain objects or EmbedBuilder instances. Omit to leave existing embeds unchanged in an edit */
           readonly embeds?: readonly (EmbedInput | EmbedBuilder)[]
           /** Files to send, or the complete replacement file list in an edit, including IDs of existing files to keep */
@@ -638,9 +660,11 @@ export type MessageContent<A> =
       }
 
 /** Input for messages.send, including content and optional delivery settings.
- * Supply nonempty text, embeds, new files or sticker IDs. Unknown properties are rejected locally.
+ * Supply visible text, embeds, new files or sticker IDs. Text that is blank or only invisible characters counts as
+ * none and fails locally, as Fluxer refuses it. Unknown properties are rejected locally.
  * Notifications are off by default. Use allowedMentions to permit specific existing mentions to notify.
- * An attachment:// embed image or thumbnail must name one matching new image or video upload in this request.
+ * An attachment:// embed image or thumbnail must name a new image or video upload in this request by the name Fluxer
+ * stores it under, as EmbedInput describes.
  * Each field, including an attachment or allowedMentions field, is read at most once, so the value validated is the value sent.
  * Use messages.forward to copy a source message into an immutable forward
  *
@@ -659,8 +683,8 @@ export type MessageInput = MessageBody & {
     /** Writable flag set containing only MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and
      * MessageFlags.VoiceMessage. Omit to use Fluxer's default. Server-managed and unsupported bits fail locally before dispatch.
      * VoiceMessage sends a voice note, an uploaded audio file that Fluxer's apps show with a player. It is unrelated to
-     * voice channel connections. It needs exactly one new attachment with duration and waveform, and no content, embeds
-     * or stickers, which the SDK checks before dispatch. A forum post's first message and a webhook send accept it too,
+     * voice channel connections. It needs exactly one new attachment with duration and waveform, and no visible content,
+     * embeds or stickers, which the SDK checks before dispatch. Blank or invisible text does not count as content. A forum post's first message and a webhook send accept it too,
      * and a webhook voice note's waveform may hold at most 256 characters
      */
     readonly flags?: number
@@ -721,10 +745,15 @@ export type EditMessageOptions = {
 /** Input for changing an existing message without fetching or merging its old data.
  * Omitted body properties are left unchanged. Each supplied array replaces its corresponding collection.
  * To keep existing files alongside new uploads, include their attachment IDs in attachments.
- * To clear files, supply attachments: [] together with nonempty text or embeds.
- * To clear embeds, supply embeds: [] together with nonempty text.
- * Empty content asks Fluxer to clear text. Fluxer may regenerate link previews when text changes.
- * A flags-only edit is accepted. An empty edit and unknown properties are rejected.
+ * Fluxer checks the edit itself, not the message it leaves: Unless flags are supplied, the edit must contain visible
+ * content, an embed or an attachment, or it fails locally with reason input. Content that is empty, blank or only
+ * invisible characters counts as none.
+ * To clear files, supply attachments: [] together with visible text, embeds or flags.
+ * To clear embeds, supply embeds: [] together with visible text, attachments or flags.
+ * Empty or null content clears the text, so it needs a nonempty embeds or attachments list, or flags, in the same edit.
+ * Supplied flags replace the message's writable flags, so to keep its embeds and only clear the text, send
+ * `content: ""` with the message's current flags. Fluxer may regenerate link previews when text
+ * changes. A flags-only edit is accepted. An empty edit and unknown properties are rejected.
  * Each field is read at most once, so the value validated is the value sent.
  * Mention notifications default off for this edit, including notification of the reply author
  *
@@ -744,9 +773,11 @@ export type EditMessageInput =
       })
 
 /** Choose one page for messages.fetchHistory.
- * Omit cursors for the latest visible messages, or choose exactly one of before, after and around.
+ * Omit cursors for the latest visible messages, choose one of before, after and around, or bound the page by both
+ * before and after.
  * Results are returned newest first, including pages selected with after.
- * Combined cursor modes and unknown properties are rejected locally
+ * When around is set, Fluxer ignores before and after for the page, as its message service does. In a thread they can
+ * still decide whether the page includes the thread's starter message. Unknown properties are rejected locally
  *
  * @category Messages
  */
@@ -757,28 +788,47 @@ export type MessageHistoryQuery = {
     | {
           /** Fetch the nearest messages older than this decimal ID, excluding the cursor message */
           readonly before?: string
-          /** Not accepted with before. Choose one cursor */
+          /** Omitted here. Supply it together with before to bound the page by both IDs */
           readonly after?: never
-          /** Not accepted with before. Choose one cursor */
+          /** Omitted here. With around, Fluxer ignores before for the page */
           readonly around?: never
       }
     | {
-          /** Not accepted with after. Choose one cursor */
+          /** Omitted here. Supply it together with after to bound the page by both IDs */
           readonly before?: never
           /** Fetch the nearest messages newer than this decimal ID, excluding it. Results still arrive newest first */
           readonly after?: string
-          /** Not accepted with after. Choose one cursor */
+          /** Omitted here. With around, Fluxer ignores after for the page */
           readonly around?: never
       }
     | {
-          /** Not accepted with around. Choose one cursor */
-          readonly before?: never
-          /** Not accepted with around. Choose one cursor */
-          readonly after?: never
+          /** Upper bound of the window, a decimal message ID. The page holds the newest messages older than it, up to
+           * limit, and excludes the cursor message
+           */
+          readonly before: string
+          /** Lower bound of the window, a decimal message ID. Only messages newer than it are returned, excluding it.
+           * A window holding more than limit messages returns the newest of them, so page further with before set to
+           * the oldest returned ID. An after ID at or above before returns an empty page. In a thread, Fluxer adds the
+           * thread's starter message, whose ID is the thread ID, whenever after is below the thread ID, even when before
+           * is at or below it, so stop paging once the starter arrives
+           */
+          readonly after: string
+          /** Omitted here. With around, Fluxer ignores before and after for the page */
+          readonly around?: never
+      }
+    | {
+          /** Accepted with around, but Fluxer ignores it for the page. In a thread, a before at or below the thread ID
+           * can leave out the thread's starter message unless around names it
+           */
+          readonly before?: string
+          /** Accepted with around, but Fluxer ignores it for the page. In a thread, Fluxer adds the thread's starter
+           * message only when after is below the thread ID
+           */
+          readonly after?: string
           /** Center the page on this decimal message ID, including it only when present and visible.
            * Fluxer does not guarantee a full page or equal numbers of messages on either side
            */
-          readonly around?: string
+          readonly around: string
       }
 )
 

@@ -275,7 +275,7 @@ test("builders snapshot supported structural getter fields across both public en
         }
 
         get everyone() {
-            return true
+            return false
         }
 
         get repliedUser() {
@@ -317,7 +317,7 @@ test("builders snapshot supported structural getter fields across both public en
             },
         ],
         attachments: [{ data: bytes, filename: "getter.txt", title: "Getter attachment" }],
-        allowedMentions: { users: ["1"], roles: ["2"], everyone: true, repliedUser: true },
+        allowedMentions: { users: ["1"], roles: ["2"], everyone: false, repliedUser: true },
         messageReference: { id: "3", channelId: "20" },
     })
     expect(message.attachments![0]!.data).toBe(bytes)

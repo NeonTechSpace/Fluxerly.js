@@ -15,7 +15,7 @@ import type { ChannelPermissions, PermissionFetchOptions, PermissionInput, Permi
 import { channelFetch, channelList } from "./channels.js"
 import type { ClientOwner } from "./client.js"
 import { guildFetch, memberFetch, roleList } from "./guilds.js"
-import { identifier, record } from "./decode/primitives.js"
+import { inputId, record } from "./decode/primitives.js"
 import { failures, mapFailureCause } from "./effect-failures.js"
 import { readCaller, suspendInput, suspendMarked } from "./defects.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
@@ -76,14 +76,15 @@ interface ValidatedTarget {
 // Each validator reads a caller field once, so the validated value is the one calculated
 
 function validateMember(value: unknown, guildId: string): PermissionMember | undefined {
-    if (!record(value) || value.guildId !== guildId) return undefined
-    const userId = value.userId
+    if (!record(value) || inputId(value.guildId) !== guildId) return undefined
+    const userId = inputId(value.userId)
     const roleInput = value.roleIds
-    if (!identifier(userId) || !Array.isArray(roleInput)) return undefined
+    if (userId === undefined || !Array.isArray(roleInput)) return undefined
     const roleIds: string[] = []
     const seen = new Set<string>()
-    for (const roleId of roleInput) {
-        if (!identifier(roleId) || roleId === guildId || seen.has(roleId)) return undefined
+    for (const input of roleInput) {
+        const roleId = inputId(input)
+        if (roleId === undefined || roleId === guildId || seen.has(roleId)) return undefined
         seen.add(roleId)
         roleIds.push(roleId)
     }
@@ -98,10 +99,10 @@ function validateRoles(
     if (!Array.isArray(value)) return undefined
     const roles = new Map<string, PermissionRole>()
     for (const role of value) {
-        if (!record(role) || role.guildId !== guildId) return undefined
-        const id = role.id
+        if (!record(role) || inputId(role.guildId) !== guildId) return undefined
+        const id = inputId(role.id)
         const permissions = role.permissions
-        if (!identifier(id) || !unsigned64(permissions) || roles.has(id)) return undefined
+        if (id === undefined || !unsigned64(permissions) || roles.has(id)) return undefined
         roles.set(id, { id, guildId, permissions })
     }
     if (!roles.has(guildId) || member.roleIds.some((roleId) => !roles.has(roleId))) return undefined
@@ -110,11 +111,11 @@ function validateRoles(
 
 function decodeOverwrite(value: unknown, seen: Set<string>): PermissionOverwrite | undefined {
     if (!record(value)) return undefined
-    const id = value.id
+    const id = inputId(value.id)
     const type = value.type
     const allow = value.allow
     const deny = value.deny
-    if (!identifier(id) || (type !== "role" && type !== "member") || !unsigned64(allow) || !unsigned64(deny))
+    if (id === undefined || (type !== "role" && type !== "member") || !unsigned64(allow) || !unsigned64(deny))
         return undefined
     const key = `${type}:${id}`
     if (seen.has(key)) return undefined
@@ -123,9 +124,9 @@ function decodeOverwrite(value: unknown, seen: Set<string>): PermissionOverwrite
 }
 
 function validateChannel(value: unknown, guildId: string): PermissionChannel | undefined {
-    if (!record(value) || value.guildId !== guildId) return undefined
-    const id = value.id
-    if (!identifier(id) || !("permissionOverwrites" in value)) return undefined
+    if (!record(value) || inputId(value.guildId) !== guildId) return undefined
+    const id = inputId(value.id)
+    if (id === undefined || !("permissionOverwrites" in value)) return undefined
     const overwrites = value.permissionOverwrites
     if (!Array.isArray(overwrites)) return undefined
     const seen = new Set<string>()
@@ -140,9 +141,8 @@ function validateChannel(value: unknown, guildId: string): PermissionChannel | u
 
 /** The parent channel ID of a thread in the guild, or undefined when the thread's guild or IDs are invalid */
 function threadParentId(value: unknown, guildId: string): string | undefined {
-    if (!record(value) || value.guildId !== guildId || !identifier(value.id)) return undefined
-    const parentId = value.parentId
-    return identifier(parentId) ? parentId : undefined
+    if (!record(value) || inputId(value.guildId) !== guildId || inputId(value.id) === undefined) return undefined
+    return inputId(value.parentId)
 }
 
 function validateChannels(
@@ -201,15 +201,19 @@ function validateInput(value: unknown): ValidatedInput | InputValidationFailure 
     if (!record(value)) return inputValidationFailure("input", "type", "Permission input must be an object")
     const guildInput = value.guild
     if (!record(guildInput)) return inputValidationFailure("input.guild", "type", "Permission guild must be an object")
-    const guildId = guildInput.id
-    if (!identifier(guildId))
-        return inputValidationFailure("input.guild.id", "format", "Permission guild ID must be a decimal string")
-    const ownerId = guildInput.ownerId
-    if (!identifier(ownerId))
+    const guildId = inputId(guildInput.id)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "input.guild.id",
+            "format",
+            "Permission guild ID must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const ownerId = inputId(guildInput.ownerId)
+    if (ownerId === undefined)
         return inputValidationFailure(
             "input.guild.ownerId",
             "format",
-            "Permission guild owner ID must be a decimal string",
+            "Permission guild owner ID must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
     const guild: PermissionGuild = { id: guildId, ownerId }
     const member = validateMember(value.member, guild.id)
@@ -295,15 +299,27 @@ function validateTarget(
     if (!record(value)) return inputValidationFailure("target", "type", "Permission target must be an object")
     const unsupported = unsupportedKeyFailure(value, keys, "target", "the permission target")
     if (unsupported) return unsupported
-    const guildId = value.guildId
-    if (!identifier(guildId))
-        return inputValidationFailure("target.guildId", "format", "Guild IDs must be decimal strings")
-    const userId = value.userId
-    if (!identifier(userId))
-        return inputValidationFailure("target.userId", "format", "User IDs must be decimal strings")
-    const channelId = value.channelId
-    if (channelId !== undefined && !identifier(channelId))
-        return inputValidationFailure("target.channelId", "format", "Channel IDs must be decimal strings")
+    const guildId = inputId(value.guildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "target.guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const userId = inputId(value.userId)
+    if (userId === undefined)
+        return inputValidationFailure(
+            "target.userId",
+            "format",
+            "User IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const channelId = value.channelId === undefined ? undefined : inputId(value.channelId)
+    if (value.channelId !== undefined && channelId === undefined)
+        return inputValidationFailure(
+            "target.channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return { guildId, userId, channelId }
 }
 

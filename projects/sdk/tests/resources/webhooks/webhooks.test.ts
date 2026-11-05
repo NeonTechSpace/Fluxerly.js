@@ -11,6 +11,7 @@ import {
     errors,
     MessageFlags,
     voiceWaveform,
+    type EmbedInput,
     type WebhookClientOptions,
 } from "../../../src/index.js"
 import {
@@ -359,6 +360,85 @@ test.each(modes)("%s rejects invalid first shared webhook settings without dispa
     expect(fetch).not.toHaveBeenCalled()
 })
 
+test.each(modes)("%s webhook message edits may name a file the message already has", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(message({ id: "401" }))
+    })
+    const { webhook } = await setup(mode)
+    await settle(webhook.editMessage("401", { embeds: [{ thumbnail: { url: "attachment://chart.webp" } }] }))
+    expect(bodies).toEqual([expect.objectContaining({ embeds: [{ thumbnail: { url: "attachment://chart.webp" } }] })])
+})
+
+test.each(modes)("%s webhook message edits send empty embed text, which Fluxer reads as absent there", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(message({ id: "401" }))
+    })
+    const { webhook } = await setup(mode)
+    // This route reads its body through Validator('json'), which turns "" into null, and Fluxer then drops an author,
+    // footer or media object without its required text, unread (WebhookController.ts:462, Validator.ts:59-80)
+    const kept: EmbedInput[] = [
+        { title: "Kept", author: { name: "" } },
+        { title: "Kept", author: { name: "", url: "not a URL", iconUrl: "javascript:void 0" } },
+        { title: "Kept", footer: { text: "", iconUrl: "not a URL" } },
+        { title: "Kept", image: { url: "", description: "" }, thumbnail: { url: "", description: "Unchecked" } },
+        { title: "Kept", url: "", timestamp: "" },
+        { description: "Kept", author: { name: "Author", url: "", iconUrl: "" }, footer: { text: "x", iconUrl: "" } },
+        // A dropped author still holds a value here, so Fluxer keeps the embed
+        { author: { name: "", url: "https://example.com" } },
+        { color: 0 },
+        { fields: [] },
+    ]
+    for (const embed of kept) await settle(webhook.editMessage("401", { embeds: [embed] }))
+    expect(bodies.map((body) => body.embeds)).toEqual(
+        kept.map((embed) => [JSON.parse(JSON.stringify(embed).replaceAll('"iconUrl"', '"icon_url"'))]),
+    )
+    // Fluxer turns an embed whose values are all empty into null and refuses it, so it fails locally
+    for (const embed of [
+        {},
+        { title: "" },
+        { title: "", description: "", url: "", timestamp: "" },
+        { author: { name: "" } },
+        { author: { name: "", url: "", iconUrl: "" } },
+        { footer: { text: "" }, image: { url: "" }, thumbnail: { url: "", description: "" } },
+    ] satisfies EmbedInput[])
+        await expect(
+            settle(webhook.editMessage("401", { content: "Text", embeds: [{ title: "Kept" }, embed] })),
+        ).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+            inputValidation: { path: "embeds[]", constraint: "required" },
+        })
+    // Webhook sends parse the raw body, so an empty author name still fails there
+    await expect(settle(webhook.send({ embeds: [{ title: "Kept", author: { name: "" } }] }))).rejects.toMatchObject({
+        reason: "input",
+        inputValidation: { path: "embeds[].author.name" },
+    })
+    expect(bodies).toHaveLength(kept.length)
+})
+
+// Fluxer reads the mention settings of a webhook send with content, and never those of a webhook message edit
+// (fluxer_api/src/api/channel/services/message/MessageSendService.ts:1083-1085, 1178-1240 at 0098958f)
+test.each(modes)("%s refuses everyone with listed users or roles on sends, and edits send it", async (mode) => {
+    const fetch = stubFetchWithHostedDiscovery(async () => Response.json(message()))
+    const { webhook } = await setup(mode)
+    for (const allowedMentions of [
+        { everyone: true, users: ["30"] },
+        { everyone: true, roles: ["40"] },
+    ])
+        await expect(settle(webhook.send({ content: "mixed", allowedMentions }))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+            inputValidation: { path: "allowedMentions", constraint: "relationship" },
+        })
+    expect(hostedOperationCalls(fetch)).toEqual([])
+    await settle(webhook.editMessage("400", { content: "mixed", allowedMentions: { everyone: true, users: ["30"] } }))
+    expect(hostedOperationCalls(fetch)).toHaveLength(1)
+})
+
 test.each(modes)("%s encodes tagged webhook reply and forward references", async (mode) => {
     const bodies: Record<string, unknown>[] = []
     let status = 200
@@ -502,6 +582,24 @@ test.each(modes)("%s rejects invalid input before any dispatch", async (mode) =>
             outcome: "notDispatched",
         })
     expect(fetch).not.toHaveBeenCalled()
+})
+
+test.each(modes)("%s bounds avatarUrl at Fluxer's 2,048 characters after normalization", async (mode) => {
+    const bodies: Record<string, unknown>[] = []
+    const fetch = stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(message())
+    })
+    const { webhook } = await setup(mode)
+    const longest = `https://example.com/${"a".repeat(2048 - "https://example.com/".length)}`
+    await settle(webhook.send({ content: "x", avatarUrl: `  ${longest}\u202e ` }))
+    expect(bodies.map((body) => body.avatar_url)).toEqual([`  ${longest}\u202e `])
+    await expect(settle(webhook.send({ content: "x", avatarUrl: `${longest}a` }))).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+        inputValidation: { path: "avatarUrl", constraint: "format" },
+    })
+    expect(hostedOperationCalls(fetch)).toHaveLength(1)
 })
 
 test.each(modes)("%s rejects mismatched identities and malformed lists without exposing secrets", async (mode) => {
@@ -914,6 +1012,90 @@ test.each(modes)("%s retries transient reads but never retries rejected or serve
             outcome: code < 500 ? "rejected" : "unknown",
         })
         expect(calls).toBe(1)
+    }
+})
+
+test.each(modes)("%s sends a webhook file over 50 MiB and reports Fluxer's size refusal", async (mode) => {
+    const sizes: number[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        sizes.push((await new Response(init.body).arrayBuffer()).byteLength)
+        return Response.json({ code: "FILE_SIZE_TOO_LARGE", message: "x" }, { status: 400 })
+    })
+    const { webhook } = await setup(mode)
+    // A webhook uses the limits of the user who created it, which an instance can raise above 50 MiB
+    const data = new Uint8Array(52_428_801)
+    await expect(settle(webhook.send({ attachments: [{ data, filename: "large.bin" }] }))).rejects.toMatchObject({
+        reason: "rejected",
+        outcome: "rejected",
+        status: 400,
+        apiError: { code: "fileSizeTooLarge" },
+    })
+    expect(sizes).toHaveLength(1)
+    expect(sizes[0]).toBeGreaterThan(52_428_801)
+})
+
+test.each(modes)("%s reports busy upload slots as rejected only for Fluxer's own multipart answer", async (mode) => {
+    let calls = 0
+    let answer = () =>
+        Response.json({ code: "SERVICE_UNAVAILABLE", message: "x" }, { status: 503, headers: { "retry-after": "5" } })
+    stubFetchWithHostedDiscovery(
+        vi.fn(async (_url: string, init: RequestInit) => {
+            calls++
+            // Fluxer reads the files before it answers
+            if (init.body) await new Response(init.body).arrayBuffer()
+            return answer()
+        }),
+    )
+    const { webhook } = await setup(mode)
+    const withFile = { content: "x", attachments: [{ data: new Uint8Array([1]), filename: "file.bin" }] }
+    // Fluxer answers this way while it reads the files, before anything is applied, so a later send cannot duplicate it
+    const busy = await expectErr(webhook.send(withFile))
+    expect(busy).toMatchObject({
+        reason: "rejected",
+        outcome: "rejected",
+        status: 503,
+        retryAfterMs: 5000,
+        apiError: { providerCode: "SERVICE_UNAVAILABLE" },
+    })
+    expect(calls).toBe(1)
+    // Nothing was applied, so the same call may run again after the wait, unless it read a stream
+    expect(busy.details.uploadSlotsBusy).toBe(true)
+    expect(errors.isRetryable(busy)).toBe(true)
+    expect(errors.retryAfterMs(busy)).toBe(5000)
+    expect(busy.hint).toContain("Wait at least 5000 ms")
+    const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+            controller.close()
+        },
+    })
+    const streamed = await expectErr(
+        webhook.send({ content: "x", attachments: [{ stream, size: 1, filename: "file.bin" }] }),
+    )
+    expect(streamed).toMatchObject({ outcome: "rejected", details: expect.objectContaining({ streamUsed: true }) })
+    expect(errors.isRetryable(streamed)).toBe(false)
+    expect(streamed.hint).toContain("new stream")
+    // A JSON send never waits for an upload slot, and Fluxer's other 503 answers can come after a message was saved
+    await expect(settle(webhook.send({ content: "x" }))).rejects.toMatchObject({ status: 503, outcome: "unknown" })
+    for (const other of [
+        () =>
+            Response.json(
+                { code: "SERVICE_UNAVAILABLE", message: "x" },
+                { status: 503, headers: { "retry-after": "1" } },
+            ),
+        () => Response.json({ code: "SERVICE_UNAVAILABLE", message: "x" }, { status: 503 }),
+        () => new Response("Service Unavailable", { status: 503, headers: { "retry-after": "5" } }),
+        () =>
+            Response.json(
+                { code: "SERVICE_UNAVAILABLE", message: "x" },
+                { status: 500, headers: { "retry-after": "5" } },
+            ),
+    ]) {
+        answer = other
+        const failure = await expectErr(webhook.send(withFile))
+        expect(failure).toMatchObject({ outcome: "unknown" })
+        expect(failure.details).not.toHaveProperty("uploadSlotsBusy")
+        expect(errors.isRetryable(failure)).toBe(false)
     }
 })
 

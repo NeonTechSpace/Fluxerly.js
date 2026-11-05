@@ -997,6 +997,7 @@ export function operationFailureHint(input: {
     readonly apiError?: ApiErrorDetail | null
     readonly read?: boolean
     readonly streamUsed?: boolean
+    readonly uploadSlotsBusy?: boolean
     readonly inputPath?: string | null | undefined
     readonly oauthError?: string | null
     readonly credential?: RequestCredential
@@ -1010,6 +1011,11 @@ export function operationFailureHint(input: {
         streamUsed: input.streamUsed === true,
     })
     if (reason === "rateLimit" || (outcome === "unknown" && !read)) return general
+    // Fluxer's busy upload slots answer applied nothing and asks for another try later
+    if (input.uploadSlotsBusy === true)
+        return input.streamUsed === true
+            ? `Fluxer's upload slots were busy and nothing was applied. Wait at least ${input.retryAfterMs ?? 0} ms, then send it again with a new stream or with the file as bytes`
+            : `Fluxer's upload slots were busy and nothing was applied. Wait at least ${input.retryAfterMs ?? 0} ms, then send it again`
     if (reason === "rejected" || reason === "notFound")
         return (
             (input.requirement === undefined ? undefined : requiredPermissionsHint(input.requirement)) ??
@@ -1036,6 +1042,7 @@ export interface OperationErrorFields<
     readonly inputValidation: InputValidationDetail | null
     readonly read: boolean
     readonly streamUsed: boolean
+    readonly uploadSlotsBusy: boolean
     readonly providerCode: string | null
     readonly responseField: string | null
 }
@@ -1083,6 +1090,7 @@ export function operationErrorFields<Operation extends string, Reason extends st
         inputValidation: options.inputValidation ?? null,
         read: options.read === true,
         streamUsed: options.streamUsed === true,
+        uploadSlotsBusy: options.uploadSlotsBusy === true,
         providerCode: safeProviderCode(apiError, providerCode),
         responseField: safeResponseField(responseField),
     }
@@ -1158,6 +1166,7 @@ export function operationErrorSettings(
             inputPath: fields.inputValidation?.path,
             read: fields.read || undefined,
             streamUsed: fields.streamUsed || undefined,
+            uploadSlotsBusy: fields.uploadSlotsBusy || undefined,
             requiredPermissions: requirement?.permissions,
         }),
     }

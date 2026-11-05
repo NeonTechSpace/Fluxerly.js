@@ -19,7 +19,7 @@ import { decodeForumDefaultReaction, decodeForumTag, decodeThread } from "./chan
 import { decodeUser } from "./users.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
-import { count as nonNegativeInt32, identifier, record } from "./decode/primitives.js"
+import { count as nonNegativeInt32, identifier, inputId, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 
 /** Filters accept only known actions, while entries keep any action number, including one Fluxer adds later */
@@ -211,6 +211,9 @@ interface EncodedAuditLogQuery {
     readonly params: URLSearchParams
 }
 
+/** The trimmed ID of a supplied caller value, or undefined when absent or refused */
+const optionalId = (value: unknown) => (value === undefined ? undefined : inputId(value))
+
 function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFailure {
     const input = query === undefined ? {} : query
     if (!record(input)) return inputValidationFailure("query", "type", "Audit log query must be an object")
@@ -224,13 +227,15 @@ function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFai
     const limit = input.limit === undefined ? 50 : input.limit
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
         return inputValidationFailure("query.limit", "range", "Audit log limit must be an integer from 1 through 100")
-    if (input.before !== undefined && !identifier(input.before))
+    const before = optionalId(input.before)
+    if (input.before !== undefined && before === undefined)
         return inputValidationFailure(
             "query.before",
             "format",
             "Audit log before cursor must be a decimal entry ID string",
         )
-    if (input.after !== undefined && !identifier(input.after))
+    const after = optionalId(input.after)
+    if (input.after !== undefined && after === undefined)
         return inputValidationFailure(
             "query.after",
             "format",
@@ -242,8 +247,13 @@ function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFai
             "relationship",
             "Audit log query cannot combine before and after cursors",
         )
-    if (input.userId !== undefined && !identifier(input.userId))
-        return inputValidationFailure("query.userId", "format", "Audit log user IDs must be decimal strings")
+    const userId = optionalId(input.userId)
+    if (input.userId !== undefined && userId === undefined)
+        return inputValidationFailure(
+            "query.userId",
+            "format",
+            "Audit log user IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (input.actionType !== undefined && !actionType(input.actionType))
         return inputValidationFailure(
             "query.actionType",
@@ -253,15 +263,15 @@ function encodeQuery(query?: unknown): EncodedAuditLogQuery | InputValidationFai
     if (input.userId === undefined && input.actionType === undefined)
         return inputValidationFailure("query", "required", "Audit log query must select userId or actionType")
     const params = new URLSearchParams({ limit: String(limit) })
-    if (input.before !== undefined) params.set("before", input.before)
-    if (input.after !== undefined) params.set("after", input.after)
-    if (input.userId !== undefined) params.set("user_id", input.userId)
+    if (before !== undefined) params.set("before", before)
+    if (after !== undefined) params.set("after", after)
+    if (userId !== undefined) params.set("user_id", userId)
     if (input.actionType !== undefined) params.set("action_type", String(input.actionType))
     return {
         limit,
-        ...(input.before === undefined ? {} : { before: input.before }),
-        ...(input.after === undefined ? {} : { after: input.after }),
-        ...(input.userId === undefined ? {} : { userId: input.userId }),
+        ...(before === undefined ? {} : { before }),
+        ...(after === undefined ? {} : { after }),
+        ...(userId === undefined ? {} : { userId }),
         ...(input.actionType === undefined ? {} : { actionType: input.actionType }),
         params,
     }
@@ -322,9 +332,15 @@ function decodeAuditLogPage(value: unknown, query: EncodedAuditLogQuery, guildId
 }
 
 /** Builds a remote-only, filtered audit-log page request without cache admission or a provider-side consolidation write */
-export function auditLogPage(guildId: string, query?: unknown): GuildRequest<AuditLogPage> | InputValidationFailure {
+export function auditLogPage(rawGuildId: string, query?: unknown): GuildRequest<AuditLogPage> | InputValidationFailure {
     const encoded = encodeQuery(query)
-    if (!identifier(guildId)) return inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings")
+    const guildId = inputId(rawGuildId)
+    if (guildId === undefined)
+        return inputValidationFailure(
+            "guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (encoded instanceof InputValidationFailure) return encoded
     return {
         guildId,

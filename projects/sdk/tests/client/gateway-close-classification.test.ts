@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest"
 import { AuthenticationError, ConnectionError, RateLimitError } from "../../src/errors.js"
 import { classifyClose, closeReasonText } from "../../src/internal/gateway/session.js"
-import { closeCodeInfo } from "../../src/internal/protocol/gateway.js"
+import { closeCodeInfo, opcodeName } from "../../src/internal/protocol/gateway.js"
 
 describe("pinned provider gateway close lifecycle", () => {
     test("keeps established sessions resumable after timeout and rate-limit closes", () => {
@@ -21,6 +21,11 @@ describe("pinned provider gateway close lifecycle", () => {
     test("blames the bot's missing heartbeat for 4009, not a missing server acknowledgement", () => {
         // Fluxer closes with 4009 when no heartbeat from the client arrived in time
         expect(closeCodeInfo(4009).meaning).not.toMatch(/acknowledg/i)
+    })
+
+    test("names opcode 28 for logs and leaves an unknown opcode unnamed", () => {
+        expect(opcodeName(28)).toBe("REQUEST_FORUM_UNREADS")
+        expect(opcodeName(99)).toBeNull()
     })
 
     test("resets only the rejected resume attempt and retains permanent startup failures", () => {

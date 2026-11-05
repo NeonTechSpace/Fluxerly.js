@@ -23,7 +23,7 @@ import {
 } from "#sdk/errors"
 import { cleanupOwner } from "../cleanup-owner.js"
 import { nowMs } from "../clock.js"
-import { failures, holdsReason, mapFailureCause, withDeadline } from "../effect-failures.js"
+import { failures, holdsReason, mapFailureCause } from "../effect-failures.js"
 import type { ClientLogger } from "../logging.js"
 
 /** The classes of ConnectionFailure, for mapping a shard's run failures */
@@ -43,24 +43,49 @@ export function formatDuration(milliseconds: number): string {
     return `${Math.floor(seconds / 60)} min ${seconds % 60} s`
 }
 
+/** The group's startup deadline. The group's first Identify extends it once by the wait Fluxer can impose on a session
+ * start, when connection.startupTimeoutMs is left at its default
+ */
+export class StartupDeadline {
+    #identifyWaitMs: number
+    constructor(
+        /** Clock time at which startup times out */
+        public at: number,
+        /** The startup budget the deadline was derived from, reported when startup times out */
+        public timeoutMs: number,
+        identifyWaitMs: number,
+    ) {
+        this.#identifyWaitMs = identifyWaitMs
+    }
+
+    /** Extend the deadline for the group's first Identify, and do nothing for later ones */
+    identifySent(): void {
+        this.at += this.#identifyWaitMs
+        this.timeoutMs += this.#identifyWaitMs
+        this.#identifyWaitMs = 0
+    }
+}
+
 /** Run every shard loop until one fails permanently, bounded by the group startup deadline until startup completes.
  * Defects from losing loops, such as socket cleanup failures, are kept in the group's cause
  */
 export function superviseShards<Shard extends { readonly shardId: number }>(options: {
     readonly shards: readonly Shard[]
     readonly startupTimeoutMs: number
+    /** Time the group's first Identify adds to the startup deadline */
+    readonly identifyWaitMs: number
     /** Wrap each shard failure with its shard ID, as configured sharding requires */
     readonly attributeShards: boolean
     /** Completed once every shard is ready */
     readonly startup: Deferred.Deferred<void, ConnectError>
-    readonly runShard: (shard: Shard, deadline: number) => Effect.Effect<unknown, ConnectionFailure>
+    readonly runShard: (shard: Shard, deadline: StartupDeadline) => Effect.Effect<unknown, ConnectionFailure>
 }) {
-    const { shards, startupTimeoutMs, attributeShards, startup, runShard } = options
-    return Effect.suspend(() => {
+    const { shards, startupTimeoutMs, identifyWaitMs, attributeShards, startup, runShard } = options
+    return Effect.gen(function* () {
         const exits: Exit.Exit<unknown, ConnectionFailure>[] = []
+        const clock = yield* Clock.Clock
+        const deadline = new StartupDeadline(nowMs(clock) + startupTimeoutMs, startupTimeoutMs, identifyWaitMs)
         const sessions = Effect.gen(function* () {
-            const clock = yield* Clock.Clock
-            const deadline = nowMs(clock) + startupTimeoutMs
             return yield* Effect.forEach(
                 shards,
                 (shard) =>
@@ -79,13 +104,22 @@ export function superviseShards<Shard extends { readonly shardId: number }>(opti
                 { concurrency: "unbounded", discard: true },
             )
         })
-        const startupGuard = Deferred.await(startup).pipe(
-            // allow-silent: The startup outcome itself is observed through the startup deferred
-            Effect.ignore,
-            withDeadline(startupTimeoutMs, () => new ConnectionTimeoutError(startupTimeoutMs)),
-            Effect.andThen(Effect.never),
-        )
-        return Effect.raceFirst(sessions, startupGuard).pipe(
+        // The deadline can move while startup waits, so the guard sleeps until the current deadline and checks again
+        const expiry: Effect.Effect<never, ConnectionTimeoutError> = Effect.gen(function* () {
+            while (true) {
+                const remaining = deadline.at - nowMs(clock)
+                if (remaining <= 0) return yield* Effect.fail(new ConnectionTimeoutError(deadline.timeoutMs))
+                yield* Effect.sleep(remaining)
+            }
+        })
+        const startupGuard = Effect.raceFirst(
+            Deferred.await(startup).pipe(
+                // allow-silent: The startup outcome itself is observed through the startup deferred
+                Effect.ignore,
+            ),
+            expiry,
+        ).pipe(Effect.andThen(Effect.never))
+        return yield* Effect.raceFirst(sessions, startupGuard).pipe(
             // A losing session may defect during socket cleanup. Keep those causes across the race boundary
             Effect.onExit((outcome) => {
                 const missing = exits.flatMap((exit) =>

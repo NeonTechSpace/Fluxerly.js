@@ -799,3 +799,39 @@ test("wrapping a native SDK write in Effect.timeout gives no outcome, while the 
     expect(Exit.isFailure(bounded) ? errors.outcome(bounded.cause) : "succeeded").toBeUndefined()
     expect(Exit.isFailure(kept) ? errors.outcome(kept.cause) : "succeeded").toBe("unknown")
 })
+
+// Only the REST classifier's busy upload slots answer is retryable among rejections. An OAuth read records every
+// server error as rejected too, so a status check alone would call those retryable
+test("isRetryable is true for the busy upload slots marker alone, not for other rejected 503s", () => {
+    const busy = new MessageError({
+        reason: "rejected",
+        outcome: "rejected",
+        status: 503,
+        retryAfterMs: 5000,
+        uploadSlotsBusy: true,
+    })
+    expect(busy.details.uploadSlotsBusy).toBe(true)
+    expect(errors.isRetryable(busy)).toBe(true)
+    expect(busy.hint).toContain("upload slots were busy")
+    const streamed = new MessageError({
+        reason: "rejected",
+        outcome: "rejected",
+        status: 503,
+        retryAfterMs: 5000,
+        uploadSlotsBusy: true,
+        streamUsed: true,
+    })
+    expect(errors.isRetryable(streamed)).toBe(false)
+    expect(streamed.hint).toContain("new stream")
+    const oauth = new OAuthOperationError({
+        operation: "oauth.fetchIdentity",
+        reason: "rejected",
+        outcome: "rejected",
+        status: 503,
+    })
+    expect(oauth.details).not.toHaveProperty("uploadSlotsBusy")
+    expect(errors.isRetryable(oauth)).toBe(false)
+    expect(oauth.hint ?? "").not.toContain("upload slots")
+    const plain = new MessageError({ reason: "rejected", outcome: "rejected", status: 503 })
+    expect(errors.isRetryable(plain)).toBe(false)
+})

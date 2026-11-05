@@ -3,7 +3,8 @@ import { FluxerlyError, operationDetails } from "./errors.js"
 import { err, ok, type Result } from "neverthrow"
 import { GuildMemberProfileFlags } from "./guilds.js"
 import type { Guild, GuildMember, GuildRole } from "./guilds.js"
-import { snowflakes, valueOrThrow } from "./helpers.js"
+import { valueOrThrow } from "./helpers.js"
+import { inputId } from "./internal/decode/primitives.js"
 import type { GuildEmoji, GuildSticker } from "./expressions.js"
 import type { User, UserProfileFields } from "./users.js"
 
@@ -121,7 +122,7 @@ type AssetOperation = AssetUrlError["operation"]
 function assetErrorMessage(operation: AssetOperation, reason: AssetUrlError["reason"]): string {
     const explanation =
         reason === "id"
-            ? "IDs must be decimal strings"
+            ? "IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly"
             : reason === "hash"
               ? "Asset hashes must be strings of letters, digits, or underscores, or null when there is no custom image"
               : reason === "options"
@@ -159,7 +160,8 @@ function target(value: unknown, operation: AssetOperation): Result<Record<string
 }
 
 function id(value: unknown, operation: AssetOperation): Result<string, AssetUrlError> {
-    return snowflakes.isValid(value) ? ok(value) : err(assetError(operation, "id"))
+    const trimmed = inputId(value)
+    return trimmed === undefined ? err(assetError(operation, "id")) : ok(trimmed)
 }
 
 function hash(value: unknown, operation: AssetOperation): Result<string, AssetUrlError> {

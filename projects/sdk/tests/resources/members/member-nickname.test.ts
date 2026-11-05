@@ -61,7 +61,6 @@ test("rejects invalid nickname target and values before dispatch", () => {
     for (const [member, nickname] of [
         [null, "name"],
         [{ guildId: "20", userId: "invalid" }, "name"],
-        [target, ""],
         [target, "x".repeat(33)],
         [target, undefined],
     ])

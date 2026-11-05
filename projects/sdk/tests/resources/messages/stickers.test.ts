@@ -50,7 +50,7 @@ test.each(modes)("%s sends stickers without text, replies and projects frozen st
         },
     })
     const before = server.requests.length
-    for (const stickerIds of [[], null, Array(1), ["../501"], [501], ["1", "2", "3", "4"]])
+    for (const stickerIds of [[], Array(1), ["../501"], [501], ["1", "2", "3", "4"]])
         await rejectsInput(api.send({ stickerIds } as MessageInput))
     await rejectsInput(api.send({ stickerIds: iteratorMaskedSticker } as MessageInput))
     await rejectsInput(api.edit({ content: "No replacement", stickerIds: ["501"] } as EditMessageInput))
@@ -63,6 +63,21 @@ test.each(modes)("%s sends stickers without text, replies and projects frozen st
         server.set({ ...wire(), stickers })
         await rejectsResponse(api.fetch())
     }
+})
+
+// Fluxer's send schema takes null stickers as none (packages/schema/src/domains/message/MessageRequestSchemas.ts:354 at
+// 0098958f). Fails on the old code, which refused null stickerIds outside webhook forwards
+test.each(modes)("%s sends null stickerIds beside a message body as Fluxer accepts it", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    await api.send({ content: "Caption", stickerIds: null })
+    expect(server.requests[0]?.body).toMatchObject({ content: "Caption", sticker_ids: null })
+    await api.reply({ content: "Caption", stickerIds: null })
+    expect(server.requests[1]?.body).toMatchObject({ sticker_ids: null, message_reference: { message_id: "10" } })
+    // Null stickers count as none, so a message needs another body field
+    const before = server.requests.length
+    await rejectsInput(api.send({ stickerIds: null } as MessageInput))
+    expect(server.requests).toHaveLength(before)
 })
 
 test.each(modes)("%s rejects maximal sparse sticker arrays before reading indexed entries", async (mode) => {

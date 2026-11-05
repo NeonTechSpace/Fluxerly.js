@@ -381,7 +381,7 @@ test.each(modes)("%s rejects invalid user and conversation operations before dis
         }
     // The explanation names the invalid group field, because the path is the whole input
     for (const [input, field] of [
-        [{ name: "" }, "name"],
+        [{ name: " " }, "name"],
         [{ icon: "https://example.test/icon.png" }, "icon"],
         [{ ownerId: "bad" }, "owner"],
     ] as const)

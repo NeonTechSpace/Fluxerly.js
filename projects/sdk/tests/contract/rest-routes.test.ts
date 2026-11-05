@@ -26,3 +26,33 @@ test("the generated REST route types match the upstream pin, the corrections and
     ).toBe(expected)
     expect(generated).toContain(`${manifest.repository}@${manifest.commit}`)
 })
+
+// The schema corrections fail closed on a name the document lacks or a change that changes nothing
+test("a REST schema correction that names something missing or changes nothing fails generation", async () => {
+    const { restRoutesSource } = (await import(new URL("../../scripts/rest-routes.js", import.meta.url).href)) as {
+        restRoutesSource(input: unknown): string
+    }
+    const schema = {
+        type: "object",
+        properties: { value: { anyOf: [{ type: "string" }, { type: "null" }] }, kept: { type: "string" } },
+    }
+    const generate = (correction: Record<string, unknown>) => () =>
+        restRoutesSource({
+            spec: { openapi: "3.1.0", paths: {}, components: { schemas: { Fixture: structuredClone(schema) } } },
+            docs: { sections: new Map() },
+            corrections: {
+                routes: [],
+                query: [],
+                schemas: [{ schema: "Fixture", evidence: ["fluxer_api/src/api/Fixture.ts:1"], ...correction }],
+            },
+            source: { repository: "fluxerapp/fluxer", commit: "0".repeat(40) },
+            stamp: "fixture",
+        })
+    expect(generate({ property: "missing", branches: [{ type: "object" }] })).toThrow(/lacks/)
+    expect(generate({ property: "kept", branches: [{ type: "object" }] })).toThrow(/not an anyOf union/)
+    expect(generate({ property: "value", branches: [{ type: "string" }] })).toThrow(/already lists/)
+    expect(generate({ remove: ["missing"] })).toThrow(/lacks/)
+    expect(generate({ property: "value", branches: [{ type: "object" }], evidence: [] })).toThrow(/cite/)
+    expect(generate({ property: "value", branches: [{ type: "object" }] })).not.toThrow()
+    expect(generate({ remove: ["kept"] })).not.toThrow()
+})

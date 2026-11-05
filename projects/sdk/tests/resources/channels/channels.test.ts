@@ -440,7 +440,7 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
         { type: ChannelType.Text, name: "" },
         { type: ChannelType.Text, name: "  " },
         { type: -1, name: "valid" },
-        { type: ChannelType.Text, name: "valid", topic: "" },
+        { type: ChannelType.Text, name: "valid", topic: " " },
         { type: ChannelType.Text, name: "valid", rateLimitPerUser: 21_601 },
         { type: ChannelType.Voice, name: "valid", bitrate: 7_999 },
         { type: ChannelType.Voice, name: "valid", bitrate: 384_001 },
@@ -525,7 +525,8 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
     expect(await api.fetch()).toMatchObject({ type: "unknown", rawType: 999 })
 })
 
-test.each(modes)("%s edits distinguish a null topic, an empty topic and empty overwrites", async (mode) => {
+// Fluxer reads an empty topic as null on this route, so it clears the topic like null, while a blank topic fails
+test.each(modes)("%s edits send a null or empty topic, refuse a blank one and send empty overwrites", async (mode) => {
     const requests: Array<{ method: string; path: string; body: unknown }> = []
     rest(async (url, init) => {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>
@@ -535,7 +536,8 @@ test.each(modes)("%s edits distinguish a null topic, an empty topic and empty ov
     const api = await setup(mode)
 
     expect(await api.edit("10", { topic: null })).toMatchObject({ topic: null })
-    await expect(api.edit("10", { topic: "" })).rejects.toMatchObject({
+    await api.edit("10", { topic: "" })
+    await expect(api.edit("10", { topic: " " })).rejects.toMatchObject({
         _tag: "ChannelOperationError",
         reason: "input",
         outcome: "notDispatched",
@@ -544,6 +546,7 @@ test.each(modes)("%s edits distinguish a null topic, an empty topic and empty ov
 
     expect(requests).toEqual([
         { method: "PATCH", path: "/api/v1/channels/10", body: { topic: null } },
+        { method: "PATCH", path: "/api/v1/channels/10", body: { topic: "" } },
         { method: "PATCH", path: "/api/v1/channels/10", body: { permission_overwrites: [] } },
     ])
 })

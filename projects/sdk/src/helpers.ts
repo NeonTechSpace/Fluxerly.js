@@ -8,6 +8,7 @@ import type { DirectMessageChannel, User } from "./users.js"
 import type { MessageReference } from "./messages.js"
 import { permissionLabel } from "./internal/permission-labels.js"
 import { guildShardId, maximumShardCount } from "./internal/sharding.js"
+import { inputId } from "./internal/decode/primitives.js"
 
 const snowflakeEpochMs = 1_420_070_400_000n
 const snowflakeTimestampShift = 22n
@@ -215,7 +216,7 @@ export class HelperError extends FluxerlyError {
 function helperExplanation(operation: HelperError["operation"], reason: HelperError["reason"]): string {
     switch (reason) {
         case "id":
-            return "IDs must be decimal strings from 0 through 9,223,372,036,854,775,807"
+            return "IDs must be decimal strings from 0 through 9,223,372,036,854,775,807, because JavaScript numbers cannot hold Fluxer IDs exactly"
         case "markup":
             if (operation === "format.parseMention")
                 return "Text must be a user, role, or channel mention such as <@123>"
@@ -387,9 +388,10 @@ function overwritesById(value: unknown): ReadonlyMap<string, PermissionOverwrite
     for (const entry of value as unknown[]) {
         if (typeof entry !== "object" || entry === null) return null
         // Read each caller field once, so the validated overwrite is the one compared
-        const { id, type, allow, deny } = entry as Partial<Record<keyof PermissionOverwrite, unknown>>
+        const { id: rawId, type, allow, deny } = entry as Partial<Record<keyof PermissionOverwrite, unknown>>
+        const id = inputId(rawId)
         if (
-            !isSnowflake(id) ||
+            id === undefined ||
             (type !== "role" && type !== "member") ||
             !validPermissionBits(allow) ||
             !validPermissionBits(deny) ||
@@ -420,22 +422,14 @@ function helperError(operation: HelperError["operation"], reason: HelperError["r
     return new HelperError(operation, reason)
 }
 
-function isSnowflake(value: unknown): value is string {
-    if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) return false
-    try {
-        return BigInt(value) <= largestSnowflake
-    } catch {
-        // allow-silent: a value BigInt cannot parse is not a snowflake
-        return false
-    }
-}
-
 function snowflake(value: unknown, operation: HelperError["operation"]): Result<bigint, HelperError> {
-    return isSnowflake(value) ? ok(BigInt(value)) : err(helperError(operation, "id"))
+    const id = inputId(value)
+    return id === undefined ? err(helperError(operation, "id")) : ok(BigInt(id))
 }
 
 function markupId(value: unknown, operation: HelperError["operation"]): Result<string, HelperError> {
-    return isSnowflake(value) ? ok(value) : err(helperError(operation, "id"))
+    const id = inputId(value)
+    return id === undefined ? err(helperError(operation, "id")) : ok(id)
 }
 
 function timestampDate(value: unknown, operation: HelperError["operation"]): Result<Date, HelperError> {
@@ -455,10 +449,11 @@ function customEmoji(value: unknown, operation: HelperError["operation"]): Resul
     const input = value as Record<string, unknown>
     if (typeof input.name !== "string" || !/^[A-Za-z0-9_-]+$/u.test(input.name))
         return err(helperError(operation, "markup"))
-    if (!isSnowflake(input.id)) return err(helperError(operation, "id"))
+    const id = inputId(input.id)
+    if (id === undefined) return err(helperError(operation, "id"))
     if (input.animated !== undefined && typeof input.animated !== "boolean")
         return err(helperError(operation, "markup"))
-    return ok(Object.freeze({ name: input.name, id: input.id, ...(input.animated === true ? { animated: true } : {}) }))
+    return ok(Object.freeze({ name: input.name, id, ...(input.animated === true ? { animated: true } : {}) }))
 }
 
 function channelLink(
@@ -467,11 +462,11 @@ function channelLink(
 ): Result<{ readonly id: string; readonly guildId: string | null }, HelperError> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return err(helperError(operation, "link"))
     const input = value as Record<string, unknown>
-    if (!isSnowflake(input.id)) return err(helperError(operation, "id"))
-    if (!("guildId" in input)) return ok({ id: input.id, guildId: null })
-    return isSnowflake(input.guildId)
-        ? ok({ id: input.id, guildId: input.guildId })
-        : err(helperError(operation, "link"))
+    const id = inputId(input.id)
+    if (id === undefined) return err(helperError(operation, "id"))
+    if (!("guildId" in input)) return ok({ id, guildId: null })
+    const guildId = inputId(input.guildId)
+    return guildId === undefined ? err(helperError(operation, "link")) : ok({ id, guildId })
 }
 
 function installationPermissions(value: unknown): Result<string | undefined, HelperError> {
@@ -513,9 +508,11 @@ function parseMention(value: string): Result<Mention, HelperError> {
     const user = /^<@!?([0-9]+)>$/u.exec(value)
     const role = /^<@&([0-9]+)>$/u.exec(value)
     const channel = /^<#([0-9]+)>$/u.exec(value)
-    if (user && isSnowflake(user[1])) return ok(Object.freeze({ kind: "user" as const, id: user[1] }))
-    if (role && isSnowflake(role[1])) return ok(Object.freeze({ kind: "role" as const, id: role[1] }))
-    if (channel && isSnowflake(channel[1])) return ok(Object.freeze({ kind: "channel" as const, id: channel[1] }))
+    // The captured digits come from markup text, so only the range and leading zeros are checked
+    if (user && inputId(user[1]) !== undefined) return ok(Object.freeze({ kind: "user" as const, id: user[1]! }))
+    if (role && inputId(role[1]) !== undefined) return ok(Object.freeze({ kind: "role" as const, id: role[1]! }))
+    if (channel && inputId(channel[1]) !== undefined)
+        return ok(Object.freeze({ kind: "channel" as const, id: channel[1]! }))
     return err(helperError("format.parseMention", "markup"))
 }
 
@@ -628,7 +625,8 @@ export type FormatHelpers = Readonly<{
      * Create `<:name:id>` text, or `<a:name:id>` when animated is true.
      * A GuildEmoji can be passed directly.
      * Throws HelperError for invalid names, IDs or animation values.
-     * This does not upload or look up an emoji
+     * This does not upload or look up an emoji.
+     * Outside the emoji's own community, Fluxer replaces an emoji from an age-restricted community with plain `:name:` text when it saves the message
      */
     customEmoji(input: CustomEmojiMarkup): string
     /**
@@ -693,7 +691,8 @@ export const format: FormatHelpers = Object.freeze({
 export type SnowflakeHelpers = Readonly<{
     /**
      * Return true for a decimal string from `"0"` through `"9223372036854775807"`, with no extra leading zeroes.
-     * Returns false immediately for numbers, whitespace and invalid strings, without converting through Number or failing
+     * Surrounding whitespace is allowed, as Fluxer trims IDs, and every helper that takes an ID uses the trimmed ID.
+     * Returns false immediately for numbers, inner whitespace and invalid strings, without converting through Number or failing
      */
     isValid(value: unknown): value is string
     /**
@@ -752,7 +751,7 @@ function snowflakeBoundary(value: Date): Result<string, HelperError> {
  */
 export const snowflakes: SnowflakeHelpers = Object.freeze({
     isValid(value: unknown): value is string {
-        return isSnowflake(value)
+        return inputId(value) !== undefined
     },
     parse: (value: string): bigint => valueOrThrow(parseSnowflake(value)),
     tryParse: parseSnowflake,
@@ -764,7 +763,7 @@ export const snowflakes: SnowflakeHelpers = Object.freeze({
         ),
     boundary: (value: Date): string => valueOrThrow(snowflakeBoundary(value)),
     shardFor: (guildId: string, totalShards: number): number => {
-        valueOrThrow(snowflake(guildId, "snowflakes.shardFor"))
+        const id = valueOrThrow(snowflake(guildId, "snowflakes.shardFor"))
         if (
             typeof totalShards !== "number" ||
             !Number.isSafeInteger(totalShards) ||
@@ -772,7 +771,7 @@ export const snowflakes: SnowflakeHelpers = Object.freeze({
             totalShards > maximumShardCount
         )
             throw helperError("snowflakes.shardFor", "shardCount")
-        return guildShardId(guildId, totalShards)
+        return guildShardId(id.toString(), totalShards)
     },
 })
 
@@ -1048,7 +1047,7 @@ export const links: LinkHelpers = Object.freeze({
     message(message: MessageReference, channel: ChannelLinkTarget): string {
         const resolvedChannel = valueOrThrow(channelLink(channel, "links.message"))
         const id = markupId(message?.id, "links.message")
-        if (id.isErr() || message?.channelId !== resolvedChannel.id) throw helperError("links.message", "link")
+        if (id.isErr() || inputId(message?.channelId) !== resolvedChannel.id) throw helperError("links.message", "link")
         return resolvedChannel.guildId === null
             ? `${hostedWebapp}/channels/@me/${resolvedChannel.id}/${id.value}`
             : `${hostedWebapp}/channels/${resolvedChannel.guildId}/${resolvedChannel.id}/${id.value}`

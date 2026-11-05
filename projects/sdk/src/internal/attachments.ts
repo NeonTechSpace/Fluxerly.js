@@ -5,10 +5,9 @@
  */
 import type { Attachment, AttachmentFileSource, AttachmentStreamSource } from "#sdk/attachments"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { fieldsOnce, identifier, record } from "./decode/primitives.js"
+import { fieldsOnce, identifier, inputId, record } from "./decode/primitives.js"
 import { normalizedText } from "./field-text.js"
 
-const attachmentMaxBytes = 52_428_800
 /** Fluxer's attachment flag bits a caller sets: IS_SPOILER and CONTAINS_EXPLICIT_MEDIA (packages/constants/src/ChannelConstants.ts at 5f3fc0b1) */
 const spoilerFlag = 8
 const explicitMediaFlag = 16
@@ -32,8 +31,12 @@ function filename(value: unknown): value is string {
     return typeof value === "string" && value.length >= 1 && value.length <= 255 && !/[\x00-\x1f\x7f/\\]/.test(value)
 }
 
+/** A content type of printable ASCII that holds 1 through 255 UTF-16 code units after Fluxer's normalization, which
+ * trims it, so a blank one fails (packages/schema/src/domains/message/AttachmentSchemas.ts:34, 44 at 0098958f). It is
+ * sent as given
+ */
 function contentType(value: unknown): value is string {
-    return typeof value === "string" && /^[\x20-\x7e]{1,255}$/.test(value)
+    return typeof value === "string" && /^[\x20-\x7e]*$/.test(value) && normalizedText(value, 1, 255)
 }
 
 function metadata(
@@ -54,17 +57,30 @@ function metadata(
         return inputValidationFailure(
             "attachments[].contentType",
             "format",
-            "Attachment content types must contain 1 through 255 printable ASCII characters",
+            "Attachment content types must contain only printable ASCII characters, 1 through 255 of them after Fluxer trims surrounding whitespace, so a blank one fails",
         )
+    // A new attachment's title, description, duration and waveform may be null, which Fluxer stores as none
+    // (packages/schema/src/domains/message/AttachmentSchemas.ts:15-29 at 0098958f). A webhook send's files are always
+    // multipart, whose own metadata schema also reads description, duration and waveform without null, so there only the
+    // title may be null (packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:64-86,
+    // fluxer_api/src/api/webhook/WebhookController.ts:108-140)
+    const nullAllowed = (key: "title" | "description" | "duration" | "waveform") =>
+        key === "title" || waveformTarget !== "webhook"
     for (const [key, max] of [
         ["title", 1024],
         ["description", 4096],
     ] as const)
-        if (field(key) !== undefined && !normalizedText(field(key), 1, max))
+        if (
+            field(key) !== undefined &&
+            !(field(key) === null && nullAllowed(key)) &&
+            !normalizedText(field(key), 1, max)
+        )
             return inputValidationFailure(
                 `attachments[].${key}`,
                 "length",
-                `Attachment ${key} must contain 1 through ${max} UTF-16 code units after Fluxer's normalization`,
+                nullAllowed(key)
+                    ? `Attachment ${key} must be null or contain 1 through ${max} UTF-16 code units after Fluxer's normalization`
+                    : `Webhook attachment ${key} must contain 1 through ${max} UTF-16 code units after Fluxer's normalization, as Fluxer's multipart webhook schema refuses null`,
             )
     const spoiler = field("spoiler")
     if (spoiler !== undefined && typeof spoiler !== "boolean")
@@ -82,20 +98,27 @@ function metadata(
     // normalization (packages/schema/src/domains/message/AttachmentSchemas.ts at 5f3fc0b1). A negative length is refused here
     if (
         duration !== undefined &&
+        !(duration === null && nullAllowed("duration")) &&
         (typeof duration !== "number" || !Number.isInteger(duration) || duration < 0 || duration > 2_147_483_647)
     )
         return inputValidationFailure(
             "attachments[].duration",
             "range",
-            "Attachment duration must be a whole number of seconds from 0 through 2,147,483,647",
+            nullAllowed("duration")
+                ? "Attachment duration must be null or a whole number of seconds from 0 through 2,147,483,647"
+                : "Webhook attachment duration must be a whole number of seconds from 0 through 2,147,483,647",
         )
-    if (waveform !== undefined && !normalizedText(waveform, 1, waveformLimits[waveformTarget]))
+    if (
+        waveform !== undefined &&
+        !(waveform === null && nullAllowed("waveform")) &&
+        !normalizedText(waveform, 1, waveformLimits[waveformTarget])
+    )
         return inputValidationFailure(
             "attachments[].waveform",
             "length",
             waveformTarget === "webhook"
                 ? "Webhook voice notes support a waveform of 1 through 256 UTF-16 code units after Fluxer's normalization. A voiceWaveform result fits for audio up to 19.2 seconds"
-                : "Attachment waveform must be a string of 1 through 4,096 UTF-16 code units after Fluxer's normalization",
+                : "Attachment waveform must be null or a string of 1 through 4,096 UTF-16 code units after Fluxer's normalization",
         )
     values.push({
         id,
@@ -121,14 +144,16 @@ const waveformLimits = { message: 4096, webhook: 256 } as const
 /** Where a new attachment is sent, which sets its longest waveform */
 export type WaveformTarget = keyof typeof waveformLimits
 
-/** The validated size of a bounded file source, read once with its method checks, or undefined for another value */
+/**
+ * The validated size of a bounded file source, read once with its method checks, or undefined for another value. Fluxer
+ * sets the largest file per instance and bot, so the SDK leaves that check to Fluxer
+ */
 function fileSourceSize(value: unknown): number | undefined {
     if (!record(value)) return undefined
     const size = value.size
     return typeof size === "number" &&
         Number.isSafeInteger(size) &&
         size >= 0 &&
-        size <= attachmentMaxBytes &&
         typeof value.slice === "function" &&
         typeof value.stream === "function"
         ? size
@@ -187,15 +212,20 @@ function encodeRetainedAttachment(
     edit: boolean,
     retained: Set<string>,
 ): Record<string, unknown> | InputValidationFailure {
-    const retainedId = field("id")
+    const suppliedId = field("id")
     if (!edit)
         return inputValidationFailure(
             "attachments[].id",
             "relationship",
             "Retained attachment IDs are accepted only when editing a message",
         )
-    if (!identifier(retainedId))
-        return inputValidationFailure("attachments[].id", "format", "Attachment IDs must be decimal strings")
+    const retainedId = inputId(suppliedId)
+    if (retainedId === undefined)
+        return inputValidationFailure(
+            "attachments[].id",
+            "format",
+            "Attachment IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const unsupported = unsupportedKeyFailure(
         item,
         ["id", "title", "description"],
@@ -260,12 +290,6 @@ function encodeByteSource(
             "Attachment data must be an ArrayBuffer-backed Uint8Array",
         )
     const byteLength = data.byteLength
-    if (byteLength > attachmentMaxBytes)
-        return inputValidationFailure(
-            "attachments[].data",
-            "size",
-            "Attachment data must not exceed 52,428,800 bytes (50 MiB)",
-        )
     try {
         new Uint8Array(buffer, data.byteOffset, byteLength)
     } catch {
@@ -296,7 +320,7 @@ function encodeFileSource(
         return inputValidationFailure(
             "attachments[].file",
             "type",
-            "Attachment files must be File or Blob objects with slice and stream methods and a size from 0 through 52,428,800 bytes (50 MiB)",
+            "Attachment files must be File or Blob objects with slice and stream methods and a size that is a nonnegative safe integer",
         )
     return { source: { kind: "file", file: file as AttachmentFileSource }, size: fileSize }
 }
@@ -331,16 +355,11 @@ function encodeStreamSource(
             "Attachment streams must be ReadableStream objects with a getReader method",
         )
     const streamSize = field("size")
-    if (
-        typeof streamSize !== "number" ||
-        !Number.isSafeInteger(streamSize) ||
-        streamSize < 0 ||
-        streamSize > attachmentMaxBytes
-    )
+    if (typeof streamSize !== "number" || !Number.isSafeInteger(streamSize) || streamSize < 0)
         return inputValidationFailure(
             "attachments[].size",
             "range",
-            "Attachment stream size must be an integer from 0 through 52,428,800 bytes (50 MiB)",
+            "Attachment stream size must be a nonnegative safe integer of bytes",
         )
     return { source: { kind: "stream", stream }, size: streamSize }
 }

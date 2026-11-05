@@ -165,11 +165,50 @@ test.each(modes)("%s accepts plain invite codes beyond 128 characters without an
     expect(fetch).toHaveBeenCalledTimes(1)
 })
 
+test.each(modes)(
+    "%s sends the invite code Fluxer keeps after normalization and expects that code back",
+    async (mode) => {
+        const client = await setup(mode)
+        // Fluxer removes U+000C and U+202E from the code path segment and trims it before looking the invite up, then
+        // answers with the stored code (packages/schema/src/primitives/SchemaPrimitives.ts:15-22 and 176-182,
+        // fluxer_api/src/api/invite/InviteRequestService.ts:64-65 at 0098958f)
+        const requests: string[] = []
+        let code = "FixtureCode"
+        stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+            requests.push(`${init.method} ${new URL(url).pathname}`)
+            if (init.method === "DELETE") return new Response(null, { status: 204 })
+            return Response.json({ ...wire(), code })
+        })
+        // Fails on the old code: The code was sent as given and Fluxer's answer did not match it
+        expect((await settle(client.invites.fetch("\u202eFixtureCode"))).code).toBe("FixtureCode")
+        // Fails on the old code: Padding and form feeds were refused
+        expect((await settle(client.invites.fetch(" Fixture\u000cCode "))).code).toBe("FixtureCode")
+        // The lowercase vanity fallback also compares with the normalized code
+        code = "fixturecode"
+        expect((await settle(client.invites.fetch("\tFixtureCode\n"))).code).toBe("fixturecode")
+        await settle(client.invites.delete(" FixtureCode\n"))
+        expect(requests).toEqual([
+            "GET /api/v1/invites/FixtureCode",
+            "GET /api/v1/invites/FixtureCode",
+            "GET /api/v1/invites/FixtureCode",
+            "DELETE /api/v1/invites/FixtureCode",
+        ])
+        await expect(settle(client.invites.fetch("Fixture Code"))).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+        })
+        expect(requests).toHaveLength(4)
+    },
+)
+
 test.each(modes)("%s rejects mismatched invite responses and duplicate management entries", async (mode) => {
     const client = await setup(mode)
     let response: unknown = { ...wire(), code: "WrongCode" }
     stubFetchWithHostedDiscovery(async () => Response.json(response))
-    await expect(settle(client.invites.fetch("FixtureCode"))).rejects.toMatchObject({ reason: "response" })
+    const mismatch = await settle(client.invites.fetch("FixtureCode")).catch((error: unknown) => error)
+    expect(mismatch).toMatchObject({ reason: "response" })
+    // Fails on the old code: The diagnostic named the last field read instead of the code mismatch
+    expect(String((mismatch as Error).message)).toContain("It describes a different resource than the one requested")
     response = { ...wire(), expires_at: "2025-02-29T00:00:00Z" }
     await expect(settle(client.invites.fetch("FixtureCode"))).rejects.toMatchObject({ reason: "response" })
     response = { ...wire(), created_at: "2025-04-31T00:00:00Z" }

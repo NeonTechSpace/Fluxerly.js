@@ -128,8 +128,10 @@ export class MessageError extends FluxerlyError {
         readonly providerCode?: string | null | undefined
         /** Failed response field or check, as in OperationErrorOptions */
         readonly responseField?: string | null | undefined
-        /** Whether a rate-limited send read an attachment from a ReadableStream, as in OperationErrorOptions */
+        /** Whether a rate-limited send, or one refused because upload slots stayed busy, read an attachment from a ReadableStream, as in OperationErrorOptions */
         readonly streamUsed?: boolean | undefined
+        /** Whether Fluxer refused the upload because its upload slots stayed busy, as in OperationErrorOptions */
+        readonly uploadSlotsBusy?: boolean | undefined
         readonly cause?: unknown
     }) {
         const fields = operationErrorFields({ ...options, operation: "send" })
@@ -189,7 +191,7 @@ export class MessageOperationError extends FluxerlyError {
     readonly reason: OperationReason
     /** Whether the request may have reached Fluxer, described by {@link OperationOutcome}.
      * Preparatory file uploads may already have occurred even when no message or reaction request was dispatched.
-     * An unknown outcome includes server errors and missing or invalid success responses.
+     * An unknown outcome includes server errors, apart from the busy upload slots that OperationOutcome describes, and missing or invalid success responses.
      * Read calls do not mutate messages even when their request outcome is unknown
      */
     readonly outcome: OperationOutcome

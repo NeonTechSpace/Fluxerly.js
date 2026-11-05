@@ -246,7 +246,7 @@ export class MessageBuilder<HasBody extends boolean = false> {
     }
 
     /** Replace the numeric message flags and return this builder, without validating the value.
-     * Message sends and replies accept MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and MessageFlags.VoiceMessage. A voice note requires exactly one audio attachment with duration and waveform and no content, embeds or stickers
+     * Message sends and replies accept MessageFlags.SuppressEmbeds, MessageFlags.SuppressNotifications and MessageFlags.VoiceMessage. A voice note requires exactly one audio attachment with duration and waveform and no visible content, embeds or stickers
      */
     flags(value: number): this {
         this.flagsValue = value

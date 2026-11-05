@@ -23,7 +23,7 @@ import type { RequestOptions, AuditedRequestOptions } from "./options.js"
 export interface Invites {
     /**
      * Look up an invite code without using it or joining its destination.
-     * Pass the code, not its full URL.
+     * Pass the code, not its full URL. The SDK applies Fluxer's normalization, which removes U+000C and U+202E and trims whitespace, then sends that code of at most 256 UTF-16 code units and expects it back.
      * Expired, revoked or inaccessible codes fail remotely.
      * Fluxer may normalize the case of a vanity code
      */
@@ -65,7 +65,8 @@ export interface Invites {
      * Revoke an invite code, succeeding with no value after HTTP 204.
      * Fluxer checks creator or management permissions.
      * Existing members remain.
-     * A missing code is an error, not proof a previous delete succeeded
+     * A missing code is an error, not proof a previous delete succeeded.
+     * The code has the same limit as in fetch
      */
     delete(
         code: string,

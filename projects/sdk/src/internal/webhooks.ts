@@ -35,9 +35,12 @@ import {
     count as nonNegativeInt32,
     fieldsOnce,
     identifier,
-    imageDataUri,
+    inputId,
+    inputIds,
+    base64Image,
+    base64ImageExplanation,
+    clearsImage,
     record,
-    snapshotArray,
 } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { suspendInput } from "./defects.js"
@@ -46,7 +49,7 @@ import { RestOwner } from "./rest.js"
 import { loggingConfiguration, type ClientLogger } from "./logging.js"
 import { InstanceResolver, type InstanceConfiguration, instanceConfiguration } from "./instance.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { normalizedText } from "./field-text.js"
+import { fluxerHttpUrl, normalizeText, normalizedText, withInstanceUrlRule } from "./field-text.js"
 import { decodeUser } from "./users.js"
 import { type LogicalScheduler, makeLogicalScheduler } from "./logical-scheduler.js"
 import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
@@ -67,6 +70,11 @@ type WebhookValidationResult<A> = WebhookRequest<A> | InputValidationFailure
 
 const validToken = (value: unknown): value is string =>
     typeof value === "string" && /^[A-Za-z0-9_-]{1,512}$/.test(value)
+// A token-authenticated route reads the token path segment as createStringType(), so the token to send holds 1 through
+// 256 characters. The pattern leaves nothing for normalization to remove. Received tokens keep the wider bound above
+// (packages/schema/src/domains/common/CommonParamSchemas.ts:87-89 at 0098958f, applied by
+// fluxer_api/src/api/webhook/WebhookController.ts:324-603)
+const tokenToSend = (value: unknown): value is string => validToken(value) && value.length <= 256
 const name = (value: unknown): value is string => normalizedText(value, 1, 80)
 
 function decodeSourceGuild(value: unknown): WebhookSourceGuild | undefined {
@@ -100,13 +108,14 @@ function decodeWebhook(value: unknown): Webhook | undefined {
         (value.avatar != null && typeof value.avatar !== "string")
     )
         return undefined
-    const sourceGuild = value.source_guild === undefined ? undefined : decodeSourceGuild(value.source_guild)
-    const sourceChannel = value.source_channel === undefined ? undefined : decodeSourceChannel(value.source_channel)
-    if (
-        (value.source_guild !== undefined && sourceGuild === undefined) ||
-        (value.source_channel !== undefined && sourceChannel === undefined)
-    )
-        return undefined
+    // Each source is read once and checked right after it is decoded, so failingFieldPath names the nested field that
+    // failed rather than the source it re-read
+    const rawSourceGuild = value.source_guild
+    const sourceGuild = rawSourceGuild === undefined ? undefined : decodeSourceGuild(rawSourceGuild)
+    if (rawSourceGuild !== undefined && sourceGuild === undefined) return undefined
+    const rawSourceChannel = value.source_channel
+    const sourceChannel = rawSourceChannel === undefined ? undefined : decodeSourceChannel(rawSourceChannel)
+    if (rawSourceChannel !== undefined && sourceChannel === undefined) return undefined
     const creator = value.user === undefined ? undefined : decodeUser(value.user)
     const base = {
         id: value.id,
@@ -147,11 +156,16 @@ function settings(value: unknown, create: boolean, move: boolean) {
             "Webhook name must contain 1 through 80 UTF-16 code units after Fluxer's normalization",
         )
     const avatar = value.avatar
-    if (avatar !== undefined && avatar !== null && !imageDataUri(avatar))
-        return inputValidationFailure("avatar", "format", "Webhook avatar must be null or a base64 image data URI")
-    const channelId = value.channelId
-    if (channelId !== undefined && !identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    if (avatar !== undefined && !clearsImage(avatar) && !base64Image(avatar))
+        return inputValidationFailure("avatar", "format", base64ImageExplanation("Webhook avatar", avatar))
+    const rawChannelId = value.channelId
+    const channelId = rawChannelId === undefined ? undefined : inputId(rawChannelId)
+    if (rawChannelId !== undefined && channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (!create && displayName === undefined && avatar === undefined && channelId === undefined)
         return inputValidationFailure("input", "required", "Webhook edit must contain a change")
     return {
@@ -165,14 +179,19 @@ function settings(value: unknown, create: boolean, move: boolean) {
 }
 
 export function webhookCreate(
-    channelId: string,
+    rawChannelId: string,
     input: WebhookCreate,
     options?: AuditedRequestOptions,
 ): WebhookValidationResult<CreatedWebhook> {
     const body = settings(input, true, false),
         extra = auditSettings(options)
-    if (!identifier(channelId))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    const channelId = inputId(rawChannelId)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (body instanceof InputValidationFailure) return body
     if (extra instanceof InputValidationFailure) return extra
     return {
@@ -197,8 +216,14 @@ export function webhookCreate(
     }
 }
 
-export function webhookFetch(id: string): WebhookValidationResult<Webhook> {
-    if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
+export function webhookFetch(rawId: string): WebhookValidationResult<Webhook> {
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "webhookId",
+            "format",
+            "Webhook IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: id,
         method: "GET",
@@ -211,12 +236,15 @@ export function webhookFetch(id: string): WebhookValidationResult<Webhook> {
     }
 }
 
-export function webhookList(id: string, kind: "channels" | "guilds"): WebhookValidationResult<readonly Webhook[]> {
-    if (!identifier(id))
+export function webhookList(rawId: string, kind: "channels" | "guilds"): WebhookValidationResult<readonly Webhook[]> {
+    const id = inputId(rawId)
+    if (id === undefined)
         return inputValidationFailure(
             kind === "channels" ? "channelId" : "guildId",
             "format",
-            kind === "channels" ? "Channel IDs must be decimal strings" : "Guild IDs must be decimal strings",
+            kind === "channels"
+                ? "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly"
+                : "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
     return {
         majorId: id,
@@ -265,8 +293,14 @@ export function webhookDelete(id: string, options?: AuditedRequestOptions): Webh
     return { ...base, ...extra, method: "DELETE", status: 204, decode: () => undefined }
 }
 
-export function webhookTokenFetch(id: string): WebhookValidationResult<IncomingWebhook> {
-    if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
+export function webhookTokenFetch(rawId: string): WebhookValidationResult<IncomingWebhook> {
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "webhookId",
+            "format",
+            "Webhook IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     return {
         majorId: id,
         tokenAuth: true,
@@ -312,14 +346,32 @@ function webhookReplyTarget(
 function optionThreadId(options: unknown): string | undefined | InputValidationFailure {
     if (!record(options)) return undefined
     const threadId = options.threadId
-    if (threadId === undefined || identifier(threadId)) return threadId
-    return inputValidationFailure("options.threadId", "format", "Thread IDs must be decimal strings")
+    if (threadId === undefined) return undefined
+    const trimmed = inputId(threadId)
+    if (trimmed !== undefined) return trimmed
+    return inputValidationFailure(
+        "options.threadId",
+        "format",
+        "Thread IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    )
 }
 
-function messageRequest(id: string, messageId?: string, threadId?: string): WebhookValidationResult<Message> {
-    if (!identifier(id)) return inputValidationFailure("webhookId", "format", "Webhook IDs must be decimal strings")
-    if (messageId !== undefined && !identifier(messageId))
-        return inputValidationFailure("messageId", "format", "Message IDs must be decimal strings")
+/** The thread ID, when given, must already be trimmed by the caller */
+function messageRequest(rawId: string, rawMessageId?: string, threadId?: string): WebhookValidationResult<Message> {
+    const id = inputId(rawId)
+    if (id === undefined)
+        return inputValidationFailure(
+            "webhookId",
+            "format",
+            "Webhook IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    const messageId = rawMessageId === undefined ? undefined : inputId(rawMessageId)
+    if (rawMessageId !== undefined && messageId === undefined)
+        return inputValidationFailure(
+            "messageId",
+            "format",
+            "Message IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     // A send always waits for the message, so its query already has a first parameter
     const path = messageId === undefined ? "?wait=true" : `/messages/${messageId}`
     return {
@@ -342,34 +394,72 @@ function messageRequest(id: string, messageId?: string, threadId?: string): Webh
     }
 }
 
+// Fluxer's URLType strips U+000C and U+202E, trims, then allows 1 to 2,048 UTF-16 code units
+// (packages/schema/src/primitives/UrlValidators.ts:28-31, WebhookRequestSchemas.ts:107 at 0098958f)
+/** Fluxer reads a webhook avatar URL as URLType, so the SDK applies the same normalized checks as for embed URLs
+ * (packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:107 at 0098958f)
+ */
 function avatarUrlFailure(avatarUrl: unknown): InputValidationFailure | undefined {
-    if (typeof avatarUrl !== "string" || avatarUrl.length > 8192)
-        return inputValidationFailure(
-            "avatarUrl",
-            "format",
-            "Webhook avatarUrl must be an HTTP or HTTPS URL of at most 8,192 characters",
-        )
-    try {
-        const url = new URL(avatarUrl)
-        if (!["https:", "http:"].includes(url.protocol) || url.username || url.password)
-            return inputValidationFailure(
-                "avatarUrl",
-                "format",
-                "Webhook avatarUrl must be an HTTP or HTTPS URL without a username or password",
-            )
-    } catch {
-        return inputValidationFailure("avatarUrl", "format", "Webhook avatarUrl must be a valid HTTP or HTTPS URL")
-        // allow-silent: The parse failure becomes the typed input failure
-    }
-    return undefined
+    if (fluxerHttpUrl(avatarUrl)) return undefined
+    return inputValidationFailure(
+        "avatarUrl",
+        "format",
+        "Webhook avatarUrl must be null or an http:// or https:// URL without a user name or password, whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer, of 1 through 2,048 UTF-16 code units after Fluxer's normalization",
+    )
 }
 
-/** Encode a forward send, which keeps only the message's nonce, flags and allowed mentions beside its source */
-function encodeWebhookForward(message: Record<string, unknown>, source: unknown): EncodedBody | InputValidationFailure {
+/**
+ * The wire fields of the body keys a webhook forward carries, or undefined when one of them holds something. Fluxer
+ * refuses a forward whose content is nonempty after its normalization or whose embed, attachment or sticker list is
+ * nonempty, so absent, null or blank content, empty lists and null stickers pass, and the SDK sends them as given
+ * (fluxer_api/src/api/channel/services/message/MessageSendService.ts:310, 395-413,
+ * packages/schema/src/domains/message/MessageRequestSchemas.ts:330 and SchemaPrimitives.ts:185-187 at 0098958f)
+ */
+function forwardBody(message: Record<string, unknown>): Record<string, unknown> | undefined {
+    const body: Record<string, unknown> = {}
+    const content = message.content
+    if (content !== undefined) {
+        if (content !== null && (typeof content !== "string" || normalizeText(content) !== "")) return undefined
+        body.content = content
+    }
+    for (const [key, wire] of [
+        ["embeds", "embeds"],
+        ["attachments", "attachments"],
+        ["stickerIds", "sticker_ids"],
+    ] as const) {
+        const value = message[key]
+        if (value === undefined) continue
+        // Fluxer's webhook schema also takes null stickers (WebhookRequestSchemas.ts:104 at 0098958f)
+        if (value === null && key === "stickerIds") {
+            body[wire] = null
+            continue
+        }
+        if (!Array.isArray(value) || value.length !== 0) return undefined
+        body[wire] = []
+    }
+    return body
+}
+
+/** Encode a forward send, which keeps only the message's nonce, flags, allowed mentions and empty body fields beside
+ * its source
+ */
+function encodeWebhookForward(
+    message: Record<string, unknown>,
+    source: unknown,
+    body: Record<string, unknown>,
+): EncodedBody | InputValidationFailure {
     const forward = encodeForward("0", source, "")
+    // The placeholder embed only satisfies the body rule and is not sent. It carries no content, because Fluxer reads
+    // no mention settings on a forward, so everyone with listed users or roles passes, as it does there
+    // (fluxer_api/src/api/channel/services/message/MessageSendService.ts:1083-1085 at 0098958f)
     const options = encodeMessage(
         "0",
-        { content: "_", nonce: message.nonce, flags: message.flags, allowedMentions: message.allowedMentions },
+        {
+            embeds: [{ title: "_" }],
+            nonce: message.nonce,
+            flags: message.flags,
+            allowedMentions: message.allowedMentions,
+        },
         "",
         undefined,
         false,
@@ -388,6 +478,7 @@ function encodeWebhookForward(message: Record<string, unknown>, source: unknown)
     return {
         files: [],
         json: JSON.stringify({
+            ...body,
             ...(message.flags === undefined ? {} : { flags: payload.flags }),
             allowed_mentions: payload.allowed_mentions,
             ...forwardPayload,
@@ -420,20 +511,17 @@ function encodeWebhookBody(
             false,
             "webhook",
         )
-    if (
+    const forward =
         reference !== undefined &&
         referenceType === "forward" &&
-        Object.keys(messageReference as object).every((key) => ["type", "source"].includes(key)) &&
-        !("content" in message) &&
-        !("embeds" in message) &&
-        !("attachments" in message) &&
-        !("stickerIds" in message)
-    )
-        return encodeWebhookForward(message, reference("source"))
+        Object.keys(messageReference as object).every((key) => ["type", "source"].includes(key))
+            ? forwardBody(message)
+            : undefined
+    if (forward !== undefined) return encodeWebhookForward(message, reference!("source"), forward)
     return inputValidationFailure(
         "messageReference",
         "relationship",
-        "Webhook messageReference must be a valid reply, or a forward with only type and source sent without content, embeds, attachments, or stickerIds",
+        "Webhook messageReference must be a valid reply, or a forward with only type and source whose content is absent, null or blank, whose embeds and attachments are absent or empty and whose stickerIds are absent, empty or null",
     )
 }
 
@@ -459,11 +547,16 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
     const username = field("username")
     const avatarUrl = field("avatarUrl")
     const messageReference = field("messageReference")
-    const threadId = field("threadId")
+    const rawThreadId = field("threadId")
     const threadName = field("threadName")
     const appliedTagIds = field("appliedTagIds")
-    if (threadId !== undefined && !identifier(threadId))
-        return inputValidationFailure("threadId", "format", "Webhook threadId must be a decimal string")
+    const threadId = rawThreadId === undefined ? undefined : inputId(rawThreadId)
+    if (rawThreadId !== undefined && threadId === undefined)
+        return inputValidationFailure(
+            "threadId",
+            "format",
+            "Webhook threadId must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const base = messageRequest(id, undefined, threadId)
     if (base instanceof InputValidationFailure) return base
     if (threadName !== undefined && !normalizedText(threadName, 1, 100))
@@ -472,8 +565,8 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
             "length",
             "Webhook threadName must contain 1 through 100 UTF-16 code units after Fluxer's normalization",
         )
-    const tagIds = appliedTagIds === undefined ? undefined : snapshotArray(appliedTagIds, 5)
-    if (appliedTagIds !== undefined && (tagIds === undefined || !tagIds.every(identifier)))
+    const tagIds = appliedTagIds === undefined ? undefined : inputIds(appliedTagIds, 5)
+    if (appliedTagIds !== undefined && tagIds === undefined)
         return inputValidationFailure(
             "appliedTagIds",
             "format",
@@ -497,13 +590,16 @@ export function webhookSend(id: string, value: WebhookMessageInput | string): We
             "relationship",
             "A new post has no earlier message to refer to, so a message with a messageReference cannot set threadName",
         )
-    if (username !== undefined && !name(username))
+    // Fluxer accepts null for both, which keeps the webhook's own name and avatar
+    // (packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:106-107,
+    // fluxer_api/src/api/webhook/WebhookService.ts:465-467 and MessageSendService.ts:1125 at 0098958f)
+    if (username !== undefined && username !== null && !name(username))
         return inputValidationFailure(
             "username",
             "length",
-            "Webhook username must contain 1 through 80 UTF-16 code units after Fluxer's normalization",
+            "Webhook username must be null or contain 1 through 80 UTF-16 code units after Fluxer's normalization",
         )
-    if (avatarUrl !== undefined) {
+    if (avatarUrl !== undefined && avatarUrl !== null) {
         const invalidAvatar = avatarUrlFailure(avatarUrl)
         if (invalidAvatar) return invalidAvatar
     }
@@ -560,7 +656,9 @@ export function webhookMessageEdit(
         "the webhook message edit",
     )
     if (unsupported) return unsupported
-    const body = encodeEdit(input)
+    // Fluxer reads this route's body through Validator('json'), which treats empty embed text as absent
+    // (fluxer_api/src/api/webhook/WebhookController.ts:462 at 0098958f)
+    const body = encodeEdit(input, true)
     return body instanceof InputValidationFailure ? body : { ...base, method: "PATCH", body }
 }
 
@@ -612,8 +710,13 @@ class WebhookOwner {
         build: () => WebhookRequest<A> | InputValidationFailure,
         options?: RequestOptions,
     ) {
-        return Effect.suspend(() =>
-            this.#token ? this.rest.webhook(this.#token, operation, build, options) : Effect.fail(closedBeforeSend()),
+        return withInstanceUrlRule(
+            Effect.suspend(() =>
+                this.#token
+                    ? this.rest.webhook(this.#token, operation, build, options)
+                    : Effect.fail(closedBeforeSend()),
+            ),
+            this.instance.hosted,
         )
     }
     shutdown() {
@@ -664,8 +767,8 @@ export function makeWebhookClient(
                     "Webhook client options must be an object with only id, token or revealToken, uploadMaxBytes, instance, and logging",
                 ),
             )
-        const id = options.id
-        if (!identifier(id))
+        const id = inputId(options.id)
+        if (id === undefined)
             return Effect.fail(
                 new ConfigurationError(
                     "configuration",
@@ -679,11 +782,11 @@ export function makeWebhookClient(
             const reveal = value.revealToken
             token = typeof reveal === "function" ? reveal.call(value) : undefined
         }
-        if (!validToken(token))
+        if (!tokenToSend(token))
             return Effect.fail(
                 new ConfigurationError(
                     "token",
-                    "The webhook token must be 1 through 512 letters, digits, underscores, or hyphens, supplied as token or returned by revealToken",
+                    "The webhook token must be 1 through 256 letters, digits, underscores, or hyphens, supplied as token or returned by revealToken",
                 ),
             )
         const uploadMaxBytes = options.uploadMaxBytes

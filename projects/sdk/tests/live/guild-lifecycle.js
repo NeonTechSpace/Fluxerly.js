@@ -99,6 +99,14 @@ try {
         expected.slice(0, 200),
     )
     assert.equal(await cached(client.guilds.get(sandbox.id)), undefined)
+    // Fluxer uses after and ignores before when both are sent
+    // (fluxer_api/src/api/guild/services/data/GuildOperationsService.ts:248-259), so a before that would leave nothing
+    // still returns the memberships after the first
+    const bothCursors = await value(client.guilds.fetchPage({ before: expected[0], after: expected[0] }))
+    assert.deepEqual(
+        bothCursors.map((guild) => guild.id),
+        expected.slice(1, 201),
+    )
     const traversal = client.guilds.iterate({ maxItems: 4000, maxPages: 20 })
     const actual = []
     if (mode === "effect") {

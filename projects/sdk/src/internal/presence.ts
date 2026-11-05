@@ -12,7 +12,7 @@ import type {
 } from "#sdk/events"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { CustomStatusEmoji, PresenceInput, PresenceStatus } from "#sdk/presence"
-import { gatewayIdentifier, identifier, record, snapshotArray } from "./decode/primitives.js"
+import { identifier, inputGatewayId, inputId, record, snapshotArray } from "./decode/primitives.js"
 import { readCaller } from "./defects.js"
 import { nullableTimestamp, validCalendarTimestamp } from "./decode/timestamp.js"
 import { maxClientPayloadBytes, Opcode } from "./protocol/gateway.js"
@@ -223,14 +223,15 @@ function customStatusEmoji(value: unknown): Readonly<CustomStatusEmoji> | InputV
             return inputValidationFailure(
                 "customStatus.emoji.id",
                 "type",
-                "Custom status emoji IDs must be decimal strings",
+                "Custom status emoji IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
             )
-        return identifier(id)
-            ? Object.freeze({ id })
+        const trimmed = inputId(id)
+        return trimmed !== undefined
+            ? Object.freeze({ id: trimmed })
             : inputValidationFailure(
                   "customStatus.emoji.id",
                   "format",
-                  "Custom status emoji IDs must be decimal strings",
+                  "Custom status emoji IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
               )
     }
     if (Object.hasOwn(value, "name")) {
@@ -329,17 +330,22 @@ function memberSubscriptions(guildId: string, members: readonly string[]): Gatew
 /** Copy caller member IDs once, then validate the copy, so the validated IDs are the ones subscribed */
 function frozenMemberIds(value: unknown): readonly string[] | InputValidationFailure | "limit" {
     if (!Array.isArray(value))
-        return inputValidationFailure("memberIds", "type", "Member IDs must be an array of decimal strings")
+        return inputValidationFailure(
+            "memberIds",
+            "type",
+            "Member IDs must be an array of decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const members = snapshotArray(value, maxMembersPerGuild)
     if (members === undefined) return "limit"
-    if (!members.every(gatewayIdentifier))
+    const trimmed = members.map(inputGatewayId)
+    if (!trimmed.every((id) => id !== undefined))
         return inputValidationFailure(
             "memberIds",
             "format",
-            "Member IDs must be positive canonical decimal strings no greater than 9223372036854775807",
+            "Member IDs must be positive canonical decimal strings no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
-    return new Set(members).size === members.length
-        ? (members as readonly string[])
+    return new Set(trimmed).size === trimmed.length
+        ? Object.freeze(trimmed as string[])
         : inputValidationFailure("memberIds", "unique", "Member IDs must be unique")
 }
 
@@ -498,13 +504,14 @@ export class PresenceOwner implements PresenceGatewayOwner {
      * A successful return means bounded local acceptance only. Provider acceptance and presence delivery remain unknown.
      * Returns only SDK-authored input detail. Limits remain a distinct local policy failure
      */
-    setMembers(guildId: unknown, memberIds: unknown): InputValidationFailure | "limit" | false | undefined {
+    setMembers(rawGuildId: unknown, memberIds: unknown): InputValidationFailure | "limit" | false | undefined {
         if (this.#closed) return false
-        if (!gatewayIdentifier(guildId))
+        const guildId = inputGatewayId(rawGuildId)
+        if (guildId === undefined)
             return inputValidationFailure(
                 "guildId",
                 "format",
-                "Guild IDs must be positive canonical decimal strings no greater than 9223372036854775807",
+                "Guild IDs must be positive canonical decimal strings no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
             )
         // Reading the caller IDs is application code, reported by the calling operation
         const members = readCaller(() => frozenMemberIds(memberIds))

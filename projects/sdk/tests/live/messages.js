@@ -1480,6 +1480,25 @@ async function verifyAttachments(ops, channelId) {
     const rejected = await ops.editFailure(replied, { attachments: [] })
     assert.equal(rejected.reason, "input")
     report(stage, true)
+
+    // The SDK no longer caps uploads, so Fluxer's own limit, 50 MiB for a bot unless the instance raises it, refuses
+    // a larger file when it plans the upload. The stream fails if read, so no bytes are sent either way
+    stage = "attachments_over_limit_refused_by_fluxer"
+    let streamRead = false
+    const stream = {
+        getReader: () => {
+            streamRead = true
+            return new ReadableStream({ start: (controller) => controller.error(new Error("Not read")) }).getReader()
+        },
+    }
+    const refused = await ops.sendFailure({
+        attachments: [{ stream, size: 52_428_801, filename: `over-limit-${randomUUID()}.bin` }],
+    })
+    assert.equal(streamRead, false)
+    assert.equal(refused?.reason, "rejected")
+    assert.equal(refused?.outcome, "notDispatched")
+    assert.equal(refused?.apiError?.code, "fileSizeTooLarge")
+    report(stage, true)
 }
 
 async function verifyEmbeds(ops, channelId) {
@@ -1509,6 +1528,9 @@ async function verifyEmbeds(ops, channelId) {
                 fields: [
                     { name: "Status", value: "Passed", inline: true },
                     { name: "Details", value: "Verified" },
+                    // Fluxer accepts empty field names and values, which the SDK sends unchanged
+                    { name: "", value: "Online" },
+                    { name: "", value: "" },
                 ],
             },
         ],
@@ -1526,6 +1548,21 @@ async function verifyEmbeds(ops, channelId) {
     stage = "embeds_independent_readback"
     assert.equal(actual?.embeds?.[0]?.title, title)
     assert.equal(actual?.embeds?.[0]?.fields?.[1]?.inline, false)
+    stage = "embeds_empty_field_names"
+    assert.deepEqual(
+        actual?.embeds?.[0]?.fields?.slice(2).map((field) => [field.name, field.value]),
+        [
+            ["", "Online"],
+            ["", ""],
+        ],
+    )
+    assert.deepEqual(
+        sent.embeds[0]?.fields?.slice(2).map((field) => [field.name, field.value]),
+        [
+            ["", "Online"],
+            ["", ""],
+        ],
+    )
     stage = "embeds_destination_url"
     assert.equal(new URL(actual?.embeds?.[0]?.url).href, "https://fluxer.com/")
     stage = "embeds_image_url"
@@ -1562,17 +1599,138 @@ async function verifyEmbeds(ops, channelId) {
     assert.equal(collected.messages[0]?.embeds[0]?.title, title)
     report(stage, true)
 
+    // Fluxer checks the edit itself, not the message it leaves: Without flags it needs visible content, an embed or an
+    // attachment, so clearing the embeds or the text alone fails (MessageValidationService.ts:47-68). The raw requests
+    // confirm that on hosted Fluxer, and the SDK refuses the same edit locally
     stage = "embeds_empty_edit_rejection_and_clear"
+    for (const body of [{ embeds: [] }, { content: "" }]) {
+        const raw = await sandboxApi("PATCH", `/channels/${channelId}/messages/${sent.id}`, body)
+        assert.equal(raw.status, 400)
+        assert.equal(raw.data?.code, "CANNOT_SEND_EMPTY_MESSAGE")
+    }
     const rejected = await ops.editFailure(sent, { embeds: [] })
     assert.equal(rejected?._tag, "MessageOperationError")
-    assert.equal(rejected?.reason, "rejected")
-    assert.equal(rejected?.status, 400)
+    assert.equal(rejected?.reason, "input")
+    assert.equal(rejected?.outcome, "notDispatched")
     assert.equal((await ops.fetch(sent)).embeds[0]?.title, "Gateway update")
+    // With flags, empty content passes and clears the text while the embeds stay
+    const textCleared = await ops.edit(sent, { content: "", flags: 0 })
+    assert.equal(textCleared.content, "")
+    assert.equal(textCleared.embeds[0]?.title, "Gateway update")
+    assert.equal((await api("GET", `/channels/${channelId}/messages/${sent.id}`)).data?.content ?? "", "")
     const cleared = await ops.edit(sent, { content: "Plain text", embeds: [] })
     assert.deepEqual(cleared.embeds, [])
     const readback = (await api("GET", `/channels/${channelId}/messages/${sent.id}`)).data
     assert.equal(readback?.content, "Plain text")
     assert.deepEqual(readback?.embeds ?? [], [])
+    report(stage, true)
+
+    // Fluxer accepts null content: A send has no text, and an edit clears the text as an empty string does, so without
+    // flags the edit still needs an embed or a file. It checks a nonce after trimming it, so a blank nonce fails and a
+    // padded one is accepted (MessageRequestSchemas.ts:314-336, MessagePersistenceService.ts:435-449)
+    stage = "embeds_null_content_and_trimmed_nonce"
+    const nullTitle = `embed-null-${randomUUID()}`
+    const blankNonce = await sandboxApi("POST", `/channels/${channelId}/messages`, {
+        embeds: [{ title: nullTitle }],
+        nonce: "   ",
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    assert.equal(blankNonce.status, 400)
+    const nullSent = await ops.send({
+        content: null,
+        embeds: [{ title: nullTitle }],
+        nonce: `  ${randomUUID().slice(0, 8)}  `,
+    })
+    assert.equal(nullSent.content, "")
+    assert.equal(nullSent.embeds[0]?.title, nullTitle)
+    const rawNullEdit = await sandboxApi("PATCH", `/channels/${channelId}/messages/${nullSent.id}`, { content: null })
+    assert.equal(rawNullEdit.status, 400)
+    assert.equal(rawNullEdit.data?.code, "CANNOT_SEND_EMPTY_MESSAGE")
+    const nullRejected = await ops.editFailure(nullSent, { content: null })
+    assert.equal(nullRejected?.reason, "input")
+    assert.equal(nullRejected?.outcome, "notDispatched")
+    await ops.edit(nullSent, { content: "Text before null" })
+    const nullCleared = await ops.edit(nullSent, { content: null, flags: 0 })
+    assert.equal(nullCleared.content, "")
+    assert.equal(nullCleared.embeds[0]?.title, nullTitle)
+    const nullReadback = (await api("GET", `/channels/${channelId}/messages/${nullSent.id}`)).data
+    assert.equal(nullReadback?.content ?? "", "")
+    assert.equal(nullReadback?.embeds?.[0]?.title, nullTitle)
+    report(stage, true)
+
+    // Fluxer's URLType runs validator.isURL with require_tld outside development mode, so a host without a top-level
+    // domain fails, and its SnowflakeType trims IDs (UrlValidators.ts:8-21, 44-49, SchemaPrimitives.ts:39-52, 110-116).
+    // The raw requests confirm both on hosted Fluxer: The SDK refuses the URL locally and sends padded IDs trimmed
+    stage = "embeds_url_hosts_and_padded_ids"
+    const localHost = await sandboxApi("POST", `/channels/${channelId}/messages`, {
+        embeds: [{ title: `embed-host-${randomUUID()}`, url: "http://localhost/build" }],
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    assert.equal(localHost.status, 400)
+    const hostRefused = await ops.sendFailure({ embeds: [{ title: "Build", url: "http://localhost/build" }] })
+    assert.equal(hostRefused?.reason, "input")
+    assert.equal(hostRefused?.outcome, "notDispatched")
+    const paddedReply = await sandboxApi("POST", `/channels/${channelId}/messages`, {
+        content: `padded-${randomUUID()}`,
+        message_reference: { message_id: ` ${nullSent.id} `, channel_id: `\t${channelId}\n` },
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    assert.equal(paddedReply.status, 200)
+    assert.equal(paddedReply.data?.message_reference?.message_id, nullSent.id)
+    const paddedFetch = await ops.fetch({ channelId: ` ${channelId}\n`, id: ` ${nullSent.id} ` })
+    assert.equal(paddedFetch.id, nullSent.id)
+    assert.equal(paddedFetch.channelId, channelId)
+    report(stage, true)
+
+    // Message sends parse the raw body, so Fluxer takes empty embed text literally there: An empty author name fails its
+    // own length check, which the SDK checks locally, while an embed with no values is kept
+    // (MessageRequestParser.ts:383-402, MessageRequestSchemas.ts:34-53, 100-120)
+    stage = "embeds_empty_text_literal_on_sends"
+    const emptyName = await sandboxApi("POST", `/channels/${channelId}/messages`, {
+        content: "Text",
+        embeds: [{ title: `embed-empty-${randomUUID()}`, author: { name: "" } }],
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    assert.equal(emptyName.status, 400)
+    const withoutValues = await ops.send({ content: `embed-none-${randomUUID()}`, embeds: [{}] })
+    assert.equal((await api("GET", `/channels/${channelId}/messages/${withoutValues.id}`)).status, 200)
+    report(stage, true)
+
+    // Fluxer reads the mention settings of a send only when it has content or a reply reference, so a send with only
+    // embeds may allow everyone together with listed users (MessageSendService.ts:757-759, MessageMentionService.ts:231-236)
+    stage = "embeds_only_send_mixed_mentions"
+    const mixed = await ops.send({
+        embeds: [{ title: `embed-mixed-${randomUUID()}` }],
+        allowedMentions: { everyone: true, users: [withoutValues.author.id] },
+    })
+    assert.equal((await api("GET", `/channels/${channelId}/messages/${mixed.id}`)).status, 200)
+    report(stage, true)
+
+    // An edit without attachments may name a file the message already has. Fluxer resolves it against the message's
+    // files and moves that file into the embed (MessageEmbedAttachmentResolver.ts:49-58, MessageEditService.ts:119-123)
+    stage = "embeds_existing_attachment_edit"
+    const withFile = await ops.send({
+        content: "Chart attached",
+        attachments: [{ data: Buffer.from(solidPngBase64(), "base64"), filename: "chart.png" }],
+    })
+    assert.deepEqual(
+        withFile.attachments.map((attachment) => attachment.filename),
+        ["chart.png"],
+    )
+    const moved = await ops.edit(withFile, { embeds: [{ title: "Chart", image: { url: "attachment://chart.png" } }] })
+    assert.equal(moved.embeds[0]?.title, "Chart")
+    const movedWire = (await api("GET", `/channels/${channelId}/messages/${withFile.id}`)).data
+    assert.match(movedWire?.embeds?.[0]?.image?.url ?? "", /chart\.png/)
+    assert.doesNotMatch(movedWire?.embeds?.[0]?.image?.url ?? "", /^attachment:/)
+    console.log(
+        JSON.stringify({
+            mode,
+            check: stage,
+            informational: true,
+            attachmentsAfterEdit: (movedWire?.attachments ?? []).length,
+            imageFlags: movedWire?.embeds?.[0]?.image?.flags ?? null,
+        }),
+    )
     report(stage, true)
 }
 
@@ -1857,6 +2015,21 @@ async function verifyChannels(ops, mainChannelId, botId, interrupt) {
         assert.ok(
             Number.isInteger(editedVoice.bitrate) && editedVoice.bitrate >= 8_000 && editedVoice.bitrate <= 384_000,
         )
+        report(stage, true)
+
+        // Channel edits read their body through Fluxer's Validator, which turns an empty string into null: An empty
+        // topic clears the topic, and an empty name leaves the name unchanged (Validator.ts:59-63,
+        // ChannelDataService.ts:191-196)
+        stage = "channel_edit_empty_strings"
+        const topicSet = await ops.edit(voice.id, { topic: `${journal.channelFixtures.voiceTier.marker}-topic` })
+        assert.equal(topicSet.topic, `${journal.channelFixtures.voiceTier.marker}-topic`)
+        const emptied = await ops.edit(voice.id, { name: "", topic: "" })
+        assertSnapshot(emptied, voice.id, 2)
+        assert.equal(emptied.name, voiceRaw.name)
+        assert.equal(emptied.topic ?? null, null)
+        const emptiedRaw = await rawChannel(voice.id)
+        assert.equal(emptiedRaw.name, voiceRaw.name)
+        assert.equal(emptiedRaw.topic ?? null, null)
         report(stage, true)
 
         stage = "channel_permission_overwrites"
@@ -2622,12 +2795,15 @@ function verifyMissing(error, operation) {
     assert.equal(error.status, 404)
 }
 
+/** An edit of empty content alone fails locally, as Fluxer refuses an edit without flags that has no visible content,
+ * embed or attachment (MessageValidationService.ts:47-68)
+ */
 function verifyClearRejection(error) {
     assert.equal(error?._tag, "MessageOperationError")
     assert.equal(error.operation, "edit")
-    assert.equal(error.reason, "rejected")
-    assert.equal(error.outcome, "rejected")
-    assert.equal(error.status, 400)
+    assert.equal(error.reason, "input")
+    assert.equal(error.outcome, "notDispatched")
+    assert.equal(error.status, null)
 }
 
 /** Search only the journaled test channel. Each later attempt is explicit application retry after an indexing page, never SDK polling */
@@ -2989,7 +3165,16 @@ async function prepareHistory(channelId, botId) {
             { name: "history_last_page", query: { limit: 2, before: ids[1] }, ids: [ids[0]] },
             { name: "history_empty_page", query: { before: ids[0] }, ids: [] },
             { name: "history_after", query: { limit: 2, after: ids[0] }, ids: [ids[2], ids[1]] },
+            // Fluxer returns the newest messages between both cursors (fluxer_messages/src/shard_impl.rs:796-809)
+            { name: "history_between", query: { limit: 2, before: ids[4], after: ids[0] }, ids: [ids[3], ids[2]] },
+            { name: "history_between_all", query: { before: ids[3], after: ids[1] }, ids: [ids[2]] },
             { name: "history_around", query: { limit: 3, around: ids[2] }, ids: [ids[3], ids[2], ids[1]] },
+            // Fluxer ignores before and after when around is set (fluxer_messages/src/shard_impl.rs:792-795)
+            {
+                name: "history_around_ignores_cursors",
+                query: { limit: 3, around: ids[2], before: ids[1], after: ids[3] },
+                ids: [ids[3], ids[2], ids[1]],
+            },
             { name: "history_maximum_limit", query: { limit: 100 }, ids: [...ids].reverse() },
         ],
         async verify(page, check) {
@@ -3016,6 +3201,58 @@ async function prepareHistory(channelId, botId) {
             report(check.name, true)
         },
     }
+}
+
+// Fluxer leaves flags out of embed media stored without them (fluxer_messages/src/types.rs:312-313), and the SDK reads
+// that as 0. This reads the newest stored messages of up to three of the sandbox's own text channels once, records how
+// many embed media entries lack flags as information, and checks that the SDK decodes those pages. A channel the bot
+// cannot read is skipped. It never fails the run for finding no such media, since that depends on stored history
+async function inspectStoredEmbedFlags(client, temporaryChannelId) {
+    stage = "history_stored_embed_media_flags"
+    const listed = await sandboxApi("GET", `/guilds/${guildId}/channels`)
+    assert.equal(listed.status, 200)
+    // Only channels created over an hour before this check's own channel, so none is another live check's temporary
+    // channel, which that check may delete between the raw read and the SDK read. Fluxer IDs hold their creation time
+    // in milliseconds above bit 22 (packages/snowflake/src/Snowflake.ts:6-9)
+    const createdMs = (id) => BigInt(id) >> 22n
+    const channels = listed.data
+        .filter(
+            (item) =>
+                item.type === 0 &&
+                item.id !== temporaryChannelId &&
+                createdMs(temporaryChannelId) - createdMs(item.id) > 3_600_000n,
+        )
+        .slice(0, 3)
+    let read = 0
+    let media = 0
+    let withoutFlags = 0
+    for (const item of channels) {
+        const page = await sandboxApi("GET", `/channels/${item.id}/messages?limit=100`)
+        if (page.status !== 200 || !Array.isArray(page.data)) continue
+        read++
+        for (const message of page.data)
+            for (const embed of message.embeds ?? [])
+                for (const key of ["image", "thumbnail", "video", "audio"])
+                    if (embed[key]) {
+                        media++
+                        if (embed[key].flags === undefined) withoutFlags++
+                    }
+        if (page.data.some((message) => (message.embeds ?? []).length > 0)) {
+            const decoded = await client.messages.fetchHistory(item.id, { limit: 100 })
+            assert.ok(decoded.isOk(), "The SDK must decode stored history, including embed media without flags")
+        }
+    }
+    console.log(
+        JSON.stringify({
+            mode,
+            check: stage,
+            informational: true,
+            channelsRead: read,
+            embedMedia: media,
+            withoutFlags,
+        }),
+    )
+    report(stage, true)
 }
 
 // One text-to-speech message in the temporary channel, removed with the channel during cleanup.
@@ -3531,7 +3768,10 @@ try {
             const { builders, commands, createClient, format } = await import("@neontechspace/fluxerly")
             client = createClient({
                 token,
-                ...(cache || typing || embeds || attachments || batchDelete || search ? { cache: cacheOptions() } : {}),
+                ...(cache || typing || embeds || attachments || search ? { cache: cacheOptions() } : {}),
+                // Caching channels places this check's own channel, so another check's channel deletion cannot evict its
+                // cached messages, as the SDK drops the messages of channels it cannot place
+                ...(batchDelete ? { cache: { ...cacheOptions(), channels: true } } : {}),
                 ...(guilds ? { cache: { channels: true, guilds: true, members: true, roles: true } } : {}),
                 ...(channels ? { cache: { channels: true } } : {}),
                 ...(moderation ? { cache: { members: true } } : {}),
@@ -3724,6 +3964,7 @@ try {
                             }
                     }
                     if (cache) report("cache_rest_history", true)
+                    if (history) await inspectStoredEmbedFlags(client, channel.id)
                     stage = "sdk_receive_and_reply"
                 }
                 if (manage || cache) {
@@ -4367,9 +4608,9 @@ try {
                     Effect.gen(function* () {
                         client = yield* createClient({
                             token,
-                            ...(cache || typing || embeds || attachments || batchDelete || search
-                                ? { cache: cacheOptions() }
-                                : {}),
+                            ...(cache || typing || embeds || attachments || search ? { cache: cacheOptions() } : {}),
+                            // Channels are cached for the same reason as in the default mode
+                            ...(batchDelete ? { cache: { ...cacheOptions(), channels: true } } : {}),
                             ...(guilds ? { cache: { channels: true, guilds: true, members: true, roles: true } } : {}),
                             ...(channels ? { cache: { channels: true } } : {}),
                             ...(moderation ? { cache: { members: true } } : {}),

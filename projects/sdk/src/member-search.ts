@@ -57,7 +57,9 @@ export type GuildMemberJoinSourceType = (typeof GuildMemberJoinSourceTypes)[keyo
  * @category Guilds and members
  */
 export interface MemberSearchQuery {
-    /** Text matched by Fluxer against indexed usernames, display names, nicknames, discriminators and user IDs. At most 100 UTF-16 code units */
+    /** Text matched by Fluxer against indexed usernames, display names, nicknames, discriminators and user IDs. At most 100 UTF-16 code units.
+     * An empty string is left out of the request, as Fluxer refuses it, so it matches every member like an omitted query
+     */
     readonly query?: string
     /** Results in this offset page, 1–100, default 25 */
     readonly limit?: number
@@ -75,7 +77,9 @@ export interface MemberSearchQuery {
     readonly userCreatedAtBeforeSeconds?: number
     /** Require one of these indexed membership sources. At most 10 distinct values and requires ManageGuild */
     readonly joinSourceTypes?: readonly GuildMemberJoinSourceType[]
-    /** Require one of these indexed invite codes. At most 10 distinct values and requires ManageGuild. Codes are never included in SDK diagnostics */
+    /** Require one of these indexed invite codes. At most 10 distinct nonempty values and requires ManageGuild. Fluxer
+     * reads an empty code as null and refuses it, so one fails locally. Codes are never included in SDK diagnostics
+     */
     readonly sourceInviteCodes?: readonly string[]
     /** Include only bot or only non-bot indexed members */
     readonly isBot?: boolean

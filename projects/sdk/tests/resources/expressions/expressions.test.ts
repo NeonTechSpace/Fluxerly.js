@@ -90,7 +90,9 @@ test.each(modes)("%s validates expressions before HTTP, without leaking rejected
         () => client.emojis.create("../200", { name: "Fixture", image }),
         () => client.emojis.create("200", { name: "invalid name", image }),
         () => client.emojis.create("200", { name: "Fixture", image: "https://private.example/image" }),
-        () => client.emojis.create("200", { name: "Fixture", image: Buffer.alloc(524_289).toString("base64") }),
+        // Fluxer's default body limit for one upload, 15,029,592 bytes, replaces the old local 512 KiB image ceiling
+        () => client.emojis.create("200", { name: "Fixture", image: "A".repeat(15_029_592) }),
+        () => client.stickers.create("200", { name: "Fixture", image: "A".repeat(15_029_592) }),
         () => client.emojis.createMany("200", []),
         () => client.emojis.createMany("200", Array(1)),
         () => client.stickers.create("200", { name: "Fixture", image, tags: Array(1) }),
@@ -193,15 +195,92 @@ test.each(modes)("%s accepts parameterized image data URIs without weakening bas
     const input = { name: "Fixture", image: "data:image/png;charset=utf-8;base64,aW1hZ2U=" }
     await settle(client.emojis.create("200", input))
     await settle(client.stickers.create("200", input))
-    for (const image of [
-        "data:image/png;charset=utf-8;base64,invalid*",
-        "data:image/png;charset=utf-8;base64," + Buffer.alloc(524_289).toString("base64"),
-    ])
+    for (const image of ["data:image/png;charset=utf-8;base64,invalid*", "data:image/png;charset=utf-8;base64,AB=="])
         await expect(settle(client.emojis.create("200", { name: "Fixture", image }))).rejects.toMatchObject({
             reason: "input",
             outcome: "notDispatched",
         })
     expect(fetch).toHaveBeenCalledTimes(2)
+})
+
+// Fluxer resolves emoji_max_size and sticker_max_size per community, and an instance may raise them past the 512 KiB
+// default (fluxer_api/src/api/infrastructure/AvatarService.ts:111-136 and :214-220, ImageUploadValidation.ts:30-55,
+// packages/constants/src/LimitConfigMetadata.ts:348-368 at 0098958f), so larger images go to Fluxer whole
+test.each(modes)("%s sends expression images larger than 512 KiB for Fluxer to check", async (mode) => {
+    const client = await setup(mode, false)
+    const bodies: { path: string; body: string }[] = []
+    stubFetchWithHostedDiscovery(async (url: string, init: RequestInit) => {
+        const path = new URL(url).pathname
+        bodies.push({ path, body: String(init.body) })
+        const item = wire(path.includes("stickers"))
+        return path.endsWith("/bulk")
+            ? Response.json({ success: [item, { ...item, id: "101" }], failed: [] })
+            : Response.json(item)
+    })
+    // 1 MiB and one byte of decoded image, twice the old local ceiling
+    const large = Buffer.alloc(1_048_577).toString("base64")
+    const dataUri = `data:image/png;base64,${large}`
+    for (const kind of ["emojis", "stickers"] as const) {
+        const api = client[kind]
+        await settle(api.create("200", { name: "Fixture", image: large }))
+        expect(bodies.at(-1)?.path).toBe(`/api/v1/guilds/200/${kind}`)
+        expect(JSON.parse(bodies.at(-1)!.body).image).toBe(large)
+        const batch = await settle(
+            api.createMany("200", [
+                { name: "One", image: large },
+                { name: "Two", image: dataUri },
+            ]),
+        )
+        expect(batch.success).toHaveLength(2)
+        expect(bodies.at(-1)?.path).toBe(`/api/v1/guilds/200/${kind}/bulk`)
+        expect(JSON.parse(bodies.at(-1)!.body)[kind].map((item: { image: string }) => item.image)).toEqual([
+            large,
+            dataUri,
+        ])
+    }
+    expect(bodies).toHaveLength(4)
+})
+
+// Fluxer's routes keep fixed body limits: 15,029,592 bytes for one upload, the default for a route without its own, and
+// 36,001,112 bytes for a batch, 50 images at the default 512 KiB (RequestBodyLimitMiddleware.ts:12-28,
+// GuildEmojiController.ts:57, GuildStickerController.ts:61, AssetFormatPolicy.ts:162-177 at 0098958f)
+test.each(modes)("%s refuses expression bodies over Fluxer's route limits", async (mode) => {
+    const client = await setup(mode, false)
+    const sizes: number[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        sizes.push(Buffer.byteLength(String(init.body)))
+        return Response.json({ success: [wire(), { ...wire(), id: "101" }], failed: [] })
+    })
+    const overhead = JSON.stringify({
+        emojis: [
+            { name: "One", image: "" },
+            { name: "Two", image: "" },
+        ],
+    }).length
+    const half = Math.floor((36_001_112 - overhead) / 8) * 4
+    const fitting = [
+        { name: "One", image: "A".repeat(half) },
+        { name: "Two", image: "A".repeat(half) },
+    ]
+    await settle(client.emojis.createMany("200", fitting))
+    expect(sizes).toHaveLength(1)
+    expect(sizes[0]).toBeGreaterThan(36_001_112 - 8)
+    await expect(
+        settle(client.emojis.createMany("200", [fitting[0]!, { name: "Two", image: "A".repeat(half + 8) }])),
+    ).rejects.toMatchObject({
+        reason: "input",
+        outcome: "notDispatched",
+        message: expect.stringContaining("36,001,112"),
+    })
+    for (const kind of ["emojis", "stickers"] as const)
+        await expect(
+            settle(client[kind].create("200", { name: "Fixture", image: "A".repeat(15_029_592) })),
+        ).rejects.toMatchObject({
+            reason: "input",
+            outcome: "notDispatched",
+            message: expect.stringContaining("15,029,592"),
+        })
+    expect(sizes).toHaveLength(1)
 })
 
 test.each(modes)(

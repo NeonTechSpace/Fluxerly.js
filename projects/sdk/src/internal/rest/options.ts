@@ -49,7 +49,7 @@ export const defaultRestConfiguration: RestConfiguration = Object.freeze({
     concurrencyScales: true,
     mediaConcurrency: 4,
     maxQueued: 256,
-    queuedJsonMaxBytes: 4_194_304,
+    queuedJsonMaxBytes: 67_108_864,
     defaultTimeoutMs: 30_000,
 })
 

@@ -474,6 +474,11 @@ export class InstanceResolver {
         this.now = options.now ?? Date.now
     }
 
+    /** Whether the client targets hosted Fluxer, whose URL host rule requires a top-level domain */
+    get hosted(): boolean {
+        return this.configuration.bootstrap === hostedBootstrap
+    }
+
     #start(): Effect.Effect<ResolveTask> {
         const owner = this
         return Effect.gen(function* () {

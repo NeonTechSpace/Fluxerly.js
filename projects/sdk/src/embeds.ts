@@ -1,16 +1,36 @@
 /** A card for a message's `embeds` array, with optional text, images and named sections.
  * Message operations reject unknown keys and null values locally
  *
+ * Sends, replies, channel message edits and webhook sends check an empty string like any other value. A webhook
+ * message edit differs, because Fluxer treats an empty string there as absent everywhere except in fields, so the SDK
+ * sends it as given. There an author with an empty name, a footer with empty text, or an image or thumbnail with an
+ * empty url is dropped together with its other values, which the SDK then sends unchecked, and an embed whose values
+ * are all empty text fails locally with reason input and path embeds[], since Fluxer refuses it. A color or a fields
+ * list, even an empty one, keeps such an embed
+ *
  * Text length limits count UTF-16 code units, the units used by JavaScript string length. For validation, the SDK removes
  * U+000C and U+202E and trims surrounding whitespace. It sends the original text unchanged
  *
- * URLs must use HTTP/HTTPS and contain at most 2048 characters, except image and thumbnail URLs may use attachment://filename.
- * An attachment URL must exactly and case-sensitively match one new upload filename in the same send, reply or edit.
- * Its extension must map to an image or video MIME type in Fluxer's filename lookup, such as PNG, AVIF, MP4 or WebM.
- * Its filename may contain letters, marks, numbers, underscores, dots and hyphens only. Fluxer renames a file with two dots
- * in a row or a Windows device name such as CON, AUX or NUL before its first dot, so such a file cannot be referenced
+ * URLs must use HTTP/HTTPS, carry no credentials such as user:pass@, and contain 1 through 2048 characters after the same
+ * normalization as text, so surrounding whitespace does not count. As in hosted Fluxer, the host must be an IP address or a
+ * domain name with a top-level domain, such as example.com, so a host such as localhost fails locally with reason input.
+ * A client for a custom instance skips only the top-level domain rule locally and leaves it to that server, which skips
+ * it in development mode. The original value is sent unchanged. Image and thumbnail
+ * URLs may use attachment://filename instead, where the prefix and filename are read after that normalization.
+ * The filename must exactly and case-sensitively equal the name Fluxer stores for a new upload in the same send, reply or
+ * edit. When several uploads share that stored name, Fluxer puts the last of them into the embed. Fluxer stores an upload under a cleaned name: Spaces become underscores, a slash becomes an underscore,
+ * runs of dots become one dot, and characters outside letters, marks, numbers, underscores, dots and hyphens are dropped.
+ * So an upload named "my photo.png" is referenced as attachment://my_photo.png. A Windows device name such as CON before
+ * the first dot gets a leading underscore. The stored extension must map to an image or video MIME type in Fluxer's
+ * filename lookup, such as PNG, AVIF, MP4 or WebM
  *
- * The SDK does not look up existing attachments, so an existing attachment ID cannot supply an attachment URL.
+ * An edit that omits attachments, including every webhook message edit, may instead name a file the message already
+ * has, as Fluxer resolves it, which moves that file into the embed. Fluxer checks that the name exists and refuses an
+ * unknown one with reason rejected. An edit that sends an attachments list can name only the files that list names,
+ * which this SDK sends only for new uploads
+ *
+ * The SDK does not look up existing attachments, so an existing attachment ID kept in an attachments list cannot supply
+ * an attachment URL.
  * Fluxer moves referenced uploads into embed media, so they are not returned in the message's attachment list
  *
  * Fluxer also limits the combined text of all embeds in one message to 6,000 UTF-16 code units: Every title, description,
@@ -45,12 +65,12 @@ export interface EmbedInput {
     readonly title?: string
     /** Main body text. An empty string is omitted by Fluxer. A nonempty value must contain 1–4,096 normalized UTF-16 code units */
     readonly description?: string
-    /** Destination URL for the title */
+    /** Destination URL for the title. In a webhook message edit, an empty string counts as absent */
     readonly url?: string
     /** RGB integer from 0x000000 through 0xffffff */
     readonly color?: number
     /** Time shown with the embed, an ISO 8601 string with a timezone such as `new Date().toISOString()`.
-     * Invalid calendar dates are rejected locally
+     * Invalid calendar dates are rejected locally. In a webhook message edit, an empty string counts as absent
      */
     readonly timestamp?: string
     /** Author label and optional links */
@@ -71,11 +91,15 @@ export interface EmbedInput {
  * @category Messages
  */
 export interface EmbedAuthorInput {
-    /** Required author name, 1–256 normalized UTF-16 code units */
+    /** Required author name, 1–256 normalized UTF-16 code units. In a webhook message edit, an empty string makes
+     * Fluxer drop the whole author, including url and iconUrl
+     */
     readonly name: string
-    /** Destination for the author label */
+    /** Destination for the author label. In a webhook message edit, an empty string counts as absent */
     readonly url?: string
-    /** HTTP(S) icon URL, at most 2048 characters. Attachment URLs are not accepted here */
+    /** HTTP(S) icon URL without credentials, 1 through 2048 characters after normalization. Attachment URLs are not accepted here. In a webhook message edit, an
+     * empty string counts as absent
+     */
     readonly iconUrl?: string
 }
 
@@ -85,21 +109,29 @@ export interface EmbedAuthorInput {
  * @category Messages
  */
 export interface EmbedFooterInput {
-    /** Required footer text, 1–2,048 normalized UTF-16 code units */
+    /** Required footer text, 1–2,048 normalized UTF-16 code units. In a webhook message edit, an empty string makes
+     * Fluxer drop the whole footer, including iconUrl
+     */
     readonly text: string
-    /** HTTP(S) icon URL, at most 2048 characters. Attachment URLs are not accepted here */
+    /** HTTP(S) icon URL without credentials, 1 through 2048 characters after normalization. Attachment URLs are not accepted here. In a webhook message edit, an
+     * empty string counts as absent
+     */
     readonly iconUrl?: string
 }
 
-/** Media for an image or thumbnail field in a rich card. Use an HTTP(S) image URL or attachment://filename for a new image or video uploaded with the same message.
+/** Media for an image or thumbnail field in a rich card. Use an HTTP(S) image URL or attachment://filename for a new image or video uploaded with the same message, where the filename is the name Fluxer stores the upload under.
  * The SDK neither uploads through this object nor fetches remote or retained attachment bytes
  *
  * @category Messages
  */
 export interface EmbedMediaInput {
-    /** Required HTTP(S) image URL or attachment://filename naming an uploaded image or video for image and thumbnail fields */
+    /** Required HTTP(S) image URL or attachment://filename naming an uploaded image or video for image and thumbnail fields.
+     * In a webhook message edit, an empty string makes Fluxer drop the whole image or thumbnail, including description
+     */
     readonly url: string
-    /** Optional description for readers who cannot see the media, 1–4,096 normalized UTF-16 code units */
+    /** Optional description for readers who cannot see the media, 1–4,096 normalized UTF-16 code units. In a webhook
+     * message edit, an empty string counts as absent
+     */
     readonly description?: string
 }
 
@@ -109,9 +141,9 @@ export interface EmbedMediaInput {
  * @category Messages
  */
 export interface EmbedFieldInput {
-    /** Required heading, 1–256 normalized UTF-16 code units */
+    /** Required heading, 0–256 normalized UTF-16 code units. An empty string sends a field without a heading */
     readonly name: string
-    /** Required body, 0–1,024 normalized UTF-16 code units. An empty string is accepted */
+    /** Required body, 0–1,024 normalized UTF-16 code units. An empty string sends a field without a body */
     readonly value: string
     /** Request side-by-side display when space permits. Defaults to false */
     readonly inline?: boolean
@@ -185,7 +217,9 @@ export interface EmbedMedia {
     readonly placeholder?: string
     /** Duration in seconds */
     readonly duration?: number
-    /** Platform media bits: Explicit media is `1 << 4` and animated media is `1 << 5`. Unknown bits are kept as received */
+    /** Platform media bits: Explicit media is `1 << 4` and animated media is `1 << 5`. Unknown bits are kept as received.
+     * Fluxer leaves flags out of media stored without them, which reads as 0
+     */
     readonly flags: number
 }
 

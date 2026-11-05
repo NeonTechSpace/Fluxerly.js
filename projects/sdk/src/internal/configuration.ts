@@ -24,7 +24,12 @@ import type { Observer } from "#sdk/observer"
 import type { ResourceConfiguration } from "./guild-cache.js"
 import { parseSharding, type ShardPlan } from "./sharding.js"
 import type { IdentifyCoordinator, SessionStore } from "#sdk/sharding"
-import { defaultRecovery, type RecoveryConfiguration } from "./client/backoff.js"
+import {
+    defaultConnectionAttemptMs,
+    defaultIdentifyWaitMs,
+    defaultRecovery,
+    type RecoveryConfiguration,
+} from "./client/backoff.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { gatewayConfiguration, type GatewayConfiguration } from "./gateway/options.js"
 import type { FilterCacheKind } from "./gateway/event-dispatches.js"
@@ -171,6 +176,9 @@ export interface Configuration<M extends MessageCore = Message> {
     readonly logging: ClientLogger
     readonly token: Redacted.Redacted<string>
     readonly startupTimeoutMs: number
+    /** Time the group's first Identify adds to the startup deadline: Fluxer's session start wait, or 0 when
+     * startupTimeoutMs is set */
+    readonly startupIdentifyWaitMs: number
     readonly maxStartupAttempts: number
     readonly cache: CacheConfiguration<M> | undefined
     readonly resourceCache: ResourceConfiguration
@@ -382,7 +390,8 @@ export function validateConfiguration<F extends MessageFields | undefined = unde
             channelCache,
             userCache: { ...(users ? { users } : {}), ...(directMessages ? { directMessages } : {}) },
             token: Redacted.make(token),
-            startupTimeoutMs: timeout ?? 30_000,
+            startupTimeoutMs: timeout ?? defaultConnectionAttemptMs,
+            startupIdentifyWaitMs: timeout === undefined ? defaultIdentifyWaitMs : 0,
             maxStartupAttempts: attempts ?? 3,
             sharding: sharding.plan,
             reshard: sharding.reshard,
@@ -547,5 +556,6 @@ function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfigu
         attemptTimeoutMs,
         healthyResetMs,
         schedule: schedule as RecoveryConfiguration["schedule"],
+        identifyWaitMs: value.attemptTimeoutMs === undefined ? defaultRecovery.identifyWaitMs : 0,
     })
 }

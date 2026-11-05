@@ -405,6 +405,27 @@ test.each(modes)("%s keeps public profile badges in order, unknown kinds include
     expect((await api.fetchProfile()).profileBadges).toMatchObject([{ key: "staff", assetUrl: null }])
 })
 
+// Fluxer adds the Operators' wall quote to a badge when the wall shows one, and sends null or nothing otherwise
+// (user/services/UserAccountRequestService.ts:429, user/profile_badges/ProfileBadgeBuilder.ts:139 at 0098958f)
+test.each(modes)("%s keeps a badge quote, and leaves it out when Fluxer sends null or nothing", async (mode) => {
+    rest(async () =>
+        Response.json(
+            profile("30", {
+                profile_badges: [
+                    badge({ key: "operator_pass", kind: "operator_pass", quote: "Ship it <b>now</b>" }),
+                    badge({ quote: null }),
+                    badge(),
+                ],
+            }),
+        ),
+    )
+    const api = await profiles(mode)
+    const [quoted, nulled, absent] = (await api.fetchProfile()).profileBadges!
+    expect(quoted).toMatchObject({ kind: "operator_pass", quote: "Ship it <b>now</b>" })
+    expect(Object.hasOwn(nulled!, "quote")).toBe(false)
+    expect(Object.hasOwn(absent!, "quote")).toBe(false)
+})
+
 test.each(modes)("%s rejects malformed profile badges as a malformed response", async (mode) => {
     let response: unknown
     rest(async () => Response.json(response))
@@ -419,6 +440,7 @@ test.each(modes)("%s rejects malformed profile badges as a malformed response", 
         [badge({ aspect_ratio: 0 })],
         [badge({ count: 1.5 })],
         [badge({ details: { title: "x", lines: [1] } })],
+        [badge({ quote: 1 })],
     ]) {
         response = profile("30", { profile_badges: badges })
         await expect(api.fetchProfile()).rejects.toMatchObject({

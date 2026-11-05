@@ -94,7 +94,6 @@ test.each(modes)("%s guild pages are bounded, frozen, and do not populate a memb
         [{ limit: 201 }, "query.limit"],
         [{ limit: null }, "query.limit"],
         [{ before: "01" }, "query"],
-        [{ before: "1", after: "2" }, "query"],
         [{ withCounts: "yes" }, "query"],
     ] as const)
         await expect(api.page(query as GuildListQuery)).rejects.toMatchObject({
@@ -103,6 +102,14 @@ test.each(modes)("%s guild pages are bounded, frozen, and do not populate a memb
             inputValidation: { path },
         })
     expect(calls).toHaveLength(1)
+    // Fluxer accepts both cursors and uses after, so both are sent as given
+    await api.page({ before: "10", after: "2" })
+    expect(Object.fromEntries(calls[1]!.searchParams)).toEqual({
+        limit: "200",
+        with_counts: "false",
+        before: "10",
+        after: "2",
+    })
     for (const response of [[wireGuild("20"), wireGuild("20")], [wireGuild("30"), wireGuild("20")], [{ id: "20" }]]) {
         stubFetchWithHostedDiscovery(async () => Response.json(response))
         await expect(api.page()).rejects.toMatchObject({ reason: "response" })

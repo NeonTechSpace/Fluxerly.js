@@ -39,7 +39,9 @@ export interface RestRequests {
      * Send one request to a route of Fluxer's API description, checked at compile time: The route is its method and
      * path template, such as `POST /channels/{channel_id}/messages`, and params, query and body take Fluxer's official
      * field names. The response body has the route's type. These types come from Fluxer's API description at the
-     * commit this release pins, so they do not cover later routes or fields, and the response is not checked at runtime.
+     * commit this release pins, with reviewed corrections where Fluxer's server sends or accepts something else, such
+     * as public routes the description lists without a bot token that Fluxer answers for a bot too. They do not cover
+     * later routes or fields, and the response is not checked at runtime.
      * Each path parameter is percent-encoded as one segment, and a missing, extra or empty one fails with
      * RestRequestError reason input before any request. Only the compiler checks that a route is listed, and at runtime
      * any route is sent whose filled path request accepts. The request then follows every rule of request, through the

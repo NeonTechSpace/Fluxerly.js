@@ -137,6 +137,7 @@ export interface Roles {
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Change role hierarchy positions using distinct role IDs and nonnegative safe-integer positions.
+     * Fluxer takes at most 10,000 entries in one call, and a longer list fails before sending.
      * The everyone role cannot move.
      * HTTP 204 succeeds with no value and no new role list.
      * Fluxer normalizes manageable positions, so use fetchAll if final order matters.
@@ -150,7 +151,7 @@ export interface Roles {
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
      * Set roles' display positions without changing their permission hierarchy or enabling hoist.
-     * Pass a nonempty list of distinct role IDs with integer hoistPosition values from -2,147,483,648 through 2,147,483,647.
+     * Pass a nonempty list of at most 10,000 distinct role IDs with integer hoistPosition values from -2,147,483,648 through 2,147,483,647.
      * The everyone role is excluded.
      * Fluxer checks ManageRoles and hierarchy.
      * HTTP 204 succeeds with no value, not a role list.

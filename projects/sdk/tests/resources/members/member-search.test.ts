@@ -357,3 +357,18 @@ test.each(modes)("%s keeps unknown POST failures single-attempt but retries conf
     expect((await driveSdkTime(clock, settle(client.members.search("20")))).pageResultCount).toBe(1)
     expect(fetch).toHaveBeenCalledTimes(2)
 })
+
+test.each(modes)("%s leaves empty search text out of the request, as Fluxer refuses it", async (mode) => {
+    const client = await setup(mode)
+    const bodies: unknown[] = []
+    stubFetchWithHostedDiscovery(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)))
+        return Response.json(page())
+    })
+    await settle(client.members.search("20", { query: "" }))
+    await settle(client.members.search("20", { query: " " }))
+    expect(bodies).toEqual([
+        { limit: 25, offset: 0 },
+        { query: " ", limit: 25, offset: 0 },
+    ])
+})

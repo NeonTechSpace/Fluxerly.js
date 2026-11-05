@@ -18,7 +18,8 @@ import type { RequestOptions, AttachmentDownloadOptions, AttachmentStreamOptions
 export interface Attachments {
     /**
      * Ask Fluxer's bot-authenticated API to reissue signatures for 1 through 50 URL strings.
-     * Each string may contain at most 2,048 UTF-16 code units.
+     * Each string must contain 1 through 2,048 UTF-16 code units, as Fluxer reads an empty string as null and refuses
+     * the whole request.
      * Strings, duplicate entries and query parameters are sent unchanged
      *
      * The frozen result has one original and refreshed pair per input in the same order.
@@ -42,7 +43,7 @@ export interface Attachments {
     ): ResultAsync<readonly RefreshedAttachmentUrl[], AttachmentRefreshFailure | CancelledError | ConfigurationError>
     /**
      * Download attachment.url into one Uint8Array.
-     * Pass maxBytes explicitly, from 1 through 52,428,800 bytes (50 MiB).
+     * Pass maxBytes explicitly, a positive safe integer. The SDK sets no upper limit, since Fluxer decides how large an attachment may be.
      * The limit caps the returned bytes, not total memory, because response chunks can coexist with the packed result
      *
      * The URL must match this instance's discovered media /attachments/ path.
@@ -61,7 +62,7 @@ export interface Attachments {
     ): ResultAsync<Uint8Array, AttachmentDownloadFailure | CancelledError | ConfigurationError>
     /**
      * Read attachment.url as chunks without combining the file into one array.
-     * Pass maxBytes explicitly, from 1 through 52,428,800 bytes (50 MiB), for the total bytes delivered
+     * Pass maxBytes explicitly, a positive safe integer with no upper limit of the SDK's own, for the total bytes delivered
      *
      * The first pull reads the inputs, resolves endpoints, waits for a media slot (four by default, rest.mediaConcurrency) and starts the GET.
      * Media slots are separate from the REST and upload slots.

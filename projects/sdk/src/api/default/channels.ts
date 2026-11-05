@@ -28,7 +28,7 @@ import type { RequestOptions, AuditedRequestOptions } from "./options.js"
  * ID-based writes do not fetch first to verify channel type.
  * Requests share the client's REST or upload slots across assigned shards, four per local shard by default, up to 64 (rest.concurrency).
  * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
- * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes).
+ * Both pools together allow 256 waiting requests or 64 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes).
  * The default deadline, rest.defaultTimeoutMs (30,000 ms unless configured), includes capacity, rate-limit and retry waits.
  * Eligible reads retry transport and HTTP 500, 502, 503 or 504 failures at most twice
  *
@@ -234,6 +234,7 @@ export interface Channels {
     ): ResultAsync<void, ChannelOperationFailure | CancelledError | ConfigurationError>
     /**
      * Submit community-channel moves, succeeding with no value after HTTP 204.
+     * Fluxer takes at most 10,000 moves in one call, and a longer list fails before sending.
      * Fluxer applies moves sequentially and may normalize positions.
      * The syncPermissionsOnMove option copies the destination category's overwrites, and applies only to a move into another category.
      * Fluxer copies them after each move, so a failed copy leaves that channel moved without them.

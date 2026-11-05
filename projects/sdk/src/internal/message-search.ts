@@ -15,18 +15,19 @@ import type {
 } from "#sdk/message-search"
 import { decodeThreadList } from "./channel-decode.js"
 import { decodeMessage } from "./message.js"
-import { identifier, integerInRange as integer, record } from "./decode/primitives.js"
+import { identifier, inputId, inputIds, integerInRange as integer, record } from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import {
     booleanField,
     checkFields,
     choiceField,
+    type FieldRule,
     type FieldRules,
     idField,
     listField,
+    normalizedTextField,
+    normalizedTextOf,
     oneOf,
-    textField,
-    textOf,
     wireFields,
 } from "./field-rules.js"
 
@@ -44,19 +45,21 @@ const contentTypes = new Set<MessageSearchContentType>([
 const embedTypes = new Set<MessageSearchEmbedType>(["image", "video", "sound", "article"])
 const authorTypes = new Set(["user", "bot", "webhook"])
 
-const ids = (name: string, maximum: number) =>
-    listField(
-        maximum,
-        identifier,
-        "format",
-        `Message search ${name} must be an array of at most ${maximum} decimal ID strings`,
-    )
+/** A list of at most maximum caller IDs, kept trimmed */
+const ids = (name: string, maximum: number): FieldRule => ({
+    accept: (value) => inputIds(value, maximum),
+    constraint: "format",
+    explanation: `Message search ${name} must be an array of at most ${maximum} decimal ID strings`,
+    suffix: "[]",
+})
+// Fluxer checks every search text after removing U+000C and U+202E and trimming it, so blank text fails
+// (packages/schema/src/domains/message/MessageRequestSchemas.ts:235-292 at 0098958f). The text is sent as given
 const texts = (name: string, maximum: number, length: number) =>
     listField(
         maximum,
-        textOf(length),
+        normalizedTextOf(length),
         "format",
-        `Message search ${name} must be an array of at most ${maximum} strings containing 1 through ${length.toLocaleString("en-US")} UTF-16 code units`,
+        `Message search ${name} must be an array of at most ${maximum} strings containing 1 through ${length.toLocaleString("en-US")} UTF-16 code units after Fluxer removes form feeds and U+202E and trims surrounding whitespace, so blank text fails`,
     )
 const kinds = (name: string, allowed: ReadonlySet<string>) =>
     listField(
@@ -69,9 +72,17 @@ const flag = (name: string) => booleanField(`Message search ${name} must be a bo
 
 /** Filter rules after limit and page, in the order Fluxerly checks them and sends them */
 const filterRules: FieldRules = {
-    maxId: idField("Maximum message ID must be a decimal string"),
-    minId: idField("Minimum message ID must be a decimal string"),
-    content: textField(1, 1024, "Message search content must contain 1 through 1,024 UTF-16 code units"),
+    maxId: idField(
+        "Maximum message ID must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    ),
+    minId: idField(
+        "Minimum message ID must be a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+    ),
+    content: normalizedTextField(
+        1,
+        1024,
+        "Message search content must contain 1 through 1,024 UTF-16 code units after Fluxer removes form feeds and U+202E and trims surrounding whitespace, so blank text fails",
+    ),
     contents: texts("contents", 100, 1024),
     exactPhrases: texts("exactPhrases", 10, 1024),
     channelIds: ids("channelIds", 500),
@@ -146,14 +157,24 @@ export function encodeMessageSearch(contextInput: unknown, query?: unknown) {
         "the message search context",
     )
     if (unsupported) return unsupported
-    const guildId = contextInput.guildId
-    const channelId = contextInput.channelId
-    if (guildId === undefined && channelId === undefined)
+    const suppliedGuildId = contextInput.guildId
+    const suppliedChannelId = contextInput.channelId
+    if (suppliedGuildId === undefined && suppliedChannelId === undefined)
         return inputValidationFailure("context", "required", "Message search context requires guildId or channelId")
-    if (guildId !== undefined && !identifier(guildId))
-        return inputValidationFailure("context.guildId", "format", "Guild IDs must be decimal strings")
-    if (channelId !== undefined && !identifier(channelId))
-        return inputValidationFailure("context.channelId", "format", "Channel IDs must be decimal strings")
+    const guildId = suppliedGuildId === undefined ? undefined : inputId(suppliedGuildId)
+    const channelId = suppliedChannelId === undefined ? undefined : inputId(suppliedChannelId)
+    if (suppliedGuildId !== undefined && guildId === undefined)
+        return inputValidationFailure(
+            "context.guildId",
+            "format",
+            "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
+    if (suppliedChannelId !== undefined && channelId === undefined)
+        return inputValidationFailure(
+            "context.channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const context: MessageSearchContext =
         guildId === undefined
             ? Object.freeze({ channelId: channelId! })

@@ -32,7 +32,7 @@ import { nowMs } from "#sdk/internal/clock"
 import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transport/index"
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
 import { guildList } from "#sdk/internal/guild-lifecycle"
-import { identifier, int32, record } from "#sdk/internal/decode/primitives"
+import { identifier, inputId, int32, record } from "#sdk/internal/decode/primitives"
 import { failingFieldPath } from "#sdk/internal/decode/trace"
 import { readCaller, suspendInput, suspendMarked } from "#sdk/internal/defects"
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
@@ -677,13 +677,15 @@ export class OAuthOwner {
                     ),
                 )
             const botScope = scopes.includes("bot")
-            const guildId = input.guildId
-            const channelId = input.channelId
+            const rawGuildId = input.guildId
+            const rawChannelId = input.channelId
+            const guildId = rawGuildId === undefined ? undefined : inputId(rawGuildId)
+            const channelId = rawChannelId === undefined ? undefined : inputId(rawChannelId)
             const permissions = input.permissions
             const disableGuildSelect = input.disableGuildSelect
             const installationInput =
-                guildId !== undefined ||
-                channelId !== undefined ||
+                rawGuildId !== undefined ||
+                rawChannelId !== undefined ||
                 permissions !== undefined ||
                 disableGuildSelect !== undefined
             if (installationInput && !botScope)
@@ -695,15 +697,25 @@ export class OAuthOwner {
                         "Bot installation options require the bot scope",
                     ),
                 )
-            if (guildId !== undefined && !identifier(guildId))
+            if (rawGuildId !== undefined && guildId === undefined)
                 return Effect.fail(
-                    inputError("oauth.authorizationUrl", "guildId", "format", "Guild target must be a decimal ID"),
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "guildId",
+                        "format",
+                        "Guild target must be a decimal ID, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
                 )
-            if (channelId !== undefined && !identifier(channelId))
+            if (rawChannelId !== undefined && channelId === undefined)
                 return Effect.fail(
-                    inputError("oauth.authorizationUrl", "channelId", "format", "Channel target must be a decimal ID"),
+                    inputError(
+                        "oauth.authorizationUrl",
+                        "channelId",
+                        "format",
+                        "Channel target must be a decimal ID, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                    ),
                 )
-            if (guildId !== undefined && channelId !== undefined)
+            if (rawGuildId !== undefined && rawChannelId !== undefined)
                 return Effect.fail(
                     inputError(
                         "oauth.authorizationUrl",
@@ -1329,9 +1341,9 @@ export function makeOAuthOwner(
                     "OAuth configuration must be an object with only clientId, clientSecret, instance, and logging",
                 ),
             )
-        const clientId = config.clientId
+        const clientId = inputId(config.clientId)
         const clientSecret = config.clientSecret
-        if (!identifier(clientId) || !text(clientSecret))
+        if (clientId === undefined || !text(clientSecret))
             return Effect.fail(
                 new ConfigurationError(
                     "configuration",

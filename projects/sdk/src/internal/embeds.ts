@@ -11,7 +11,7 @@ import {
     type InputValidationConstraint,
 } from "#sdk/input-validation"
 import { timestamp as isoTimestamp } from "./decode/timestamp.js"
-import { normalizedText } from "./field-text.js"
+import { fluxerHttpUrl, normalizeText, normalizedText } from "./field-text.js"
 import { count, record as object } from "./decode/primitives.js"
 
 type Reader = (value: unknown, construct?: boolean) => unknown
@@ -29,16 +29,10 @@ const length =
     (min: number, max: number): Reader =>
     (value) =>
         normalizedText(value, min, max) ? value : undefined
-const url: Reader = (value) => {
-    if (typeof value !== "string" || value.length > 2048) return undefined
-    try {
-        const parsed = new URL(value)
-        return parsed.protocol === "http:" || parsed.protocol === "https:" ? value : undefined
-    } catch {
-        // allow-silent: An unparsable URL is rejected as invalid embed input
-        return undefined
-    }
-}
+/** The input-only URL reader, which checks Fluxer's URLType through fluxerHttpUrl and keeps the caller's raw value.
+ * Responses keep their strings as received, so the output tables use string, not this
+ */
+const inputUrl = (value: unknown): string | undefined => (fluxerHttpUrl(value) ? value : undefined)
 // Fluxer's MessageHelpers.getContentType uses mime 4.1.0 standard and other image/video mappings,
 // with ContentTypeUtils overriding .ts to text/plain. Starred MIME aliases do not resolve extensions
 const attachmentMediaExtensions: ReadonlySet<string> = Object.freeze(
@@ -54,18 +48,49 @@ const attachmentMediaExtensions: ReadonlySet<string> = Object.freeze(
         ).split(" "),
     ),
 )
-const attachmentUrl = (value: unknown, uploadedFilenames: readonly string[] | undefined): string | undefined => {
-    if (typeof value !== "string" || value.length < 1 || value.length > 2048) return undefined
-    if (!value.startsWith("attachment://")) return url(value) as string | undefined
-    const filename = value.slice("attachment://".length)
+/** The files an attachment:// URL may name: The new uploads of a send or edit, or "existing" for an edit that sends no
+ * attachments list, where Fluxer resolves the URL against the files the message already has
+ * (fluxer_api/src/api/channel/services/message/MessageEmbedAttachmentResolver.ts:49-58, MessageEditService.ts:119-123
+ * at 0098958f). The SDK does not look those files up, so Fluxer checks that the name exists
+ */
+export type EmbedAttachmentFiles = readonly string[] | "existing" | undefined
+
+/** Fluxer stores an upload under this name, which an attachment:// reference must equal
+ * (packages/schema/src/primitives/FileValidators.ts:12-14, 50-66 at 0098958f)
+ */
+const reservedNames = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)/i
+function uploadedFilename(value: string): string {
+    let normalized = normalizeText(value)
+    normalized = normalized.replaceAll(String.fromCharCode(0), "")
+    normalized = normalized.replace(/[/\\]/g, "_")
+    normalized = normalized.replace(/\.{2,}/g, ".")
+    normalized = normalized.replace(/[<>:"|?*]/g, "")
+    if (reservedNames.test(normalized)) normalized = `_${normalized}`
+    normalized = normalized.replace(/\s+/g, "_")
+    normalized = normalized.replace(/[^\p{L}\p{N}\p{M}_.-]/gu, "")
+    normalized = normalized.replace(/\.\./g, "_")
+    if (!normalized || /^[._]+$/.test(normalized)) normalized = "unnamed"
+    return normalized
+}
+
+const attachmentUrl = (value: unknown, uploadedFilenames: EmbedAttachmentFiles): string | undefined => {
+    if (typeof value !== "string") return undefined
+    // Fluxer checks the prefix and the filename on the normalized value
+    // (packages/schema/src/primitives/UrlValidators.ts:81-95 at 0098958f)
+    const normalized = normalizeText(value)
+    if (normalized.length < 1 || normalized.length > 2048) return undefined
+    if (!normalized.startsWith("attachment://")) return inputUrl(value)
+    const filename = normalized.slice("attachment://".length)
     const extension = filename.split(".").pop()?.toLowerCase()
-    const matches = uploadedFilenames?.filter((uploaded) => uploaded === filename).length ?? 0
-    // Fluxer renames an upload with two dots in a row or a Windows device name before its first dot, so the reference
-    // would no longer match (packages/schema/src/primitives/FileValidators.ts:50-66 at 5f3fc0b1)
+    // The resolver looks the filename up in the set of the uploads' stored names, and when several uploads share it, the
+    // last one goes into the embed (fluxer_api/src/api/channel/services/message/MessageEmbedAttachmentResolver.ts:49-58,
+    // 124-143 at 0098958f)
+    const matches =
+        uploadedFilenames === "existing"
+            ? 1
+            : (uploadedFilenames?.filter((uploaded) => uploadedFilename(uploaded) === filename).length ?? 0)
     return /^[\p{L}\p{N}\p{M}_.-]+$/u.test(filename) &&
-        !filename.includes("..") &&
-        !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(filename) &&
-        matches === 1 &&
+        matches >= 1 &&
         extension !== undefined &&
         attachmentMediaExtensions.has(extension)
         ? value
@@ -102,7 +127,21 @@ const subjects: Readonly<Record<string, string>> = {
     "embeds[].fields[]": "Each embed field",
 }
 
-function projectInput(value: unknown, shape: Shape, path: string): Record<string, unknown> | InputValidationFailure {
+/** With emptyIsAbsent, an empty string counts as absent, as on Fluxer's webhook message edit route, the only message
+ * route whose body passes through Validator('json') (fluxer_api/src/api/webhook/WebhookController.ts:462 at 0098958f).
+ * There Fluxer reads an empty string as absent everywhere in an embed except its fields, and drops an author, footer
+ * or media object whose required text is then absent, without reading its other values
+ * (fluxer_api/src/api/Validator.ts:59-80 and packages/schema/src/domains/message/MessageRequestSchemas.ts:34-43, 50-98).
+ * So such an empty string is sent as given, and the other strings of a dropped object are sent unchecked. Message
+ * sends, channel message edits and webhook sends parse the raw body (MessageRequestParser.ts:383-402,
+ * WebhookController.ts:72-82), so there an empty string is checked like any other value
+ */
+function projectInput(
+    value: unknown,
+    shape: Shape,
+    path: string,
+    emptyIsAbsent = false,
+): Record<string, unknown> | InputValidationFailure {
     const subject = subjects[path] ?? "Embed input"
     if (!object(value)) return inputValidationFailure(path, "type", `${subject} must be an object`)
     const unsupported = unsupportedKeyFailure(
@@ -112,9 +151,15 @@ function projectInput(value: unknown, shape: Shape, path: string): Record<string
         path.endsWith("[]") ? `an ${subject.slice("Each ".length).toLowerCase()}` : `the ${subject.toLowerCase()}`,
     )
     if (unsupported) return unsupported
+    // Each property is read once, so the value validated is the value sent
+    const items = Object.entries(shape).map(([key, property]) => [key, property, value[key]] as const)
+    const dropped = emptyIsAbsent && items.some(([, [, , required], item]) => required === true && item === "")
     const result: Record<string, unknown> = {}
-    for (const [key, [wire, read, required, validation]] of Object.entries(shape)) {
-        const item = value[key]
+    for (const [key, [wire, read, required, validation], item] of items) {
+        if ((emptyIsAbsent && item === "") || (dropped && typeof item === "string")) {
+            result[wire] = item
+            continue
+        }
         if (item === undefined) {
             if (required)
                 return inputValidationFailure(
@@ -184,12 +229,23 @@ const inputAuthor: Shape = {
         true,
         ["length", "Embed author name must contain 1 through 256 UTF-16 code units after Fluxer's normalization"],
     ],
-    url: ["url", url, false, ["format", "Embed author URL must be an HTTP or HTTPS URL of at most 2,048 characters"]],
+    url: [
+        "url",
+        inputUrl,
+        false,
+        [
+            "format",
+            "Embed author URL must be an HTTP or HTTPS URL without credentials whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer, of 1 through 2,048 characters after Fluxer's normalization",
+        ],
+    ],
     iconUrl: [
         "icon_url",
-        url,
+        inputUrl,
         false,
-        ["format", "Embed author iconUrl must be an HTTP or HTTPS URL of at most 2,048 characters"],
+        [
+            "format",
+            "Embed author iconUrl must be an HTTP or HTTPS URL without credentials whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer, of 1 through 2,048 characters after Fluxer's normalization",
+        ],
     ],
 }
 const inputFooter: Shape = {
@@ -201,19 +257,22 @@ const inputFooter: Shape = {
     ],
     iconUrl: [
         "icon_url",
-        url,
+        inputUrl,
         false,
-        ["format", "Embed footer iconUrl must be an HTTP or HTTPS URL of at most 2,048 characters"],
+        [
+            "format",
+            "Embed footer iconUrl must be an HTTP or HTTPS URL without credentials whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer, of 1 through 2,048 characters after Fluxer's normalization",
+        ],
     ],
 }
-const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => ({
+const inputMedia = (uploadedFilenames: EmbedAttachmentFiles): Shape => ({
     url: [
         "url",
         (value) => attachmentUrl(value, uploadedFilenames),
         true,
         [
             "format",
-            "Embed media URL must be an HTTP or HTTPS URL, or attachment://<filename> naming exactly one uploaded file whose filename maps to an image or video MIME type",
+            "Embed media URL must be an HTTP or HTTPS URL without credentials whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer, or attachment://<filename> naming an uploaded file by the name Fluxer stores it under, or in an edit without attachments a file the message has, whose filename maps to an image or video MIME type, all of 1 through 2,048 characters after Fluxer's normalization",
         ],
     ],
     description: [
@@ -226,12 +285,16 @@ const inputMedia = (uploadedFilenames: readonly string[] | undefined): Shape => 
         ],
     ],
 })
+// Fluxer's documents and server disagree on field names: fluxer_docs/src/content/docs/http-api/messages.mdx:551 says
+// "1-256 characters", but packages/schema/src/domains/message/MessageRequestSchemas.ts:88-98 accepts 0 to 256 and keeps
+// an empty name (at 0098958f). The server decides, so an empty name is sent. Hosted Fluxer stored "" in the live embeds
+// check. Narrow this again only if Fluxer's server starts refusing empty names
 const inputField: Shape = {
     name: [
         "name",
-        length(1, 256),
+        length(0, 256),
         true,
-        ["length", "Embed field name must contain 1 through 256 UTF-16 code units after Fluxer's normalization"],
+        ["length", "Embed field name must contain at most 256 UTF-16 code units after Fluxer's normalization"],
     ],
     value: [
         "value",
@@ -241,7 +304,7 @@ const inputField: Shape = {
     ],
     inline: ["inline", boolean, false, ["type", "Embed field inline must be a boolean"]],
 }
-const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => ({
+const inputEmbed = (uploadedFilenames: EmbedAttachmentFiles, emptyIsAbsent: boolean): Shape => ({
     title: [
         "title",
         length(0, 256),
@@ -257,7 +320,15 @@ const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => 
             "Embed description must be empty or contain 1 through 4,096 UTF-16 code units after Fluxer's normalization",
         ],
     ],
-    url: ["url", url, false, ["format", "Embed URL must be an HTTP or HTTPS URL of at most 2,048 characters"]],
+    url: [
+        "url",
+        inputUrl,
+        false,
+        [
+            "format",
+            "Embed URL must be an HTTP or HTTPS URL without credentials whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer, of 1 through 2,048 characters after Fluxer's normalization",
+        ],
+    ],
     color: [
         "color",
         (value) => (integer(value) !== undefined && (value as number) <= 0xffffff ? value : undefined),
@@ -270,10 +341,13 @@ const inputEmbed = (uploadedFilenames: readonly string[] | undefined): Shape => 
         false,
         ["format", "Embed timestamp must be an ISO 8601 timestamp with timezone"],
     ],
-    author: ["author", (value) => projectInput(value, inputAuthor, "embeds[].author")],
-    footer: ["footer", (value) => projectInput(value, inputFooter, "embeds[].footer")],
-    image: ["image", (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].image")],
-    thumbnail: ["thumbnail", (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].thumbnail")],
+    author: ["author", (value) => projectInput(value, inputAuthor, "embeds[].author", emptyIsAbsent)],
+    footer: ["footer", (value) => projectInput(value, inputFooter, "embeds[].footer", emptyIsAbsent)],
+    image: ["image", (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].image", emptyIsAbsent)],
+    thumbnail: [
+        "thumbnail",
+        (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].thumbnail", emptyIsAbsent),
+    ],
     fields: [
         "fields",
         (value) =>
@@ -306,7 +380,15 @@ const outputMedia: Shape = {
     description: ["description", string],
     placeholder: ["placeholder", string],
     duration: ["duration", integer],
-    flags: ["flags", integer, true],
+    flags: ["flags", integer],
+}
+/** Fluxer leaves flags out of embed media stored without them (fluxer_messages/src/types.rs:312-313 and
+ * shard_impl.rs:1672-1674 at 0098958f), which means no flags, so a missing value reads as 0
+ */
+const media = (value: unknown, construct = true) => {
+    const projected = project(value, outputMedia, construct)
+    if (projected === undefined || projected === true || projected.flags !== undefined) return projected
+    return Object.freeze({ ...projected, flags: 0 })
 }
 const outputField: Shape = {
     name: ["name", string, true],
@@ -322,15 +404,15 @@ const outputChild: Shape = {
     timestamp: ["timestamp", timestamp],
     author: ["author", (value, construct) => project(value, outputAuthor, construct)],
     footer: ["footer", (value, construct) => project(value, outputFooter, construct)],
-    image: ["image", (value, construct) => project(value, outputMedia, construct)],
-    thumbnail: ["thumbnail", (value, construct) => project(value, outputMedia, construct)],
+    image: ["image", media],
+    thumbnail: ["thumbnail", media],
     fields: [
         "fields",
         (value, construct) => list(value, (field, build) => project(field, outputField, build), Infinity, construct),
     ],
     provider: ["provider", (value, construct) => project(value, outputProvider, construct)],
-    video: ["video", (value, construct) => project(value, outputMedia, construct)],
-    audio: ["audio", (value, construct) => project(value, outputMedia, construct)],
+    video: ["video", media],
+    audio: ["audio", media],
     html: ["html", string],
     htmlWidth: ["html_width", integer],
     htmlHeight: ["html_height", integer],
@@ -344,9 +426,43 @@ const outputEmbed: Shape = {
     ],
 }
 
-/** Media targets using attachment:// need an unambiguous new upload in this request. Retained IDs never imply a filename lookup */
-export const encodeEmbeds = (value: unknown, uploadedFilenames?: readonly string[]) =>
-    inputList(value, (embed) => projectInput(embed, inputEmbed(uploadedFilenames), "embeds[]"), Infinity, "embeds")
+/** Media targets using attachment:// need an unambiguous new upload in this request, or, for an edit that sends no
+ * attachments list, name a file the message already has, which Fluxer checks. Retained IDs never imply a filename lookup.
+ * EmptyIsAbsent applies Fluxer's empty-string handling of the webhook message edit route, see projectInput
+ */
+export const encodeEmbeds = (value: unknown, uploadedFilenames?: EmbedAttachmentFiles, emptyIsAbsent = false) =>
+    inputList(
+        value,
+        (embed) => {
+            const projected = projectInput(
+                embed,
+                inputEmbed(uploadedFilenames, emptyIsAbsent),
+                "embeds[]",
+                emptyIsAbsent,
+            )
+            return emptyIsAbsent ? keptEmbed(projected) : projected
+        },
+        Infinity,
+        "embeds",
+    )
+
+/** Whether Fluxer reads a value as absent where empty strings count as absent: An empty string, or an object, such as
+ * an embed, author or footer, whose values are all absent. Lists, numbers and booleans are kept, even an empty list
+ */
+const absent = (value: unknown): boolean => value === "" || (object(value) && Object.values(value).every(absent))
+
+/** Where empty strings count as absent, Fluxer turns an embed whose values are all absent into null and then refuses
+ * it (fluxer_api/src/api/Validator.ts:68-78 and packages/schema/src/domains/webhook/WebhookRequestSchemas.ts:161 at
+ * 0098958f), so such an embed fails locally
+ */
+const keptEmbed = (embed: Record<string, unknown> | InputValidationFailure) =>
+    embed instanceof InputValidationFailure || !absent(embed)
+        ? embed
+        : inputValidationFailure(
+              "embeds[]",
+              "required",
+              "Each embed in a webhook message edit needs a nonempty value, as Fluxer treats empty text there as absent and refuses an embed with none",
+          )
 
 export function decodeEmbeds(value: unknown): readonly Embed[] | undefined
 export function decodeEmbeds(value: unknown, construct: boolean): readonly Embed[] | true | undefined

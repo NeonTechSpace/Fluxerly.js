@@ -36,6 +36,8 @@ export interface RestFailureOptions {
     readonly responseField?: string | null
     /** Whether a rate-limited upload read an attachment from a caller's stream, so the same call cannot be repeated */
     readonly streamUsed?: boolean
+    /** Whether this is Fluxer's busy upload slots answer, which applied nothing (see uploadSlotsBusy below) */
+    readonly uploadSlotsBusy?: boolean
     /** Underlying transport failure, kept as the public error's cause */
     readonly cause?: unknown
 }
@@ -53,6 +55,8 @@ export class RestFailure extends Error {
     readonly responseField: string | null
     /** Whether a rate-limited operation read a caller's stream, set where the failure is made or once the operation ends */
     streamUsed: boolean
+    /** Whether this is Fluxer's busy upload slots answer, which applied nothing */
+    readonly uploadSlotsBusy: boolean
     override readonly cause?: unknown
     /** Whether the failed request was a GET, set once where the request method is known */
     read = false
@@ -69,6 +73,7 @@ export class RestFailure extends Error {
         this.providerCode = options.providerCode ?? null
         this.responseField = options.responseField ?? null
         this.streamUsed = options.streamUsed ?? false
+        this.uploadSlotsBusy = options.uploadSlotsBusy ?? false
         this.cause = options.cause
     }
 
@@ -86,6 +91,7 @@ export class RestFailure extends Error {
                 providerCode: this.providerCode,
                 responseField: this.responseField,
                 streamUsed: this.streamUsed,
+                uploadSlotsBusy: this.uploadSlotsBusy,
                 cause: this.cause,
             }),
             this,
@@ -132,6 +138,7 @@ export function operationFailure<Operation extends string, Failure>(
             responseField: error.responseField,
             ...(error.read ? { read: true } : {}),
             ...(error.streamUsed ? { streamUsed: true } : {}),
+            ...(error.uploadSlotsBusy ? { uploadSlotsBusy: true } : {}),
             ...(error.cause === undefined ? {} : { cause: error.cause }),
         }),
         error,
@@ -365,6 +372,8 @@ export interface ClassifyContext {
     readonly retriesAsRead: boolean
     /** A signed upload PUT, whose destination is external storage rather than the Fluxer API */
     readonly upload: boolean
+    /** A multipart request to the Fluxer API that carries files */
+    readonly multipart: boolean
     /** A preparation step, such as upload planning, that cannot change the operation's outcome */
     readonly preparation: boolean
     /** The request accepts Fluxer's temporarily-disabled-feature rejection as a successful fallback */
@@ -469,6 +478,25 @@ function rejectionRetryAfter(response: Response, apiRead: ApiErrorRead): number 
           : Math.max(headerRetryAfterMs, apiRead.retryAfterMs)
 }
 
+/**
+ * Fluxer's answer when every multipart upload slot of an API process stayed busy for 10 seconds: HTTP 503 with
+ * SERVICE_UNAVAILABLE and Retry-After 5. It comes while Fluxer reads the request's files, before any message, edit or
+ * thread is applied, and Fluxer then deletes the files it already stored, so the request changed nothing
+ * (channel/services/FormUploadSlots.ts:7-22, channel/services/AttachmentUploadService.ts:141-162 and
+ * channel/services/message/MessageRequestParser.ts:47-83 in fluxer_api/src/api at 0098958f). Fluxer's other 503
+ * answers send Retry-After 1 or none and come from database and gateway calls at any step, so they keep an unknown
+ * outcome
+ */
+function uploadSlotsBusy(response: Response, apiRead: ApiErrorRead, context: ClassifyContext): boolean {
+    return (
+        context.multipart &&
+        !context.preparation &&
+        response.status === 503 &&
+        apiRead.detail?.providerCode === "SERVICE_UNAVAILABLE" &&
+        response.headers.get("retry-after")?.trim() === "5"
+    )
+}
+
 /** Classify a received response. Rejections throw a RestFailure with the outcome Fluxer established */
 export async function classifyResponse(response: Response, context: ClassifyContext): Promise<ResponseClass> {
     const { progress } = context
@@ -537,8 +565,11 @@ export async function classifyResponse(response: Response, context: ClassifyCont
     const retryableRead = context.retriesAsRead && [500, 502, 503, 504].includes(response.status)
     apiRead ??= await readApiError(response, context.signal, context.upload ? "upload" : "fluxer")
     collect(context, apiRead)
+    const slotsBusy = uploadSlotsBusy(response, apiRead, context)
+    if (slotsBusy) progress.outcome = "rejected"
     const retryAfterMs = rejectionRetryAfter(response, apiRead)
     throw new RestFailure({
+        ...(slotsBusy ? { uploadSlotsBusy: true } : {}),
         reason: response.status === 404 && !context.preparation ? "notFound" : "rejected",
         outcome: progress.outcome,
         status: response.status,

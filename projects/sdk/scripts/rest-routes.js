@@ -1,6 +1,7 @@
 // @ts-check
 // Route types for client.rest.call, generated from Fluxer's OpenAPI document and HTTP API docs at the reviewed upstream
-// pin and written to the committed src/rest-routes.ts. Each route that accepts a bot token gets its path parameters,
+// pin and written to the committed src/rest-routes.ts. Each route that accepts a bot token, and each public route a route
+// correction adds, gets its path parameters,
 // query, JSON body and success response with Fluxer's official field names, and a link to the section of Fluxer's docs
 // that the website's endpoint map links. The reviewed corrections in rest-routes-corrections.json fix places where the
 // document is wrong or incomplete, each citing Fluxer's source at the pin.
@@ -70,7 +71,7 @@ const structuralKeywords = new Set([
 /**
  * @typedef {{ route: string, reason?: string, evidence: string[] }} RouteCorrection
  * @typedef {{ route: string, name: string, type: "integer" | "boolean", evidence: string[] }} QueryCorrection
- * @typedef {{ schema: string | string[], property?: string, values?: unknown[], required?: string[], reason?: string, evidence: string[] }} SchemaCorrection
+ * @typedef {{ schema: string | string[], property?: string, values?: unknown[], branches?: unknown[], required?: string[], remove?: string[], reason?: string, evidence: string[] }} SchemaCorrection
  * @typedef {{ routes: RouteCorrection[], query: QueryCorrection[], schemas: SchemaCorrection[] }} Corrections
  * @typedef {{ sections: Map<string, { page: string, anchor: string }> }} Docs
  */
@@ -198,6 +199,30 @@ function correctedSchemas(spec, corrections) {
                     ...(description ? { description } : {}),
                     type: current.type,
                     enum: correction.values,
+                }
+            }
+            if (correction.branches) {
+                // Union branches the server also sends, added to the property's anyOf
+                const property = correction.property
+                if (!property || !Object.hasOwn(schema.properties, property))
+                    throw new Error(`The correction names ${name}.${property}, which the document lacks`)
+                const current = schema.properties[property]
+                if (!Array.isArray(current?.anyOf))
+                    throw new Error(`The correction adds branches to ${name}.${property}, which is not an anyOf union`)
+                const known = new Set(current.anyOf.map((/** @type {unknown} */ branch) => JSON.stringify(branch)))
+                for (const branch of correction.branches)
+                    if (known.has(JSON.stringify(branch)))
+                        throw new Error(`The document already lists the added branch of ${name}.${property}`)
+                schema.properties[property] = { ...current, anyOf: [...current.anyOf, ...correction.branches] }
+            }
+            if (correction.remove) {
+                // Properties the document offers but the server always refuses
+                for (const property of correction.remove) {
+                    if (!Object.hasOwn(schema.properties, property))
+                        throw new Error(`The correction removes ${name}.${property}, which the document lacks`)
+                    delete schema.properties[property]
+                    if (Array.isArray(schema.required))
+                        schema.required = schema.required.filter((/** @type {string} */ item) => item !== property)
                 }
             }
             if (correction.required) {
@@ -557,7 +582,8 @@ function routeMember(context, spec, docs, route) {
 }
 
 /**
- * The routes a bot token reaches: Those whose document lists botToken, and the route corrections' additions
+ * The routes a bot token reaches: Those whose document lists botToken, and the route corrections' additions, such as
+ * public reads the document lists with no token
  * @param {ReturnType<typeof specOperations>} operations
  * @param {RouteCorrection[]} corrections
  */

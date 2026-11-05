@@ -302,7 +302,9 @@ try {
             save()
             const batch = await value(
                 client[kind].createMany(guildId, [
-                    { name: good.name, image: `data:image/png;charset=utf-8;base64,${solidPngBase64()}` },
+                    // Fluxer reads the text after the first comma, or all of it, so bare base64 works too
+                    // (packages/schema/src/primitives/FileValidators.ts:80-108)
+                    { name: good.name, image: solidPngBase64() },
                     { name: bad.name, image: "bm90IGFuIGltYWdl" },
                 ]),
             )

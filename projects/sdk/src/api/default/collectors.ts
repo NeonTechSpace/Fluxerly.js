@@ -160,7 +160,7 @@ export interface ReactionCollectorOptions extends EventBufferOptions {
     readonly guildId?: string
     /** Collect only this emoji, or omit to accept any emoji.
      * Use any ReactionEmojiInput, including Unicode, custom markup and parsed or received emoji. The SDK normalizes and copies it at registration.
-     * Unicode text must match exactly, including skin tone and variation selectors. Custom emoji match by ID even after renaming.
+     * Unicode text must match exactly after Fluxer's normalization, which removes U+000C and U+202E and trims whitespace, including skin tone and variation selectors. Custom emoji match by ID even after renaming.
      * A custom input still needs a valid name. Invalid input fails registration with ConfigurationError field emoji, without a request.
      * Matching runs before filter and onReaction, but after the event enters the queue, so other emoji can still fill the pending queue
      */

@@ -670,7 +670,7 @@ export interface ScheduledTask {
  *
  * **Connection and sharding**
  *
- * Gateway startup defaults to 30,000 ms, plus one second for each additional local shard when the SDK spaces Identify commands.
+ * Gateway startup defaults to 30,000 ms, plus one second for each additional local shard when the SDK spaces Identify commands. With that default, the first Identify adds the 135 seconds Fluxer may take to start a session while its Identify queue is busy.
  * Automatic sharding first counts communities under a separate deadline of the same length.
  * Each assigned shard allows up to three startup attempts within that budget.
  * An explicit sharding plan fixes this client's local IDs for its lifetime, while automatic sharding and a client

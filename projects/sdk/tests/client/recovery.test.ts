@@ -452,7 +452,7 @@ for (const rejection of ["invalid", "sequence"])
         released(clock)
     })
 
-test.each(modes)("%s bounds each recovery handshake to thirty seconds", async (mode) => {
+test.each(modes)("%s bounds a recovery attempt that stalls before Identify to thirty seconds", async (mode) => {
     const clock = sdkClock()
     const server = await fixture(clock)
     const api = await driver(mode, { startupTimeoutMs: 1000, maxStartupAttempts: 1 })
@@ -475,6 +475,107 @@ test.each(modes)("%s bounds each recovery handshake to thirty seconds", async (m
     await connected(api.client)
     expect(server.sockets).toHaveLength(3)
     await api.shutdown()
+    released(clock)
+})
+
+/** Hold the next handshake, end the established session the given way and wait until the next attempt sends op */
+async function stallNextHandshake(
+    clock: SdkClock,
+    server: Awaited<ReturnType<typeof fixture>>,
+    end: "close" | "invalidSession",
+    op: number,
+) {
+    server.options.holdReady = true
+    if (end === "close") server.sockets[0]!.close(4000)
+    else server.send({ op: GatewayOpcode.invalidSession, d: false }, server.sockets[0])
+    await clock.waiting(500)
+    await clock.advance(500)
+    await vi.waitFor(
+        () => expect(server.commands.filter((command) => command.op === op)).toHaveLength(op === 2 ? 2 : 1),
+        {
+            interval: 5,
+        },
+    )
+    // Server acceptance can precede the client's upgrade callback under concurrent test load
+    await vi.waitFor(() => expect(wsTarget.sockets[1]!.readyState).toBe(WebSocket.OPEN), { interval: 5 })
+}
+
+/** The held attempt stays open for exactly budgetMs after it started, then the SDK closes it and waits to retry */
+async function expectAttemptBudget(clock: SdkClock, budgetMs: number) {
+    await clock.advance(budgetMs - 1)
+    expect(wsTarget.sockets[1]!.readyState).toBe(WebSocket.OPEN)
+    await clock.advance(1)
+    await clock.waiting(1000)
+    expect(wsTarget.sockets[1]!.readyState).toBe(WebSocket.CLOSED)
+}
+
+// Fluxer arms its 135-second session start wait only on Identify
+// (fluxer_gateway/src/gateway/gateway_handler_identify.erl:308 and session/session_manager.erl:30 at 0098958f), and a
+// Resume has none, so only a recovery Identify gets the longer default
+test.each(modes)("%s bounds a recovery Resume to thirty seconds by default", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    const api = await driver(mode)
+    expect(await api.start("connect").done).toBe("Success")
+    await stallNextHandshake(clock, server, "close", GatewayOpcode.resume)
+    await expectAttemptBudget(clock, 30_000)
+    await api.shutdown()
+    released(clock)
+})
+
+test.each(modes)("%s allows a recovery Identify Fluxer's 135-second session start by default", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    const api = await driver(mode)
+    expect(await api.start("connect").done).toBe("Success")
+    await stallNextHandshake(clock, server, "invalidSession", GatewayOpcode.identify)
+    await expectAttemptBudget(clock, 165_000)
+    await api.shutdown()
+    released(clock)
+})
+
+test.each(modes)("%s keeps a set recovery attemptTimeoutMs as one deadline for Identify", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    const api = await driver(mode, { recovery: { attemptTimeoutMs: 40_000 } })
+    expect(await api.start("connect").done).toBe("Success")
+    await stallNextHandshake(clock, server, "invalidSession", GatewayOpcode.identify)
+    await expectAttemptBudget(clock, 40_000)
+    await api.shutdown()
+    released(clock)
+})
+
+test.each(modes)("%s bounds startup that stalls before Identify to thirty seconds by default", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    server.options.holdHello = true
+    const api = await driver(mode)
+    const startup = api.start("connect")
+    await clock.waiting(30_000)
+    await clock.advance(29_999)
+    expect(api.client.state).toBe("Connecting")
+    await clock.advance(1)
+    expect(await startup.done).toBe("ConnectionTimeoutError")
+    expect(await startup.failure).toMatchObject({ timeoutMs: 30_000 })
+    expect(server.commands.some((command) => command.op === GatewayOpcode.identify)).toBe(false)
+    released(clock)
+})
+
+test.each(modes)("%s extends startup by Fluxer's session start wait once Identify is sent", async (mode) => {
+    const clock = sdkClock()
+    const server = await fixture(clock)
+    server.options.holdReady = true
+    const api = await driver(mode)
+    const startup = api.start("connect")
+    await vi.waitFor(
+        () => expect(server.commands.some((command) => command.op === GatewayOpcode.identify)).toBe(true),
+        { interval: 5 },
+    )
+    await clock.advance(164_999)
+    expect(api.client.state).toBe("Connecting")
+    await clock.advance(1)
+    expect(await startup.done).toBe("ConnectionTimeoutError")
+    expect(await startup.failure).toMatchObject({ timeoutMs: 165_000 })
     released(clock)
 })
 

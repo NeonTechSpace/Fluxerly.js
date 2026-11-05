@@ -65,7 +65,8 @@ export interface Stickers {
      * Upload one community sticker and return its metadata.
      * Inputs are copied when execution starts.
      * No image URL is fetched automatically.
-     * Fluxer checks image format, dimensions, permissions and capacity.
+     * Fluxer checks image format, size, dimensions, permissions and capacity, using the community's size limit.
+     * The request body may hold up to 15,029,592 encoded bytes, the most Fluxer accepts.
      * A write with an unknown outcome is not replayed
      */
     create(
@@ -78,6 +79,8 @@ export interface Stickers {
      * The input array is copied by index, then its entries are copied when execution starts.
      * Some uploads can succeed while others fail.
      * No rollback or automatic chunking is performed.
+     * Each image may use the community's size limit, but the batch body may hold at most 36,001,112 encoded bytes,
+     * the most Fluxer accepts.
      * Failures named by duplicate sticker names cannot be matched reliably to input positions.
      * After an unknown outcome, fetch fresh remote data rather than blindly replaying the batch
      */

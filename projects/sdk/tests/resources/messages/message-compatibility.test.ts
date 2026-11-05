@@ -206,7 +206,6 @@ test.each(modes)(
             ["sound.mp3", [file("sound.mp3")]],
             ["document.pdf", [file("document.pdf")]],
             ["missing.mp4", [file("other.mp4")]],
-            ["clip.mp4", [file("clip.mp4"), file("clip.mp4")]],
             ["clip.mp4", []],
             ["clip.mp4", [file("clip.MP4")]],
             ["bad name.mp4", [file("bad name.mp4")]],

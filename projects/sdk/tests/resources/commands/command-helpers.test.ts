@@ -169,6 +169,8 @@ const rows: Row[] = [
     ["boolean case", { type: "boolean" }, "True", undefined],
     ["id", { type: "id" }, "123", "123"],
     ["zero id", { type: "id" }, "0", undefined],
+    ["padded id", { type: "id" }, " 123\n", "123"],
+    ["inner whitespace id", { type: "id" }, "1 23", undefined],
     ["largest id", { type: "id" }, "9223372036854775807", "9223372036854775807"],
     ["too large id", { type: "id" }, "9223372036854775808", undefined],
     ["id with leading zero", { type: "id" }, "012", undefined],
@@ -194,6 +196,8 @@ const rows: Row[] = [
     ["role by name", { type: "roleChoice", candidates: roles }, "mods", roles[0]],
     ["role by mention", { type: "roleChoice", candidates: roles }, "<@&30>", roles[0]],
     ["member id", { type: "member" }, "77", member("77"), "40"],
+    // IDs are trimmed as everywhere the SDK accepts one, and the trimmed form is returned
+    ["padded member id", { type: "member" }, " 77\t", member("77"), "40"],
     ["member mention", { type: "member" }, "<@77>", member("77"), "40"],
     ["member nickname mention", { type: "member" }, "<@!77>", member("77"), "40"],
     ["member without a community", { type: "member" }, "77", undefined],

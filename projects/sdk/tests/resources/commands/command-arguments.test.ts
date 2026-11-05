@@ -112,6 +112,28 @@ test.each(["userChoice", "channelChoice", "roleChoice"] as const)(
     },
 )
 
+test.each(["userChoice", "channelChoice", "roleChoice"] as const)(
+    "%s trims padded candidate IDs as every other ID and refuses IDs Fluxer cannot hold",
+    (type) => {
+        const candidates = [{ id: " 20\n", name: "padded", username: "padded" }]
+        const descriptor: CommandArgumentDescriptor = { type, candidates }
+        const schema = snapshotCommandArguments({ target: descriptor })
+        for (const raw of ["20", type === "userChoice" ? "<@20>" : type === "channelChoice" ? "<#20>" : "<@&20>"])
+            expect(convertCommandArguments(schema, [raw])).toEqual({
+                _tag: "Converted",
+                values: {
+                    target: type === "userChoice" ? { id: "20", username: "padded" } : { id: "20", name: "padded" },
+                },
+            })
+        for (const id of ["0", "020", "9223372036854775808", "2 0"]) {
+            const refused: CommandArgumentDescriptor = { type, candidates: [{ ...candidates[0]!, id }] }
+            expect(() => snapshotCommandArguments({ target: refused })).toThrow(
+                expect.objectContaining({ _tag: "ConfigurationError", field: "command" }),
+            )
+        }
+    },
+)
+
 test("numeric bounds reject values outside min and max, and a default fills only an omitted token", () => {
     const schema = snapshotCommandArguments({
         count: { type: "integer", min: 1, max: 10 },

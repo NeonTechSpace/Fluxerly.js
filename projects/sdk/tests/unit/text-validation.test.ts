@@ -129,7 +129,6 @@ type BoundaryCase = readonly [
 
 const messageTarget = { channelId: "50", id: "60" }
 const textBoundaryCases: readonly BoundaryCase[] = [
-    ["members.editSelf empty nickname", "nickname", ({ client }) => client.members.editSelf("20", { nickname: "" })],
     [
         "members.editSelf bidi-control nickname",
         "nickname",
@@ -162,7 +161,6 @@ const textBoundaryCases: readonly BoundaryCase[] = [
         "pronouns",
         ({ client }) => client.members.editSelf("20", { pronouns: "‮" }),
     ],
-    ["members.setNickname empty nickname", "nickname", ({ client }) => client.members.setNickname(member, "")],
     ["guilds.edit over-limit name", "name", ({ client }) => client.guilds.edit("20", { name: astralOver(100) })],
     ["guilds.edit bidi-control name", "name", ({ client }) => client.guilds.edit("20", { name: "‮" })],
     [
@@ -287,11 +285,6 @@ const textBoundaryCases: readonly BoundaryCase[] = [
         "directMessages.editGroup name over the raw limit",
         "input",
         ({ client }) => client.directMessages.editGroup("10", { name: `${customNameAtRawLimit()}‍` }),
-    ],
-    [
-        "directMessages.editGroup empty nickname",
-        "nicknames",
-        ({ client }) => client.directMessages.editGroup("10", { nicknames: { "30": "" } }),
     ],
     [
         "messages.edit over-limit embed title",

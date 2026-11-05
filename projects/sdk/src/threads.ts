@@ -207,7 +207,9 @@ export interface ArchivedThreadIterationQuery extends PaginationQuery {
  * @category Channels
  */
 export interface ThreadSearchQuery {
-    /** Text to look for in thread names, at most 100 UTF-16 code units. Omit it to match every name */
+    /** Text to look for in thread names, at most 100 UTF-16 code units. Omit it to match every name.
+     * An empty string is left out of the request, as Fluxer refuses it, so it also matches every name
+     */
     readonly name?: string
     /** Forum tag IDs to filter by, at most 20 decimal strings. A tag the channel no longer has matches no thread */
     readonly tagIds?: readonly string[]

@@ -98,6 +98,9 @@ Paths in the map are relative to `node_modules/@neontechspace/fluxerly/`. The Ef
 - Community data and settings: `dist/api/default/guilds.d.ts`, starting with `client.guilds`
 - Event names, payloads and handler context: `dist/events.d.ts`, starting with `EventMap`, `EventContext`
 - Errors and Results: `dist/errors.d.ts`, `dist/error-tools.d.ts`, starting with `errors`, `describeError`
+- Upload, refresh, download or stream attachments: `dist/api/default/attachments.d.ts`, `dist/attachments.d.ts`, starting with `client.attachments`
+- Webhooks: `dist/api/default/webhooks.d.ts` for `client.webhooks`, and `dist/api/default/webhook-client.d.ts` for `createWebhookClient`, which sends through a webhook without a bot token
+- Community emoji and stickers: `dist/api/default/emojis.d.ts`, `dist/api/default/stickers.d.ts`, starting with `client.emojis`, `client.stickers`
 - Logging: `dist/logging.d.ts`, starting with the `logging` option of `runBot` and `createClient`
 - Mentions, links, text and colors: `dist/api/default/helpers.d.ts`, starting with `format`, `links`, `text`, `colors`
 - Tests without a token or network: `dist/testing.d.ts`, starting with `createTestBot`
@@ -123,6 +126,7 @@ Keep the application's existing module and TypeScript settings when they work wi
   A `hidden: true` command is left out of help and suggestions but still runs, so guard commands that need protection
 - With `createClient`, register handlers with `client.on` or `client.subscribe` before `connect` or `run`.
   The `run` method waits until the client stops, not just until it connects. The `shutdown` method closes the client permanently
+- Startup allows 30 seconds, and the first Identify adds 135 seconds once, because Fluxer can hold a session start that long while its Identify queue is busy. A reconnection attempt allows 30 seconds, plus 135 when it sends Identify instead of resuming. Size health checks and process manager start timeouts for up to about 165 seconds. Setting `connection.startupTimeoutMs` or `connection.recovery.attemptTimeoutMs` makes that value one fixed deadline that Identify does not extend
 
 In the default API, local work returns plain values and needs no Result handling: Creating clients and command routers, registering handlers, cache `get` lookups and helpers such as `format` and `colors`.
 In the default API, misuse of local work, such as invalid options or a missing token, throws `ConfigurationError` or the helper's own error at once. The native Effect API returns Effects for some of this work, as described under "Only for native Effect applications"
@@ -132,7 +136,8 @@ Methods returning `AsyncIterable`, such as `messages.iterateHistory`, start work
 ## Errors and cleanup
 
 Expected runtime failures return `Err`. Unexpected SDK failures can throw or reject a Promise, so release clients with `await using` or in `finally`.
-Every SDK error extends `FluxerlyError` with a stable `code`, an optional `hint` and a `cause`. Use `describeError(error)` to print one, `errors.apiCode(error)` to branch on a Fluxer rejection such as `"missingPermissions"`, and `errors.isRetryable(error)` before repeating a call
+Every SDK error extends `FluxerlyError` with a stable `code`, an optional `hint` and a `cause`. Use `describeError(error)` to print one, `errors.apiCode(error)` to branch on a Fluxer rejection such as `"missingPermissions"` or `"fileSizeTooLarge"`, and `errors.isRetryable(error)` before repeating a call.
+A retryable failure can still require a wait, as a rate limit or Fluxer's busy upload slots answer does, so first wait `errors.retryAfterMs(error)` milliseconds when it returns a number. An upload that read a `ReadableStream`, marked by `details.streamUsed`, is not retryable and needs a new stream
 
 Failures without a returned result, such as a handler that throws or returns an `Err`, go to the client's `onError` option or are logged at Error with the full error.
 Do not wrap every handler in a catch that only logs. Let the SDK report it, or pass `onError` to route reports to the application's own error tracking
@@ -143,7 +148,7 @@ A subscription registered after shutdown began is returned already closed with a
 ## Tests
 
 Test a `runBot` bot by passing its own options object to `createTestBot` from `@neontechspace/fluxerly/testing`. It runs the bot's events, commands and `setup` against an in-memory Fluxer, with no token or network. Use `createTestClient` for code written against a client.
-Both return a real client with the controls `ready()`, `emit(type, payload)` for Fluxer events such as `MESSAGE_CREATE`, `rest.respond(matcher, response)`, `requests()`, `commands()`, `logs()`, `counters()` and `disconnect()`. The shared `fixtures` build event payloads.
+Both return a test harness with the real client at `test.client` and the controls `ready()`, `emit(type, payload)` for Fluxer events such as `MESSAGE_CREATE`, `rest.respond(matcher, response)`, `requests()`, `commands()`, `logs()`, `counters()` and `disconnect()`. The shared `fixtures` build event payloads.
 Send a user message with `say(content)` on a test bot, which resolves with the messages the bot sent, including sends that a test's `rest.respond` fixture rejected. Message sends and edits without a `rest.respond` fixture receive an echoed message.
 Wait for a request with `next()` on the route that `rest.respond` returns, and for a quiet bot with `idle()`, instead of sleeping. Waits have no deadline unless `timeoutMs` is passed. Pass it to a wait that might never settle, or run tests with `node --test --test-timeout=10000 --test-force-exit`.
 A handler or command failure without `onError` makes shutdown fail with `UnhandledTestFailuresError`, unless the test reads it from `failures()`.
@@ -151,7 +156,10 @@ Release the default test client with `await using` or `shutdown()`
 
 ## Before sending requests
 
-- Keep IDs as decimal strings, not JavaScript numbers, and check documented units on timeout options
+- Keep IDs as decimal strings, not JavaScript numbers, and check documented units on timeout options. SDK methods and helpers trim surrounding whitespace from an ID and require a decimal without leading zeros, at most 9223372036854775807, and gateway IDs must also be nonzero. `client.rest.call` and `client.rest.request` send params and bodies as given
+- Null `content` clears a message's text. An edit without `flags` needs visible content, an embed or an attachment in the edit itself. To clear the text alone, include the message's current `flags` in the same edit, except on a voice note, where supplying flags clears the voice-note flag
+- Embed URLs, link channel URLs and webhook avatar URLs must start with lowercase `http://` or `https://`, carry no credentials and name an IP address or a domain. On hosted Fluxer the domain needs a top-level domain, while a custom instance decides that itself. These rules do not apply to URLs the bot receives
+- Download `maxBytes` is required and has no SDK ceiling. `client.attachments.download` holds the whole file in memory, so use `client.attachments.stream` for large files
 - Check whether the chosen method reads cached data or fetches it from Fluxer. An object missing from the cache may still exist on Fluxer
 - Keep tokens out of logs, examples, fixtures and error reports
 - Check the documented cancellation and retry behavior before adding retries.
@@ -205,7 +213,10 @@ Check each member's declaration rather than assuming every native member is an E
 
 - Build a command router with `commands.create` and `attach` it to a client. Router options add `use` middleware, `onReject: "reply"` feedback, `mentionPrefix` and `cooldowns: { maxEntries }`, and `router.help` or the command context's `help()` builds help pages. The context's `sendHelp()` sends them, and its `paginate(pages)` shows pages that the command's author flips with reactions
 - Use `client.use(middleware)` for event middleware around every later `on` handler
-- For Fluxer API routes without an SDK method, use `client.rest.call("METHOD /path/{param}", { params, query, body })`, whose route, fields and response are typed from Fluxer's API description with Fluxer's field names, or `client.rest.request({ method, path })` for a route or field newer than the SDK. Both share the client's queue, rate limits and logging. For gateway commands without an SDK method, use `client.gateway.send(shardId, op, d)`, and read a voice join that Fluxer refuses from the `gatewayError` event. For dispatches without a typed event, such as `THREAD_MEMBER_UPDATE`, use `client.on("raw", handler)`: Check `documented`, then compare `t`, and `d` gets the payload type Fluxer's documentation describes, with Fluxer's field names. These types check nothing at runtime, so check a value before relying on it. Check the installed declarations for an SDK method first
+- Check the installed declarations for an SDK method before using the raw tools below. Their types check nothing at runtime, so check a value before relying on it
+- For Fluxer API routes without an SDK method, use `client.rest.call("METHOD /path/{param}", { params, query, body })`, whose route, fields and response are typed from Fluxer's API description, with reviewed corrections from Fluxer's server code, and Fluxer's field names. Use `client.rest.request({ method, path })` for a route or field newer than the SDK, or a route `call` does not list, such as Fluxer's report flows. Both share the client's queue, rate limits and logging
+- For gateway commands without an SDK method, use `client.gateway.send(shardId, op, d)`, and read a voice join that Fluxer refuses from the `gatewayError` event
+- For dispatches without a typed event, such as `THREAD_MEMBER_UPDATE`, use `client.on("raw", handler)`: Check `documented`, then compare `t`, and `d` gets the payload type the SDK describes from Fluxer's documentation and reviewed server code, with Fluxer's field names. `documented` is true exactly for the types the SDK describes, including `GUILD_HEALTH_UPDATE`, which only Fluxer's server code defines
 - The client logs startup, readiness, lost connections, long rate-limit waits, event drops, shutdown and every application failure by default. Records mask the token, Fluxer's credential forms and common credential names, such as Authorization headers, passwords and cookies, but not an unlabelled secret or another service's secret under a name the SDK does not know, so keep such secrets out of error messages.
   Adjust output with the `logging` option rather than filtering console output. Choose `format` (`"pretty"` or `"json"`), `sink` to forward records to another logger and `dedupe` when creating the client. Change `level`, per-category `categories` and `debug` while running with `client.logging.configure`.
   Set `FLUXERLY_DEBUG=1`, or a list of categories, for Debug records. Leave `unsafe` payload logging off unless explicitly authorized for local debugging.

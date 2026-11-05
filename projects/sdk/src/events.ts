@@ -929,7 +929,7 @@ export interface EventMap<M extends MessageCore = Message> extends GuildLifecycl
     /** A private-channel call ended, or became unavailable when unavailable is true */
     readonly callDelete: CallDelete
     /** Every received gateway dispatch in its wire form, including types this SDK version does not decode.
-     * When documented is true, comparing t with a dispatch type gives d the type Fluxer's documentation describes.
+     * When documented is true, comparing t with a dispatch type gives d the type the SDK describes from Fluxer's documentation and source.
      * The body is not part of the SDK's compatibility contract. See RawDispatchEvent
      */
     readonly raw: RawDispatchEvent
@@ -965,10 +965,12 @@ export interface RawDispatch {
     readonly d: unknown
 }
 
-/** What the raw event delivers: A dispatch whose type Fluxer's documentation describes, or one it does not.
- * Check documented first, then compare t with a dispatch type, and TypeScript gives d that type's documented shape with
- * Fluxer's own field names. A dispatch type that is new, or that the documentation at the SDK's reviewed Fluxer commit
- * does not describe, still arrives, with documented false and an unknown d.
+/** What the raw event delivers: A dispatch whose type the SDK describes, or one it does not.
+ * The SDK describes each type Fluxer's documentation describes, with reviewed corrections where Fluxer's source sends
+ * something else, and a few types Fluxer's source sends but its documentation leaves out, such as GUILD_HEALTH_UPDATE.
+ * Check documented first, then compare t with a dispatch type, and TypeScript gives d that type's shape with Fluxer's
+ * own field names. A dispatch type that is new, or that the SDK at its reviewed Fluxer commit does not describe, still
+ * arrives, with documented false and an unknown d.
  * The types check nothing at runtime: d is still the unvalidated body Fluxer sent, which can lack a documented field or
  * carry newer ones, so check a value before relying on it
  *
@@ -990,7 +992,8 @@ export type RawDispatchEvent =
     | { readonly [T in keyof GatewayDispatchPayloads]: DocumentedRawDispatch<T> }[keyof GatewayDispatchPayloads]
     | UndocumentedRawDispatch
 
-/** A raw dispatch whose type T Fluxer's documentation describes, with d typed by GatewayDispatchPayloads.
+/** A raw dispatch whose type T the SDK describes from Fluxer's documentation and source, with d typed by
+ * GatewayDispatchPayloads.
  * The type is a description, not a check, as RawDispatchEvent explains
  *
  * @category Events and collectors
@@ -998,7 +1001,7 @@ export type RawDispatchEvent =
 export interface DocumentedRawDispatch<T extends keyof GatewayDispatchPayloads> extends RawDispatch {
     /** The dispatch type, one that GatewayDispatchPayloads describes */
     readonly t: T
-    /** The unvalidated body, typed by the documentation at the SDK's reviewed Fluxer commit */
+    /** The unvalidated body, typed from the documentation and reviewed source corrections at the SDK's reviewed Fluxer commit */
     readonly d: GatewayDispatchPayloads[T]
     /** True: The SDK's types describe this dispatch type */
     readonly documented: true

@@ -24,7 +24,7 @@ import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
  *
  * Requests share the client's REST or upload slots across all assigned shards, four per local shard by default, up to 64 (rest.concurrency).
  * Attachment-download slots are separate, four by default (rest.mediaConcurrency).
- * Both pools together allow 256 waiting requests or 4 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
+ * Both pools together allow 256 waiting requests or 64 MiB of queued JSON by default (rest.maxQueued and rest.queuedJsonMaxBytes)
  *
  * Total deadline defaults to the client's rest.defaultTimeoutMs, 30,000 ms unless configured, including queue waits, retries and rate-limit waits. Reads retry transport failures and HTTP 500/502/503/504 at most twice.
  * Writes retry only confirmed 429 responses. Permission, input, 404 and malformed-response failures do not retry
@@ -207,6 +207,7 @@ export interface Channels {
     delete(channelId: string, options?: AuditedRequestOptions): Effect.Effect<void, ChannelOperationFailure>
     /**
      * Submit community-channel moves, succeeding with no value after HTTP 204.
+     * Fluxer takes at most 10,000 moves in one call, and a longer list fails before sending.
      * Fluxer applies moves sequentially and may normalize positions.
      * The syncPermissionsOnMove option copies the destination category's overwrites, and applies only to a move into another category.
      * Fluxer copies them after each move, so a failed copy leaves that channel moved without them.

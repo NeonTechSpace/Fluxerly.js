@@ -101,7 +101,8 @@ export type FormatHelpers = Readonly<{
      * Create `<:name:id>` text, or `<a:name:id>` when animated is true.
      * A GuildEmoji can be passed directly.
      * Throws HelperError for invalid names, IDs or animation values.
-     * This does not upload or look up an emoji
+     * This does not upload or look up an emoji.
+     * Outside the emoji's own community, Fluxer replaces an emoji from an age-restricted community with plain `:name:` text when it saves the message
      */
     customEmoji: (input: CustomEmojiMarkup) => string
     /**
@@ -171,7 +172,8 @@ export const format: FormatHelpers = Object.freeze({
 export type SnowflakeHelpers = Readonly<{
     /**
      * Return true for a decimal string from `"0"` through `"9223372036854775807"`, with no extra leading zeroes.
-     * Returns false immediately for numbers, whitespace and invalid strings, without converting through Number or failing
+     * Surrounding whitespace is allowed, as Fluxer trims IDs, and every helper that takes an ID uses the trimmed ID.
+     * Returns false immediately for numbers, inner whitespace and invalid strings, without converting through Number or failing
      */
     isValid: (value: unknown) => value is string
     /**

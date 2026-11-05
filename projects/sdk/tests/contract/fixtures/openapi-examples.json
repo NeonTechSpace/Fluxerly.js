@@ -1,9 +1,9 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "f50792ae705cbba28fecace477253de534c627ef",
+        "commit": "0098958f94ba4cd80c0dac25129d568be7759bd3",
         "path": "fluxer_api/src/api/openapi/openapi.json",
-        "sha256": "82b93bb2c9db59e6b4865806a775bb7e34415e7de106e37f814bd6977df28a08"
+        "sha256": "3906f9bfb698b0889998ae2acba5c10fab16bd83baa2902c6b189c514192e8dd"
     },
     "factsSha256": "5bf75bdd8f429eca8e6a8e8c43440e0b0afbab72e1f0f8d899b038be6a7444bd",
     "schemas": {

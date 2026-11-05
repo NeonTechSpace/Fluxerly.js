@@ -55,7 +55,6 @@ function readUploadParts(
         typeof item.part_size !== "number" ||
         !Number.isSafeInteger(item.part_size) ||
         item.part_size <= 0 ||
-        item.part_size > 52_428_800 ||
         !Array.isArray(item.parts) ||
         item.parts.length === 0 ||
         item.parts.length > 10_000 ||

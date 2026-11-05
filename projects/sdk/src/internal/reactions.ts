@@ -6,9 +6,10 @@
 import type { ReactionEmoji, ReactionEmojiInput, ReactionTarget, ReactionUser, ReactionUsersPage } from "#sdk/reactions"
 import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { format } from "#sdk/helpers"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, inputId, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 import { decodeDispatchMember } from "./guilds.js"
+import { normalizeText } from "./field-text.js"
 import { decodeMessageUser } from "./message.js"
 
 export function encodeReactionUsersQuery(query: unknown) {
@@ -17,7 +18,7 @@ export function encodeReactionUsersQuery(query: unknown) {
     const unsupported = unsupportedKeyFailure(input, ["limit", "after"], "query", "the reaction user query")
     if (unsupported) return unsupported
     const limitInput = input.limit
-    const after = input.after
+    const suppliedAfter = input.after
     const limit = limitInput === undefined ? 25 : limitInput
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)
         return inputValidationFailure(
@@ -25,8 +26,13 @@ export function encodeReactionUsersQuery(query: unknown) {
             "range",
             "Reaction user limit must be an integer from 1 through 100",
         )
-    if (after !== undefined && !identifier(after))
-        return inputValidationFailure("query.after", "format", "Reaction user cursor must be a decimal ID string")
+    const after = suppliedAfter === undefined ? undefined : inputId(suppliedAfter)
+    if (suppliedAfter !== undefined && after === undefined)
+        return inputValidationFailure(
+            "query.after",
+            "format",
+            "Reaction user cursor must be a decimal ID string, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     const params = new URLSearchParams({ limit: String(limit) })
     if (after !== undefined) params.set("after", after)
     return { limit, after, params }
@@ -71,11 +77,23 @@ const name = (value: unknown): value is string =>
     // oxlint-disable-next-line no-control-regex -- rejects control characters and spaces in emoji names
     !/[\x00-\x20\x7f]/.test(value)
 
+// A reaction route reads the emoji path segment as createStringType(1, 64), which removes U+000C and U+202E and trims
+// the emoji before its value must hold 1 through 64 UTF-16 code units (packages/schema/src/domains/common/
+// CommonParamSchemas.ts:147-149 and packages/schema/src/primitives/SchemaPrimitives.ts:15-22 and 176-182 at 0098958f,
+// applied by fluxer_api/src/api/channel/controllers/MessageInteractionController.ts:202-364). Fluxer then stores that
+// normalized value as the emoji name (fluxer_api/src/api/channel/services/interaction/MessageReactionService.ts:397-431),
+// so the normalized emoji is the request identity and the collector match. Received emoji keep the wider bound
+const unicodeName = (value: unknown): string | undefined => {
+    if (typeof value !== "string") return undefined
+    const normalized = normalizeText(value)
+    return name(normalized) && normalized.length <= 64 && !/[%/:<>]/.test(normalized) ? normalized : undefined
+}
+
 export function resolveReactionEmoji(
     value: ReactionEmojiInput,
 ): string | { readonly name: string; readonly id: string } | undefined {
     if (typeof value === "string") {
-        if (!value.startsWith("<")) return name(value) && !/[%/:<>]/.test(value) ? value : undefined
+        if (!value.startsWith("<")) return unicodeName(value)
         const parsed = format.tryParseCustomEmoji(value)
         if (parsed.isErr()) return undefined
         value = parsed.value
@@ -85,7 +103,7 @@ export function resolveReactionEmoji(
     const hasAnimated = "animated" in value
     const guildId = hasGuildId ? value.guildId : undefined
     const animated = hasAnimated ? value.animated : undefined
-    const snapshot = hasGuildId && hasAnimated && identifier(guildId) && typeof animated === "boolean"
+    const snapshot = hasGuildId && hasAnimated && inputId(guildId) !== undefined && typeof animated === "boolean"
     const allowCloning = snapshot ? value.allowCloning : undefined
     const metadata = snapshot && typeof allowCloning === "boolean"
     if (
@@ -101,11 +119,13 @@ export function resolveReactionEmoji(
         )
     )
         return undefined
-    const id = value.id
-    if (animated !== undefined && (typeof animated !== "boolean" || id === undefined)) return undefined
+    const rawId = value.id
+    if (animated !== undefined && (typeof animated !== "boolean" || rawId === undefined)) return undefined
     const nameValue = value.name
-    if (id === undefined) return name(nameValue) && !/[%/:<>]/.test(nameValue) ? nameValue : undefined
-    return typeof nameValue === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(nameValue) && identifier(id)
+    if (rawId === undefined) return unicodeName(nameValue)
+    // The ID is trimmed as every caller ID is, so the name:id path segment holds the form Fluxer stores
+    const id = inputId(rawId)
+    return typeof nameValue === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(nameValue) && id !== undefined
         ? { name: nameValue, id }
         : undefined
 }

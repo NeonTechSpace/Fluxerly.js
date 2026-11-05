@@ -88,7 +88,7 @@ export interface AttachmentStreamSource {
  * @category Messages
  */
 export interface AttachmentFileSource {
-    /** Exact file length in bytes, a nonnegative safe integer no larger than 52,428,800 for an upload */
+    /** Exact file length in bytes, a nonnegative safe integer. Fluxer decides how large an uploaded file may be */
     readonly size: number
     /** Return a source for the byte range from start inclusive to end exclusive. The SDK uses explicit offsets for upload parts */
     slice(start?: number, end?: number, contentType?: string): AttachmentFileSource
@@ -101,14 +101,17 @@ interface AttachmentMetadata {
      * Fluxer may normalize the filename when preparing the upload
      */
     readonly filename: string
-    /** Optional MIME type hint, at most 255 printable ASCII characters. The upload request defaults to application/octet-stream.
+    /** Optional MIME type hint of printable ASCII characters, 1 through 255 of them after Fluxer trims surrounding
+     * whitespace, so a blank hint fails locally. The upload request defaults to application/octet-stream.
      * Fluxer's upload plan chooses the MIME type used for transfer and may override this hint based on the filename
      */
     readonly contentType?: string
-    /** Optional display title, 1–1,024 normalized UTF-16 code units */
-    readonly title?: string
-    /** Optional alternative-text description, 1–4,096 normalized UTF-16 code units */
-    readonly description?: string
+    /** Optional display title, 1–1,024 normalized UTF-16 code units, or null for none */
+    readonly title?: string | null
+    /** Optional alternative-text description, 1–4,096 normalized UTF-16 code units, or null for none. A webhook send
+     * refuses null here, as Fluxer's multipart webhook schema does, so omit it there
+     */
+    readonly description?: string | null
     /** Mark the file as a spoiler. Defaults to false */
     readonly spoiler?: boolean
     /** Mark the file as explicit media, so Fluxer's apps treat it as sensitive, as they do media Fluxer's own check flags.
@@ -121,17 +124,19 @@ interface AttachmentMetadata {
      * Fluxer replaces it with the length it measures when it can read the file. A voice note needs it, and Fluxer
      * refuses one longer than the instance allows, 1,200 seconds by default.
      * New uploads in message sends, replies, direct message sends, forum posts, webhook sends and messages.edit accept
-     * it, but an edit cannot add MessageFlags.VoiceMessage
+     * it, but an edit cannot add MessageFlags.VoiceMessage. Null means none outside a voice note, except in a webhook
+     * send, which refuses null as Fluxer's multipart webhook schema does
      */
-    readonly duration?: number
+    readonly duration?: number | null
     /** Waveform of an audio file for a voice note's preview, as Fluxer's apps draw it: Base64-encoded amplitude bytes,
      * 1 through 4,096 UTF-16 code units after Fluxer's normalization, or at most 256 in a webhook send, the limit of
      * Fluxer's multipart webhook schema. A voiceWaveform result fits a webhook for audio up to 19.2 seconds. The SDK
      * does not compute or check the samples. A file with a waveform must be audio, which Fluxer checks from its media type.
      * New uploads in message sends, replies, direct message sends, forum posts, webhook sends and messages.edit accept
-     * it, but an edit cannot add MessageFlags.VoiceMessage
+     * it, but an edit cannot add MessageFlags.VoiceMessage. Null means none outside a voice note, except in a webhook
+     * send, which refuses null as Fluxer's multipart webhook schema does
      */
-    readonly waveform?: string
+    readonly waveform?: string | null
     /** Not accepted for new uploads, use AttachmentReference to keep an existing attachment during an edit */
     readonly id?: never
 }
@@ -143,7 +148,7 @@ interface AttachmentMetadata {
  */
 export interface AttachmentBytesInput extends AttachmentMetadata {
     /** File bytes, including Node buffers and subarray views. Shared-memory buffers are rejected.
-     * Empty files are accepted. At most 50 MiB per file, the deployed server may impose a lower limit
+     * Empty files are accepted. Fluxer decides how large a file may be, as described for messages.send
      */
     readonly data: Uint8Array
     /** Do not combine a file source with data */
@@ -155,7 +160,7 @@ export interface AttachmentBytesInput extends AttachmentMetadata {
 }
 
 /** Attach a caller-owned file whose size is known.
- * The SDK streams the file without copying or storing its bytes first. Empty files are accepted. The reported size must be a nonnegative safe integer no greater than 50 MiB.
+ * The SDK streams the file without copying or storing its bytes first. Empty files are accepted. The reported size must be a nonnegative safe integer, and Fluxer decides how large a file may be.
  * Node openAsBlob files can fail during reading if the file changes. A caller may retry only with a stable source and a new message operation.
  * An inline multipart 429 reports rateLimit rather than reopening a mutable file source
  *
@@ -181,7 +186,7 @@ export interface AttachmentFileInput extends AttachmentMetadata {
 export interface AttachmentStreamInput extends AttachmentMetadata {
     /** A finite byte stream that can be consumed once, not a stream factory or an unbounded live feed */
     readonly stream: AttachmentStreamSource
-    /** Exact byte count from 0 through 52,428,800. Too few or too many source bytes fail the upload */
+    /** Exact byte count, a nonnegative safe integer. Too few or too many source bytes fail the upload */
     readonly size: number
     /** Do not combine copied bytes with a stream source */
     readonly data?: never
@@ -377,7 +382,9 @@ export class AttachmentRefreshError extends FluxerlyError {
 export type AttachmentRefreshFailure = AttachmentRefreshError | ClientClosedError
 
 /** Limit the bytes and time used by an attachment download.
- * The maxBytes option is required, a positive safe integer no greater than 52,428,800.
+ * The maxBytes option is required, a positive safe integer. The SDK sets no upper limit of its own, because Fluxer
+ * decides how large an attachment may be: A bot can send up to its upload limit, 50 MiB unless the instance raises it,
+ * and people up to theirs, as much as 500 MiB by default.
  * This limits returned bytes, not the file size on Fluxer, total JavaScript memory or buffering while the SDK assembles the result.
  * The timeoutMs option covers endpoint discovery, URL validation and the full GET, and defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured.
  * The SDK still waits for cleanup after the deadline.
@@ -387,7 +394,9 @@ export type AttachmentRefreshFailure = AttachmentRefreshError | ClientClosedErro
  * @category Messages
  */
 export interface AttachmentDownloadOptions {
-    /** Maximum bytes to accept, required and from 1 through 52,428,800. Exceeding it fails with reason tooLarge rather than truncating */
+    /** Maximum bytes to accept, required and a positive safe integer. Exceeding it fails with reason tooLarge rather than
+     * truncating. A buffered download holds that many bytes in memory, so use attachments.stream for large files
+     */
     readonly maxBytes: number
     /** Total deadline in milliseconds, an integer from 1 through 2,147,483,647, including discovery and the GET.
      * Defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured. Cleanup is still awaited after expiry

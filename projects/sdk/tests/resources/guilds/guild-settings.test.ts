@@ -262,9 +262,20 @@ test.each(modes)("%s preserves valid UTC calendar cutoffs in requests and respon
         return Response.json(guild(body))
     })
     const api = await setup(mode)
-    for (const value of ["2000-02-29T00:00:00Z", "2024-04-30T24:00:00Z", "2024-02-29T00:00:00.123456789Z"]) {
+    for (const value of ["2000-02-29T00:00:00Z", "2024-02-29T00:00:00.123456789Z"]) {
         expect((await api.edit({ messageHistoryCutoff: value })).messageHistoryCutoff).toBe(value)
         expect(bodies.at(-1)).toEqual({ message_history_cutoff: value })
+    }
+    // Fluxer's z.iso.datetime() accepts only Z and hours 00 to 23, so other valid forms are sent as the same UTC instant
+    for (const [value, sent] of [
+        ["2026-01-01T00:30:00+01:00", "2025-12-31T23:30:00Z"],
+        ["2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00Z"],
+        ["2024-02-28T22:15:30.123456-02:30", "2024-02-29T00:45:30.123456Z"],
+        ["2024-04-30T24:00:00Z", "2024-05-01T00:00:00Z"],
+        ["2024-12-31T24:00:00.000-01:00", "2025-01-01T01:00:00.000Z"],
+    ] as [string, string][]) {
+        expect((await api.edit({ messageHistoryCutoff: value })).messageHistoryCutoff).toBe(sent)
+        expect(bodies.at(-1)).toEqual({ message_history_cutoff: sent })
     }
     let reads = 0
     const input = {

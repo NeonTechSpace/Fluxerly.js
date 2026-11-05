@@ -142,19 +142,21 @@ test("edit supports explicit clearing and mention opt-in without sending other f
             await settle(
                 client.messages.edit(target, {
                     content: "",
-                    allowedMentions: { users: ["30"], roles: ["40"], everyone: true, repliedUser: true },
+                    flags: 0,
+                    allowedMentions: { users: ["30"], roles: ["40"], repliedUser: true },
                 }),
             )
         ).content,
     ).toBe("")
     expect(server.requests[0]!.body).toEqual({
         content: "",
-        allowed_mentions: { parse: ["everyone"], users: ["30"], roles: ["40"], replied_user: true },
+        allowed_mentions: { parse: [], users: ["30"], roles: ["40"], replied_user: true },
+        flags: 0,
     })
     server.control.respond = (response) => {
         response.writeHead(400).end("private server body")
     }
-    const rejected = await client.messages.edit(target, { content: "" })
+    const rejected = await client.messages.edit(target, { content: "", flags: 0 })
     expect(rejected.isErr() && rejected.error).toMatchObject({
         operation: "edit",
         reason: "rejected",

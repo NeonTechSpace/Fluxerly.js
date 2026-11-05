@@ -200,13 +200,16 @@ export interface DiscoveryGuild {
  * @category Guilds and members
  */
 export interface DiscoverySearchQuery {
-    /** Free-text query of at most 100 UTF-16 code units */
+    /** Free-text query of at most 100 UTF-16 code units. An empty string is left out of the request, as Fluxer refuses it */
     readonly query?: string
     /** Provider category ID from 0 through 8. Fluxer names it category_type */
     readonly categoryId?: number
-    /** Case-sensitive language tag such as en-US, 2–35 UTF-16 code units in the accepted BCP-47-style format */
+    /** Case-sensitive language code, 2–35 UTF-16 code units in a BCP-47-style format. Fluxer accepts only the codes it
+     * supports, such as en-US, fr or pt-BR, and refuses others such as en with reason `rejected`. The supported list is
+     * Fluxer's and can change, so the SDK checks only the format
+     */
     readonly primaryLanguage?: string
-    /** Directory tag of at most 30 UTF-16 code units */
+    /** Directory tag of at most 30 UTF-16 code units. An empty string is left out of the request, as Fluxer refuses it */
     readonly tag?: string
     /** Provider ordering. Omission uses Fluxer's default ordering. Fluxer may use member-count ordering for onlineCount, so ordering by online presence is not guaranteed */
     readonly sortBy?: "memberCount" | "onlineCount" | "relevance"

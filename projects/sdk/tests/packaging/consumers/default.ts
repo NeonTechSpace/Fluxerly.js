@@ -775,8 +775,10 @@ export function rejectedMessageShapes(client: Client): void {
     const page: readonly Message[] = []
     // @ts-expect-error History arrays cannot be mutated
     page.push(page[0]!)
-    // @ts-expect-error History cursor modes are mutually exclusive
+    // Before and after together bound one page
     client.messages.fetchHistory("20", { before: "10", after: "9" })
+    // Fluxer accepts around with the other cursors and ignores them for the page
+    client.messages.fetchHistory("20", { before: "10", after: "9", around: "8" })
     // @ts-expect-error History IDs remain strings
     client.messages.fetchHistory("20", { around: 10 })
     // @ts-expect-error IDs must remain strings

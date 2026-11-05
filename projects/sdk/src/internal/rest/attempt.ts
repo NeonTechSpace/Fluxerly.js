@@ -484,6 +484,7 @@ export function runAttempt<A, M extends MessageCore>(
                             method: request.method,
                             retriesAsRead: retriesAsRead(request),
                             upload: request.put !== undefined,
+                            multipart: state.putUpload === undefined && state.upload !== undefined,
                             preparation: request.preparation === true,
                             hasFeatureFallback: request.featureDisabled !== undefined,
                             progress,

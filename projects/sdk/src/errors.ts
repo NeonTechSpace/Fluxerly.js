@@ -131,6 +131,10 @@ export abstract class FluxerlyError extends Error {
 /**
  * Whether a request may have reached Fluxer.
  * The outcome notDispatched means it was not sent, rejected means Fluxer refused it, and unknown means the result is uncertain.
+ * A server error is unknown, except Fluxer's answer that its file upload slots stayed busy.
+ * The SDK recognizes it only when all of these hold: The request was a multipart request with file parts, as inline uploads and webhook messages send, and not an upload plan or a signed upload, the status is 503, Fluxer's error code is SERVICE_UNAVAILABLE, and the Retry-After header is exactly 5.
+ * Fluxer sends that answer while reading the files, before applying anything, so a recognized one is rejected and sending again after retryAfterMs cannot duplicate the write.
+ * Such a failure sets details.uploadSlotsBusy, and unlike other rejections it is retryable for errors.isRetryable, unless the call read a stream source, marked by details.streamUsed, which needs a fresh stream.
  * A write with an unknown outcome may already have applied, so reconcile remote state before repeating it.
  * A read with an unknown outcome cannot have changed remote state and is safe to repeat.
  * A rejection does not prove rollback
@@ -188,11 +192,17 @@ export interface OperationErrorOptions<Operation extends string, Reason extends 
      * A read is recorded as details.read and keeps network and timeout failures retryable. Defaults to false
      */
     readonly read?: boolean | undefined
-    /** Whether a rate-limited upload read an attachment from a ReadableStream, which cannot be read again.
-     * Recorded as details.streamUsed. It makes errors.isRetryable false, because repeating the same call would send the
-     * used stream. Send again with a new stream or with the file as bytes. Defaults to false
+    /** Whether a rate-limited upload, or one Fluxer refused because its upload slots stayed busy, read an attachment
+     * from a ReadableStream, which cannot be read again. Recorded as details.streamUsed. It makes errors.isRetryable
+     * false, because repeating the same call would send the used stream. Send again with a new stream or with the file
+     * as bytes. Defaults to false
      */
     readonly streamUsed?: boolean | undefined
+    /** Whether Fluxer refused a multipart upload because its file upload slots stayed busy, the answer OperationOutcome
+     * describes. Recorded as details.uploadSlotsBusy. Fluxer applied nothing, so errors.isRetryable returns true for it
+     * unless streamUsed is set. Defaults to false
+     */
+    readonly uploadSlotsBusy?: boolean | undefined
     /** Underlying failure retained as the error's cause */
     readonly cause?: unknown
 }

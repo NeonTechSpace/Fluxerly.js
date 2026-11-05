@@ -146,6 +146,11 @@ export interface GatewaySessionOptions<M extends MessageCore> {
     readonly session: Session
     /** Budget for HELLO, authentication and READY or RESUMED together */
     readonly timeoutMs: number
+    /**
+     * Called when this session sends Identify, which Fluxer may hold in its session start queue. Returns the
+     * milliseconds the attempt may still take from now, which replace the rest of timeoutMs when longer
+     */
+    readonly onIdentify?: (() => number) | undefined
     /** Called once when the session is ready, after request owners are attached */
     readonly onReady: (mode: "identify" | "resume") => void
     /**
@@ -650,6 +655,9 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
             )
             const { commands, pacer } = socket
             yield* Effect.forkScoped(pacer.run)
+            // Sending Identify can move the deadline, so the timer sleeps until the current deadline and checks again
+            let startupDeadline = now() + timeoutMs
+            let startupBudget = timeoutMs
             const startup = Effect.gen(function* () {
                 const interval = yield* Deferred.await(hello)
                 yield* Effect.forkScoped(
@@ -671,7 +679,15 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         }),
                     ),
                 )
-                yield* !resuming && identify ? identify(commands.authenticate) : Effect.sync(commands.authenticate)
+                const authenticate = () => {
+                    commands.authenticate()
+                    const remaining = resuming ? undefined : options.onIdentify?.()
+                    if (remaining !== undefined && now() + remaining > startupDeadline) {
+                        startupBudget += now() + remaining - startupDeadline
+                        startupDeadline = now() + remaining
+                    }
+                }
+                yield* !resuming && identify ? identify(authenticate) : Effect.sync(authenticate)
                 yield* Deferred.await(ready)
             }).pipe(
                 Effect.withSpan("fluxerly.gateway.connect", {
@@ -680,13 +696,18 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         ...(shardId === undefined ? {} : { "fluxerly.shard": shardId }),
                     },
                 }),
-                Effect.timeoutOrElse({
-                    duration: timeoutMs,
-                    orElse: () =>
-                        Effect.fail(new AttemptFailure(new ConnectionTimeoutError(timeoutMs), true, false, "timeout")),
-                }),
             )
-            yield* Effect.raceFirst(startup, Deferred.await(ended))
+            const expiry: Effect.Effect<never, AttemptFailure> = Effect.gen(function* () {
+                while (true) {
+                    const remaining = startupDeadline - now()
+                    if (remaining <= 0)
+                        return yield* Effect.fail(
+                            new AttemptFailure(new ConnectionTimeoutError(startupBudget), true, false, "timeout"),
+                        )
+                    yield* Effect.sleep(remaining)
+                }
+            })
+            yield* Effect.raceFirst(Effect.raceFirst(startup, expiry), Deferred.await(ended))
             presence?.attach(commands.presence, commands.memberSubscriptions, resuming ? "resume" : "identify")
             counts?.attach(commands.guildCounts, commands.channelMemberCounts)
             memberChunks?.attach(commands.memberChunks)

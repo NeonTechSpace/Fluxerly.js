@@ -21,15 +21,31 @@ export interface RecoveryConfiguration {
     readonly healthyResetMs: number
     /** Native schedule that replaces the backoff delays, when configured */
     readonly schedule: Schedule.Schedule<unknown, ConnectionFailure> | undefined
+    /** Time sending Identify adds to an attempt's deadline: Fluxer's session start wait, or 0 when attemptTimeoutMs is set */
+    readonly identifyWaitMs: number
 }
+
+/** Default budget for discovery, the socket, HELLO, Resume and READY in one connection attempt */
+export const defaultConnectionAttemptMs = 30_000
+
+/** Fluxer may hold an Identify in its queue for 60 seconds and gives a session start 135 seconds before it gives up
+ * (fluxer_gateway/src/session/session_manager_shard_lifecycle.erl:24-25, session_manager.erl:30 and :120-122, armed
+ * on Identify at gateway_handler_identify.erl:308, at 0098958f). A Resume has no such wait. When the caller leaves a
+ * connection deadline at its default, sending Identify adds this wait to it. After such a failure Fluxer holds the
+ * Identify and retries it every one to two seconds while the socket stays open, with no limit
+ * (fluxer_gateway/src/gateway/gateway_handler_identify.erl:19-20, :373-384 and :447-477), so no finite deadline follows
+ * it exactly
+ */
+export const defaultIdentifyWaitMs = 135_000
 
 /** Documented connection.recovery defaults */
 export const defaultRecovery: RecoveryConfiguration = Object.freeze({
     minDelayMs: 1_000,
     maxDelayMs: 30_000,
-    attemptTimeoutMs: 30_000,
+    attemptTimeoutMs: defaultConnectionAttemptMs,
     healthyResetMs: 60_000,
     schedule: undefined,
+    identifyWaitMs: defaultIdentifyWaitMs,
 })
 
 /** Fixed startup backoff: 1 s doubling to 30 s, always bounded by the startup deadline */

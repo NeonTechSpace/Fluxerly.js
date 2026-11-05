@@ -268,7 +268,7 @@ export const historyPagination = <M extends MessageCore = Message>(
         return {
             load: (cursor, limit) =>
                 owner
-                    .fetchHistory(channelId, cursorQuery("before", cursor, limit), settings.options)
+                    .fetchHistory(validated.channelId, cursorQuery("before", cursor, limit), settings.options)
                     .pipe(Effect.map((items) => ({ items, next: items.at(-1)?.id ?? null }))),
         }
     })
@@ -498,7 +498,7 @@ export const pinPagination = <M extends MessageCore = Message>(
             identity: (item: import("#sdk/pins").MessagePin<M>) => item.message.id,
             load: (cursor, limit) =>
                 owner
-                    .fetchPins(channelId, cursorQuery("before", cursor, limit), settings.options)
+                    .fetchPins(validated.channelId, cursorQuery("before", cursor, limit), settings.options)
                     .pipe(Effect.map((page) => ({ items: page.items, next: page.nextBefore }))),
         }
     })

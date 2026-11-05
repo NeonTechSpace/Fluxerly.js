@@ -44,7 +44,9 @@ export interface RestRequests {
      * Send one request to a route of Fluxer's API description, checked at compile time: The route is its method and
      * path template, such as `POST /channels/{channel_id}/messages`, and params, query and body take Fluxer's official
      * field names. The response body has the route's type. These types come from Fluxer's API description at the
-     * commit this release pins, so they do not cover later routes or fields, and the response is not checked at runtime.
+     * commit this release pins, with reviewed corrections where Fluxer's server sends or accepts something else, such
+     * as public routes the description lists without a bot token that Fluxer answers for a bot too. They do not cover
+     * later routes or fields, and the response is not checked at runtime.
      * Each path parameter is percent-encoded as one segment, and a missing, extra or empty one fails with
      * RestRequestError reason input before any request. Only the compiler checks that a route is listed, and at runtime
      * any route is sent whose filled path request accepts. The request then follows every rule of request, through the
@@ -129,8 +131,8 @@ export interface RestRequest extends OperationOptions {
      * Not allowed with GET
      */
     readonly files?: readonly AttachmentInput[]
-    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after trimming.
-     * Any language works, because the header carries its UTF-8 bytes. Control characters, line separators and lone
+    /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after
+     * U+000C and U+202E removal and trimming, which Fluxer otherwise drops silently. Any language works, because the header carries its UTF-8 bytes. Control characters, line separators and lone
      * surrogates fail before dispatch. Omission sends no header. Never included in errors, logs or diagnostics
      */
     readonly auditReason?: string

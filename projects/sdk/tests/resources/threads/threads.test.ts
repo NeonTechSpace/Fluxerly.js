@@ -427,3 +427,17 @@ test.each(modes)("%s categorizes the reasons Fluxer refuses a thread operation",
             hint: expect.stringMatching(/\S/),
         })
 })
+
+test.each(modes)("%s leaves an empty search name out of the request, as Fluxer refuses it", async (mode) => {
+    const api = await open(mode)
+    const forum = api.fixtures.forumChannel()
+    const search = api.rest.respond(`GET /channels/${forum.id}/threads/search`, {
+        body: { threads: [], members: [], has_more: false, total_results: 0 },
+    })
+    await settle(api.client.threads.search(forum.id, { name: "", limit: 5 }))
+    await settle(api.client.threads.search(forum.id, { name: "a" }))
+    expect(search.requests().map((request) => [...new URL(request.url).searchParams])).toEqual([
+        [["limit", "5"]],
+        [["name", "a"]],
+    ])
+})

@@ -126,6 +126,8 @@ export const checkClasses = Object.freeze({
         "--flags-only": manual("shared-state"),
         "--no-move": manual("shared-state"),
     },
+    // Its client caches channels beside messages, so another check deleting its own text channel cannot evict the
+    // messages this check reads back from the cache
     "webhooks.js": { "": sdkWork("test-owned") },
 })
 

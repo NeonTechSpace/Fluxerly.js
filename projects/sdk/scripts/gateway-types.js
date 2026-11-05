@@ -4,7 +4,12 @@
 // committed gateway documentation fixture and its overlay, which scripts/gateway-docs.js writes from the documents at the
 // reviewed upstream pin, so regenerating never downloads anything. A contract test fails when the written files differ
 // from what this script renders.
+// Fluxer's documents are wrong in places, so scripts/gateway-types-corrections.json lists the reviewed fixes, each with
+// the reason and the Fluxer source lines at the pin that show what the server sends. A correction that names something
+// the fixture lacks, or that changes nothing, fails generation, so a Fluxer fix shows when the pin moves. The corrections
+// are part of the generated header's stamp, so editing them without regenerating fails the contract test
 // Run from projects/ after regenerating the fixture: node sdk/scripts/gateway-types.js
+import { createHash } from "node:crypto"
 import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -12,6 +17,7 @@ import { format, resolveConfig } from "prettier"
 
 const fixturePath = fileURLToPath(new URL("../tests/contract/fixtures/gateway-docs.json", import.meta.url))
 const overlayPath = fileURLToPath(new URL("../tests/contract/fixtures/gateway-docs-overlay.json", import.meta.url))
+const correctionsPath = fileURLToPath(new URL("./gateway-types-corrections.json", import.meta.url))
 export const payloadsPath = fileURLToPath(new URL("../src/gateway-payloads.ts", import.meta.url))
 export const namesPath = fileURLToPath(new URL("../src/internal/gateway/documented-dispatches.ts", import.meta.url))
 const docsOrigin = "https://docs.fluxer.com"
@@ -20,7 +26,7 @@ const docsOrigin = "https://docs.fluxer.com"
  * @typedef {import("./gateway-docs.js").Shape} Shape
  * @typedef {{ name: string, optional: boolean, description?: string, shape: Shape }} Field
  * @typedef {{ object?: string, link?: string, event?: string, with?: string, array?: true }} Payload
- * @typedef {{ file: string, anchor: string, prose: string, payload?: Payload, fields: Field[] }} Event
+ * @typedef {{ file: string, anchor: string, prose: string, payload?: Payload, fields: Field[], undocumented?: true }} Event
  * @typedef {{ title: string, file: string, fields: Field[] }} ObjectSection
  * @typedef {{
  *     source: { commit: string },
@@ -30,6 +36,16 @@ const docsOrigin = "https://docs.fluxer.com"
  *     gatewayError: { fields: Field[] },
  * }} Fixture
  * @typedef {{ object?: string, like?: string, without?: string[], fields?: Field[], within?: Record<string, Field[]> }} Overlay
+ * What a correction does to the fields of an object or an event. `optional` and `nullable` name existing fields,
+ * `replaceFields` swaps a field of the same name for a different one, `addFields` adds new ones and `addFieldsFrom`
+ * puts the fields of another object first. Shapes may also be a `union` of shapes, a `struct` of fields, `true`, a
+ * `partial` of a shape that still `require`s some fields, or a `rest` or `ref` shape with `with` fields that add to or
+ * replace the object's own
+ * @typedef {{ reason: string, evidence: string[], optional?: string[], nullable?: string[], replaceFields?: Field[], addFields?: Field[], addFieldsFrom?: string }} FieldCorrection
+ * @typedef {FieldCorrection & { object: string }} ObjectCorrection
+ * @typedef {Omit<FieldCorrection, "nullable"> & { event: string, nullable?: Record<string, string[]> }} EventCorrection
+ * @typedef {{ event: string, reason: string, evidence: string[], scope: string, fields: Field[] }} NewEvent
+ * @typedef {{ objects: ObjectCorrection[], events: EventCorrection[], newEvents: NewEvent[] }} Corrections
  */
 
 /**
@@ -57,11 +73,161 @@ const pascal = (/** @type {string} */ text) =>
 /** A field's documented meaning as a comment, or nothing when the documents give none */
 const comment = (/** @type {string | undefined} */ text) => (text ? `/** ${text.replaceAll("*/", "* /")} */\n` : "")
 
+// A correction cites Fluxer source files at the pin by line, such as fluxer_gateway/src/session/session_ready_dispatch.erl:195-197
+const citation = /^[\w./@-]+\.(?:ts|erl|rs):\d+(-\d+)?$/
+
+/** @param {{ reason?: unknown, evidence?: unknown }} correction @param {string} label */
+function checkEvidence(correction, label) {
+    const { reason, evidence } = correction
+    if (typeof reason !== "string" || reason === "") throw new Error(`The correction ${label} must give a reason`)
+    if (
+        !Array.isArray(evidence) ||
+        evidence.length === 0 ||
+        !evidence.every((item) => typeof item === "string" && citation.test(item))
+    )
+        throw new Error(`The correction ${label} must cite Fluxer source files by line`)
+}
+
 /**
- * Renders both generated files from the fixture and overlay, formatted as the repository formats them
- * @param {{ fixture: Fixture, overlay: Record<string, Overlay> }} input
+ * Applies the corrections of one field list and returns the new list. A name the list lacks, a field it already has
+ * and a change that leaves a field as it was fail, so no correction can stay once the fixture agrees with the server
+ * @param {Field[]} fields
+ * @param {FieldCorrection & { nullable?: string[] }} correction
+ * @param {string} label
+ * @param {(link: string) => Field[]} fieldsOf
  */
-export async function renderGatewayTypes({ fixture, overlay }) {
+function correctFields(fields, correction, label, fieldsOf) {
+    /** @type {Field[]} */
+    let result = structuredClone(fields)
+    const find = (/** @type {string} */ name) => {
+        const field = result.find((item) => item.name === name)
+        if (!field) throw new Error(`The correction names ${label} ${name}, which the fixture lacks`)
+        return field
+    }
+    let changes = 0
+    for (const name of correction.optional ?? []) {
+        const field = find(name)
+        if (field.optional) throw new Error(`The fixture already makes ${label} ${name} optional`)
+        field.optional = true
+        changes++
+    }
+    for (const name of correction.nullable ?? []) {
+        const field = find(name)
+        if (field.shape.nullable) throw new Error(`The fixture already makes ${label} ${name} nullable`)
+        field.shape = { ...field.shape, nullable: true }
+        changes++
+    }
+    for (const field of correction.replaceFields ?? []) {
+        const index = result.findIndex((item) => item.name === field.name)
+        if (index < 0) throw new Error(`The correction names ${label} ${field.name}, which the fixture lacks`)
+        if (JSON.stringify(result[index]) === JSON.stringify(field))
+            throw new Error(`The correction of ${label} ${field.name} changes nothing`)
+        result[index] = field
+        changes++
+    }
+    for (const field of correction.addFields ?? []) {
+        if (result.some((item) => item.name === field.name))
+            throw new Error(`The fixture already has ${label} ${field.name}`)
+        result.push(field)
+        changes++
+    }
+    if (correction.addFieldsFrom) {
+        const added = fieldsOf(correction.addFieldsFrom)
+        for (const field of added)
+            if (result.some((item) => item.name === field.name))
+                throw new Error(`The fixture already has ${label} ${field.name}`)
+        if (added.length === 0) throw new Error(`The correction adds no fields to ${label}`)
+        result = [...structuredClone(added), ...result]
+        changes++
+    }
+    if (changes === 0) throw new Error(`The correction of ${label} changes nothing`)
+    return result
+}
+
+/**
+ * Returns the fixture and overlay with the reviewed corrections applied. The inputs stay as they are
+ * @param {{ fixture: Fixture, overlay: Record<string, Overlay>, corrections: Corrections }} input
+ */
+function applyCorrections({ fixture, overlay: original, corrections }) {
+    const known = ["objects", "events", "newEvents"]
+    for (const key of Object.keys(corrections))
+        if (!known.includes(key)) throw new Error(`The corrections have the unknown list ${key}`)
+    const fixed = /** @type {Fixture} */ (structuredClone(fixture))
+    const overlay = /** @type {Record<string, Overlay>} */ (structuredClone(original))
+    // A gateway object is named by its anchor and an HTTP API object by its link
+    const section = (/** @type {string} */ name) => {
+        const found = name.startsWith("/") ? fixed.httpObjects[name] : fixed.objects[name]
+        if (!found) throw new Error(`The correction names the object ${name}, which the fixture lacks`)
+        return found
+    }
+    const originalSection = (/** @type {string} */ name) =>
+        (name.startsWith("/") ? fixture.httpObjects : fixture.objects)[name]
+    const seen = new Set()
+    for (const correction of corrections.objects ?? []) {
+        checkEvidence(correction, correction.object)
+        if (seen.has(correction.object)) throw new Error(`The corrections list ${correction.object} twice`)
+        seen.add(correction.object)
+        const target = section(correction.object)
+        target.fields = correctFields(
+            /** @type {ObjectSection} */ (originalSection(correction.object)).fields,
+            correction,
+            correction.object,
+            (link) => section(link).fields,
+        )
+    }
+    for (const correction of corrections.events ?? []) {
+        checkEvidence(correction, correction.event)
+        if (seen.has(correction.event)) throw new Error(`The corrections list ${correction.event} twice`)
+        seen.add(correction.event)
+        const event = fixed.events[correction.event]
+        if (!event) throw new Error(`The correction names the event ${correction.event}, which the fixture lacks`)
+        const { nullable = {}, event: name, ...own } = correction
+        const hasOwn = ["optional", "replaceFields", "addFields", "addFieldsFrom"].some((key) => key in own)
+        if (hasOwn) event.fields = correctFields(event.fields, own, name, (link) => section(link).fields)
+        else if (Object.keys(nullable).length === 0) throw new Error(`The correction of ${name} changes nothing`)
+        // A field the overlay adds inside a field of the event, such as the member of an added thread member
+        for (const [key, names] of Object.entries(nullable)) {
+            const within = overlay[name]?.within?.[key]
+            if (!within) throw new Error(`The correction names ${name} ${key}, which the overlay lacks`)
+            overlay[name].within = {
+                ...overlay[name].within,
+                [key]: correctFields(
+                    within,
+                    { reason: own.reason, evidence: own.evidence, nullable: names },
+                    `${name} ${key}`,
+                    () => [],
+                ),
+            }
+        }
+    }
+    for (const correction of corrections.newEvents ?? []) {
+        checkEvidence(correction, correction.event)
+        if (fixed.events[correction.event])
+            throw new Error(`Fluxer's documents now list ${correction.event}, so its correction is no longer needed`)
+        if (correction.fields.length === 0 || typeof correction.scope !== "string")
+            throw new Error(`The correction ${correction.event} must give a scope and fields`)
+        fixed.events[correction.event] = {
+            file: "",
+            anchor: "",
+            scope: correction.scope,
+            prose: correction.reason,
+            fields: correction.fields,
+            undocumented: true,
+        }
+    }
+    return {
+        fixture: fixed,
+        overlay,
+        stamp: createHash("sha256").update(JSON.stringify(corrections)).digest("hex").slice(0, 16),
+    }
+}
+
+/**
+ * Renders both generated files from the fixture, overlay and corrections, formatted as the repository formats them
+ * @param {{ fixture: Fixture, overlay: Record<string, Overlay>, corrections: Corrections }} input
+ */
+export async function renderGatewayTypes(input) {
+    const { fixture, overlay, stamp } = applyCorrections(input)
     // Every documented object becomes one unexported interface named after its anchor, which GatewayPayloadObjects
     // exposes by documentation address. A gateway object whose name an HTTP API object also has gets a Gateway prefix
     /** @type {Map<string, string>} */
@@ -80,7 +246,7 @@ export async function renderGatewayTypes({ fixture, overlay }) {
         return name
     }
     /**
-     * @param {Shape} shape
+     * @param {any} shape A documented shape, or one of the shapes a correction adds
      * @param {Field[]} [extra]
      * @param {string} [omit] A field the description says the object arrives without, such as user on a message's member
      * @returns {string}
@@ -102,6 +268,20 @@ export async function renderGatewayTypes({ fixture, overlay }) {
             case "boolean":
                 type = "boolean"
                 break
+            case "true":
+                type = "true"
+                break
+            case "struct":
+                type = literal(shape.fields)
+                break
+            case "union":
+                type = shape.members.map((member) => typeOf(member)).join(" | ")
+                break
+            case "partial": {
+                const whole = typeOf(shape.of)
+                type = `Pick<${whole}, ${shape.require.map(quote).join(" | ")}> & Partial<${whole}>`
+                break
+            }
             case "object":
                 type = "{ readonly [field: string]: unknown }"
                 break
@@ -115,6 +295,14 @@ export async function renderGatewayTypes({ fixture, overlay }) {
                 if (!section)
                     throw new Error(`The fixture has no object ${shape.kind === "ref" ? shape.object : shape.link}`)
                 type = objectType(shape.kind === "ref" ? gatewayObjectLink(fixture, shape.object) : shape.link)
+                if (shape.with) {
+                    // Fields a correction gives the object replace its own of the same name
+                    const replaced = shape.with
+                        .map(({ name }) => name)
+                        .filter((name) => section.fields.some((field) => field.name === name))
+                    if (replaced.length > 0) type = `Omit<${type}, ${replaced.map(quote).join(" | ")}>`
+                    type = `${type} & ${literal(shape.with)}`
+                }
                 if (omit) {
                     if (!section.fields.some((field) => field.name === omit))
                         throw new Error(`A description leaves ${omit} out of ${type}, which has no such field`)
@@ -131,7 +319,7 @@ export async function renderGatewayTypes({ fixture, overlay }) {
                 type = `{ readonly [key: string]: ${typeOf(shape.value)} }`
                 break
             default:
-                throw new Error(`No type for the documented kind ${/** @type {{ kind: string }} */ (shape).kind}`)
+                throw new Error(`No type for the documented kind ${shape.kind}`)
         }
         if (extra) type = `${type} & ${literal(extra)}`
         return shape.nullable ? `${type} | null` : type
@@ -239,17 +427,21 @@ export async function renderGatewayTypes({ fixture, overlay }) {
 
     const commit = fixture.source.commit
     const header = `// Generated by scripts/gateway-types.js from Fluxer's gateway and HTTP API documentation at commit
-// ${commit} through tests/contract/fixtures/gateway-docs.json,
-// so edit the generator or the fixture rather than this file`
+// ${commit} through tests/contract/fixtures/gateway-docs.json and the reviewed corrections in
+// scripts/gateway-types-corrections.json (stamp ${stamp}),
+// so edit the generator, the fixture or the corrections rather than this file`
     const eventNames = Object.keys(fixture.events).sort()
     const objectLinks = [...objectNames.keys()].sort()
     const objectSection = (/** @type {string} */ link) =>
         link.startsWith("/gateway/")
             ? fixture.objects[/** @type {string} */ (link.split("#")[1])]
             : fixture.httpObjects[link]
-    const eventLink = (/** @type {string} */ name) => {
+    // An event the documents never list says so, and its type follows Fluxer's source
+    const eventSource = (/** @type {string} */ name) => {
         const event = fixture.events[name]
-        return `${docsOrigin}/gateway/${event.file.replace(/\.md$/, "")}/#${event.anchor}`
+        return event.undocumented
+            ? "Fluxer's documentation does not list it, so the type follows Fluxer's gateway source"
+            : `Fluxer's documentation: ${docsOrigin}/gateway/${event.file.replace(/\.md$/, "")}/#${event.anchor}`
     }
     // A payload that is more than one named type gets an unexported alias of its own, so the reference shows one name per
     // dispatch type and the field lists stay in these generated declarations
@@ -260,16 +452,17 @@ export async function renderGatewayTypes({ fixture, overlay }) {
         if (/^[A-Z]\w*$/.test(type) || /^GatewayDispatchPayloads\["[A-Z_]+"\]$/.test(type)) return [name, type]
         const alias = `${pascal(name)}Payload`
         if (objectLinks.some((link) => objectNames.get(link) === alias)) throw new Error(`${alias} names an object too`)
-        aliases.push(`/** The data of ${name}. Fluxer's documentation: ${eventLink(name)} */
+        aliases.push(`/** The data of ${name}. ${eventSource(name)} */
 type ${alias} = ${type}`)
         return [name, alias]
     })
     const payloads = `${header}
 
 /**
- * The data of each gateway dispatch type that Fluxer's documentation describes, keyed by its dispatch type, with
- * Fluxer's own field names. Read it through a raw event whose documented is true, where t selects the entry.
- * These types come from the documentation at the SDK's reviewed Fluxer commit and check nothing at runtime. Fluxer can
+ * The data of each gateway dispatch type that Fluxer's documentation describes, or that Fluxer's source shows it sends,
+ * keyed by its dispatch type, with Fluxer's own field names. Read it through a raw event whose documented is true,
+ * where t selects the entry. These types come from the documentation at the SDK's reviewed Fluxer commit, with
+ * reviewed corrections where Fluxer's source sends something else, and check nothing at runtime. Fluxer can
  * send fields added after that commit, leave out fields its documentation lists or change a shape, so check a value
  * before relying on it. Editors show each field with Fluxer's own description, and each entry links its documentation
  *
@@ -278,7 +471,7 @@ type ${alias} = ${type}`)
 export interface GatewayDispatchPayloads {
 ${payloadTypes
     .map(
-        ([name, type]) => `    /** Fluxer's documentation: ${eventLink(/** @type {string} */ (name))} */
+        ([name, type]) => `    /** ${eventSource(/** @type {string} */ (name))} */
     readonly ${name}: ${type}`,
     )
     .join("\n")}
@@ -332,11 +525,12 @@ ${eventNames.map((name) => `    ${quote(name)},`).join("\n")}
     return { payloads: await formatted(payloads, payloadsPath), names: await formatted(names, namesPath) }
 }
 
-/** Reads the committed fixture and overlay */
+/** Reads the committed fixture, overlay and corrections */
 export async function readGatewayTypeSources() {
     return {
         fixture: /** @type {Fixture} */ (JSON.parse(await readFile(fixturePath, "utf8"))),
         overlay: /** @type {Record<string, Overlay>} */ (JSON.parse(await readFile(overlayPath, "utf8"))),
+        corrections: /** @type {Corrections} */ (JSON.parse(await readFile(correctionsPath, "utf8"))),
     }
 }
 

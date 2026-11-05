@@ -29,14 +29,15 @@ test.each(modes)(
         expect(replacement.embeds).toEqual([{ type: "rich", title: "Replacement" }])
         expect(server.requests[3]?.body).not.toHaveProperty("content")
         expect((await api.edit({ content: "", embeds: [{ title: "Embed only" }] })).content).toBe("")
-        // The fixture rejects an edit that would leave the message empty, so the SDK forwards it unchanged
-        await expect(api.edit({ embeds: [] })).rejects.toMatchObject({ reason: "rejected", status: 400 })
+        // Fluxer refuses an edit without flags that has no visible content, embed or attachment, whatever the message
+        // keeps, so clearing embeds alone fails locally
+        await expect(api.edit({ embeds: [] })).rejects.toMatchObject({ reason: "input", status: null })
         expect((await api.edit({ content: "Plain text", embeds: [] })).embeds).toEqual([])
         expect(server.requests.map((r) => r.method)).not.toContain("GET")
         expect(server.requests.map((r) => r.url)).toEqual([
             "https://fluxer.com/api/v1/channels/20/messages",
             "https://fluxer.com/api/v1/channels/20/messages",
-            ...Array.from({ length: 5 }, () => "https://fluxer.com/api/v1/channels/20/messages/10"),
+            ...Array.from({ length: 4 }, () => "https://fluxer.com/api/v1/channels/20/messages/10"),
         ])
     },
 )
@@ -68,6 +69,23 @@ test.each(modes)("%s reads direct embed fields only from indexed array entries",
     const before = server.requests.length
     await rejectsInput(api.send({ embeds: [{ fields: iteratorMaskedField }] } as unknown as MessageInput))
     expect(server.requests).toHaveLength(before)
+})
+
+test.each(modes)("%s sends embed fields with empty names and values unchanged, as Fluxer accepts", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    // Fluxer trims before measuring, so a blank name counts as empty and a padded 256-unit name still fits
+    const fields = [
+        { name: "Status", value: "" },
+        { name: "", value: "Online" },
+        { name: "", value: "" },
+        { name: " \u000c ", value: " " },
+        { name: ` ${"x".repeat(256)} `, value: "x".repeat(1024) },
+    ]
+    await api.send({ embeds: [{ fields }] })
+    await api.reply({ embeds: [{ fields }] })
+    await api.edit({ embeds: [{ fields }] })
+    expect(server.requests.map((request) => request.body.embeds?.[0]?.fields)).toEqual([fields, fields, fields])
 })
 
 test.each(modes)("%s preserves valid leap-day offset and 24:00 embed timestamps", async (mode) => {
@@ -134,11 +152,17 @@ test.each(modes)(
         }
         server.set(wire([{ type: "rich", title: null, fields: null, author: { name: "Author", icon_url: null } }]))
         expect((await api.fetch()).embeds).toEqual([{ type: "rich", author: { name: "Author" } }])
-        // Field-type rows are covered by the decoder table. These rows cover a missing type, media without flags,
-        // more than one child and an impossible calendar date
+        // Fluxer leaves flags out of media stored without them (fluxer_messages/src/types.rs:312-313 at 0098958f), which
+        // reads as no flags, while flags of the wrong type still fail
+        server.set(wire([{ type: "image", image: { url: "x" }, thumbnail: { url: "y", flags: 32 } }]))
+        expect((await api.fetch()).embeds).toEqual([
+            { type: "image", image: { url: "x", flags: 0 }, thumbnail: { url: "y", flags: 32 } },
+        ])
+        // Field-type rows are covered by the decoder table. These rows cover a missing type, media with flags of the
+        // wrong type, more than one child and an impossible calendar date
         for (const bad of [
             [{}],
-            [{ type: "rich", image: { url: "x" } }],
+            [{ type: "rich", image: { url: "x", flags: "0" } }],
             [{ type: "rich", children: [{ type: "x" }, { type: "y" }] }],
             [{ type: "rich", timestamp: "2025-02-29T00:00:00.000Z" }],
         ]) {
@@ -178,6 +202,16 @@ test.each(modes)(
     },
 )
 
+test.each(modes)("%s sends an embed without values, which message sends and edits accept", async (mode) => {
+    const server = await fixture()
+    const api = await driver(mode)
+    // Channel message routes parse the raw body, so an empty embed object stays an object Fluxer accepts
+    // (MessageRequestParser.ts:383-402, MessageRequestSchemas.ts:100-120)
+    await api.send({ content: "Text", embeds: [{}] })
+    await api.edit({ content: "Text", embeds: [{}, { title: "" }] })
+    expect(server.requests.map((request) => request.body.embeds)).toEqual([[{}], [{}, { title: "" }]])
+})
+
 test.each(modes)("%s rejects invalid input before dispatch without exposing private embed contents", async (mode) => {
     const server = await fixture()
     const api = await driver(mode)
@@ -192,16 +226,31 @@ test.each(modes)("%s rejects invalid input before dispatch without exposing priv
         { timestamp: "2025-02-29T00:00:00.000Z" },
         { url: "javascript:alert(1)" },
         { image: { url: "attachment://file.png" } },
+        // Message sends and channel edits take an empty string literally, so these fail Fluxer's own checks
         { author: { name: "" } },
+        { author: { name: "Author", url: "" } },
+        { footer: { text: "" } },
+        { image: { url: "" } },
+        { image: { url: "https://example.com/a.png", description: "" } },
+        { url: "" },
+        { timestamp: "" },
         { footer: { text: "x", unknown: true } },
         { image: {} },
         { fields: [{ name: "n" }] },
+        { fields: [{ name: "x".repeat(257), value: "v" }] },
+        { fields: [{ name: "n", value: "x".repeat(1025) }] },
         { fields: [{ name: "n", value: "v", inline: null }] },
         { fields: Array.from({ length: 26 }, () => ({ name: "n", value: "v" })) },
     ]
     for (const embed of invalid) {
         const body = { embeds: [{ description: "private-fixture-sentinel", ...embed }] } as { embeds: EmbedInput[] }
-        for (const operation of [() => api.send(body), () => api.reply(body), () => api.edit(body)]) {
+        // An edit without attachments may name a file the message already has, so only sends need a new upload
+        const existingFile = embed.image?.url === "attachment://file.png"
+        for (const operation of [
+            () => api.send(body),
+            () => api.reply(body),
+            ...(existingFile ? [] : [() => api.edit(body)]),
+        ]) {
             const error = await operation().then(
                 () => undefined,
                 (error) => error,

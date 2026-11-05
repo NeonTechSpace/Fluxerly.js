@@ -8,7 +8,7 @@ import type { MessageCore } from "#sdk/messages"
 import type { MessageDecoder } from "./message-fields.js"
 import { inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { decodeMessage } from "./message.js"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, inputId, record } from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 
 /** Compare validated pin timestamps by instant, retaining every fractional digit and normalizing timezone offsets */
@@ -24,10 +24,16 @@ export function comparePinTimestamps(left: string, right: string): number {
     return first < second ? -1 : first > second ? 1 : 0
 }
 
-export function encodePinsQuery(channel: unknown, query: unknown) {
+/** Validate the channel and query. The result carries the trimmed channel ID, which the request and its decoding use */
+export function encodePinsQuery(rawChannel: unknown, query: unknown) {
     const input = query === undefined ? {} : query
-    if (!identifier(channel))
-        return inputValidationFailure("channelId", "format", "Channel IDs must be decimal strings")
+    const channelId = inputId(rawChannel)
+    if (channelId === undefined)
+        return inputValidationFailure(
+            "channelId",
+            "format",
+            "Channel IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+        )
     if (!record(input)) return inputValidationFailure("query", "type", "Pin query must be an object")
     const unsupported = unsupportedKeyFailure(input, ["limit", "before"], "query", "the pin query")
     if (unsupported) return unsupported
@@ -44,7 +50,7 @@ export function encodePinsQuery(channel: unknown, query: unknown) {
         )
     const params = new URLSearchParams({ limit: String(limit) })
     if (before !== undefined) params.set("before", before)
-    return { limit, params }
+    return { channelId, limit, params }
 }
 
 export function decodePinsPage(

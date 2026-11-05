@@ -13,7 +13,7 @@ import { calculatePermissions } from "./permissions.js"
 import { encodeMemberSearchQuery, memberSearch } from "./member-search.js"
 import { Pagination, defaultMaxPages } from "./pagination.js"
 import { suspendInput } from "./defects.js"
-import { identifier, record } from "./decode/primitives.js"
+import { inputId, record } from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { RequestOptions } from "#sdk/client"
 
@@ -57,7 +57,7 @@ export function searchMembers(
                 ),
             )
         return Effect.succeed([request, timeout] as const)
-    }).pipe(Effect.flatMap(([request, timeout]) => searchValidated(owner, guildId, request, timeout)))
+    }).pipe(Effect.flatMap(([request, timeout]) => searchValidated(owner, request.guildId, request, timeout)))
 }
 
 /** Run one validated member search, checking Manage Guild first when the filters select sensitive join sources */
@@ -118,7 +118,7 @@ function searchValidated(
 
 export function searchMemberPagination(
     owner: Pick<ClientOwner, "guild" | "logical" | "subscribe" | "state"> & { readonly defaultTimeoutMs?: number },
-    guildId: string,
+    rawGuildId: string,
     filters: Omit<MemberSearchQuery, "limit">,
     limits: MemberSearchIterationLimits,
     options?: RequestOptions,
@@ -196,8 +196,15 @@ export function searchMemberPagination(
                     "Member search timeout must be an integer from 1 through 2,147,483,647 ms",
                 ),
             )
-        if (!identifier(guildId))
-            return invalid(inputValidationFailure("guildId", "format", "Guild IDs must be decimal strings"))
+        const guildId = inputId(rawGuildId)
+        if (guildId === undefined)
+            return invalid(
+                inputValidationFailure(
+                    "guildId",
+                    "format",
+                    "Guild IDs must be decimal strings, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                ),
+            )
         const validated = encodeMemberSearchQuery(filters)
         if (validated instanceof InputValidationFailure) return invalid(validated)
         const copied = validated.query
