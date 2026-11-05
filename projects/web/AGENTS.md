@@ -48,10 +48,10 @@ They are named once, at the top of `src/styles/global.css`
 
 ## Motion
 
-Every page should feel captivating and immersive, the docs calmer, and reading always comes first. Move only transforms and opacity, follow the page's scroll with scroll timelines where you can, and switch everything off under `html[data-still]`. It already counts reduced motion when no choice is saved, and a media query would overrule a visitor's saved choice. Shared effects live in `src/styles/immersion.css`.
+Every page should feel captivating and immersive, the docs calmer, and reading always comes first. Move only transforms and opacity, follow the page's scroll with scroll timelines where you can, and switch everything off under `html[data-still]`. Still stops everything that moves. A fade that only changes opacity in place, such as the mascot's preview sharpening into the full picture, may stay. `html[data-still]` already counts reduced motion when no choice is saved, and a media query would overrule a visitor's saved choice. Shared effects live in `src/styles/immersion.css`
 
 ## Visual changes
 
 Have two independent reviewers score fixed screens out of 10 and add the round to `scripts/checks/design-scores.json`. A reviewer's fall of more than 0.2 from the immediately preceding round fails the test when that reviewer appears in both rounds, so fix it rather than editing the log
 
-Look at the rendered screens yourself as well. Measurements passed while a section's rail was missing from one mode, and only the pictures showed it.
+Look at the rendered screens yourself as well. Measurements passed while a section's rail was missing from one mode, and only the pictures showed it

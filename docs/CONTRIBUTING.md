@@ -218,6 +218,8 @@ Only human-written text does not need a note, even if a model posts it. This
 exception does not remove the PR's requirement to disclose models used where it
 applies
 
+Maintainers do not need the note
+
 ## Review and reconsideration
 
 Permission to submit a PR is separate from approval to merge it. A PR may be
