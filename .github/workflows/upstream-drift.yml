@@ -29,6 +29,8 @@ jobs:
           install: false
       - name: Read the previous upstream observation
         id: baseline
+        # The comparison step uses this observation only while the repository pin is the one it recorded, and otherwise
+        # the pin, so a review that moved the pin is never compared with an older report
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

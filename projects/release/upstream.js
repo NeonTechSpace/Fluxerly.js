@@ -37,16 +37,30 @@ export const endpointDocsDirectory = "fluxer_docs/src/content/docs/http-api"
 // Fluxer paths whose changes can reach a bot, listed for review. A commit touching one is not proof of bot impact
 const watchedPaths = [
     "fluxer_api/src/api",
+    // Rate limit headers and retry_after, the search matching that message search forwards to, the filename media
+    // type lookup that decides which attachment:// files can be embed media, and signed attachment URLs
+    "fluxer_api/pkgs/rate_limit",
+    "fluxer_api/pkgs/elasticsearch_search/src",
+    "fluxer_api/pkgs/mime_utils/src",
+    "fluxer_api/pkgs/media_proxy_utils/src",
+    // The message, user and shared services that build message, history, embed and partial user JSON
+    "fluxer_messages/src",
+    "fluxer_users/src",
+    "fluxer_common/src",
     "fluxer_gateway/src",
     "fluxer_gateway/rebar.config",
     "packages/schema",
     "packages/constants",
+    // Default and trait limits, such as bot attachment sizes and attachment counts
+    "packages/limits/src",
     "packages/errors",
     "packages/instance_bootstrap",
     "fluxer_media_proxy/src",
     "fluxer_unfurl/src",
     "fluxer_docs/src/content/docs/gateway",
     "fluxer_docs/src/content/docs/http-api",
+    // Fluxer's upload and rate limit guides
+    "fluxer_docs/src/content/docs/topics",
     "pnpm-workspace.yaml",
 ]
 // Folders whose subfolders are compared with the baseline's: the repository root and Fluxer's package folders. A new
@@ -63,7 +77,7 @@ const setKeys = new Set(["enum", "required", "type", "tokens"])
 
 /**
  * @typedef {{ path: string, sha256: string }} PinnedFile
- * @typedef {{ repository: string, branch: string, commit: string, files: { openapi: PinnedFile }, endpointDocs?: PinnedFile[], gatewayDocs: PinnedFile, rateLimits: PinnedFile, sourceFacts?: PinnedFile[], voice?: PinnedFile[], folders?: string[] }} Manifest
+ * @typedef {{ repository: string, branch: string, commit: string, pin?: string, files: { openapi: PinnedFile }, endpointDocs?: PinnedFile[], gatewayDocs: PinnedFile, rateLimits: PinnedFile, sourceFacts?: PinnedFile[], voice?: PinnedFile[], folders?: string[] }} Manifest
  * @typedef {{
  *     resolveCommit(repository: string, branch: string): Promise<string>,
  *     fetchFile(repository: string, commit: string, path: string): Promise<Buffer>,
@@ -132,6 +146,8 @@ export function validateManifest(manifest) {
         !repositoryPattern.test(manifest?.repository ?? "") ||
         typeof manifest.branch !== "string" ||
         !commitPattern.test(manifest.commit ?? "") ||
+        // An observation records the repository pin it ran under, which decides whether the next run may compare with it
+        (manifest.pin !== undefined && !commitPattern.test(manifest.pin)) ||
         !files ||
         Object.keys(files).sort().join(",") !== "openapi" ||
         !Object.values(files).every(pinnedPath) ||
@@ -820,7 +836,7 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
         "",
         `Baseline: ${kind} at ${escape(result.pinnedCommit.slice(0, 10))}, upstream now at ${escape(result.commit.slice(0, 10))}`,
         "",
-        ...(baseline.reason ? [`Baseline fallback: ${escape(baseline.reason)}`, ""] : []),
+        ...(baseline.reason ? [`Why this baseline: ${escape(baseline.reason)}`, ""] : []),
         ...changeReport(result),
     ]
     if (sincePin)
@@ -1155,6 +1171,9 @@ function parseArguments(args) {
 }
 
 /**
+ * The repository pin comes first: The previous run's observation is the baseline only when it recorded the pin it ran
+ * under and the pin has not moved since. Otherwise the reviewed pin is newer than what that run reported, or may be, so
+ * the comparison starts from the pin. Unusable observations fall back to the pin too, each with its reason
  * @param {Manifest} manifest
  * @param {string | undefined} path
  * @returns {Promise<Baseline>}
@@ -1182,6 +1201,18 @@ async function readBaseline(manifest, path) {
             previous.gatewayDocs.path !== manifest.gatewayDocs.path ||
             previous.rateLimits.path !== manifest.rateLimits.path
         ) throw new Error("Baseline target differs from the repository manifest")
+        if (previous.pin === undefined)
+            return {
+                manifest,
+                kind: "repository-pin",
+                reason: "The previous run's observation does not record the repository pin it ran under, so the pin may have moved since and is used",
+            }
+        if (previous.pin !== manifest.commit)
+            return {
+                manifest,
+                kind: "repository-pin",
+                reason: `The repository pin moved from ${previous.pin.slice(0, 10)} to ${manifest.commit.slice(0, 10)} since the previous run, so the pin is used`,
+            }
         // A source file the repository pin watches but the previous run did not, such as one added since, compares with
         // its pinned hash until a run records it
         const sourceFacts = manifest.sourceFacts?.map((fact) => previous.sourceFacts?.find(({ path }) => path === fact.path) ?? fact)
@@ -1191,6 +1222,7 @@ async function readBaseline(manifest, path) {
         return {
             manifest: { ...previous, ...(sourceFacts ? { sourceFacts } : {}), ...(voice ? { voice } : {}), ...(folders ? { folders } : {}) },
             kind: "previous-run",
+            reason: `The repository pin is still ${manifest.commit.slice(0, 10)}, as in the previous run, so that run's observation is used`,
         }
     } catch {
         return { manifest, kind: "repository-pin", reason: "Previous-run baseline is invalid or targets different upstream documents" }
@@ -1200,14 +1232,16 @@ async function readBaseline(manifest, path) {
 /**
  * @param {Manifest} manifest
  * @param {Awaited<ReturnType<typeof checkUpstream>>} result
+ * @param {string} [pin] The repository pin the run ran under, which a recorded observation keeps for the next run
  * @returns {Manifest}
  */
-function observation(manifest, result) {
+function observation(manifest, result, pin) {
     const file = (/** @type {string} */ key) => ({ path: result.files[key].path, sha256: result.files[key].current })
     return {
         repository: manifest.repository,
         branch: manifest.branch,
         commit: result.commit,
+        ...(pin ? { pin } : {}),
         files: { openapi: file("openapi") },
         gatewayDocs: { path: result.gatewayDocs.path, sha256: result.gatewayDocs.current },
         rateLimits: { path: result.rateLimits.path, sha256: result.rateLimits.current },
@@ -1237,7 +1271,8 @@ export async function runUpstream(args, {
     const baseline = await readBaseline(manifest, options.baseline)
     // An update records the commit that was reviewed, which is not the branch head once upstream has moved
     const result = await checkUpstream(baseline.manifest, options.update ? atCommit(source, options.update) : source)
-    const observed = observation(baseline.manifest, result)
+    // A moved pin is the reviewed commit itself, so only a recorded observation names the pin it ran under
+    const observed = observation(baseline.manifest, result, options.update ? undefined : manifest.commit)
     if (options.update) {
         // Moving the pin also pins the docs files the website's endpoint map reads at that commit
         const { files, gatewayDocs, rateLimits, sourceFacts, voice, folders, ...identity } = observed

@@ -241,6 +241,7 @@ test("An observation becomes the next run's baseline, reports nothing unchanged,
     assert.deepEqual(recorded, {
         ...manifest,
         commit: current,
+        pin: pinned,
         files: {
             openapi: { path: "openapi.json", sha256: hash(changedDocument["openapi.json"]) },
         },
@@ -268,11 +269,60 @@ test("An observation becomes the next run's baseline, reports nothing unchanged,
     assert.deepEqual(JSON.parse(readFileSync(files.manifestFile, "utf8")), manifest)
 })
 
+test("The repository pin comes first, and a previous observation is the baseline only while the pin it recorded is current", async (t) => {
+    const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument })
+    const files = workspace(t, manifest)
+    const args = ["--baseline", files.baselineFile, "--record", files.recordFile]
+    // The previous run observed upstream at the current commit, so only that observation can hide the change since the pin
+    await runUpstream(["--record", files.recordFile], { ...files, source })
+    const { pin: recordedPin, ...observed } = JSON.parse(readFileSync(files.recordFile, "utf8"))
+    assert.equal(recordedPin, pinned, "An observation records the pin it ran under")
+    const older = "d".repeat(40)
+    const cases = [
+        // Recorded before observations named their pin, like every run before this rule
+        [observed, /does not record the repository pin/],
+        // The pin moved after that run, such as after a review
+        [{ ...observed, pin: older }, new RegExp(`moved from ${older.slice(0, 10)} to ${pinned.slice(0, 10)}`)],
+    ]
+    for (const [previous, reason] of cases) {
+        writeFileSync(files.baselineFile, JSON.stringify(previous))
+        const result = await runUpstream(args, { ...files, source })
+        assert.equal(result.baseline.kind, "repository-pin")
+        assert.equal(result.result.pinnedCommit, pinned)
+        assert.equal(result.result.drift, true, "The change since the pin stays visible")
+        assert.match(result.baseline.reason, reason)
+        assert.ok(readFileSync(files.summaryFile, "utf8").includes(`Why this baseline: ${result.baseline.reason}`))
+        assert.equal(JSON.parse(readFileSync(files.recordFile, "utf8")).pin, pinned, "The new observation records the pin")
+    }
+    // The posted comment names the baseline and why, as the job summary does
+    const history = [
+        { sha: current, subject: "Gateway change", paths: ["fluxer_gateway/src/session.erl"] },
+        { sha: pinned, subject: "Baseline", paths: [] },
+    ]
+    writeFileSync(files.baselineFile, JSON.stringify({ ...observed, pin: older }))
+    await runUpstream([...args, "--comment", files.commentFile], { ...files, source: withHistory(source, history) })
+    assert.match(readFileSync(files.commentFile, "utf8"), /Why this baseline: The repository pin moved/)
+    writeFileSync(files.baselineFile, JSON.stringify({ ...observed, pin: pinned }))
+    const unmoved = await runUpstream(args, { ...files, source })
+    assert.equal(unmoved.baseline.kind, "previous-run")
+    assert.equal(unmoved.result.pinnedCommit, current)
+    assert.equal(unmoved.result.drift, false)
+    assert.match(unmoved.report, new RegExp(`Why this baseline: The repository pin is still ${pinned.slice(0, 10)}`))
+    // A recorded pin that is not a full commit is an invalid observation, which falls back as before
+    writeFileSync(files.baselineFile, JSON.stringify({ ...observed, pin: "main" }))
+    const invalid = await runUpstream(args, { ...files, source })
+    assert.equal(invalid.baseline.kind, "repository-pin")
+    assert.match(invalid.baseline.reason, /invalid/)
+    // Moving the pin records the reviewed commit itself, without a pin of its own
+    await runUpstream(["--update", current], { ...files, source })
+    assert.equal(JSON.parse(readFileSync(files.manifestFile, "utf8")).pin, undefined)
+})
+
 test("A run that compares with the previous observation and the pin reads each upstream file once", async (t) => {
     const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument })
     const files = workspace(t, manifest)
     // The previous run saw the pinned commit, so both comparisons read the branch head and the pinned commit
-    writeFileSync(files.baselineFile, JSON.stringify(manifest))
+    writeFileSync(files.baselineFile, JSON.stringify({ ...manifest, pin: manifest.commit }))
     const result = await runUpstream(["--baseline", files.baselineFile], { ...files, source })
     assert.equal(result.baseline.kind, "previous-run")
     assert.ok(result.sincePin)
@@ -283,7 +333,7 @@ test("A run that compares with the previous observation and the pin reads each u
 test("A new upstream commit that leaves every watched document unchanged is not document drift", async (t) => {
     const { manifest, source } = upstream({ [pinned]: document, [current]: document })
     const files = workspace(t, manifest)
-    writeFileSync(files.baselineFile, JSON.stringify(manifest))
+    writeFileSync(files.baselineFile, JSON.stringify({ ...manifest, pin: manifest.commit }))
     const observed = await runUpstream(["--record", files.recordFile, "--baseline", files.baselineFile], { ...files, source })
     assert.equal(observed.baseline.kind, "previous-run")
     assert.equal(observed.result.commit, current)
@@ -629,7 +679,10 @@ test("A comment reports only the change since the last report, while the job sum
     const nextDocument = { ...changedDocument, [`${limits}/Channel.ts`]: bucket("channel:read::guild_id") }
     const { manifest, source } = upstream({ [pinned]: document, [current]: changedDocument, [next]: nextDocument })
     const files = workspace(t, manifest)
-    writeFileSync(files.baselineFile, JSON.stringify({ ...manifest, commit: current, gatewayDocs: { path: gateway, sha256: gatewayHash(changedDocument) } }))
+    writeFileSync(
+        files.baselineFile,
+        JSON.stringify({ ...manifest, commit: current, pin: pinned, gatewayDocs: { path: gateway, sha256: gatewayHash(changedDocument) } }),
+    )
     const history = [commit("c", "Bucket change", "fluxer_api/src/api/limits.ts"), commit("b", "Baseline", "fluxer_app/src/Old.tsx")]
     await runUpstream(commentArgs(files), { ...files, source: withHistory({ ...source, resolveCommit: async () => next }, history) })
     assert.doesNotMatch(readFileSync(files.commentFile, "utf8"), /Since the repository pin/)
@@ -887,10 +940,9 @@ test("A previous observation recorded before a source file was watched compares 
     const { manifest, source } = upstream({ [pinned]: withRules(document, text), [current]: withRules(document, "export const limit = 50\n") })
     const files = workspace(t, watchingRules(manifest, text))
     // An observation from before sourceFacts existed
-    writeFileSync(files.baselineFile, JSON.stringify(manifest))
+    writeFileSync(files.baselineFile, JSON.stringify({ ...manifest, pin: manifest.commit }))
     const result = await runUpstream(["--baseline", files.baselineFile], { ...files, source })
     assert.equal(result.baseline.kind, "previous-run")
-    assert.equal(result.baseline.reason, undefined)
     assert.deepEqual(result.result.sourceFacts.map(({ path, changed }) => ({ path, changed })), [{ path: rules, changed: true }])
 })
 
@@ -996,10 +1048,9 @@ test("A previous observation recorded before voice paths were watched compares t
     const changed = { ...voiceDocument, [liveKit]: "export class LiveKitService { grant() {} }" }
     const { manifest, source } = upstream({ [pinned]: voiceDocument, [current]: changed })
     const files = workspace(t, watchingVoice(manifest, voiceDocument))
-    writeFileSync(files.baselineFile, JSON.stringify(manifest))
+    writeFileSync(files.baselineFile, JSON.stringify({ ...manifest, pin: manifest.commit }))
     const result = await runUpstream(["--baseline", files.baselineFile], { ...files, source })
     assert.equal(result.baseline.kind, "previous-run")
-    assert.equal(result.baseline.reason, undefined)
     assert.deepEqual(result.result.voice.map(({ path, changed }) => ({ path, changed })), [
         { path: voiceDocs, changed: false },
         { path: liveKit, changed: true },
