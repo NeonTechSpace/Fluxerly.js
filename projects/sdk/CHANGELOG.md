@@ -1,5 +1,180 @@
 # @neontechspace/fluxerly
 
+## 1002.0.0
+
+### Major Changes
+
+- ed7b0c7: Breaking changes, each with the code it affects and how to migrate:
+
+    - A multipart request with files, as inline uploads and webhook messages send, that Fluxer answers with HTTP 503, code `SERVICE_UNAVAILABLE` and `Retry-After: 5` now fails with outcome `rejected` instead of `unknown`, sets `details.uploadSlotsBusy`, and `errors.isRetryable` returns true for it. Fluxer gives this answer when its file upload slots stay busy for 10 seconds, while it reads the files and before it applies anything, so sending the message, edit or webhook message again after `retryAfterMs` cannot duplicate it. A call that read a stream source sets `details.streamUsed` and stays not retryable, because it needs a fresh stream. Fluxer's other 503 answers keep outcome `unknown`
+      Affected: Retry wrappers that use `errors.isRetryable`, which now repeat such an upload where they used to stop, and code that treats this answer as possibly applied
+      Migration: Wait `retryAfterMs` before repeating the call, and pass a new stream when `details.streamUsed` is set
+
+- ed7b0c7: Breaking changes, each with the code it affects and how to migrate:
+
+    - Embed URLs, in the embed, its author, its footer icon and its image and thumbnail, are now checked after Fluxer's text normalization, which removes form feeds and right-to-left overrides and trims surrounding whitespace. A URL that fits 2,048 characters only after trimming is now accepted and sent as given, and a blank URL still fails. A URL with credentials, such as `https://user:pass@example.com`, now fails with reason `input` and constraint `format` before sending. Fluxer refuses credentials, so it used to fail remotely with reason `rejected`
+      Affected: Code that sends URLs with credentials and handles Fluxer's refusal
+      Migration: Remove the credentials from the URL, and match reason `input`
+    - An `attachment://` reference in an embed image or thumbnail is now read after the same normalization and compared with the name Fluxer stores for each new upload. Fluxer turns spaces into underscores, a slash into an underscore, runs of dots into one dot, and drops characters outside letters, marks, numbers, underscores, dots and hyphens. An upload named `my photo.png` is now referenced as `attachment://my_photo.png`, and the reference `attachment://my photo.png` fails with reason `input` before sending. A reference with two dots in a row, such as `attachment://a..png`, no longer matches an upload with that name, which Fluxer stores as `a.png`
+      Affected: Code that references uploads whose names Fluxer changes
+      Migration: Reference the stored name, such as `attachment://my_photo.png`, and match reason `input`
+
+- ed7b0c7: Breaking changes, each with the code it affects and how to migrate:
+
+    - Emoji and sticker images larger than 512 KiB decoded are no longer refused locally, because Fluxer resolves the size limit per community and an instance may raise it. `emojis.create`, `stickers.create` and both `createMany` methods now send such an image, and an image Fluxer refuses as too large fails with reason `rejected` and an `apiError` with code `invalidFormBody` whose validation entry for the image has provider code `IMAGE_SIZE_EXCEEDS_LIMIT`. Base64 checks still run locally. The request body is now checked against Fluxer's fixed route limits instead: 15,029,592 encoded bytes for one upload and 36,001,112 for a batch, which fail with reason `input` and constraint `size` on `input` or `inputs`
+      Affected: Code that relies on an image over 512 KiB failing with reason `input` and constraint `size` on `image` before any request
+      Migration: Match an `apiError` with code `invalidFormBody` for an image Fluxer refuses as too large, and split a batch whose body exceeds 36,001,112 bytes
+
+- ed7b0c7: Breaking changes, each with the code it affects and how to migrate:
+
+    - Allowing `everyone` together with a nonempty `users` or `roles` list in `allowedMentions` now fails with reason `input`, constraint `relationship` and path `allowedMentions` before sending, for channel message edits and for sends, replies and webhook sends that have content or reply to a message. Fluxer reads the mention settings there and refuses that combination, so it used to fail remotely with reason `rejected` and an `apiError` with code `invalidFormBody`. A send with only embeds or files, and a webhook message edit, still send it, as Fluxer does not read the settings there
+      Affected: Code that matches reason `rejected` for this mistake
+      Migration: Allow `everyone` alone, or list user and role IDs without it, and match reason `input`
+    - A webhook message `avatarUrl` may now hold at most 2,048 characters after Fluxer's normalization, the limit Fluxer applies, instead of 8,192. A longer URL now fails with reason `input` before sending instead of being refused by Fluxer
+      Affected: Code that sends avatar URLs longer than 2,048 characters and handles Fluxer's refusal
+      Migration: Use a shorter avatar URL, and match reason `input`
+    - An image whose base64 has nonzero bits before its `=` padding now fails with reason `input` and constraint `format` before sending, with an explanation that names the padding. Fluxer refuses such base64, so it used to fail remotely with reason `rejected`. Buffer and other standard encoders never write it
+      Affected: Code that builds base64 by hand and handles Fluxer's refusal
+      Migration: Encode image bytes with `Buffer.from(bytes).toString("base64")` and match reason `input`
+    - In a webhook message edit, an embed whose values are all empty strings, such as `{}` or `{ title: "" }`, now fails with reason `input`, constraint `required` and path `embeds[]` before sending. On that route Fluxer reads empty strings as absent and refuses an embed left with nothing, so it used to fail remotely with reason `rejected`. Sends, replies, channel message edits and webhook sends still accept such an embed, as Fluxer does there
+      Affected: Code that edits webhook messages with embeds built from values that can be empty and handles Fluxer's refusal
+      Migration: Leave such an embed out of the edit, and match reason `input`
+    - A message edit without flags now fails with reason `input`, constraint `required` and path `input` before sending when it has no visible content, no embed and no attachment, such as `{ content: "" }` or `{ embeds: [] }` alone. This covers `messages.edit` and the webhook client's `editMessage`, where Fluxer reads empty content as null first. Fluxer checks the edit itself rather than the message it leaves, so such an edit used to fail remotely with reason `rejected` and an `apiError` with code `cannotSendEmptyMessage`. Content that is blank or only invisible characters, such as a zero-width space, counts as none, as in Fluxer
+      Affected: Code that clears the text or the embeds of a message alone, and code that matches reason `rejected` for it
+      Migration: Send the text or embeds that should stay, or include the message's current `flags` in the same edit, which Fluxer accepts with empty content, and match reason `input`
+    - A message send, reply or webhook send whose content is blank or only invisible characters, with no embed, attachment or sticker, now fails with reason `input` before sending. Fluxer refuses it, so it used to fail remotely with reason `rejected`
+      Affected: Code that sends whitespace as a message and handles Fluxer's refusal
+      Migration: Send visible text or another part, and match reason `input`
+    - An empty string in `sourceInviteCodes` of a member search, and an empty URL in `attachments.refreshUrls`, now fail with reason `input` before sending. Fluxer reads them as null and refuses the request, so they used to fail remotely with reason `rejected`
+      Affected: Code that passes such lists unfiltered and handles Fluxer's refusal
+      Migration: Leave empty entries out, and match reason `input`
+
+- ed7b0c7: Breaking changes, each with the code it affects and how to migrate:
+
+    - The route types of `client.rest.call` and the raw event's payload types now follow Fluxer's API description and documentation at commit 0098958f, with reviewed corrections where Fluxer's server sends or accepts something else. Fields that can be null or absent, and request fields Fluxer refuses, are now typed that way: `READY.guilds` can hold `{ id, unavailable: true }` placeholders, a member's `user` in the first `GUILD_CREATE` burst can hold only `id`, every audit log option is optional, the member of a `THREAD_MEMBERS_UPDATE` added member can be null, a channel `name` can be null for a group DM, a custom status can lack `expires_at` and `emoji_id`, audit log change values can be objects and lists of objects such as a forum's tags, the message edit body no longer offers `message_snapshots`, which Fluxer always refuses, and message search allows only the `current` scope, the only one Fluxer accepts from a bot
+      Affected: TypeScript code that reads these raw fields as always present or assigns them where a non-null value is required, and `client.rest.call` bodies that send `message_snapshots` on an edit or another search `scope`
+      Migration: Check a value for null or absence before using it, and drop the refused request fields, which Fluxer never accepted
+    - New raw fields and routes, which need no change: The profile badges of `GET /users/{target_id}/profile` gain an optional `quote`, the meme object that `READY` and the favorite meme events carry gains `nsfw`, the user settings object that `READY` and `USER_SETTINGS_UPDATE` carry gains `allow_mature_content_on_ios`, guild emoji and stickers gain `nsfw`, `READY` gains `geoip_country_code`, `INVITE_CREATE` gains an optional `guild_id`, the gateway user object gains the partial user fields such as `id` and `username`, member list items carry the member's presence, and thread member `id` and `user_id` are always present. `client.rest.call` also types Fluxer's public read routes `GET /invites/{invite_code}`, `GET /instance/badges`, `GET /.well-known/fluxer`, `GET /ip` and `GET /oauth2/applications/{id}/public`, and `GUILD_HEALTH_UPDATE`, which Fluxer sends but does not document, is part of the raw event's types and counts as documented
+
+- ed7b0c7: Lists that Fluxer caps at 10,000 entries now fail before sending when they are longer, with reason `input`, constraint `length` and an explanation that names the cap. This covers `permissionOverwrites` on channel creation and channel edits, channel position updates, role position updates and role hoist position updates. Fluxer refuses such a list, so it used to fail remotely
+
+    - Channel, role and role hoist position updates no longer check their encoded size, since 10,000 entries stay far below Fluxer's body limits. A position list that used to fail on its size now fails on its entry count
+      Affected: Code that sends more than 10,000 entries in one of these lists, or matches constraint `size` on a position update
+      Migration: Send at most 10,000 entries, and match constraint `length`
+
+- ed7b0c7: IDs with surrounding whitespace are now accepted wherever the SDK takes an ID. Fluxer trims the IDs in REST paths, queries and bodies and then requires a decimal without leading zeros from 0 through 9223372036854775807. A few Fluxer inputs are not trimmed, such as gateway IDs, a webhook's thread ID and a reaction's custom emoji ID, and the gateway also refuses 0. The SDK now trims each ID once and sends the trimmed ID everywhere, including those inputs, and uses it for the result and the cache, so `client.channels.fetch(" 123 ")` reads `/channels/123` and `client.channels.get(" 123 ")` finds the cached channel. This covers IDs in arguments, in input objects and in ID lists, cache lookups and deletes, gateway requests such as member chunks and member presence, the `snowflakes` and `format` helpers, asset URL builders and command owner IDs. Gateway requests and local filters such as collectors also require a positive ID. An ID that is not such a decimal after trimming still fails before sending, with the same reason and path as before
+
+    - An ID above 9223372036854775807 now fails before sending with reason `input`, or with the configuration error an option uses for an invalid ID. Fluxer refuses such an ID, so it used to fail remotely in a REST call. The helpers and asset URL builders already refused it
+      Affected: Code that passes IDs above the signed 64-bit maximum and handles Fluxer's refusal
+      Migration: Pass IDs Fluxer issued, and match reason `input`
+    - `snowflakes.isValid` now returns true for an ID with surrounding whitespace, and `snowflakes.parse`, `format.userMention` and the other helpers accept it and use the trimmed ID
+      Affected: Code that uses `snowflakes.isValid` to require an ID without whitespace
+      Migration: Compare the value with its `trim()` as well when the exact form matters
+
+- ed7b0c7: Names, codes, reasons, path values and link URLs now follow what Fluxer checks after its normalization, which removes U+000C and U+202E and trims whitespace. The SDK still sends the string as given, except for invite codes and Unicode reaction emoji, which it now sends normalized. What is accepted now, and what now fails with reason `input` before sending:
+
+    - Emoji names in `emojis.create`, `emojis.edit` and `emojis.createMany` are checked after normalization, so a name with surrounding whitespace, a form feed or U+202E around 2 through 32 ASCII letters, digits or underscores is accepted, where it used to fail
+    - The `guilds.editVanityUrl` method accepts the codes Fluxer turns into a valid one: It lowercases the code, turns each whitespace run into a hyphen and collapses repeated hyphens, so `My   Code` is stored as `my-code`. The answer is compared with that normalized code, so an accepted input no longer fails as a mismatch
+    - The `guilds.editVanityUrl` method now refuses a code whose normalized form contains `fluxer` with reason `input` and constraint `allowedValue`, as Fluxer always refuses it, so it used to fail remotely
+      Affected: Code that sets vanity codes containing fluxer and handles Fluxer's refusal
+      Migration: Choose a code without fluxer, and match reason `input`
+    - An `auditReason` is now measured after normalization. A reason of only U+202E, or that is empty after removing it, now fails with reason `input` and constraint `length`, because Fluxer silently drops such a reason and records the entry without it. A reason longer than 512 code units that shrinks to 512 or fewer once U+202E is removed is now sent
+      Affected: Code that sends a reason made only of U+202E and expects it to be recorded
+      Migration: Send a reason with visible text, and match reason `input`
+    - A reaction emoji may now hold at most 64 UTF-16 code units after normalization, the limit Fluxer applies, instead of 128. A name that normalizes to nothing, such as U+202E alone, fails too
+      Affected: Code that reacts with Unicode text of 65 through 128 code units
+      Migration: Use an emoji of at most 64 code units, and match reason `input`
+    - An invite code in `invites.fetch` and `invites.delete` may now hold at most 256 UTF-16 code units after normalization, where it had no limit. A code that normalizes to nothing fails too
+      Affected: Code that passes codes longer than 256 code units and handles Fluxer's refusal
+      Migration: Use a shorter code, and match reason `input`
+    - A webhook token for `createWebhookClient` may now hold at most 256 characters, the limit Fluxer applies, instead of 512. A longer token fails with a configuration error
+      Affected: Code that passes tokens longer than 256 characters
+      Migration: Use the token Fluxer issued
+    - A link channel `url` in `channels.create` and `channels.edit` now fails with reason `input` unless its normalized value is at most 2,048 code units, starts with `http://` or `https://`, parses as a URL and holds no `@` before its path, so no user name or password. It used to accept any absolute URL, such as `ftp://` or one with credentials, which Fluxer refuses. A URL with a form feed or U+202E that Fluxer removes before parsing is accepted
+      Affected: Code that sets link URLs with other schemes, with credentials or over 2,048 code units, and handles Fluxer's refusal
+      Migration: Use an http or https URL without credentials, and match reason `input`
+    - A webhook message `avatarUrl` is now checked as Fluxer checks it, after the same normalization as a link channel `url`: It must start with `http://` or `https://` in lowercase and hold no `@` before its path. So `HTTPS://cdn.example.com/a.png` and `https://@cdn.example.com/a.png` now fail with reason `input` before sending, where Fluxer used to refuse them, and a URL with a form feed or U+202E that Fluxer removes is now sent
+      Affected: Code that sends avatar URLs with an uppercase scheme or an `@` before the path and handles Fluxer's refusal
+      Migration: Use a lowercase `https://` URL without credentials, and match reason `input`
+
+- ed7b0c7: Message nonces, message search text and attachment content types are now checked the way Fluxer checks them: After removing form feeds and U+202E and trimming surrounding whitespace. The SDK still sends the value as given. Breaking changes, each with the code it affects and how to migrate:
+
+    - A blank message nonce, such as `" "`, now fails with reason `input`, constraint `length` and path `nonce` before sending, for message sends, replies, forwards and webhook sends. Fluxer refuses it after trimming, so it used to fail remotely with reason `rejected`. A nonce whose surrounding whitespace takes it over 32 UTF-16 code units is now sent, as Fluxer accepts it and keeps the trimmed form
+      Affected: Code that sends nonces built from values that can be blank and handles Fluxer's refusal
+      Migration: Send a nonce with at least one visible character, or omit it for the SDK's own, and match reason `input`
+    - Blank text in a message search, in `content`, `contents`, `exactPhrases`, the embed provider, link hostname and attachment filename and extension filters and their exclusions, now fails with reason `input` before sending. Fluxer refuses it after trimming, so it used to fail remotely with reason `rejected`. Text whose surrounding whitespace takes it over the limit is now sent, as Fluxer accepts it
+      Affected: Code that searches with text that can be blank and handles Fluxer's refusal
+      Migration: Leave blank filters out of the query, and match reason `input`
+    - A blank attachment `contentType`, such as `" "`, now fails with reason `input` and path `attachments[].contentType` before sending. Fluxer refuses it after trimming, so it used to fail remotely with reason `rejected`. A content type whose surrounding whitespace takes it over 255 characters is now sent
+      Affected: Code that sets content types from values that can be blank
+      Migration: Omit `contentType` when there is none, and match reason `input`
+
+- ed7b0c7: Breaking changes, each with the code it affects and how to migrate:
+
+    - Attachments larger than 50 MiB are no longer refused locally, because Fluxer now lets an instance give a bot a higher limit. Fluxer decides how large each file may be: A bot gets the lower of the instance's attachment limit and its bot attachment limit, which is 50 MiB unless the instance raises it for that bot or community, and a webhook gets the limits of the user who created it. Message sends, replies and edits and webhook messages now send such a file, and a file Fluxer refuses as too large fails with reason `rejected` and an `apiError` with code `fileSizeTooLarge`. An inline multipart upload more than 64 MiB over the limit may instead end with Fluxer closing the connection, which fails with reason `network`. File and stream sources accept any nonnegative safe integer size, and signed upload plans accept parts larger than 50 MiB, which Fluxer plans for files over 1,000 MiB. The client's `uploads.maxBytes` budget and a webhook client's `uploadMaxBytes`, 100 MiB by default, still apply
+      Affected: Code that relies on a file over 50 MiB failing with reason `input` before any request, for example to tell users a file is too large
+      Migration: Match an `apiError` with code `fileSizeTooLarge` for a file Fluxer refuses, and raise `uploads.maxBytes` or `uploadMaxBytes` to send files larger than 100 MiB
+
+- ed7b0c7: URLs that the SDK checks before sending now also follow Fluxer's host rules: The host must be an IP address or a domain name with a top-level domain, without a trailing dot, an underscore, a label that starts or ends with a hyphen or a label over 63 characters, and a port must be 1 through 65535. The URL may hold no whitespace or angle brackets after Fluxer's normalization. This covers link channel `url` in `channels.create` and `channels.edit`, webhook message `avatarUrl`, and embed URLs, author and footer icons and image and thumbnail URLs. The top-level domain rule applies locally only when the client targets hosted Fluxer. A client or webhook client created with a custom `instance` skips only that rule locally and leaves it to that server, because a Fluxer server in development mode skips it too. A numeric top-level domain and every other host rule still apply there
+
+    - A URL such as `https://a_b.example.com` on any instance, or `http://localhost:3000` or `https://intranet/build` on hosted Fluxer, now fails with reason `input` before sending, and the explanation states the host rule. Fluxer refuses such a URL, so it used to fail remotely
+      Affected: Code that sends URLs with such hosts and handles Fluxer's refusal
+      Migration: Use a public host name with a top-level domain or an IP address, and match reason `input`
+
+### Minor Changes
+
+- ed7b0c7: Empty strings now work where Fluxer accepts them. Routes that read their body through Fluxer's validator turn an empty string into null before checking it, so the SDK sends an empty string as given on a field that accepts null, where it used to fail with reason `input`:
+
+    - The `guilds.edit` method accepts an empty `systemChannelId` or `afkChannelId`, which turns that channel off, and an empty `messageHistoryCutoff`, which turns history access off. An empty `contentWarningText` was already sent, and its reference now says Fluxer stores it as null, which restores the default warning
+    - The `members.editSelf` method accepts an empty `nickname`, `bio` or `pronouns`, which clears it, and `members.setNickname` accepts an empty nickname, which clears it. A blank bio or pronouns still fails, as Fluxer refuses it
+    - The `members.timeout` method accepts an empty `timeoutReason`, which means no reason. The `members.move` method accepts an empty channel ID, which disconnects the member, and an empty `connectionId`, which targets every connection like an omitted one
+    - The `guilds.editVanityUrl` method accepts an empty code, which removes the vanity URL like null
+    - The `directMessages.editGroup` method accepts an empty `name`, which clears it, an empty `ownerId`, which Fluxer ignores, and empty nickname values, which clear them. Its reference now says that Fluxer reads a `nicknames` object whose values are all null or empty, or an empty object, as null for the whole field, which clears every nickname and needs ownership
+    - The `channels.create` method accepts an empty `topic`, `url` or `parentId`, which means none, and `channels.edit` accepts an empty `topic`, `url` or `rtcRegion`, which clears it, and an empty `name`, which Fluxer ignores. Forum tags and the default reaction accept an empty `emojiId` or `emojiName`, which means no emoji, and `channels.reorder` accepts an empty `parentId` or `precedingSiblingId`, which means the same as null
+    - Sticker creation accepts an empty `description`, which is sent as null, as sticker edits already did
+    - A message edit with flags no longer needs visible content, an embed or an attachment, as Fluxer accepts any edit with flags. So `{ attachments: [], flags }` clears the files where it used to fail with reason `input`. A voice note may have blank or invisible content, which Fluxer does not count as content
+
+- ed7b0c7: The SDK now allows what Fluxer allows:
+
+    - The `messages.fetchHistory` method accepts `before` and `after` together and returns the newest messages between them, as Fluxer does. It also accepts `around` together with `before` or `after` and sends them all, while Fluxer ignores `before` and `after` for such a page, so the page is no longer checked against them. In a thread they can still decide whether Fluxer adds the thread's starter message. A page between `before` and `after` in a thread also accepts the starter message, whose ID is the thread ID, which Fluxer adds whenever `after` is below it, even when `before` is at or below it, where such a page used to fail with reason `response`
+    - The `guilds.fetchPage` method and the OAuth client's `fetchGuilds` accept `before` together with `after`, as Fluxer does, which uses `after` and ignores `before`
+    - A webhook message edit accepts empty embed strings, because Fluxer reads its body through a step that treats an empty string as absent everywhere except in fields. An author with an empty `name`, a footer with empty `text`, and an image or thumbnail with an empty `url` used to fail with reason `input` there, and Fluxer drops each of them with its other values, which the SDK now sends unchecked. An empty `url`, `timestamp`, `iconUrl` or media `description` is accepted the same way. Sends, replies, channel message edits and webhook sends keep their checks, since Fluxer takes an empty string literally on those routes
+    - Image fields accept base64 image data alone or after any data URI header, as Fluxer reads the text after the first comma and detects the format from the bytes. That covers `guilds.edit`, `members.editSelf`, role icons, webhook avatars, `directMessages.editGroup` and emoji and sticker images. An empty string in a nullable image field, and in a role's `unicodeEmoji`, now clears it like null, as Fluxer reads it as null on those routes
+    - Channel creation and edits and opening a DM accept bodies up to Fluxer's default limit of 15,029,592 bytes instead of 4,194,304
+    - A message or webhook message edit that omits `attachments` may use `attachment://name` in an embed image or thumbnail for a file the message already has. Fluxer resolves the name and moves that file into the embed, and refuses an unknown name with reason `rejected`. An edit with an attachments list still names only its new uploads
+    - The `guilds.edit`, `members.editSelf` and `directMessages.editGroup` methods accept bodies up to Fluxer's limits for their routes, 56,972,632, 29,010,604 and 15,029,592 bytes, instead of 4,194,304, so their images can be as large as Fluxer allows, 10 MiB by default. The default `rest.queuedJsonMaxBytes` is now 67,108,864 (64 MiB) instead of 4 MiB, so such a request also fits the REST queue. Large image data URIs are checked in one pass, so they no longer exhaust the stack
+    - The `attachments.download` and `attachments.stream` methods accept any positive safe integer `maxBytes` instead of at most 50 MiB, because Fluxer decides how large an attachment may be. A buffered download holds that many bytes in memory, so stream large files
+    - The profile badges from `users.fetchProfile` carry the holder's Operators' wall `quote` when Fluxer sends one
+
+- ed7b0c7: When `connection.startupTimeoutMs` and `connection.recovery.attemptTimeoutMs` are left at their 30,000 ms defaults, sending Identify now extends the deadline by 135,000 ms. Fluxer may hold an Identify in its queue for up to 60 seconds and gives a session start up to 135 seconds, as during a gateway rollout, so a 30-second attempt could give up on a session Fluxer would still start and then queue again from the back. Under heavier load Fluxer holds such an Identify and retries it itself while the connection stays open. Startup gets the extension once, when its first Identify is sent, and each recovery attempt gets it when it sends Identify. Discovery, the socket, HELLO and a Resume keep the 30-second deadline, since Fluxer imposes no such wait on them, and so does automatic sharding's community count. A value the caller sets stays one fixed deadline that Identify does not extend
+- ed7b0c7: Null now works where Fluxer accepts it in messages:
+
+    - Message sends, replies, forum posts, webhook sends, message edits and webhook message edits accept `content: null`, as Fluxer does. A send then has no text and needs an embed, a file or a sticker, and an edit clears the text, as an empty string does, so an edit without flags needs an embed or a file. On sends, replies and channel message edits Fluxer still reads `allowedMentions` when content is null, so the rule against `everyone` with listed users or roles applies there as it does with text. The types of `MessageContent`, `MessageBody` and `WebhookMessageEdit` now allow null
+    - A new attachment accepts null for `title`, `description`, `duration` and `waveform`, which Fluxer stores as none, where it used to fail with reason `input`. A voice note still needs a waveform and a duration, so null for either fails as omitting it does. A webhook send accepts null only for `title`, because Fluxer's multipart webhook schema refuses null for the others, so those still fail with reason `input`
+    - Webhook sends accept null for `username` and `avatarUrl`, which keeps the webhook's own name and avatar, as Fluxer does, where they used to fail with reason `input`
+    - A webhook forward accepts `everyone` together with listed users or roles in `allowedMentions`, as Fluxer reads no mention settings on a forward, where it used to fail with reason `input`
+    - An embed image or thumbnail `attachment://` reference may name a stored filename that several new uploads share, as Fluxer accepts, where it used to fail with reason `input`. Fluxer puts the last of those uploads into the embed
+
+- ed7b0c7: `stickerIds` may now be null on message sends, replies, direct messages, the first message of a forum or media post and webhook sends and replies, as Fluxer accepts it there. The SDK sends null as given, and Fluxer reads it as no stickers, so such a message still needs content, an embed or an attachment. Null used to fail before sending with reason `input`
+- ed7b0c7: A webhook forward may now carry `content` that is null, empty or blank and empty `embeds`, `attachments` and `stickerIds` lists or null `stickerIds`, as Fluxer accepts them beside a forward. The SDK sends them as given. Other text, an embed, an upload or a sticker beside a forward still fails before sending with reason `input`. Fluxer counts a zero-width space as text, so content made of one fails too
+
+### Patch Changes
+
+- ed7b0c7: Fluxer refuses stickers and new reactions with custom emoji from an age-restricted community outside that community, whatever the bot's permissions, and they then fail with an `apiError` with code `missingPermissions`. Adding to a reaction already on the message still works. Such an emoji in message text sent or edited outside its community becomes plain `:name:` text. The references of `messages.addReaction`, `stickerIds` and `format.customEmoji`, and the emoji and stickers guide, say so, and the missing-permission hints of sends and reactions mention it
+- ed7b0c7: Embed fields now accept an empty `name`, as Fluxer does. A field name may hold 0 to 256 UTF-16 code units and a value 0 to 1,024, both measured after Fluxer's normalization, so a blank name counts as empty. An empty or blank field name used to fail with reason `input` before sending. Fluxer's documentation still says field names hold 1 to 256 characters, but its server accepts and stores empty names, and the SDK follows the server
+- ed7b0c7: Requests now send what Fluxer accepts:
+
+    - An empty `query` in `members.search` or `discovery.search`, an empty `tag` in `discovery.search` and an empty `name` in `threads.search` are left out of the request, so they match everything like an omitted value. Fluxer refused them, so such searches used to fail with reason `rejected`
+    - A `messageHistoryCutoff` in `guilds.edit` with an offset such as `+01:00`, or with the end-of-day time `24:00:00`, is now sent as the same instant in UTC with a `Z` suffix, keeping its fraction digits, because Fluxer accepts only that form. Such values used to fail with reason `rejected`
+    - The references now say that discovery searches accept only the language codes Fluxer supports, such as `en-US`, `fr` or `pt-BR`, and that `GuildVerificationLevels.Low` requires a verified account, which is a verified email address on instances that send email
+
+- ed7b0c7: The explanation for an invalid ID now says why IDs must be decimal strings: JavaScript numbers cannot hold Fluxer IDs exactly. An ID passed as a number still fails before sending with reason `input`, even though Fluxer accepts JSON integers, because a number holding a real Fluxer ID has already lost digits
+- ed7b0c7: A malformed response now names the field that failed in `responseField`, such as `embeds.0.timestamp`. A message with a bad embed, attachment or other nested part used to be reported as a later field the decoder went on to read, such as `stickers`. Forum post data now names a malformed owner instead of the first message, a discovery search names the result that failed instead of the last one, and a webhook names the nested field of a malformed source community or channel instead of the whole source
+- ed7b0c7: Invite codes and Unicode reaction emoji now receive Fluxer's normalization before the SDK checks and sends them. Fluxer removes U+000C and U+202E from these path values and trims whitespace, and the SDK now does the same and uses the result
+
+    - The `invites.fetch` and `invites.delete` methods accept a code with surrounding whitespace, a form feed or U+202E, such as `" FixtureCode "`, where padding used to fail with reason `input`. The request carries the normalized code, and Fluxer's answer is compared with it, so a code holding U+202E no longer fails as a response mismatch. An answer for a different code now names that mismatch instead of the last field read
+    - Reaction operations accept Unicode emoji with surrounding whitespace, a form feed or U+202E, such as `" 👍 "`, and send the normalized emoji. A reaction collector's `emoji` selector uses the normalized emoji too, so a selector holding U+202E or padding now matches the reaction Fluxer stores
+
 ## 1001.0.0
 
 ### Major Changes
