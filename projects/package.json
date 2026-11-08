@@ -27,8 +27,8 @@
     },
     "devDependencies": {
         "cspell": "10.4.0",
-        "knip": "6.43.0",
-        "oxlint": "1.89.0",
+        "knip": "6.44.1",
+        "oxlint": "1.90.0",
         "oxlint-tsgolint": "7.0.2005"
     }
 }
