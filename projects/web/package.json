@@ -22,29 +22,29 @@
         "downloads:fetch": "node scripts/fetch-downloads.mjs"
     },
     "dependencies": {
-        "@astrojs/markdown-remark": "7.3.4",
-        "@astrojs/react": "7.1.1",
+        "@astrojs/markdown-remark": "7.3.5",
+        "@astrojs/react": "7.1.2",
         "@fontsource-variable/outfit": "5.3.0",
         "@phosphor-icons/react": "2.1.10",
         "@tailwindcss/vite": "4.3.3",
-        "astro": "7.4.2",
+        "astro": "7.4.4",
         "gsap": "3.15.0",
-        "react": "19.3.0",
-        "react-dom": "19.3.0",
+        "react": "19.3.1",
+        "react-dom": "19.3.1",
         "tailwindcss": "4.3.3",
-        "three": "0.186.1"
+        "three": "0.187.0"
     },
     "devDependencies": {
         "@astrojs/check": "0.9.12",
-        "@types/node": "24.19.0",
+        "@types/node": "24.19.2",
         "@types/react": "19.3.0",
         "@types/react-dom": "19.3.0",
-        "@types/three": "0.186.0",
-        "pagefind": "1.5.2",
+        "@types/three": "0.187.0",
+        "pagefind": "1.6.0",
         "playwright": "1.64.1",
         "sharp": "0.35.5",
         "typedoc": "0.28.20",
         "typescript": "6.0.3",
-        "wrangler": "4.152.0"
+        "wrangler": "4.156.0"
     }
 }
