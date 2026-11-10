@@ -7,7 +7,7 @@
 // identity and absence are verified, remaining test roles must have zero permissions, and children are removed before
 // categories. Emoji absence does not prove image-blob erasure. Moderation recovery refuses to remove unrelated timeout
 // or ban state
-import { typedResult } from "./support/results.js"
+import { typedResult, settle as value } from "./support/results.js"
 import assert from "node:assert/strict"
 import { randomUUID, createHash } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -38,6 +38,7 @@ import { createOutcomeReporter, recoveredOnly } from "./support/reporting.js"
 import { anyStatus, createSandboxApi } from "./support/sandbox-api.js"
 import { solidPngBase64 } from "./support/solid-png.js"
 import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
+import { observeConnections } from "./support/connection-diagnostics.js"
 
 const rawFetch = globalThis.fetch
 const mode = process.argv[2]
@@ -114,6 +115,7 @@ let verified = false
 let quiescent = true
 let journal
 let gatewayProbe
+let connectionDiagnostics
 const reportFailure = (error) => console.log(JSON.stringify({ mode, check: stage, ...safeFailure(error) }))
 
 async function waitForTypingRequests(requests, minimum) {
@@ -3762,6 +3764,9 @@ try {
         let seed
         let reply
         const states = []
+        connectionDiagnostics = observeConnections(WebSocket, (record) =>
+            console.log(JSON.stringify({ mode, check: "gateway_diagnostic", ...record })),
+        )
         if (forceRecovery) gatewayProbe = observeGateway()
         stage = "sdk_receive_and_reply"
         if (mode === "default") {
@@ -4054,7 +4059,10 @@ try {
                     },
                     () => done.resolve(null),
                 )
-                assert.ok((await client.connect()).isOk())
+                stage = "client_connect"
+                await value(client.connect())
+                report(stage, true)
+                stage = "sdk_receive_and_reply"
                 if (moderation) {
                     const run = async (operation) => {
                         const result = await operation
@@ -4875,7 +4883,10 @@ try {
                                 yield* Deferred.succeed(done, sent)
                             }),
                         )
+                        stage = "client_connect"
                         yield* client.connect()
+                        report(stage, true)
+                        stage = "sdk_receive_and_reply"
                         if (moderation) {
                             const scope = yield* Effect.scope
                             const run = async (operation) => {
@@ -5620,6 +5631,10 @@ try {
     process.exitCode = 1
 } finally {
     gatewayProbe?.restore()
+    if (connectionDiagnostics) {
+        console.log(JSON.stringify({ mode, check: "gateway_diagnostics", ...connectionDiagnostics.snapshot() }))
+        connectionDiagnostics.restore()
+    }
     globalThis.fetch = rawFetch
     // The scenario's client and scope closures decide quiescence; an unproven closure keeps the journal and lock
     const failures = {

@@ -7,6 +7,11 @@ const tags = new Set([
     "ClientClosedError",
     "CancelledError",
     "SdkDefect",
+    "AuthenticationError",
+    "ConnectionError",
+    "ConnectionTimeoutError",
+    "RateLimitError",
+    "ShardConnectionError",
 ])
 const reasons = new Set([
     "input",
@@ -23,6 +28,8 @@ const reasons = new Set([
     "filter",
     "tooLarge",
     "untrustedUrl",
+    "protocol",
+    "closed",
 ])
 const outcomes = new Set(["notDispatched", "rejected", "unknown"])
 const codes = new Set([
@@ -41,7 +48,7 @@ const codes = new Set([
 ])
 
 /** Project known classifications only, never arbitrary messages, stacks, causes or response bodies */
-export function safeFailure(error) {
+export function safeFailure(error, depth = 0) {
     try {
         const result = {
             type: tags.has(error?._tag) ? error._tag : error?.name === "SdkDefect" ? "SdkDefect" : "unclassified",
@@ -54,6 +61,27 @@ export function safeFailure(error) {
                     : {}),
             }))
         if (reasons.has(error?.reason)) result.reason = error.reason
+        if (result.type === "ConnectionError" && ["discovery", "gateway"].includes(error.phase)) {
+            result.phase = error.phase
+            if (
+                error.phase === "gateway" &&
+                Number.isInteger(error.status) &&
+                error.status >= 1000 &&
+                error.status <= 4999
+            )
+                result.closeCode = error.status
+        }
+        if (result.type === "ConnectionTimeoutError" && Number.isFinite(error.timeoutMs) && error.timeoutMs >= 0)
+            result.timeoutMs = error.timeoutMs
+        if (result.type === "RateLimitError" && ["http", "gateway"].includes(error.source)) {
+            result.source = error.source
+            if (error.retryAfterMs === null || (Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0))
+                result.retryAfterMs = error.retryAfterMs
+        }
+        if (result.type === "ShardConnectionError") {
+            if (Number.isSafeInteger(error.shardId) && error.shardId >= 0) result.shardId = error.shardId
+            if (depth === 0) result.failure = safeFailure(error.failure, 1)
+        }
         const outcome = error?.outcome
         if (outcomes.has(outcome)) result.outcome = outcome
         if (Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599) {

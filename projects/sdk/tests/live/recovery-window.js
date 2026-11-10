@@ -12,6 +12,7 @@ import { fromExit, settle as value } from "./support/results.js"
 import { createMemberRequestPacing } from "./support/member-request-pacing.js"
 import { readSandbox } from "./support/sandbox-api.js"
 import { harnessWatchdogMs, pacedDeadlineMs } from "./support/watchdogs.js"
+import { observeConnections } from "./support/connection-diagnostics.js"
 
 const mode = process.argv[2]
 const sessionRestart = process.argv[3] === "--session-restart"
@@ -35,6 +36,7 @@ let lock
 let client
 let driver
 let probe
+let connectionDiagnostics
 let token
 let guildId
 let botId
@@ -338,6 +340,9 @@ try {
     assert.equal(botMember.user?.id, botId)
     report(stage, { clientSecretUsed: false, serverMutations: false })
 
+    connectionDiagnostics = observeConnections(WebSocket, (record) =>
+        console.log(JSON.stringify({ mode, check: "gateway_diagnostic", ...record })),
+    )
     probe = observeGateway()
     const sdk = await import(mode === "default" ? "@neontechspace/fluxerly" : "@neontechspace/fluxerly/effect")
     driver = await createDriver(sdk)
@@ -442,6 +447,10 @@ try {
         process.exitCode = 1
     } finally {
         probe?.restore()
+        if (connectionDiagnostics) {
+            console.log(JSON.stringify({ mode, check: "gateway_diagnostics", ...connectionDiagnostics.snapshot() }))
+            connectionDiagnostics.restore()
+        }
         if (cleanupVerified) clearTimeout(watchdog)
         if (lock !== undefined && cleanupVerified) {
             if (lock.release()) report("sandbox_lock_released", { lockVerified: true })

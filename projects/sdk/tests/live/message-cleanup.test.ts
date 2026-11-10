@@ -44,6 +44,12 @@ const fakeSdk = {
             state: "Disconnected",
             messages: { send: async () => { throw failure() } },
             observeState: () => { throw failure() },
+            on: () => ({ waitForClose: async () => ({ isErr: () => false }), close() {} }),
+            connect: async () => ({
+                isErr: () => true,
+                isOk: () => false,
+                error: { _tag: "ConnectionTimeoutError", timeoutMs: 165000, message: "fixture-private-connect-detail" },
+            }),
             shutdown: async () => {
                 console.log(JSON.stringify({ fixture: "client_shutdown" }))
                 if (process.env.FLUXERLY_MESSAGES_SHUTDOWN_FAILURE === "1") throw Error(${JSON.stringify("fixture-private-shutdown-detail")})
@@ -216,6 +222,23 @@ test.each([
 })
 
 const channelRemoved = { check: "test_channel_and_messages_removed", passed: true }
+
+test("connection failure keeps the typed diagnostic and still shuts down and cleans up", () => {
+    const root = fixture(null)
+    const lines = spawn(root, ["default", "--events"], {})
+    expect(lines).toContainEqual({
+        mode: "default",
+        check: "client_connect",
+        type: "ConnectionTimeoutError",
+        timeoutMs: 165000,
+    })
+    expect(JSON.stringify(lines)).not.toContain("fixture-private-connect-detail")
+    expect(
+        fixtureEvents(lines).filter((event) => ["client_shutdown", "temporary_channel_deleted"].includes(event)),
+    ).toEqual(["client_shutdown", "temporary_channel_deleted"])
+    expect(existsSync(join(root, ".env.test.messages-events.local"))).toBe(false)
+    expect(lockFiles(root)).toEqual([])
+})
 
 test("message live cleanup deletes the owned channel after moderation recovery fails", () => {
     const lines = run(fixture())

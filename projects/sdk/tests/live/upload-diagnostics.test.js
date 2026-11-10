@@ -89,3 +89,71 @@ test("upload phase records separate planning, completion and message requests an
     for (let i = 0; i < 100; i++) await observed("https://uploads.fluxer.app/private", { method: "PUT" })
     expect(records).toHaveLength(128)
 })
+
+test.each([
+    [{ _tag: "AuthenticationError" }, { type: "AuthenticationError" }],
+    [
+        { _tag: "ConnectionTimeoutError", timeoutMs: 165000 },
+        { type: "ConnectionTimeoutError", timeoutMs: 165000 },
+    ],
+    [
+        { _tag: "ConnectionError", phase: "gateway", reason: "closed", status: 4008 },
+        { type: "ConnectionError", phase: "gateway", reason: "closed", closeCode: 4008 },
+    ],
+    [
+        { _tag: "ConnectionError", phase: "discovery", reason: "network", status: 503 },
+        { type: "ConnectionError", phase: "discovery", reason: "network", status: 503, providerFault: true },
+    ],
+    [
+        { _tag: "RateLimitError", source: "gateway", retryAfterMs: null },
+        { type: "RateLimitError", source: "gateway", retryAfterMs: null },
+    ],
+    [
+        { _tag: "RateLimitError", source: "http", retryAfterMs: 600000 },
+        { type: "RateLimitError", source: "http", retryAfterMs: 600000 },
+    ],
+])("connection diagnostics keep safe classification for %o", (error, expected) => {
+    expect(safeFailure({ ...error, message: "synthetic-secret", details: { token: "synthetic-secret" } })).toEqual(
+        expected,
+    )
+})
+
+test("shard diagnostics keep one bounded underlying failure without private or cyclic data", () => {
+    const error = {
+        _tag: "ShardConnectionError",
+        shardId: 2,
+        failure: { _tag: "ConnectionTimeoutError", timeoutMs: 165000, message: "synthetic-secret" },
+    }
+    expect(safeFailure(error)).toEqual({
+        type: "ShardConnectionError",
+        shardId: 2,
+        failure: { type: "ConnectionTimeoutError", timeoutMs: 165000 },
+    })
+    error.failure = error
+    expect(safeFailure(error)).toEqual({
+        type: "ShardConnectionError",
+        shardId: 2,
+        failure: { type: "ShardConnectionError", shardId: 2 },
+    })
+})
+
+test("connection diagnostics reject invalid fields and tolerate unreadable errors", () => {
+    expect(safeFailure({ _tag: "ConnectionTimeoutError", timeoutMs: Infinity })).toEqual({
+        type: "ConnectionTimeoutError",
+    })
+    expect(safeFailure({ _tag: "RateLimitError", source: "gateway", retryAfterMs: -1 })).toEqual({
+        type: "RateLimitError",
+        source: "gateway",
+    })
+    expect(safeFailure({ _tag: "ShardConnectionError", shardId: Number.MAX_SAFE_INTEGER + 1 })).toEqual({
+        type: "ShardConnectionError",
+        failure: { type: "unclassified" },
+    })
+    expect(
+        safeFailure({
+            get _tag() {
+                throw Error("synthetic-secret")
+            },
+        }),
+    ).toEqual({ type: "unclassified" })
+})
