@@ -176,7 +176,7 @@
     },
     "dependencies": {
         "neverthrow": "8.2.0",
-        "ws": "8.22.0"
+        "ws": "8.23.0"
     },
     "peerDependencies": {
         "effect": "^4.1.2"
