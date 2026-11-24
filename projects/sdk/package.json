@@ -1,15 +1,22 @@
 {
     "name": "@neontechspace/fluxerly",
-    "description": "A JavaScript and TypeScript SDK for building Fluxer bots on Node.js",
-    "homepage": "https://fluxerly.neontechspace.com",
+    "description": "Fluxerly.js (FluxerlyJS), a Fluxer-native bot SDK for JavaScript, TypeScript and Effect on Node.js",
+    "homepage": "https://fluxerly.neontechspace.com/",
     "bugs": {
         "url": "https://github.com/NeonTechSpace/Fluxerly.js/issues"
     },
     "keywords": [
+        "fluxerly",
+        "fluxerly.js",
+        "fluxerlyjs",
         "fluxer",
         "fluxer-api",
         "fluxer-bot",
+        "fluxer-bots",
         "fluxer-sdk",
+        "fluxer-gateway",
+        "fluxer-rest",
+        "fluxer-webhooks",
         "bot",
         "bot-development",
         "sdk",
@@ -17,6 +24,7 @@
         "javascript",
         "typescript",
         "nodejs",
+        "esm",
         "websocket",
         "effect",
         "effect-ts"
@@ -76,14 +84,14 @@
     "scripts": {
         "format": "prettier --write .",
         "format:check": "prettier --check .",
-        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:mapping && pnpm run lint:dashes && pnpm run lint:tests && pnpm run lint:effect && pnpm run lint:unused && pnpm run lint:spelling",
+        "lint": "pnpm run lint:code && pnpm run lint:discards && pnpm run lint:mapping && pnpm run lint:dashes && pnpm run lint:test-invariants && pnpm run lint:effect && pnpm run lint:unused && pnpm run lint:spelling",
         "lint:discards": "node scripts/silent-discards.js",
         "lint:dashes": "node ../scripts/em-dashes.mjs .",
         "lint:mapping": "node scripts/failure-mapping.js",
-        "lint:code": "oxlint -c ../.oxlintrc.json src scripts examples",
+        "lint:code": "oxlint -c ../.oxlintrc.json src scripts examples tests",
+        "lint:test-invariants": "node scripts/lint-tests.js",
         "lint:unused": "knip --directory .. --workspace sdk --no-progress",
         "lint:spelling": "cspell --no-progress -c ../cspell.json",
-        "lint:tests": "oxlint -c ../.oxlintrc.json tests",
         "lint:effect": "effect-tsgo diagnostics --project tsconfig.test.json --strict --severity error,warning --format text && effect-tsgo diagnostics --project tsconfig.examples.json --strict --severity error,warning --format text",
         "build": "node scripts/build.js",
         "packages:prepare": "node scripts/packages.js",
@@ -176,19 +184,19 @@
     },
     "dependencies": {
         "neverthrow": "8.2.0",
-        "ws": "8.22.0"
+        "ws": "8.23.0"
     },
     "peerDependencies": {
         "effect": "^4.1.2"
     },
     "devDependencies": {
-        "@effect/tsgo": "0.57.0",
+        "@effect/tsgo": "0.73.4",
         "@types/node": "24.19.2",
         "@types/ws": "8.18.2",
-        "effect": "4.1.2",
-        "npm": "12.2.1",
-        "prettier": "3.9.10",
+        "effect": "4.1.5",
+        "npm": "12.2.3",
+        "prettier": "3.10.1",
         "typescript": "7.0.2",
-        "vitest": "5.0.5"
+        "vitest": "5.1.1"
     }
 }

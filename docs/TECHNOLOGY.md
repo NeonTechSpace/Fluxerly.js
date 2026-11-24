@@ -153,7 +153,7 @@ Only the [socket transport](/projects/sdk/src/internal/transport/socket.ts) impo
 | Area | Selected choice |
 | --- | --- |
 | Framework | Astro |
-| Interactive parts | React islands, with three and gsap for the homepage's live scene |
+| Interactive parts | React islands, with three for the homepage's live scene |
 | Search | Pagefind, one index per served version |
 | Hosting | Cloudflare Pages |
 | Tooling compiler | TypeScript 6 until the website toolchain supports TypeScript 7 and migration is approved |

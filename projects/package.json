@@ -2,9 +2,12 @@
     "private": true,
     "scripts": {
         "build": "pnpm --filter @neontechspace/fluxerly build && pnpm --filter fluxerly-docs build",
-        "lint": "pnpm run lint:scripts && pnpm --filter @neontechspace/fluxerly lint && pnpm --filter @fluxerly/release lint && pnpm --filter fluxerly-docs lint",
+        "lint": "pnpm run lint:scripts && pnpm run lint:docs-links && pnpm --filter @neontechspace/fluxerly lint && pnpm --filter @fluxerly/release lint && pnpm --filter fluxerly-docs lint",
         "check": "node scripts/check.mjs",
+        "verify:changed": "node scripts/check.mjs --changed",
+        "verify:deep": "FLUXERLY_FUZZ_ITERATIONS=500 pnpm --filter @neontechspace/fluxerly exec vitest run tests/client/wire-fuzz.test.ts tests/client/rate-limits-model.test.ts tests/resources/cache/cache-linearizability.test.ts tests/events/event-source-property.test.ts tests/client/gateway-pacer-property.test.ts tests/client/chaos-simulation.test.ts",
         "lint:scripts": "oxlint -c .oxlintrc.json scripts",
+        "lint:docs-links": "node scripts/docs-links.mjs",
         "check:contributions": "node --import ./scripts/no-fluxer-network.mjs --test ../.github/tests/*.test.mjs",
         "changeset": "node release/cli.js changeset",
         "release:plan": "node release/cli.js plan",
@@ -26,9 +29,9 @@
         }
     },
     "devDependencies": {
-        "cspell": "10.4.0",
-        "knip": "6.43.0",
-        "oxlint": "1.89.0",
-        "oxlint-tsgolint": "7.0.2005"
+        "cspell": "10.5.2",
+        "knip": "6.48.0",
+        "oxlint": "1.95.0",
+        "oxlint-tsgolint": "7.0.2008"
     }
 }

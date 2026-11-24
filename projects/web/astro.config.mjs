@@ -57,7 +57,7 @@ export default defineConfig({
         // The dev server bundles these once at start instead of finding them on a page later, which made it re-bundle
         // mid-session and answer "504 Outdated Optimize Dep" until a reload broke every island
         optimizeDeps: {
-            include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "three", "three/examples/jsm/objects/Reflector.js", "gsap", "@phosphor-icons/react"],
+            include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "three", "three/examples/jsm/objects/Reflector.js", "@phosphor-icons/react"],
         },
     },
 })
