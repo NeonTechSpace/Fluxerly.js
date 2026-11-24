@@ -20,6 +20,7 @@ export function changelogPage(changelog, pending) {
 export async function generate(out, { withPending = false } = {}) {
     const env = { ...process.env, DOCS_CONTENT: out }
     await mkdir(out, { recursive: true })
+    // endpoints.mjs reads model.json produced by extract.mjs, so extract must finish first
     for (const script of ["extract.mjs", "endpoints.mjs"]) execFileSync(process.execPath, [join(site, "scripts/docs", script)], { cwd: site, env, stdio: "inherit" })
     await rm(join(out, "examples"), { recursive: true, force: true })
     await cp(join(sdk, "examples"), join(out, "examples"), { recursive: true, filter: (path) => !/[\\/](node_modules|dist)$/.test(path) })

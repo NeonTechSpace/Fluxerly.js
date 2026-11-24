@@ -22,7 +22,7 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
             {
                 others.map((entry) => (
                     <li>
-                        <a class="next-link" href={`/${entry.slug}`} data-accent={entry.accent}>
+                        <a class="next-link" href={`/${entry.slug}/`} data-accent={entry.accent}>
                             <img class="next-mark" src={iconSrc(featureIcons[entry.slug], 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                             <span class="next-title">{entry.title}</span>
                             <span class="next-summary">{entry.summary}</span>
@@ -137,6 +137,10 @@ const others = featurePages.filter((entry) => entry.slug !== current).toSorted((
 
     :global(html[data-still]) .next-link :global(.next-arrow) {
         transition: none;
+    }
+
+    :global(html[data-still]) .next-link:hover :global(.next-arrow) {
+        transform: none;
     }
 
     @media (max-width: 1279px) {

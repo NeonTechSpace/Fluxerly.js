@@ -49,7 +49,7 @@ export const links = {
 } as const
 
 // Until a Stable is out, npm's plain install isn't what the site describes, so the public build names the channel here
-const packageSpec: string = import.meta.env.PUBLIC_PACKAGE_SPEC ?? "@neontechspace/fluxerly"
+const packageSpec: string = import.meta.env?.PUBLIC_PACKAGE_SPEC ?? "@neontechspace/fluxerly"
 
 export const installCommand = installCommandFor("npm", packageSpec)
 export const initCommand = `npx ${packageSpec} init`
@@ -63,60 +63,78 @@ export const packageManagers = [
 export type PackageManager = (typeof packageManagers)[number]["id"]
 
 // The feature pages, in the order the Discover menu lists them. Each summary is the page's one line of what it is
-// for. Cyan is what you do, violet is what the SDK knows
+// for, while seoTitle and seoDescription carry Fluxer-native search metadata. Cyan is what you do, violet is what the SDK knows
 export const featurePages = [
     {
         slug: "first-reply",
         title: "A Working Bot in One File",
         summary: "From an empty folder to a bot that answers, in one file that already reconnects and stops cleanly",
+        seoTitle: "Build Your First Fluxer Bot in One File · Fluxerly.js",
+        seoDescription: "Start a Fluxer bot in one JavaScript or TypeScript file with runBot. Connects, reconnects, replies to !ping and stops cleanly on Ctrl+C",
         accent: "cyan",
     },
     {
         slug: "effect",
         title: "Effect, When You Want It",
         summary: "Optional. The same SDK with typed failures and scoped cleanup",
+        seoTitle: "Effect API for Fluxer Bots · Fluxerly.js",
+        seoDescription: "Optional native Effect 4 entry point for Fluxer bots with typed failures, scoped resource cleanup, Layers and structured concurrency",
         accent: "violet",
     },
     {
         slug: "results",
         title: "Read Every Failure",
         summary: "Requests return a Result to check, and the SDK repeats a write only after a rate limit",
+        seoTitle: "Typed Results and Error Handling for Fluxer Bots · Fluxerly.js",
+        seoDescription: "Network calls in Fluxerly.js return a Result for expected Fluxer failures, with orThrow when exceptions fit and safe rate-limit retries",
         accent: "violet",
     },
     {
         slug: "commands",
         title: "Commands with the Plumbing Done",
         summary: "The router converts arguments, runs guards and cooldowns and builds the help from your definitions",
+        seoTitle: "Prefix Commands, Arguments and Guards for Fluxer · Fluxerly.js",
+        seoDescription: "Built-in Fluxer bot prefix command router with typed arguments, permission guards, cooldowns, command groups and generated help pages",
         accent: "cyan",
     },
     {
         slug: "logs",
         title: "See What a Bot Is Doing",
         summary: "Readable records from the first run, with error codes, hints and the token masked",
+        seoTitle: "Structured Logging and Diagnostics for Fluxer Bots · Fluxerly.js",
+        seoDescription: "Readable Fluxer bot logs from the first run with stable error codes, action hints, automatic token masking and runtime diagnostics",
         accent: "violet",
     },
     {
         slug: "testing",
         title: "Tests Without a Token",
         summary: "A real client against an in-memory Fluxer, so tests run without a token or network access",
+        seoTitle: "Test Fluxer Bots Without a Token or Network · Fluxerly.js",
+        seoDescription: "Run real Fluxer bot tests against an in-memory Fluxer gateway and HTTP server with createTestBot, fixtures and a manual test clock",
         accent: "violet",
     },
     {
         slug: "production",
         title: "A Bot That Stays Up",
         summary: "Sharding, session resume, a clean shutdown and a restarting supervisor are all in the SDK",
+        seoTitle: "Sharding, Supervision and Uptime for Fluxer Bots · Fluxerly.js",
+        seoDescription: "Operate large Fluxer bots with automatic sharding, session resume across restarts, graceful shutdown, a process supervisor and metrics",
         accent: "cyan",
     },
     {
         slug: "data",
         title: "Reading and Caching Data",
         summary: "History reads, opt-in caches and collectors, with cached copies kept apart from fresh fetches",
+        seoTitle: "Paged History, Caches and Collectors for Fluxer · Fluxerly.js",
+        seoDescription: "Read Fluxer message history with async iterators, opt into bounded local caches and wait for replies or reactions with collectors",
         accent: "violet",
     },
     {
         slug: "raw",
         title: "Raw Access, Still Typed",
         summary: "Typed calls to the routes that accept a bot token and typed raw gateway events, under Fluxer's own field names",
+        seoTitle: "Typed Raw Fluxer REST and Gateway Access · Fluxerly.js",
+        seoDescription: "Call any bot-accessible Fluxer HTTP route with typed Fluxer field names through client.rest.call and handle typed raw gateway events",
         accent: "cyan",
     },
 ] as const

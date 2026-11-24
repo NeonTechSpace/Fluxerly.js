@@ -5,5 +5,44 @@
 /_astro/*
   Cache-Control: public, max-age=31536000, immutable
 
+/art/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=2592000
+
+/docs/peek.json
+  Cache-Control: public, max-age=300, stale-while-revalidate=86400
+
+/pagefind/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/favicon*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/icon-*.png
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/apple-touch-icon.png
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+/og-image.jpg
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
 /404.html
+  X-Robots-Tag: noindex
+
+/llms.txt
+  X-Robots-Tag: noindex
+
+/llms-full.txt
+  X-Robots-Tag: noindex
+
+/SKILL.md
+  X-Robots-Tag: noindex
+
+/docs/*.md
+  X-Robots-Tag: noindex
+
+/docs/api/*.md
+  X-Robots-Tag: noindex
+
+/docs/*.txt
   X-Robots-Tag: noindex

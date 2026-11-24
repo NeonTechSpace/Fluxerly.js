@@ -52,7 +52,10 @@ const searchText = (route: EndpointRoute) =>
                     {areas.map((area) => <option value={area.slug}>{titleCase(area.title)}</option>)}
                 </select>
             </label>
-            <p class="ep-status" aria-live="polite" data-ep-status></p>
+            <div class="ep-status-row">
+                <p class="ep-status" aria-live="polite" data-ep-status></p>
+                <button class="ep-clear" type="button" hidden data-ep-clear>Clear Filters</button>
+            </div>
         </form>
 
         {
@@ -130,10 +133,11 @@ const searchText = (route: EndpointRoute) =>
     const query = document.querySelector<HTMLInputElement>("[data-ep-query]")
     const pick = document.querySelector<HTMLSelectElement>("[data-ep-area-pick]")
     const status = document.querySelector<HTMLElement>("[data-ep-status]")
+    const clear = document.querySelector<HTMLButtonElement>("[data-ep-clear]")
     const empty = document.querySelector<HTMLElement>("[data-ep-empty]")
     const areas = [...document.querySelectorAll<HTMLElement>("[data-ep-area]")]
 
-    if (tools && query && pick && status && empty) {
+    if (tools && query && pick && status && clear && empty) {
         const rows = areas.flatMap((area) =>
             [...area.querySelectorAll<HTMLElement>("[data-ep-row]")].map((row) => ({
                 row,
@@ -163,7 +167,21 @@ const searchText = (route: EndpointRoute) =>
                 return own === segment || /^\{.+\}$/.test(own) || (!exact && index === route.segments.length - 1 && own.startsWith(segment))
             })
 
-        const apply = () => {
+        let historyTimer = 0
+        const syncHistory = () => {
+            window.clearTimeout(historyTimer)
+            historyTimer = window.setTimeout(() => {
+                const params = new URLSearchParams(location.search)
+                for (const [key, current] of [["q", query.value.trim()], ["area", pick.value]] as const) {
+                    if (current) params.set(key, current)
+                    else params.delete(key)
+                }
+                const search = params.toString()
+                history.replaceState(history.state, "", `${location.pathname}${search ? `?${search}` : ""}${location.hash}`)
+            }, 250)
+        }
+
+        const apply = (sync = true) => {
             const value = query.value.trim().toLowerCase()
             const route = asRoute(value)
             const terms = value.split(/\s+/).filter(Boolean)
@@ -181,11 +199,9 @@ const searchText = (route: EndpointRoute) =>
             for (const section of areas) section.hidden = !section.querySelector("[data-ep-row]:not([hidden])")
             const filtering = Boolean(value || area)
             status.textContent = filtering ? `${shown} of ${rows.length} routes` : ""
+            clear.hidden = !filtering && shown > 0
             empty.hidden = shown > 0
-            const params = new URLSearchParams(location.search)
-            for (const [key, current] of [["q", query.value.trim()], ["area", area]] as const) current ? params.set(key, current) : params.delete(key)
-            const search = params.toString()
-            history.replaceState(history.state, "", `${location.pathname}${search ? `?${search}` : ""}${location.hash}`)
+            if (sync) syncHistory()
         }
 
         const params = new URLSearchParams(location.search)
@@ -193,10 +209,61 @@ const searchText = (route: EndpointRoute) =>
         const area = params.get("area")
         if (area && [...pick.options].some((option) => option.value === area)) pick.value = area
         tools.hidden = false
-        query.addEventListener("input", apply)
-        pick.addEventListener("change", apply)
+        query.addEventListener("input", () => apply())
+        pick.addEventListener("change", () => apply())
+        clear.addEventListener("click", () => {
+            query.value = ""
+            pick.value = ""
+            apply()
+            query.focus()
+        })
         // Enter keeps the reader on the page instead of submitting the form
         tools.addEventListener("submit", (event) => event.preventDefault())
-        if (query.value || pick.value) apply()
+        if (query.value || pick.value) apply(false)
     }
 </script>
+
+<style>
+    .ep-status-row {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 14px;
+    }
+
+    .ep-status-row:has(.ep-status:empty):has(.ep-clear[hidden]) {
+        display: none;
+    }
+
+    .ep-status-row .ep-status {
+        grid-column: auto;
+    }
+
+    .ep-clear {
+        min-height: 44px;
+        padding: 0 14px;
+        font: inherit;
+        font-size: var(--type-small);
+        color: var(--ink-high);
+        background: var(--tint);
+        border: 0;
+        border-radius: var(--corner-small);
+        corner-shape: squircle;
+        cursor: pointer;
+        transition: color var(--speed-fast) ease;
+    }
+
+    .ep-clear[hidden] {
+        display: none;
+    }
+
+    .ep-clear:hover {
+        color: var(--accent-bright);
+    }
+
+    .ep-clear:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+</style>

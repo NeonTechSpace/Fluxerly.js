@@ -14,8 +14,12 @@ const root = document.documentElement
 const still = () => getExperience() === "still"
 const isManager = (value: unknown): value is PackageManager => packageManagers.some((item) => item.id === value)
 // The page zoom on wide screens: positions read from the viewport are in the root's pixels, the layout's own
-// pixels are smaller by this much
-const pageZoom = () => Number(getComputedStyle(root).getPropertyValue("--page-zoom")) || 1
+// pixels are smaller by this much. Cached and refreshed on resize so scroll frames avoid style reads
+let cachedZoom = Number(getComputedStyle(root).getPropertyValue("--page-zoom")) || 1
+const refreshZoom = () => {
+    cachedZoom = Number(getComputedStyle(root).getPropertyValue("--page-zoom")) || 1
+}
+const pageZoom = () => cachedZoom
 
 function store(key: string, value: string) {
     try {
@@ -114,7 +118,7 @@ function slideCode(frame: Element, button: HTMLElement, open: boolean) {
         }
         requestAnimationFrame(follow)
     }
-    motion.finished
+    void motion.finished
         .catch(() => {})
         .then(() => {
             codeSliding = false
@@ -151,7 +155,7 @@ if (versionMenu) {
 }
 
 // Changing version keeps the page when that version has it, and otherwise opens that version's overview
-document.addEventListener("click", async (event) => {
+document.addEventListener("click", (event) => {
     const link = (event.target as Element).closest<HTMLAnchorElement>("[data-docs-version]")
     if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
     event.preventDefault()
@@ -159,8 +163,10 @@ document.addEventListener("click", async (event) => {
     const base = link.dataset.docsVersion ?? "/docs/"
     const page = location.pathname.startsWith(here) ? location.pathname.slice(here.length) : ""
     const target = base + page
-    const found = page ? await fetch(target, { method: "HEAD" }).then((response) => response.ok, () => false) : true
-    location.assign(found ? target + location.hash : base)
+    void (async () => {
+        const found = page ? await fetch(target, { method: "HEAD" }).then((response) => response.ok, () => false) : true
+        location.assign(found ? target + location.hash : base)
+    })()
 })
 
 const copyResets = new WeakMap<HTMLElement, number>()
@@ -179,7 +185,7 @@ function showCopied(copy: HTMLElement) {
     )
 }
 
-document.addEventListener("click", async (event) => {
+document.addEventListener("click", (event) => {
     const target = event.target as Element
     const pmButton = target.closest<HTMLElement>("[data-set-pm]")
     if (pmButton && isManager(pmButton.dataset.setPm)) {
@@ -206,31 +212,47 @@ document.addEventListener("click", async (event) => {
     }
     const copyMarkdown = target.closest<HTMLElement>("[data-copy-markdown]")
     if (copyMarkdown) {
-        try {
-            // The clipboard is opened in the press itself and handed the download, which is the one way Safari allows it
-            const text = fetch(copyMarkdown.dataset.copyMarkdown!).then(async (response) => {
-                if (!response.ok) throw new Error(`The page's Markdown answered HTTP ${response.status}`)
-                return new Blob([await response.text()], { type: "text/plain" })
-            })
-            await navigator.clipboard.write([new ClipboardItem({ "text/plain": text })])
-        } catch (error) {
-            reportCopyFailed(error)
-            return
-        }
-        showCopied(copyMarkdown)
+        if (copyMarkdown.dataset.copying === "true") return
+        copyMarkdown.dataset.copying = "true"
+        void (async () => {
+            try {
+                const textPromise = fetch(copyMarkdown.dataset.copyMarkdown!).then(async (response) => {
+                    if (!response.ok) throw new Error(`The page's Markdown answered HTTP ${response.status}`)
+                    return response.text()
+                })
+                if (typeof ClipboardItem === "function" && typeof navigator.clipboard?.write === "function") {
+                    try {
+                        // The clipboard is opened in the press itself and handed the download, which is the one way Safari allows it
+                        await navigator.clipboard.write([new ClipboardItem({ "text/plain": textPromise.then((text) => new Blob([text], { type: "text/plain" })) })])
+                    } catch {
+                        await navigator.clipboard.writeText(await textPromise)
+                    }
+                } else {
+                    await navigator.clipboard.writeText(await textPromise)
+                }
+            } catch (error) {
+                reportCopyFailed(error)
+                return
+            } finally {
+                delete copyMarkdown.dataset.copying
+            }
+            showCopied(copyMarkdown)
+        })()
         return
     }
     const copy = target.closest<HTMLElement>("[data-copy]")
     if (copy) {
         const owner = copy.closest("[data-copy-root]")
         const source = [...(owner?.querySelectorAll<HTMLElement>("[data-copy-text]") ?? [])].find((element) => element.checkVisibility())
-        try {
-            await navigator.clipboard.writeText(((source?.querySelector("pre") ?? source)?.textContent ?? "").trimEnd())
-        } catch (error) {
-            reportCopyFailed(error)
-            return
-        }
-        showCopied(copy)
+        void (async () => {
+            try {
+                await navigator.clipboard.writeText(((source?.querySelector("pre") ?? source)?.textContent ?? "").trimEnd())
+            } catch (error) {
+                reportCopyFailed(error)
+                return
+            }
+            showCopied(copy)
+        })()
     }
 })
 
@@ -368,13 +390,31 @@ function cutAboveFooter() {
     }
     const mark = () => {
         if (!visible.length) return
-        let current = visible[0]!
-        for (const entry of visible) if (entry.heading.getBoundingClientRect().top < 140) current = entry
         const page = document.scrollingElement ?? root
-        if (page.scrollTop > 0 && page.scrollTop + page.clientHeight >= page.scrollHeight - 2) current = visible.at(-1)!
+        let current = visible[0]!
+        if (page.scrollTop > 0 && page.scrollTop + page.clientHeight >= page.scrollHeight - 2) {
+            current = visible.at(-1)!
+        } else {
+            let low = 0
+            let high = visible.length - 1
+            let found = 0
+            while (low <= high) {
+                const mid = (low + high) >> 1
+                if (visible[mid]!.heading.getBoundingClientRect().top < 140) {
+                    found = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+            current = visible[found]!
+        }
         if (current.link === shown) return
         const link = (shown = current.link)
-        for (const entry of outlineEntries) entry.link === link ? entry.link.setAttribute("aria-current", "location") : entry.link.removeAttribute("aria-current")
+        for (const entry of outlineEntries) {
+            if (entry.link === link) entry.link.setAttribute("aria-current", "location")
+            else entry.link.removeAttribute("aria-current")
+        }
         // In the outline's own pixels, clear of its top and bottom padding
         if (!outline || held || outline.scrollHeight <= outline.clientHeight) return
         let top = 0
@@ -390,8 +430,16 @@ function cutAboveFooter() {
         mark()
     }
     window.addEventListener("scroll", schedule, { passive: true })
-    window.addEventListener("resize", schedule, { passive: true })
+    window.addEventListener(
+        "resize",
+        () => {
+            refreshZoom()
+            schedule()
+        },
+        { passive: true },
+    )
     window.addEventListener("pagereveal", () => {
+        refreshZoom()
         refresh()
         update()
     })

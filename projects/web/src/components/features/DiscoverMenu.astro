@@ -40,7 +40,7 @@ const marks = {
             {
                 featurePages.map((page) => (
                     <li>
-                        <a href={`/${page.slug}`} data-accent={page.accent} aria-current={current === `/${page.slug}` ? "page" : undefined}>
+                        <a href={`/${page.slug}/`} data-accent={page.accent} aria-current={current === `/${page.slug}` ? "page" : undefined}>
                             <span class="mark" aria-hidden="true">
                                 <img src={iconSrc(marks[page.slug].icon, 160)} alt="" width="160" height="160" loading="lazy" decoding="async" />
                             </span>

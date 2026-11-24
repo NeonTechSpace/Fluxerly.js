@@ -167,7 +167,7 @@ export default function FirstReply() {
         // The code panel can re-wrap a long comment without changing the grid's height
         if (preRef.current) observer.observe(preRef.current)
         if (windowRef.current) observer.observe(windowRef.current)
-        document.fonts?.ready.then(measure)
+        void document.fonts?.ready.then(measure)
         return () => observer.disconnect()
     }, [measure])
 

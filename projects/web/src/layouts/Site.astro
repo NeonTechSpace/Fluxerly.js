@@ -14,9 +14,10 @@ interface Props {
     description?: string
     noindex?: boolean
     graph?: Record<string, unknown>[]
+    plainFooter?: boolean
 }
 
-const { title = homeTitle, description = homeDescription, noindex, graph } = Astro.props
+const { title = homeTitle, description = homeDescription, noindex, graph, plainFooter = false } = Astro.props
 ---
 
 <!doctype html>
@@ -27,6 +28,7 @@ const { title = homeTitle, description = homeDescription, noindex, graph } = Ast
         <!-- The homepage's heaviest picture, wanted at the size the hero draws it, asked for before any stylesheet can hold the parser up -->
         {Astro.url.pathname === "/" && <link rel="preload" as="image" fetchpriority="high" href={mascotArt.small} imagesrcset={mascotSrcset} imagesizes={mascotSizes} />}
         <Seo title={title} description={description} noindex={noindex} graph={graph} />
+        <link rel="alternate" type="text/plain" href="/llms.txt" title="Fluxerly.js docs index for AI tools" />
         <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
         <PageTransitions />
         <!-- The homepage's first frame waits for the whole hero, so a reload never shows the header alone, with the conductor gone,
@@ -56,6 +58,6 @@ const { title = homeTitle, description = homeDescription, noindex, graph } = Ast
         <main id="main">
             <slot />
         </main>
-        <SiteFooter />
+        <SiteFooter plain={plainFooter} />
     </body>
 </html>

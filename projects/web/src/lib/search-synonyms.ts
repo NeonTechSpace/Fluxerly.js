@@ -17,6 +17,9 @@ export const synonyms: Readonly<Record<string, readonly string[]>> = {
     "private message": ["direct message"],
     // Deleting many messages at once, as the docs' deleteMany does
     "bulk delete": ["delete many"],
+    purge: ["delete many"],
+    // Two-factor authentication, which the docs write out in full
+    "2fa": ["factor authentication"],
     // Answering a message
     respond: ["reply"],
     // A stand-in for Fluxer in tests, which the docs call fake

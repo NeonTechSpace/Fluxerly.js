@@ -1,6 +1,6 @@
 ---
 import { GithubLogoIcon } from "@phosphor-icons/react/ssr"
-import MotionControl from "../islands/MotionControl"
+import MotionControl from "./MotionControl.astro"
 import { links } from "../lib/links"
 import DiscoverMenu from "./features/DiscoverMenu.astro"
 import MotionTour from "./MotionTour.astro"
@@ -38,7 +38,7 @@ import MotionTour from "./MotionTour.astro"
             <span class="nav-label">GitHub</span>
         </a>
         <div class="modes" data-modes>
-            <MotionControl client:load />
+            <MotionControl />
         </div>
     </nav>
 </header>
@@ -323,7 +323,7 @@ import MotionTour from "./MotionTour.astro"
 
     /* The switch's tooltip. It says what a press does next and sits under its button,
        aligned to the button's right edge so it never runs off the page, with a notch pointing up at the
-       button. The motion switch is a React island, so its parts are reached with :global */
+       button. The motion switch is its own component, so its parts are reached with :global */
     .modes :global(.mode-control) {
         position: relative;
         display: flex;

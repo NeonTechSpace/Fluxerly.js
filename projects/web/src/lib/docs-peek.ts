@@ -131,8 +131,13 @@ function cardElement(): HTMLDivElement {
     return card
 }
 
-// The page's own zoom on wide screens scales the card too, so places are measured on screen and set in its units
-const zoom = () => Number.parseFloat(getComputedStyle(document.body).zoom) || 1
+// The page's own zoom on wide screens scales the card too, so places are measured on screen and set in its units.
+// Cached and refreshed on resize so scroll frames avoid style reads
+let cachedZoom = Number.parseFloat(getComputedStyle(document.body).zoom) || 1
+const refreshZoom = () => {
+    cachedZoom = Number.parseFloat(getComputedStyle(document.body).zoom) || 1
+}
+const zoom = () => cachedZoom
 
 function place(trigger: HTMLAnchorElement, peek: HTMLDivElement) {
     const scale = zoom()
@@ -314,7 +319,11 @@ function setup() {
         },
         { passive: true },
     )
-    window.addEventListener("resize", close)
+    window.addEventListener("resize", () => {
+        refreshZoom()
+        close()
+    })
+    window.addEventListener("pagereveal", refreshZoom)
 }
 
 setup()

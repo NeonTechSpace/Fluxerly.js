@@ -14,9 +14,8 @@ export function changelogMarkdown(source: string, repository: string): string {
             let line = raw.replace(/\s+$/, "")
             if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced
             if (fenced) return raw
-            line = line.replace(/^(\s*[-*+] )([0-9a-f]{7,40}): /, (_, bullet: string, commit: string) => `${bullet}\u0000${commit}\u0000`)
-            const commit = /\u0000([0-9a-f]+)\u0000/.exec(line)?.[1]
-            if (commit) line = `${line.replace(/\u0000[0-9a-f]+\u0000/, "")} [${commit}](${repository}/commit/${commit})`
+            const commitMatch = /^(\s*[-*+] )([0-9a-f]{7,40}): (.*)$/.exec(line)
+            if (commitMatch) line = `${commitMatch[1]}${commitMatch[3]} [${commitMatch[2]}](${repository}/commit/${commitMatch[2]})`
             const next = lines[index + 1]
             // A line followed by another of the same paragraph breaks there, as it was written
             const continues = line.trim() !== "" && !/^\s*#/.test(line) && next !== undefined && next.trim() !== "" && !startsBlock.test(next)

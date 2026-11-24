@@ -1,10 +1,14 @@
-import { links } from "./links"
+import sdkPackage from "../../../sdk/package.json" with { type: "json" }
+import { links } from "./links.ts"
+import { siteOrigin } from "./site-address.mjs"
 
 // What search engines and link previews read about the site. Every page's head goes through
 // src/components/Seo.astro, and these are the shared facts it describes
 
-export const siteUrl = import.meta.env.SITE.replace(/\/$/, "")
+export const siteUrl = (import.meta.env?.SITE ?? siteOrigin).replace(/\/$/, "")
 export const siteName = "Fluxerly.js"
+
+const sdkVersion = process.env.DOCS_VERSION ?? sdkPackage.version
 
 export const homeTitle = "Fluxerly.js · Fluxer bot SDK for JavaScript, TypeScript, Effect"
 export const homeDescription =
@@ -26,6 +30,7 @@ const org: Node = {
     name: "NeonTechSpace",
     url: "https://github.com/NeonTechSpace",
     logo: `${siteUrl}/icon-512.png`,
+    sameAs: ["https://github.com/NeonTechSpace", "https://www.npmjs.com/org/neontechspace"],
 }
 
 const website: Node = {
@@ -33,7 +38,7 @@ const website: Node = {
     "@id": `${siteUrl}/#website`,
     url: `${siteUrl}/`,
     name: siteName,
-    alternateName: "Fluxerly",
+    alternateName: ["Fluxerly", "FluxerlyJS", "@neontechspace/fluxerly"],
     description: homeDescription,
     image: shareImage.url,
     inLanguage: "en",
@@ -44,12 +49,16 @@ const sdk: Node = {
     "@type": "SoftwareSourceCode",
     "@id": `${siteUrl}/#sdk`,
     name: siteName,
+    alternateName: ["Fluxerly", "FluxerlyJS", "@neontechspace/fluxerly"],
     description: homeDescription,
     url: `${siteUrl}/`,
     image: shareImage.url,
     codeRepository: links.github,
+    sameAs: [links.github, links.npm],
+    softwareVersion: sdkVersion,
     programmingLanguage: ["JavaScript", "TypeScript"],
     runtimePlatform: "Node.js",
+    keywords: ["Fluxer", "Fluxer bot", "Fluxer SDK", "Fluxerly", "Fluxerly.js", "FluxerlyJS", "JavaScript", "TypeScript", "Effect", "Node.js"],
     license: "https://www.apache.org/licenses/LICENSE-2.0",
     author: { "@id": org["@id"] },
     publisher: { "@id": org["@id"] },
@@ -81,4 +90,74 @@ export function breadcrumbs(steps: { name: string; path: string }[]): Node | und
             item: new URL(step.path, `${siteUrl}/`).href,
         })),
     }
+}
+
+export interface FaqItem {
+    question: string
+    answer: string
+}
+
+// Structured FAQPage node for pages that present direct question-and-answer lists
+export function faqGraph(items: readonly FaqItem[]): Node | undefined {
+    const clean = items.map((item) => ({ question: item.question.trim(), answer: item.answer.trim() })).filter((item) => item.question && item.answer)
+    if (!clean.length) return undefined
+    return {
+        "@type": "FAQPage",
+        mainEntity: clean.map((item) => ({
+            "@type": "Question",
+            name: item.question,
+            acceptedAnswer: {
+                "@type": "Answer",
+                text: item.answer,
+            },
+        })),
+    }
+}
+
+// Extracts plain-text question and answer pairs from a guide written as ## Question sections
+export function faqFromMarkdown(source: string): FaqItem[] {
+    const body = source.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+    const parts = body.split(/^##\s+/m).slice(1)
+    return parts
+        .map((part) => {
+            const newline = part.indexOf("\n")
+            if (newline < 0) return { question: "", answer: "" }
+            const question = plainText(part.slice(0, newline))
+            const answer = plainText(part.slice(newline + 1))
+            return { question, answer }
+        })
+        .filter((item) => item.question && item.answer)
+}
+
+// Structured TechArticle node for guide pages
+export function techArticleGraph({ title, description, path }: { title: string; description: string; path: string }): Node {
+    return {
+        "@type": "TechArticle",
+        headline: title,
+        description,
+        url: new URL(path, `${siteUrl}/`).href,
+        inLanguage: "en",
+        isPartOf: { "@id": website["@id"] },
+        about: { "@id": sdk["@id"] },
+        author: { "@id": org["@id"] },
+        publisher: { "@id": org["@id"] },
+    }
+}
+
+// Structured WebPage and BreadcrumbList nodes for a feature page
+export function featurePageGraph({ title, description, path }: { title: string; description: string; path: string }): Node[] {
+    const webPage: Node = {
+        "@type": "WebPage",
+        name: title,
+        description,
+        url: new URL(path, `${siteUrl}/`).href,
+        inLanguage: "en",
+        isPartOf: { "@id": website["@id"] },
+        about: { "@id": sdk["@id"] },
+    }
+    const trail = breadcrumbs([
+        { name: siteName, path: "/" },
+        { name: title, path },
+    ])
+    return trail ? [webPage, trail] : [webPage]
 }

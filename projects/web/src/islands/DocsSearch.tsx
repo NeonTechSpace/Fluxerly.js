@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react"
-import { MagnifyingGlassIcon } from "@phosphor-icons/react"
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent } from "react"
+import { MagnifyingGlassIcon, XIcon } from "@phosphor-icons/react"
 import { answer as answerQuery, pagefindOptions, searchable, type Answer, type HeadingCounts, type Hit, type PagefindApi, type PagefindModule, type SearchWords } from "../lib/docs-search"
 import { composing, EnterIntent } from "../lib/search-enter"
 
@@ -108,8 +108,8 @@ const copies = {
         if (!entry.ok) throw new Error(`The search index answered ${entry.status}`)
     },
     failedChunks: () => failedChunks,
-    forgetSearcher: searcher.forget,
-    forgetChecker: checker.forget,
+    forgetSearcher: () => searcher.forget(),
+    forgetChecker: () => checker.forget(),
     words: loadWords,
     async pageCount() {
         const entry = await fetch(`${indexPath}pagefind-entry.json`)
@@ -154,6 +154,7 @@ export default function DocsSearch() {
     const [answered, setAnswered] = useState("")
     const [active, setActive] = useState(0)
     const [state, setState] = useState<"idle" | "loading" | "ready" | "unavailable">("idle")
+    const [mac, setMac] = useState(false)
     const listId = useId()
     // Enter pressed before the query's results arrived opens the first of them when they do
     const [enter] = useState(() => new EnterIntent())
@@ -177,24 +178,58 @@ export default function DocsSearch() {
         else if (state === "unavailable") start(reopenPagefind())
     }
 
+    const openRef = useRef(open)
+    openRef.current = open
+
     const retry = () => {
         input.current?.focus()
         start(reopenPagefind())
     }
 
     useEffect(() => {
+        setMac(/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent))
+    }, [])
+
+    useEffect(() => {
         const onKey = (event: globalThis.KeyboardEvent) => {
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
                 event.preventDefault()
-                open()
+                openRef.current()
             }
         }
+        const onHash = () => dialog.current?.close()
         window.addEventListener("keydown", onKey)
-        return () => window.removeEventListener("keydown", onKey)
-    })
+        window.addEventListener("hashchange", onHash)
+        return () => {
+            window.removeEventListener("keydown", onKey)
+            window.removeEventListener("hashchange", onHash)
+        }
+    }, [])
+
+    const samePage = (url: string) => {
+        const target = new URL(url, window.location.href)
+        return target.origin === window.location.origin && target.pathname === window.location.pathname
+    }
 
     const go = (hit: Hit | undefined) => {
-        if (hit) window.location.assign(hit.url)
+        if (!hit) return
+        if (samePage(hit.url)) dialog.current?.close()
+        window.location.assign(hit.url)
+    }
+
+    const onHitClick = (event: MouseEvent<HTMLAnchorElement>, url: string) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
+        if (samePage(url)) dialog.current?.close()
+    }
+
+    const clearQuery = () => {
+        enter.clear()
+        setQuery("")
+        setAsTyped("")
+        setHits([])
+        setReading({})
+        setAnswered("")
+        input.current?.focus()
     }
 
     useEffect(() => {
@@ -302,7 +337,7 @@ export default function DocsSearch() {
             <button className="search-open" type="button" onClick={open} aria-haspopup="dialog">
                 <MagnifyingGlassIcon size={19} aria-hidden="true" />
                 <span className="search-open-label">Search the docs</span>
-                <kbd>Ctrl K</kbd>
+                <kbd>{mac ? "⌘ K" : "Ctrl K"}</kbd>
             </button>
             <dialog
                 ref={dialog}
@@ -333,6 +368,11 @@ export default function DocsSearch() {
                         autoComplete="off"
                         spellCheck={false}
                     />
+                    {query && (
+                        <button className="search-clear" type="button" aria-label="Clear Search" onClick={clearQuery}>
+                            <XIcon size={18} weight="bold" aria-hidden="true" />
+                        </button>
+                    )}
                     <button className="search-close" type="button" onClick={() => dialog.current?.close()}>
                         Esc
                     </button>
@@ -344,7 +384,7 @@ export default function DocsSearch() {
                 <ul className="search-results" id={listId} role="listbox" aria-label="Results">
                     {hits.map((hit, index) => (
                         <li key={hit.url} id={`${listId}-${index}`} role="option" aria-selected={index === active} onMouseMove={() => setActive(index)}>
-                            <a href={hit.url} tabIndex={-1}>
+                            <a href={hit.url} tabIndex={-1} onClick={(event) => onHitClick(event, hit.url)}>
                                 <span className="search-hit-head">
                                     <span className="search-hit-title">
                                         {hit.title}

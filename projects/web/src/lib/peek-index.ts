@@ -164,7 +164,18 @@ function compact(type: Type, level: 1 | 2, depth = 0): Type {
         case "optional":
         case "rest":
             return { ...type, t: compact(type.t, level, depth + 1) }
-        default:
+        case "and":
+        case "cond":
+        case "idx":
+        case "infer":
+        case "mapped":
+        case "named":
+        case "op":
+        case "pred":
+        case "query":
+        case "raw":
+        case "tpl":
+        case "tuple":
             return depth ? more : type
     }
 }
@@ -204,10 +215,12 @@ function declarationTitle(item: Declaration): string {
             const prefix = `${keyword("type ")}${declared(item.name)}${typeParameters(item.tp)} = `
             return clip(prefix + typeAfter(prefix, item.type ?? "unknown"))
         }
-        default: {
+        case "class":
+        case "interface": {
+            const kind = item.kind
             const tp = item.tp?.map((parameter) => ({ n: parameter.n }))
             const forms = ([1, 2] as const).map((level) =>
-                declarationHtml(item.kind as "class" | "interface", item.name, {
+                declarationHtml(kind, item.name, {
                     tp,
                     extends: item.extends?.map((type) => compact(type, level)),
                     implements: item.implements?.map((type) => compact(type, level)),
@@ -254,7 +267,7 @@ function addApi(build: Build, entry: Entry, item: Declaration) {
         const title = member.anchor && memberTitle(member)
         if (!title) continue
         const url = `${page}#${member.anchor}`
-        const role = member.signatures?.length ? "Method" : /Options$/.test(item.name) ? "Option" : "Property"
+        const role = member.signatures?.length ? "Method" : item.name.endsWith("Options") ? "Option" : "Property"
         entries[url] ??= { t: title, k: `${role} of ${item.name}${where}`, d: summaryOf(member.doc, member.signatures?.[0]) }
         const known = { key: url, next: member.signatures?.[0]?.r ?? member.type }
         node.members.set(member.name, known)
@@ -304,7 +317,7 @@ function createdOf(build: Build, type: Type | undefined): ApiNode[] {
 // The options objects a parameter takes, named like BotOptions, with what such a type is made of. A parameter such as a
 // channel is not an options object, so a guildId in a sentence is not that channel's property
 function optionsOf(build: Build, type: Type | undefined): ApiNode[] {
-    const named = (key: string) => /Options$/.test(build.items.get(key)?.name ?? "")
+    const named = (key: string) => (build.items.get(key)?.name ?? "").endsWith("Options")
     const top = type && typeof type === "object" && "r" in type && type.h
     const nodes = nodesOf(build, type)
     return top && named(top) ? nodes : nodes.filter((node) => named(node.key))

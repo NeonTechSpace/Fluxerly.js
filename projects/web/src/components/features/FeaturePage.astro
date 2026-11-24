@@ -6,6 +6,7 @@ import type { IconName } from "../../lib/art"
 import NextRow from "./NextRow.astro"
 import Space from "./Space.astro"
 import { featurePages, type FeatureSlug } from "../../lib/links"
+import { featurePageGraph } from "../../lib/seo"
 
 // A feature page: the hero band with its title, the one line of what the page is for and its keepsake, then the
 // scenes, then the way on to the other pages
@@ -34,7 +35,11 @@ const orbits = [
 ]
 ---
 
-<Site title={`${page.title} · Fluxerly.js`} description={page.summary}>
+<Site
+    title={page.seoTitle}
+    description={page.seoDescription}
+    graph={featurePageGraph({ title: page.title, description: page.seoDescription, path: `/${page.slug}/` })}
+>
     <Space accent={page.accent}>
         <section class="feature-hero" aria-labelledby="page-title" data-accent={page.accent} data-reached data-rich={rich || undefined}>
             <div class="page-grid">

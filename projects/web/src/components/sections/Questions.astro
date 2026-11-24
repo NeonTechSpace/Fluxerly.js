@@ -4,7 +4,7 @@ import Companion from "./Companion.astro"
 import Depth from "./Depth.astro"
 import { guide } from "../../lib/links"
 
-interface Question {
+export interface Question {
     // The anchor after #question-, named for the topic so a link keeps its question when the list is reordered
     id: string
     question: string
@@ -15,8 +15,6 @@ interface Question {
     link?: string
 }
 
-const code = (text: string) => `<code class="inline-code">${text}</code>`
-
 // Fifteen questions read better as three short lists. The order of the list below decides nothing else
 const groups = [
     { title: "Using Fluxerly", ids: ["slash-commands", "effect", "intents", "node", "voice", "rate-limits"] },
@@ -24,18 +22,18 @@ const groups = [
     { title: "Fluxerly and AI", ids: ["built-with-ai", "avoid-ai", "trust-ai-code", "ai-slop"] },
 ]
 
-const questions: Question[] = [
+export const questions: Question[] = [
     {
         id: "slash-commands",
         question: "Where Are Slash Commands?",
-        answer: `Fluxer does not let bots register slash commands yet. Fluxerly will add them as soon as Fluxer supports them. Until then, Fluxerly commands are prefix commands, messages such as ${code("!ping")} that start with a chosen prefix, with typed arguments, guards, cooldowns, groups and generated help`,
+        answer: 'Fluxer does not let bots register slash commands yet. Fluxerly will add them as soon as Fluxer supports them. Until then, Fluxerly commands are prefix commands, messages such as <code class="inline-code">!ping</code> that start with a chosen prefix, with typed arguments, guards, cooldowns, groups and generated help',
         href: guide("commands"),
         link: "Commands Guide",
     },
     {
         id: "effect",
         question: "Do I Have to Learn Effect?",
-        answer: `No. The default entry point uses ${code("async")} and ${code("await")} with Results. The SDK uses Effect inside, and npm, pnpm and Bun install it automatically, while the Effect entry point is there for applications that already use it`,
+        answer: 'No. The default entry point uses <code class="inline-code">async</code> and <code class="inline-code">await</code> with Results. The SDK uses Effect inside, and npm, pnpm and Bun install it automatically, while the Effect entry point is there for applications that already use it',
         href: guide("effect-first-bot"),
         link: "First Effect Bot",
     },
@@ -49,21 +47,21 @@ const questions: Question[] = [
     {
         id: "intents",
         question: "Do I Have to Enable Intents or Events?",
-        answer: `No. Fluxer has no gateway intents. Messages arrive when the bot can read the channel. Presence updates for chosen community members also need ${code("client.presence.setMembers")} with their IDs`,
+        answer: 'No. Fluxer has no gateway intents. Messages arrive when the bot can read the channel. Presence updates for chosen community members also need <code class="inline-code">client.presence.setMembers</code> with their IDs',
         href: guide("configuration", "events-and-the-gateway"),
         link: "Events and the Gateway",
     },
     {
         id: "node",
         question: "Which Node.js and Module System?",
-        answer: `Node.js with ES modules only. JavaScript needs no compiler, and TypeScript projects add TypeScript 7 and ${code("@types/node")}. The supported Node.js and TypeScript versions are listed in the support guide`,
+        answer: 'Node.js with ES modules only. JavaScript needs no compiler, and TypeScript projects add TypeScript 7 and <code class="inline-code">@types/node</code>. The supported Node.js and TypeScript versions are listed in the support guide',
         href: guide("support-and-compatibility"),
         link: "Support and Compatibility",
     },
     {
         id: "results",
         question: "Why Do Calls Return a Result Instead of Throwing?",
-        answer: `Expected failures such as a missing permission, a network error or a rate limit stay visible in the return type, so they are handled where they happen. Invalid options still throw at once, and ${code("orThrow")} is there for code that prefers exceptions`,
+        answer: 'Expected failures such as a missing permission, a network error or a rate limit stay visible in the return type, so they are handled where they happen. Invalid options still throw at once, and <code class="inline-code">orThrow</code> is there for code that prefers exceptions',
         href: guide("reliability"),
         link: "Reliability Guide",
     },
@@ -103,7 +101,7 @@ const questions: Question[] = [
     {
         id: "rate-limits",
         question: "What About Rate Limits?",
-        answer: `Usually. When Fluxer answers with HTTP 429 and names a delay, the SDK waits and sends again if the wait fits the request's deadline. A webhook message, or a message on an instance without direct uploads, that carries a Blob, File or stream attachment fails instead, because its body cannot be sent twice. Waits of a second or more are logged as warnings with the code ${code("ratelimit.wait")}`,
+        answer: 'Usually. When Fluxer answers with HTTP 429 and names a delay, the SDK waits and sends again if the wait fits the request\'s deadline. A webhook message, or a message on an instance without direct uploads, that carries a Blob, File or stream attachment fails instead, because its body cannot be sent twice. Waits of a second or more are logged as warnings with the code <code class="inline-code">ratelimit.wait</code>',
         href: guide("reliability", "limits-and-retry-rules"),
         link: "Limits and Retry Rules",
     },
@@ -117,18 +115,20 @@ const questions: Question[] = [
     {
         id: "message-methods",
         question: "Why Do Messages Have No Methods?",
-        answer: `Messages are plain, read-only data, so no network call hides behind a property. A handler receives a ${code("reply")} function, and ${code("client.messages.send")} sends to any channel`,
+        answer: 'Messages are plain, read-only data, so no network call hides behind a property. A handler receives a <code class="inline-code">reply</code> function, and <code class="inline-code">client.messages.send</code> sends to any channel',
         href: guide("messages"),
         link: "Messages Guide",
     },
     {
         id: "missing-method",
         question: "What if a Fluxer Route Has No Method?",
-        answer: `The ${code("client.rest.call")} method reaches every route that accepts a bot token, typed with Fluxer's own field names, so a misspelled field fails to compile. For a route newer than the SDK, ${code("client.rest.request")} sends it untyped. Each gateway event the bot receives also arrives as the ${code("raw")} event, typed when Fluxer's documentation describes it`,
+        answer: 'The <code class="inline-code">client.rest.call</code> method reaches every route that accepts a bot token, typed with Fluxer\'s own field names, so a misspelled field fails to compile. For a route newer than the SDK, <code class="inline-code">client.rest.request</code> sends it untyped. Each gateway event the bot receives also arrives as the <code class="inline-code">raw</code> event, typed when Fluxer\'s documentation describes it',
         href: "/raw/",
         link: "Raw Access, Still Typed",
     },
 ]
+
+export const homeFaq = questions.map(({ question, answer }) => ({ question, answer: answer.replace(/<[^>]+>/g, "") }))
 
 ---
 

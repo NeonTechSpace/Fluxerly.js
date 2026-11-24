@@ -85,10 +85,10 @@ The file exports the bot's options as `bot`. The `defineBot` function returns th
 Start the bot with the token's `.env` file:
 
 ```command
-{"kind":"run","command":"node --env-file=.env bot.js"}
+{"kind":"run","command":"node --env-file-if-exists=.env bot.js"}
 ```
 
-When `FLUXER_BOT_TOKEN` is already set in the terminal, run the file without `--env-file=.env`
+When `FLUXER_BOT_TOKEN` is already set in the terminal, run the file without `--env-file-if-exists=.env` or keep the flag, which ignores a missing `.env` file
 
 <details>
 <summary>Set the variable in the terminal instead</summary>
@@ -128,7 +128,7 @@ The [client's message methods](/docs/api/js-ts/client/#messages) link to the ful
 <details>
 <summary>If the bot does not reply</summary>
 
-Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages. Without a token, the bot stops at once with an error whose hint points to an unset environment variable. When Node.js prints `.env: not found`, the terminal is not in the bot's folder or the file is saved as `.env.txt`. Keep the terminal running when trying `!ping`
+Check that `FLUXER_BOT_TOKEN` is set and that the bot can view the channel and send messages. Without a token, the bot stops at once with an error whose hint points to an unset environment variable, which also happens when the terminal is not in the bot's folder or `.env` was saved as `.env.txt`. Keep the terminal running when trying `!ping`
 
 When a reply fails, the terminal shows a log line with the reason and a hint, such as a missing permission. Outside a terminal, such as in an editor's run panel, log lines are JSON. Add `FLUXERLY_LOG_FORMAT=pretty` to `.env` for readable lines there. A reply can fail after Fluxer has already posted it, for example when the response is lost, so do not send it again blindly
 

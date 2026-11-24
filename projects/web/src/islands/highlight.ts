@@ -174,7 +174,7 @@ export function tokenizeLine(line: string, language: Language = "js"): Token[] {
             return tokenizeIni(line)
         case "text":
             return [{ kind: "plain", text: line }]
-        default:
+        case "js":
             return tokenizeScript(line)
     }
 }

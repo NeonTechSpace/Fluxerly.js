@@ -157,6 +157,7 @@ h4.ref-heading {
 }
 
 .ref-mark {
+    position: relative;
     margin-left: 0.4em;
     font-family: var(--font-sans);
     font-weight: var(--weight-regular);
@@ -170,6 +171,19 @@ h4.ref-heading {
 .ref-row:hover .ref-mark,
 .ref-mark:focus-visible {
     opacity: 1;
+}
+
+@media (hover: none) {
+    .ref-mark {
+        display: inline-block;
+        opacity: 0.55;
+    }
+
+    .ref-mark::after {
+        content: "";
+        position: absolute;
+        inset: -10px -16px;
+    }
 }
 
 .ref-group > h2.ref-heading:first-child {

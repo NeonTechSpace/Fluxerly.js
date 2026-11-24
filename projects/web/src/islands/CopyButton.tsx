@@ -28,7 +28,7 @@ export default function CopyButton({ text }: Props) {
 
     return (
         <>
-            <button className="copy-button" type="button" aria-label={`Copy ${text}`} data-copied={copied || undefined} onClick={copy}>
+            <button className="copy-button" type="button" aria-label={`Copy ${text}`} data-copied={copied || undefined} onClick={() => { void copy() }}>
                 <CopyIcon className="icon-copy" size={17} aria-hidden="true" />
                 <CheckIcon className="icon-done" size={17} weight="bold" aria-hidden="true" />
             </button>

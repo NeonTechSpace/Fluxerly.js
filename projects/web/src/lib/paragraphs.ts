@@ -20,13 +20,16 @@ function sentencesOf(text: string) {
     const masked = text.replace(/`[^`]*`|\[[^\]]*\]\([^)]*\)/g, (match) => `\u0000${kept.push(match) - 1}\u0001`).replace(/\s*\n\s*/g, " ")
     const sentences: string[] = []
     let from = 0
+    // oxlint-disable-next-line no-control-regex -- internal placeholder sentinel for masked inline code and links
     for (const match of masked.matchAll(/\.\s+(?=[A-Z"(\u0000])/g)) {
         const before = masked.slice(0, match.index)
+        // oxlint-disable-next-line no-control-regex -- internal placeholder sentinel for masked inline code and links
         if (abbreviations.test(before) || !/[\w)"'\u0001]$/.test(before)) continue
         sentences.push(masked.slice(from, match.index))
         from = match.index + match[0].length
     }
     sentences.push(withoutLastPeriod(masked.slice(from)))
+    // oxlint-disable-next-line no-control-regex -- internal placeholder sentinel for masked inline code and links
     return sentences.map((sentence) => sentence.replace(/\u0000(\d+)\u0001/g, (_, index) => kept[Number(index)]!))
 }
 

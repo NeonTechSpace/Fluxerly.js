@@ -48,7 +48,7 @@ function nested(text: string): Nested {
     match = /^Details:\s*(.*)$/.exec(text)
     if (match) return { kind: "details", fields: split(match[1]).fields }
     if (/^at\s/.test(text)) return { kind: "frame", text }
-    if (/^\.\.\./.test(text)) return { kind: "note", text }
+    if (text.startsWith("...")) return { kind: "note", text }
     return { kind: "plain", text }
 }
 

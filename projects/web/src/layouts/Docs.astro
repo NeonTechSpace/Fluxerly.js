@@ -20,7 +20,7 @@ import { docsCourse, guideGroup, type NavItem, type TocItem } from "../lib/docs-
 import { docsTitleQualifier } from "../lib/docs-titles"
 import { endpoints } from "../lib/endpoints"
 import { fluxerPinOf } from "../lib/fluxer-pin"
-import { breadcrumbs } from "../lib/seo"
+import { breadcrumbs, faqFromMarkdown, faqGraph, techArticleGraph } from "../lib/seo"
 import { seededRandom } from "../lib/stars"
 import { identifierHtml } from "../../scripts/docs/code-breaks.mjs"
 import docsSheet from "../lib/docs-sheet.js?raw"
@@ -130,6 +130,13 @@ const trail = breadcrumbs([
     ...(crumbs ?? []).map((crumb) => ({ name: crumb.title, path: crumb.href })),
     ...(slug === "index" ? [] : [{ name: title, path: current }]),
 ])
+const faqSource = slug === "faq" ? guides.find((guide) => guide.slug === "faq")?.source : undefined
+const faqNode = faqSource ? faqGraph(faqFromMarkdown(faqSource)) : undefined
+const graph = [
+    ...(trail ? [trail] : []),
+    ...(section === "guides" && slug !== "index" ? [techArticleGraph({ title, description: metaDescription, path: current })] : []),
+    ...(faqNode ? [faqNode] : []),
+]
 ---
 
 <!doctype html>
@@ -137,7 +144,7 @@ const trail = breadcrumbs([
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={trail ? [trail] : []} />
+        <Seo title={pageTitle} description={metaDescription} type={slug === "index" ? "website" : "article"} graph={graph} />
         {markdownUrl && <link rel="alternate" type="text/markdown" href={markdownUrl} title="This page as Markdown" />}
         <link rel="alternate" type="text/plain" href={`${docsBase}llms.txt`} title="Docs index for AI tools" />
         <link rel="preload" href={outfitUrl} as="font" type="font/woff2" crossorigin />
@@ -224,7 +231,7 @@ const trail = breadcrumbs([
                             </summary>
                             <div class="version-list">
                                 {docsVersions.map((version) => (
-                                    <a href={version.base} data-docs-version={version.base} aria-current={version.base === docsBase ? "true" : undefined}>
+                                    <a href={version.base} data-docs-version={version.base} rel={version.base !== "/docs/" ? "nofollow" : undefined} aria-current={version.base === docsBase ? "true" : undefined}>
                                         <span class="version-label">{version.label}</span>
                                         <span class="version-number" data-prerelease={version.version.includes("-") ? "" : undefined}>{version.version}</span>
                                         {version.deprecated && <span class="version-deprecated">Deprecated</span>}
@@ -232,7 +239,7 @@ const trail = breadcrumbs([
                                 ))}
                                 {olderVersions.length > 0 && <p class="version-group">Older Versions</p>}
                                 {olderVersions.map((version) => (
-                                    <a href={version.base} data-docs-version={version.base} aria-current={version.base === docsBase ? "true" : undefined}>
+                                    <a href={version.base} data-docs-version={version.base} rel={version.base !== "/docs/" ? "nofollow" : undefined} aria-current={version.base === docsBase ? "true" : undefined}>
                                         <span class="version-number" data-prerelease={version.version.includes("-") ? "" : undefined}>{version.version}</span>
                                         {version.deprecated && <span class="version-deprecated">Deprecated</span>}
                                     </a>
@@ -390,7 +397,7 @@ const trail = breadcrumbs([
             </main>
         </div>
 
-        <SiteFooter />
+        <SiteFooter plain />
 
         <script>
             import "../lib/docs-client"
