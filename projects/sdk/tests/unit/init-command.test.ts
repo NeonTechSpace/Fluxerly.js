@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { fileURLToPath } from "node:url"
 import { afterEach, expect, test } from "vitest"
+import { stripAnsi, visibleLength } from "../../src/internal/cli-theme.js"
 import {
     detectPackageManager,
     parseInitArguments,
@@ -112,7 +113,14 @@ test("Ctrl+C at the numbered prompt cancels init", async () => {
 const showCursor = "\x1b[?25h"
 
 /** A terminal whose input supports raw mode, recording each raw mode change, so init shows the arrow-key menu */
-function menuTerminal({ colors = false } = {}) {
+function menuTerminal({
+    colors = false,
+    truecolor = false,
+    columns = 80,
+    rows = 24,
+    platform = "win32" as NodeJS.Platform,
+    env = {} as Record<string, string | undefined>,
+} = {}) {
     const terminal = streams(true)
     const rawModes: boolean[] = []
     const input = Object.assign(terminal.input, {
@@ -122,8 +130,13 @@ function menuTerminal({ colors = false } = {}) {
             input.isRaw = mode
         },
     })
-    if (colors) Object.assign(terminal.output, { hasColors: () => true })
-    return { ...terminal, input, rawModes }
+    const output = Object.assign(terminal.output, {
+        columns,
+        rows,
+        hasColors: () => colors || truecolor,
+        ...(truecolor ? { getColorDepth: () => 24 } : {}),
+    })
+    return { ...terminal, input, output, rawModes, env, platform }
 }
 
 test.each([
@@ -136,7 +149,7 @@ test.each([
     const selected = selectStarterTemplate(undefined, terminal)
     terminal.input.write(keys)
     await expect(selected).resolves.toBe(template)
-    expect(terminal.printed()).toContain("> JavaScript\n")
+    expect(terminal.printed()).toContain("> JavaScript  Zero-build ESM starter\n")
     // The collapse clears the menu and writes the question with the choice in its place
     expect(terminal.printed()).toContain(`\x1b[0JWhich starter should fluxerly init write? ${label}\n`)
     expect(terminal.rawModes).toEqual([true, false])
@@ -182,11 +195,17 @@ test("a failure while redrawing the menu still restores the terminal", async () 
 })
 
 test("the menu highlights in color only when the terminal supports color", async () => {
-    const colored = menuTerminal({ colors: true })
-    const coloredPick = selectStarterTemplate(undefined, colored)
-    colored.input.write("\r")
-    await coloredPick
-    expect(colored.printed()).toContain("\x1b[36m> JavaScript\x1b[39m")
+    const ansi16 = menuTerminal({ colors: true, platform: "win32" })
+    const ansi16Pick = selectStarterTemplate(undefined, ansi16)
+    ansi16.input.write("\r")
+    await ansi16Pick
+    expect(ansi16.printed()).toContain("\x1b[36m> JavaScript\x1b[39m")
+
+    const truecolor = menuTerminal({ truecolor: true, platform: "linux" })
+    const truecolorPick = selectStarterTemplate(undefined, truecolor)
+    truecolor.input.write("\r")
+    await truecolorPick
+    expect(truecolor.printed()).toContain("\x1b[38;2;70;227;239m› JavaScript\x1b[39m")
 
     const plain = menuTerminal()
     const plainPick = selectStarterTemplate(undefined, plain)
@@ -194,6 +213,26 @@ test("the menu highlights in color only when the terminal supports color", async
     await plainPick
     expect(plain.printed()).toContain("> JavaScript")
     expect(plain.printed()).not.toContain("\x1b[36m")
+    expect(plain.printed()).not.toContain("\x1b[38;2;")
+})
+
+test("the menu truncates lines to prevent soft-wrapping and cleans up its resize listener", async () => {
+    const terminal = menuTerminal({ truecolor: true, columns: 28, platform: "linux" })
+    const selected = selectStarterTemplate(undefined, terminal)
+    expect(terminal.output.listenerCount("resize")).toBe(1)
+
+    // Shrink the viewport mid-menu and fire resize, then select
+    terminal.output.columns = 24
+    terminal.output.emit("resize")
+    terminal.input.write("\r")
+    await expect(selected).resolves.toBe("js")
+    expect(terminal.output.listenerCount("resize")).toBe(0)
+
+    const interactivePart = terminal.printed().split("\x1b[0J")[0]!
+    const drawnLines = interactivePart.split("\n").filter((line) => line.length > 0 && !line.endsWith("\x1b[5A"))
+    // Every interactive menu row stays within the terminal width so soft wrapping cannot shift cursor-up redraws
+    for (const line of drawnLines) expect(visibleLength(line)).toBeLessThanOrEqual(27)
+    expect(stripAnsi(interactivePart)).toContain("…")
 })
 
 const sdk = fileURLToPath(new URL("../../", import.meta.url))
@@ -364,6 +403,8 @@ test("a failed install keeps the written files, prints the install commands and 
     expect(commands).toHaveLength(2)
     expect(readdirSync(project)).toEqual(expect.arrayContaining(["package.json", "bot.ts", ".env"]))
     expect(errors).toContain("pnpm")
+    expect(errors).toContain("--pm npm|pnpm|bun")
+    expect(errors).toContain("--no-install")
     for (const { args } of expectedInstall("pnpm", "effect")) expect(printed).toContain(`   pnpm ${args.join(" ")}\n`)
 })
 
@@ -376,14 +417,15 @@ test("--no-install writes the starter and .env without installing, and prints th
     expect(printed).toContain("Start the bot: bun run start")
 })
 
-test("arguments init does not accept write nothing and run nothing", async () => {
-    const { outcome, project, commands } = await init(["--template", "rust"])
+test("arguments init does not accept explain the error, write nothing and run nothing", async () => {
+    const { outcome, project, commands, errors } = await init(["--template", "rust"])
     expect(outcome).toBe("usage")
+    expect(errors).toContain('Unsupported --template value "rust"')
     expect(readdirSync(project)).toEqual([])
     expect(commands).toEqual([])
 })
 
-test("existing starter files stop init before it writes or installs anything", async () => {
+test("existing starter files stop init before it writes or installs anything and suggest --dir", async () => {
     const { outcome, project, commands, errors } = await init(["--template", "js"], undefined, {
         existing: { "bot.js": "own bot\n" },
     })
@@ -391,6 +433,28 @@ test("existing starter files stop init before it writes or installs anything", a
     expect(readdirSync(project)).toEqual(["bot.js"])
     expect(commands).toEqual([])
     expect(errors).toContain("wrote nothing")
+    expect(errors).toContain("--dir <folder>")
+})
+
+test("cancelling init reports a capitalized message and writes nothing", async () => {
+    const project = mkdtempSync(join(tmpdir(), "fluxerly-init-cancel-"))
+    directories.push(project)
+    const terminal = menuTerminal()
+    const errors = streams(false)
+    const running = runInit([], {
+        input: terminal.input,
+        output: terminal.output,
+        errorOutput: errors.output,
+        project,
+        packageRoot: sdk,
+        userAgent: undefined,
+        env: {},
+        platform: "linux",
+    })
+    terminal.input.write("\x1b")
+    await expect(running).resolves.toBe(1)
+    expect(errors.printed()).toBe("The init command was cancelled and wrote nothing\n")
+    expect(readdirSync(project)).toEqual([])
 })
 
 test.each([

@@ -1,0 +1,93 @@
+name: Triage report
+description: Filed with fluxerly triage after a coding agent investigated the project. For hand-written reports use the SDK bug template instead
+labels: [via-triage, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This structure matches what `fluxerly triage` agents follow. Keep one concrete problem per issue and redact tokens, credentials, private message bodies and home directory paths before posting
+
+        Security vulnerabilities must be reported privately through the [security policy](https://github.com/NeonTechSpace/Fluxerly.js/blob/main/docs/SECURITY.md)
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The problem in the reporter's own words
+    validations:
+      required: true
+  - type: textarea
+    id: diagnosis
+    attributes:
+      label: Diagnosis
+      description: Explicit verdict (bot code or setup, Fluxer account/permissions/instance, or SDK bug/Fluxer parity gap) grounded in shipped src/ file and line evidence or tests
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal deterministic reproduction (preferring createTestBot when offline repro works) or exact steps
+    validations:
+      required: true
+  - type: input
+    id: sdk-version
+    attributes:
+      label: Installed Fluxerly.js version
+      description: Exact @neontechspace/fluxerly version the bug happened on (not the triage CLI version if different), or unknown
+      placeholder: 1003.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Redacted OS, Node.js, Effect, TypeScript, package manager and doctor summary
+      placeholder: |
+        OS:
+        Node.js:
+        Effect:
+        TypeScript:
+        Package manager:
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Relevant redacted describeError(error) output, log lines, stack traces or test output only
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: related
+    attributes:
+      label: Related issues
+      description: Existing issues checked and why this is not a duplicate
+    validations:
+      required: false
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Fix applied or workaround
+      description: Any local configuration fix or workaround applied to unblock the bot
+    validations:
+      required: false
+  - type: textarea
+    id: models-used
+    attributes:
+      label: Models used
+      description: Required without general vouch status, optional for vouched contributors and maintainers. Use one line per main model from the [allowed model list](https://github.com/NeonTechSpace/Fluxerly.js/blob/main/.github/contribution-policy.json), with its exact version and harness. Write None if no model was used
+      placeholder: "- Model: (model id) | Harness: (harness)"
+    validations:
+      required: false
+  - type: textarea
+    id: prose-attribution
+    attributes:
+      label: Model-written prose note
+      description: Required when this report contains model-written prose. Use the first line for text a model wrote on its own, or the second line for text the author edited, with the actual values
+      placeholder: |
+        > [!NOTE]
+        > Sent by (model) on behalf of (username)
+        > Reviewed by author, aided by (model)
+    validations:
+      required: false

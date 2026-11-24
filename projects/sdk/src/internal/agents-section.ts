@@ -5,6 +5,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { createCliTheme, type CliStreamLike } from "./cli-theme.js"
 
 const start = "<!-- fluxerly:start -->"
 const end = "<!-- fluxerly:end -->"
@@ -29,7 +30,7 @@ export type AgentsPackageManager = "npm" | "pnpm" | "bun"
 // The recorded command must run the installed copy and never download one, since the unscoped fluxerly package on npm is
 // not this SDK. A lockfile names the project's manager. Without one, as in a new starter, the manager that ran the
 // command is used
-function refreshCommand(project: string, manager: AgentsPackageManager = "npm") {
+export function localAgentsCommand(project: string, manager: AgentsPackageManager = "npm"): string {
     if (existsSync(join(project, "pnpm-lock.yaml"))) return "pnpm exec fluxerly agents"
     if (existsSync(join(project, "bun.lock")) || existsSync(join(project, "bun.lockb")))
         return "bunx --no-install fluxerly agents"
@@ -70,7 +71,7 @@ function agentsSection(guide: string, version: string, command: string) {
 function packagedSection(project: string, packageRoot: string, manager?: AgentsPackageManager) {
     const guide = readFileSync(join(packageRoot, "agents/AGENTS.md"), "utf8").replaceAll("\r\n", "\n")
     const { version } = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { version: string }
-    return agentsSection(guide, version, refreshCommand(project, manager))
+    return agentsSection(guide, version, localAgentsCommand(project, manager))
 }
 
 /**
@@ -244,22 +245,36 @@ function parseAgentsArgs(
     | { readonly mode: "write"; readonly target: AgentsTarget }
     | { readonly mode: "check" }
     | { readonly mode: "print" }
-    | "usage" {
+    | { readonly error: string } {
     let target: AgentsTarget | undefined
     let checkOnly = false
     let printOnly = false
     for (let index = 0; index < args.length; index++) {
         const arg = args[index]
-        if (arg === "--check" && !checkOnly) checkOnly = true
-        else if (arg === "--print" && !printOnly) printOnly = true
-        else if (arg === "--target" && target === undefined) {
-            const next = args[index + 1] as AgentsTarget | undefined
-            if (!next || !validTargets.has(next)) return "usage"
-            target = next
+        if (arg === "--check") {
+            if (checkOnly) return { error: "The --check option was passed more than once" }
+            checkOnly = true
+        } else if (arg === "--print") {
+            if (printOnly) return { error: "The --print option was passed more than once" }
+            printOnly = true
+        } else if (arg === "--target") {
+            if (target !== undefined) return { error: "The --target option was passed more than once" }
+            const next = args[index + 1]
+            if (next === undefined)
+                return {
+                    error: "Missing value for --target. Supported targets are agents, skill, cursor, claude, gemini and all",
+                }
+            if (!validTargets.has(next as AgentsTarget))
+                return {
+                    error: `Unsupported --target value "${next}". Supported targets are agents, skill, cursor, claude, gemini and all`,
+                }
+            target = next as AgentsTarget
             index++
-        } else return "usage"
+        } else return { error: `Unknown argument "${arg ?? ""}" for agents` }
     }
-    if ((checkOnly && printOnly) || ((checkOnly || printOnly) && target !== undefined)) return "usage"
+    if (checkOnly && printOnly) return { error: "The --check and --print options cannot be combined" }
+    if ((checkOnly || printOnly) && target !== undefined)
+        return { error: `The ${checkOnly ? "--check" : "--print"} option cannot be combined with --target` }
     if (printOnly) return { mode: "print" }
     if (checkOnly) return { mode: "check" }
     return { mode: "write", target: target ?? "agents" }
@@ -269,31 +284,33 @@ function applyAgentsTarget(
     chosen: AgentsTarget,
     project: string,
     packageRoot: string,
-    output: NodeJS.WritableStream,
+    writeLine: (text: string, kind?: "ok" | "note") => void,
 ): void {
     if (chosen === "agents" || chosen === "claude" || chosen === "gemini" || chosen === "all") {
         const result = writeAgentsSection(project, packageRoot)
-        output.write(`${agentsMessages[result.status]}\n`)
-        if (chosen === "agents") for (const note of result.notes) output.write(`${note}\n`)
+        writeLine(agentsMessages[result.status], "ok")
+        if (chosen === "agents") for (const note of result.notes) writeLine(note, "note")
     }
     if (chosen === "skill" || chosen === "all") {
         const skill = writeSkillFile(project, packageRoot)
-        output.write(`${statusVerb[skill.status]} .agents/skills/fluxerly/SKILL.md\n`)
+        writeLine(`${statusVerb[skill.status]} .agents/skills/fluxerly/SKILL.md`, "ok")
     }
     if (chosen === "cursor") {
         const rule = writeCursorRule(project, packageRoot)
-        output.write(`${statusVerb[rule.status]} .cursor/rules/fluxerly.mdc\n`)
+        writeLine(`${statusVerb[rule.status]} .cursor/rules/fluxerly.mdc`, "ok")
     }
     if (chosen === "claude") {
         const claude = linkInstructionFile(project, "CLAUDE.md", "@AGENTS.md")
-        output.write(
-            `${claude === "current" ? "CLAUDE.md already references AGENTS.md" : "Linked AGENTS.md from CLAUDE.md"}\n`,
+        writeLine(
+            claude === "current" ? "CLAUDE.md already references AGENTS.md" : "Linked AGENTS.md from CLAUDE.md",
+            "ok",
         )
     }
     if (chosen === "gemini") {
         const gemini = linkInstructionFile(project, "GEMINI.md", "Read AGENTS.md for project and Fluxerly SDK rules")
-        output.write(
-            `${gemini === "current" ? "GEMINI.md already references AGENTS.md" : "Linked AGENTS.md from GEMINI.md"}\n`,
+        writeLine(
+            gemini === "current" ? "GEMINI.md already references AGENTS.md" : "Linked AGENTS.md from GEMINI.md",
+            "ok",
         )
     }
 }
@@ -304,37 +321,69 @@ export function runAgentsCommand(
     environment: {
         readonly project: string
         readonly packageRoot: string
-        readonly output: NodeJS.WritableStream
-        readonly errorOutput: NodeJS.WritableStream
+        readonly output: NodeJS.WritableStream & CliStreamLike
+        readonly errorOutput: NodeJS.WritableStream & CliStreamLike
+        readonly env?: Readonly<Record<string, string | undefined>>
+        readonly platform?: NodeJS.Platform
     },
 ): 0 | 1 | "usage" {
+    const { project, packageRoot, output, errorOutput, env, platform } = environment
+    const outTheme = createCliTheme(output, { env, platform })
+    const errTheme = createCliTheme(errorOutput, { env, platform })
+    const writeError = (text: string) =>
+        errorOutput.write(
+            errTheme.capabilities.color === "none"
+                ? `${text}\n`
+                : `${errTheme.error(`${errTheme.symbols.fail} ${text}`)}\n`,
+        )
+    const writeOut = (text: string, kind: "ok" | "note" = "ok") => {
+        if (outTheme.capabilities.color === "none") {
+            output.write(`${text}\n`)
+            return
+        }
+        output.write(
+            kind === "note"
+                ? `${outTheme.gold(outTheme.symbols.warn)} ${outTheme.muted(text)}\n`
+                : `${outTheme.success(outTheme.symbols.pass)} ${text}\n`,
+        )
+    }
+
     const parsed = parseAgentsArgs(args)
-    if (parsed === "usage") return "usage"
-    const { project, packageRoot, output, errorOutput } = environment
+    if ("error" in parsed) {
+        writeError(parsed.error)
+        return "usage"
+    }
     if (parsed.mode === "print") {
         output.write(`${formatAgentsSection(project, packageRoot)}\n`)
         return 0
     }
+    const command = localAgentsCommand(project)
     if (parsed.mode === "check") {
         const status = checkAgentsSection(project, packageRoot)
         if (status === "current") {
-            output.write("The Fluxerly section in AGENTS.md is current\n")
+            writeOut("The Fluxerly section in AGENTS.md is current", "ok")
             return 0
         }
-        const reasons = {
-            missing: "AGENTS.md has no Fluxerly section",
-            stale: "The Fluxerly section in AGENTS.md is out of date",
-            broken: "AGENTS.md has broken Fluxerly markers",
+        if (status === "broken") {
+            writeError(
+                `AGENTS.md has broken Fluxerly markers. Repair the file so one ${start} precedes one ${end}, then run ${command}`,
+            )
+            return 1
         }
-        errorOutput.write(`${reasons[status]}. Run fluxerly agents to refresh it\n`)
+        const reason =
+            status === "missing"
+                ? "AGENTS.md has no Fluxerly section"
+                : "The Fluxerly section in AGENTS.md is out of date"
+        writeError(`${reason}. Run ${command} to refresh it`)
         return 1
     }
     try {
-        applyAgentsTarget(parsed.target, project, packageRoot, output)
+        applyAgentsTarget(parsed.target, project, packageRoot, writeOut)
         return 0
     } catch (error) {
         if (!(error instanceof AgentsSectionError)) throw error
-        errorOutput.write(`${error.message}. AGENTS.md was not changed\n`)
+        const detail = `${error.message}. AGENTS.md was not changed. Remove duplicate or unmatched markers so one ${start} precedes one ${end}, then run ${command}`
+        writeError(detail)
         return 1
     }
 }

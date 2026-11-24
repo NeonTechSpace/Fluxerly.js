@@ -409,15 +409,22 @@ try {
     assert.ok(
         files.every(
             (file) =>
-                ["package.json", "README.md", "agents/AGENTS.md", "esm-only.cjs", "LICENSE", "CHANGELOG.md"].includes(
-                    file,
-                ) ||
+                [
+                    "package.json",
+                    "README.md",
+                    "agents/AGENTS.md",
+                    "agents/TRIAGE.md",
+                    "esm-only.cjs",
+                    "LICENSE",
+                    "CHANGELOG.md",
+                ].includes(file) ||
                 file.startsWith("dist/") ||
                 file.startsWith("examples/starter/") ||
                 file.startsWith("src/"),
         ),
     )
     assert.ok(files.includes("agents/AGENTS.md"))
+    assert.ok(files.includes("agents/TRIAGE.md"))
     assert.ok(files.includes("README.md"))
     assert.ok(files.includes("LICENSE"))
     assert.ok(files.includes("esm-only.cjs"))
@@ -456,7 +463,7 @@ try {
                 `Packed bytes differ from staged ${path}`,
             )
         }
-        for (const path of ["README.md", "agents/AGENTS.md"]) {
+        for (const path of ["README.md", "agents/AGENTS.md", "agents/TRIAGE.md"]) {
             assert.equal(readFileSync(join(installed, path), "utf8"), readFileSync(join(sdk, path), "utf8"))
         }
         assert.deepEqual(readFileSync(join(installed, "LICENSE")), readFileSync(join(sdk, "../../LICENSE")))

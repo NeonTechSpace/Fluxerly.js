@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { emitKeypressEvents, type Key } from "node:readline"
 import { createInterface } from "node:readline/promises"
+import { createCliTheme, truncateVisible, type CliStreamLike, type CliTheme } from "./cli-theme.js"
 import {
     StarterConflictError,
     starterTemplates,
@@ -26,16 +27,32 @@ interface InitStreams {
         readonly isRaw?: boolean
         setRawMode?(mode: boolean): unknown
     }
-    // A terminal's hasColors respects NO_COLOR and FORCE_COLOR
-    readonly output: NodeJS.WritableStream & { readonly isTTY?: boolean; hasColors?(): boolean }
+    // A terminal's hasColors and getColorDepth respect NO_COLOR and FORCE_COLOR
+    readonly output: NodeJS.WritableStream &
+        CliStreamLike & {
+            on?(event: "resize", listener: () => void): unknown
+            off?(event: "resize", listener: () => void): unknown
+        }
+    readonly env?: Readonly<Record<string, string | undefined>> | undefined
+    readonly platform?: NodeJS.Platform | undefined
 }
 type MenuInput = InitStreams["input"] & { setRawMode(mode: boolean): unknown }
 
 const question = "Which starter should fluxerly init write?"
-const choices: readonly { readonly template: StarterTemplate; readonly label: string }[] = [
-    { template: "js", label: "JavaScript" },
-    { template: "ts", label: "TypeScript" },
-    { template: "effect", label: "Effect (TypeScript with the native Effect API)" },
+const choices: readonly {
+    readonly template: StarterTemplate
+    readonly name: string
+    readonly description: string
+    readonly label: string
+}[] = [
+    { template: "js", name: "JavaScript", description: "Zero-build ESM starter", label: "JavaScript" },
+    { template: "ts", name: "TypeScript", description: "Native .ts with TypeScript 7 check", label: "TypeScript" },
+    {
+        template: "effect",
+        name: "Effect",
+        description: "TypeScript with the native Effect API",
+        label: "Effect (TypeScript with the native Effect API)",
+    },
 ]
 const templateMenu = [question, ...choices.map(({ label }, index) => `  ${index + 1}. ${label}`)].join("\n")
 export const templateQuestion = "Enter 1, 2 or 3, or press Enter for JavaScript: "
@@ -60,8 +77,7 @@ export interface ParsedInitArguments {
     readonly manager?: PackageManager
 }
 
-/** What the arguments after `init` ask for, or "invalid" for arguments init does not accept */
-export function parseInitArguments(args: readonly string[]): ParsedInitArguments | "invalid" {
+function parseInitArgumentsDetailed(args: readonly string[]): ParsedInitArguments | { readonly error: string } {
     let template: StarterTemplate | undefined
     let install = true
     let dir: string | undefined
@@ -69,23 +85,32 @@ export function parseInitArguments(args: readonly string[]): ParsedInitArguments
     for (let index = 0; index < args.length; index++) {
         const arg = args[index]
         const next = args[index + 1]
-        if (arg === "--no-install" && install) install = false
-        else if (arg === "--template" && template === undefined && isTemplate(next)) {
+        if (arg === "--no-install") {
+            if (!install) return { error: "The --no-install option was passed more than once" }
+            install = false
+        } else if (arg === "--template") {
+            if (template !== undefined) return { error: "The --template option was passed more than once" }
+            if (next === undefined)
+                return { error: "Missing value for --template. Supported templates are js, ts and effect" }
+            if (!isTemplate(next))
+                return { error: `Unsupported --template value "${next}". Supported templates are js, ts and effect` }
             template = next
             index++
-        } else if (
-            arg === "--dir" &&
-            dir === undefined &&
-            next !== undefined &&
-            next.trim() !== "" &&
-            !next.startsWith("-")
-        ) {
+        } else if (arg === "--dir") {
+            if (dir !== undefined) return { error: "The --dir option was passed more than once" }
+            if (next === undefined || next.trim() === "" || next.startsWith("-"))
+                return { error: "Missing folder path for --dir" }
             dir = next
             index++
-        } else if (arg === "--pm" && manager === undefined && isManager(next)) {
+        } else if (arg === "--pm") {
+            if (manager !== undefined) return { error: "The --pm option was passed more than once" }
+            if (next === undefined)
+                return { error: "Missing value for --pm. Supported package managers are npm, pnpm and bun" }
+            if (!isManager(next))
+                return { error: `Unsupported --pm value "${next}". Supported package managers are npm, pnpm and bun` }
             manager = next
             index++
-        } else return "invalid"
+        } else return { error: `Unknown argument "${arg ?? ""}" for init` }
     }
     return {
         template,
@@ -95,17 +120,23 @@ export function parseInitArguments(args: readonly string[]): ParsedInitArguments
     }
 }
 
+/** What the arguments after `init` ask for, or "invalid" for arguments init does not accept */
+export function parseInitArguments(args: readonly string[]): ParsedInitArguments | "invalid" {
+    const parsed = parseInitArgumentsDetailed(args)
+    return "error" in parsed ? "invalid" : parsed
+}
+
 /**
  * Select the starter: The named template, or a choice from the prompt. Returns "cancelled" when the prompt ends
  * without an answer, such as after Ctrl+C or Escape
  */
 export async function selectStarterTemplate(
     template: StarterTemplate | undefined,
-    { input, output }: InitStreams,
+    { input, output, env, platform }: InitStreams,
 ): Promise<StarterTemplate | "cancelled"> {
     if (template !== undefined) return template
     if (!input.isTTY || !output.isTTY) return "js"
-    if (typeof input.setRawMode === "function") return pickFromMenu(input as MenuInput, output)
+    if (typeof input.setRawMode === "function") return pickFromMenu(input as MenuInput, output, { env, platform })
 
     const prompt = createInterface({ input, output })
     // Ctrl+C and the end of input close the prompt, which cancels the question
@@ -131,27 +162,53 @@ export async function selectStarterTemplate(
 
 /**
  * Show the starters as a menu that ↑ and ↓ (or k and j) move through and Enter picks, then collapse it to one line
- * with the choice. Raw mode and the cursor are restored however the menu ends
+ * with the choice. Every line is truncated to the terminal width so soft wrapping never breaks cursor redraws, and
+ * raw mode, resize listeners and the cursor are restored however the menu ends
  */
-async function pickFromMenu(input: MenuInput, output: InitStreams["output"]): Promise<StarterTemplate | "cancelled"> {
-    const color = output.hasColors?.() === true
-    const highlight = (text: string) => (color ? `\x1b[36m${text}\x1b[39m` : text)
+async function pickFromMenu(
+    input: MenuInput,
+    output: InitStreams["output"],
+    options: Pick<InitStreams, "env" | "platform">,
+): Promise<StarterTemplate | "cancelled"> {
+    const theme = createCliTheme(output, options)
+    const maxWidth = () => Math.max(20, (output.columns ?? 80) - 1)
+    const fit = (line: string) => truncateVisible(line, maxWidth(), theme.symbols.ellipsis)
+    const keyHint = theme.capabilities.unicode
+        ? "↑/↓ or j/k to move  Enter to select  Esc to cancel"
+        : "Up/Down or j/k to move  Enter to select  Esc to cancel"
     let selected = 0
-    // Each line clears what an earlier draw left on it
-    const draw = () =>
-        choices
-            .map(({ label }, index) => `\x1b[2K${index === selected ? highlight(`> ${label}`) : `  ${label}`}\n`)
-            .join("")
+    // Each line clears what an earlier draw left on it and stays within one row so cursor-up redraws stay aligned
+    const drawQuestion = () => `\x1b[2K${fit(theme.bold(question))}\n`
+    const drawBody = () =>
+        [
+            ...choices.map(({ name, description }, index) => {
+                const active = index === selected
+                const lead = active ? theme.cyan(`${theme.symbols.pointer} ${name}`) : `  ${name}`
+                const detail = description ? `  ${theme.muted(description)}` : ""
+                return `\x1b[2K${fit(`${lead}${detail}`)}\n`
+            }),
+            `\x1b[2K${fit(theme.faint(keyHint))}\n`,
+        ].join("")
+    const bodyLines = choices.length + 1
+    const totalLines = bodyLines + 1
 
     const wasRaw = input.isRaw === true
     let onKeypress: ((text: string | undefined, key: Key | undefined) => void) | undefined
     let onEnd: (() => void) | undefined
+    let onResize: (() => void) | undefined
     emitKeypressEvents(input)
     input.setRawMode(true)
     try {
-        output.write(`\x1b[?25l${question}\n${draw()}`)
+        output.write(`\x1b[?25l${drawQuestion()}${drawBody()}`)
         const picked = await new Promise<number | null>((resolve, reject) => {
             onEnd = () => resolve(null)
+            onResize = () => {
+                try {
+                    output.write(`\x1b[${totalLines}A${drawQuestion()}${drawBody()}`)
+                } catch (error) {
+                    reject(error)
+                }
+            }
             onKeypress = (_, key) => {
                 try {
                     if (key === undefined) return
@@ -162,20 +219,22 @@ async function pickFromMenu(input: MenuInput, output: InitStreams["output"]): Pr
                     if (step === 0) return
                     // Moving past either end wraps around to the other
                     selected = (selected + step + choices.length) % choices.length
-                    output.write(`\x1b[${choices.length}A${draw()}`)
+                    output.write(`\x1b[${bodyLines}A${drawBody()}`)
                 } catch (error) {
                     reject(error)
                 }
             }
             input.on("keypress", onKeypress)
             input.once("end", onEnd)
+            output.on?.("resize", onResize)
         })
-        const answer = picked === null ? "" : ` ${highlight(choices[picked]!.label)}`
-        output.write(`\x1b[${choices.length + 1}A\x1b[0J${question}${answer}\n`)
+        const answer = picked === null ? "" : ` ${theme.cyan(choices[picked]!.label)}`
+        output.write(`\x1b[${totalLines}A\x1b[0J${question}${answer}\n`)
         return picked === null ? "cancelled" : choices[picked]!.template
     } finally {
         if (onKeypress) input.off("keypress", onKeypress)
         if (onEnd) input.off("end", onEnd)
+        if (onResize) output.off?.("resize", onResize)
         input.setRawMode(wasRaw)
         // Reading stops so the process can exit once init is done
         input.pause()
@@ -265,7 +324,7 @@ export const runCommand: CommandRunner = (command, args, cwd) =>
 
 /** The streams, folders and package manager that init works with */
 export interface InitEnvironment extends InitStreams {
-    readonly errorOutput: NodeJS.WritableStream
+    readonly errorOutput: NodeJS.WritableStream & CliStreamLike
     /** The folder the starter is written into */
     readonly project: string
     /** The installed SDK package, whose package.json names the version to install */
@@ -274,18 +333,32 @@ export interface InitEnvironment extends InitStreams {
     readonly run?: CommandRunner
 }
 
-function nextSteps(manager: PackageManager, template: StarterTemplate, install?: readonly (readonly string[])[]) {
+function nextSteps(
+    manager: PackageManager,
+    template: StarterTemplate,
+    theme: CliTheme,
+    install?: readonly (readonly string[])[],
+) {
     const { run, check, watch } = managers[manager]
+    const cmd = (text: string) => (theme.capabilities.color === "none" ? text : theme.cyanLight(text))
     const steps = [
         ...(install
-            ? [[`Install ${installed[template]}:`, ...install.map((args) => `   ${args.join(" ")}`)].join("\n")]
+            ? [[`Install ${installed[template]}:`, ...install.map((args) => `   ${cmd(args.join(" "))}`)].join("\n")]
             : []),
-        `Set FLUXER_BOT_TOKEN in .env to the bot's token and invite the bot to a community. Both are explained at\n   ${createBotGuide}`,
-        `Check the bot without a token: ${run} test`,
-        ...(template === "js" ? [] : [`Check the types: ${check}`]),
-        `Start the bot: ${run} start\n   While changing the bot, ${watch} restarts it after each saved change`,
+        `Set FLUXER_BOT_TOKEN in .env to the bot's token and invite the bot to a community. Both are explained at\n   ${theme.capabilities.color === "none" ? createBotGuide : theme.cyan(createBotGuide)}`,
+        `Check the bot without a token: ${cmd(`${run} test`)}`,
+        ...(template === "js" ? [] : [`Check the types: ${cmd(check)}`]),
+        `Start the bot: ${cmd(`${run} start`)}\n   While changing the bot, ${cmd(watch)} restarts it after each saved change`,
     ]
-    return ["", "Next steps:", ...steps.map((step, index) => `${index + 1}. ${step}`)].join("\n")
+    const heading = theme.capabilities.color === "none" ? "Next steps:" : theme.bold(theme.violet("Next steps:"))
+    return [
+        "",
+        heading,
+        ...steps.map(
+            (step, index) =>
+                `${theme.capabilities.color === "none" ? `${index + 1}.` : theme.gold(`${index + 1}.`)} ${step}`,
+        ),
+    ].join("\n")
 }
 
 /**
@@ -293,13 +366,38 @@ function nextSteps(manager: PackageManager, template: StarterTemplate, install?:
  * accept. A failed install keeps the written files and prints the install commands instead
  */
 export async function runInit(args: readonly string[], environment: InitEnvironment): Promise<0 | 1 | "usage"> {
-    const { output, errorOutput, project, packageRoot } = environment
+    const { output, errorOutput, project, packageRoot, env, platform } = environment
+    const theme = createCliTheme(output, { env, platform })
+    const errTheme = createCliTheme(errorOutput, { env, platform })
     const print = (text: string) => output.write(`${text}\n`)
-    const parsed = parseInitArguments(args)
-    if (parsed === "invalid") return "usage"
+    const printOk = (text: string) =>
+        print(theme.capabilities.color === "none" ? text : `${theme.success(theme.symbols.pass)} ${text}`)
+    const printError = (text: string) =>
+        errorOutput.write(
+            errTheme.capabilities.color === "none"
+                ? `${text}\n`
+                : `${errTheme.error(`${errTheme.symbols.fail} ${text}`)}\n`,
+        )
+
+    const parsed = parseInitArgumentsDetailed(args)
+    if ("error" in parsed) {
+        printError(parsed.error)
+        return "usage"
+    }
+
+    const release = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as SdkRelease
+    if (theme.capabilities.color !== "none") {
+        const banner = theme.renderBanner({
+            version: release.version,
+            subtitle: "Starter bot setup",
+            detail: parsed.dir !== undefined ? resolve(project, parsed.dir) : project,
+        })
+        if (banner) output.write(`${banner}\n`)
+    }
+
     const template = await selectStarterTemplate(parsed.template, environment)
     if (template === "cancelled") {
-        errorOutput.write("fluxerly init was cancelled and wrote nothing\n")
+        printError("The init command was cancelled and wrote nothing")
         return 1
     }
 
@@ -312,38 +410,42 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
         result = writeStarterProject(targetProject, packageRoot, template, manager)
     } catch (error) {
         if (!(error instanceof StarterConflictError)) throw error
-        errorOutput.write(
-            `${error.message}, so fluxerly init wrote nothing. Run it in a folder without them, or move these files away first\n`,
-        )
+        const conflictMessage = `${error.message}, so the init command wrote nothing. Run it in a new folder with --dir <folder>, or move these files away first`
+        printError(conflictMessage)
         return 1
     }
     const { written, ignored } = result
-    print(`Created ${written.join(", ")}`)
-    if (!written.includes("AGENTS.md")) print("Updated the existing AGENTS.md with the Fluxerly section")
-    if (!written.includes(".env")) print("Kept the existing .env")
+    printOk(
+        `Created ${theme.capabilities.color === "none" ? written.join(", ") : written.map((name) => theme.cyan(name)).join(", ")}`,
+    )
+    if (!written.includes("AGENTS.md")) printOk("Updated the existing AGENTS.md with the Fluxerly section")
+    if (!written.includes(".env")) printOk("Kept the existing .env")
     if (!written.includes(".gitignore"))
-        print(
+        printOk(
             ignored.length > 0
                 ? `Added ${ignored.join(" and ")} to the existing .gitignore`
                 : "Kept the existing .gitignore, which already ignores node_modules and .env",
         )
 
-    const release = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as SdkRelease
     const commands = installCommands(manager, template, release)
     if (!parsed.install) {
-        print(nextSteps(manager, template, commands))
+        print(nextSteps(manager, template, theme, commands))
         return 0
     }
-    print(`Installing ${installed[template]} with ${manager}`)
+    print(
+        theme.capabilities.color === "none"
+            ? `Installing ${installed[template]} with ${manager}`
+            : `${theme.cyan(theme.symbols.bullet)} Installing ${installed[template]} with ${theme.cyan(manager)}`,
+    )
     const run = environment.run ?? runCommand
     for (const [command, ...commandArgs] of commands) {
         if (await run(command!, commandArgs, targetProject)) continue
-        errorOutput.write(
-            `Installing with ${manager} failed or ${manager} could not start. The written files are kept, and the next steps include the install\n`,
+        printError(
+            `Installing with ${manager} failed or ${manager} could not start. The written files are kept, and the next steps include the install. Pass --pm npm|pnpm|bun to use another manager or --no-install to skip installing`,
         )
-        print(nextSteps(manager, template, commands))
+        print(nextSteps(manager, template, theme, commands))
         return 1
     }
-    print(nextSteps(manager, template))
+    print(nextSteps(manager, template, theme))
     return 0
 }

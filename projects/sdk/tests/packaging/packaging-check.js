@@ -70,6 +70,7 @@ await test("A canonical changelog is included only when present, with exact byte
         writeFileSync(join(directory, "LICENSE"), "Fixture license\n")
         writeFileSync(join(fixture, "README.md"), "Fixture README\n")
         writeFileSync(join(fixture, "agents/AGENTS.md"), "Fixture agent instructions\n")
+        writeFileSync(join(fixture, "agents/TRIAGE.md"), "Fixture triage playbook\n")
         copyFileSync(join(sdk, "esm-only.cjs"), join(fixture, "esm-only.cjs"))
         // Package preparation validates versions with the release planner beside the SDK directory
         mkdirSync(join(directory, "projects/release"), { recursive: true })
