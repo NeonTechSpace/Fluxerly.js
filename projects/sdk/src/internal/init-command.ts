@@ -7,8 +7,8 @@
  */
 
 import { spawn } from "node:child_process"
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { mkdirSync, readFileSync } from "node:fs"
+import { join, resolve } from "node:path"
 import { emitKeypressEvents, type Key } from "node:readline"
 import { createInterface } from "node:readline/promises"
 import {
@@ -50,13 +50,22 @@ const answers = new Map<string, StarterTemplate>([
 
 const isTemplate = (value: string | undefined): value is StarterTemplate =>
     starterTemplates.some((template) => template === value)
+const isManager = (value: string | undefined): value is PackageManager =>
+    value === "npm" || value === "pnpm" || value === "bun"
+
+export interface ParsedInitArguments {
+    readonly template: StarterTemplate | undefined
+    readonly install: boolean
+    readonly dir?: string
+    readonly manager?: PackageManager
+}
 
 /** What the arguments after `init` ask for, or "invalid" for arguments init does not accept */
-export function parseInitArguments(
-    args: readonly string[],
-): { readonly template: StarterTemplate | undefined; readonly install: boolean } | "invalid" {
+export function parseInitArguments(args: readonly string[]): ParsedInitArguments | "invalid" {
     let template: StarterTemplate | undefined
     let install = true
+    let dir: string | undefined
+    let manager: PackageManager | undefined
     for (let index = 0; index < args.length; index++) {
         const arg = args[index]
         const next = args[index + 1]
@@ -64,9 +73,26 @@ export function parseInitArguments(
         else if (arg === "--template" && template === undefined && isTemplate(next)) {
             template = next
             index++
+        } else if (
+            arg === "--dir" &&
+            dir === undefined &&
+            next !== undefined &&
+            next.trim() !== "" &&
+            !next.startsWith("-")
+        ) {
+            dir = next
+            index++
+        } else if (arg === "--pm" && manager === undefined && isManager(next)) {
+            manager = next
+            index++
         } else return "invalid"
     }
-    return { template, install }
+    return {
+        template,
+        install,
+        ...(dir !== undefined ? { dir } : {}),
+        ...(manager !== undefined ? { manager } : {}),
+    }
 }
 
 /**
@@ -278,10 +304,12 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
     }
 
     // The manager is known before any file is written, so the starter's AGENTS.md names its refresh command
-    const manager = detectPackageManager(environment.userAgent)
+    const manager = parsed.manager ?? detectPackageManager(environment.userAgent)
+    const targetProject = parsed.dir !== undefined ? resolve(project, parsed.dir) : project
+    if (parsed.dir !== undefined) mkdirSync(targetProject, { recursive: true })
     let result: StarterResult
     try {
-        result = writeStarterProject(project, packageRoot, template, manager)
+        result = writeStarterProject(targetProject, packageRoot, template, manager)
     } catch (error) {
         if (!(error instanceof StarterConflictError)) throw error
         errorOutput.write(
@@ -291,6 +319,7 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
     }
     const { written, ignored } = result
     print(`Created ${written.join(", ")}`)
+    if (!written.includes("AGENTS.md")) print("Updated the existing AGENTS.md with the Fluxerly section")
     if (!written.includes(".env")) print("Kept the existing .env")
     if (!written.includes(".gitignore"))
         print(
@@ -308,7 +337,7 @@ export async function runInit(args: readonly string[], environment: InitEnvironm
     print(`Installing ${installed[template]} with ${manager}`)
     const run = environment.run ?? runCommand
     for (const [command, ...commandArgs] of commands) {
-        if (await run(command!, commandArgs, project)) continue
+        if (await run(command!, commandArgs, targetProject)) continue
         errorOutput.write(
             `Installing with ${manager} failed or ${manager} could not start. The written files are kept, and the next steps include the install\n`,
         )

@@ -9,7 +9,7 @@
 
 import { appendFileSync, closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { newAgentsFile, type AgentsPackageManager } from "./agents-section.js"
+import { newAgentsFile, writeAgentsSection, type AgentsPackageManager } from "./agents-section.js"
 
 /** The starters init writes, in the order the prompt offers them */
 export const starterTemplates = ["js", "ts", "effect"] as const
@@ -191,7 +191,7 @@ export function writeStarterProject(
 ): StarterResult {
     const files = starterFiles(project, packageRoot, template, manager)
     const conflicts = [...files.keys()].filter(
-        (name) => name !== ".env" && name !== ".gitignore" && existsSync(join(project, name)),
+        (name) => name !== ".env" && name !== ".gitignore" && name !== "AGENTS.md" && existsSync(join(project, name)),
     )
     if (conflicts.length > 0) throw new StarterConflictError(conflicts)
     const written: string[] = []
@@ -207,9 +207,9 @@ export function writeStarterProject(
                 // Only the bot's own account may read the token in .env
                 descriptor = openSync(join(project, name), "wx", name === ".env" ? 0o600 : 0o666)
             } catch (error) {
-                // An existing .env holds the bot's own token, so it is kept. An existing .gitignore is kept too, and
-                // gets its missing lines below
-                const keep = name === ".env" || name === ".gitignore"
+                // An existing .env holds the bot's own token, so it is kept. An existing .gitignore or AGENTS.md is
+                // kept too and updated in place below
+                const keep = name === ".env" || name === ".gitignore" || name === "AGENTS.md"
                 if (keep && (error as NodeJS.ErrnoException).code === "EEXIST") continue
                 throw error
             }
@@ -220,6 +220,7 @@ export function writeStarterProject(
                 closeSync(descriptor)
             }
         }
+        if (!written.includes("AGENTS.md")) writeAgentsSection(project, packageRoot, manager)
         // Last, so a failure above leaves the user's .gitignore as it was
         if (!written.includes(".gitignore")) ignored = addMissingIgnoredLines(join(project, ".gitignore"))
     } catch (error) {

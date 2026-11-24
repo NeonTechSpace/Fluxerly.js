@@ -1,6 +1,6 @@
 # Fluxerly.js
 
-A Fluxer bot SDK for JavaScript, TypeScript and Effect
+Fluxerly.js (FluxerlyJS) is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect on Node.js 24.15 or newer (ESM only, TypeScript 7 for type checking)
 
 [Home](https://fluxerly.neontechspace.com/) ·
 [Docs](https://fluxerly.neontechspace.com/docs/) ·
@@ -9,6 +9,8 @@ A Fluxer bot SDK for JavaScript, TypeScript and Effect
 [Changelog](https://fluxerly.neontechspace.com/docs/changelog/) ·
 [Examples](https://fluxerly.neontechspace.com/docs/examples/) ·
 [FAQ](https://fluxerly.neontechspace.com/docs/faq/) ·
+[Agent skill](https://fluxerly.neontechspace.com/SKILL.md) ·
+[llms.txt](https://fluxerly.neontechspace.com/llms.txt) ·
 [NeonFlux, a bot built with it](https://github.com/NeonTechSpace/NeonFlux)
 
 Fluxerly.js handles HTTP requests and gateway connections for messages, events, community resources and commands. Both APIs use the same underlying code
@@ -114,9 +116,9 @@ Run `npm ls effect`, `pnpm list effect` or `bun why effect` in the bot project t
 
 ## For coding agents
 
-Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Run it again after an SDK update to refresh them. The complete guide is `agents/AGENTS.md` inside the installed package. It explains which API to use, how to start and stop the client, and how to check the result
+Agent tools do not read instructions inside dependencies on their own. Run `npx --no fluxerly agents`, `pnpm exec fluxerly agents` or `bunx --no-install fluxerly agents` in the bot project, after installing the SDK there, to copy the SDK's rules into its `AGENTS.md`, which many coding agent tools read automatically. Pass `--target skill`, `--target cursor`, `--target claude`, `--target gemini` or `--target all` for tool-specific rule files, `--check` to verify freshness in CI, or `--print` to read the rules without writing files. Run `fluxerly doctor --json` to verify Node.js, ESM, TypeScript 7, Effect, `AGENTS.md` and `.gitignore` offline, or `fluxerly invite <applicationId>` to generate a bot installation URL offline. The complete guide is `agents/AGENTS.md` inside the installed package
 
-Agents that read web pages can start from the docs' [llms.txt](https://fluxerly.neontechspace.com/llms.txt), which links the newest version's Markdown guides and condensed API reference
+Agents that read web pages can start from the compact [SKILL.md](https://fluxerly.neontechspace.com/SKILL.md) or the docs' [llms.txt](https://fluxerly.neontechspace.com/llms.txt), which links the newest version's Markdown guides, split task maps and condensed API reference
 
 The installed `package.json` lists the supported Node.js version and import paths. The files listed in the `types` entries inside `exports` contain the API reference and examples
 

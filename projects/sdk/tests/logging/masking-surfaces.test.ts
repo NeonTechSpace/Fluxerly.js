@@ -1069,7 +1069,7 @@ const allowedConversions: Record<string, readonly string[]> = {
     ],
     // The fluxerly command's own errors, whose messages name files in the project folder
     "SDK-written message of a command line error": [
-        "cli.ts template error.message",
+        "internal/agents-section.ts template error.message",
         "internal/init-command.ts template error.message",
     ],
 }
