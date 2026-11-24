@@ -109,6 +109,7 @@ export class AssetUrlError extends FluxerlyError {
     ) {
         super(assetErrorMessage(operation, reason), {
             code: `asset.${reason}`,
+            hint: assetErrorHint(operation, reason),
             cause: options?.cause,
             details: operationDetails({ operation, reason }),
         })
@@ -117,6 +118,26 @@ export class AssetUrlError extends FluxerlyError {
 }
 
 type AssetOperation = AssetUrlError["operation"]
+
+/** Suggested next step for an AssetUrlError, without the rejected value */
+function assetErrorHint(operation: AssetOperation, reason: AssetUrlError["reason"]): string {
+    switch (reason) {
+        case "target":
+            if (operation === "assets.displayMemberAvatar")
+                return "Pass a Member and its matching User with the same id"
+            if (operation === "assets.emoji" || operation === "assets.sticker")
+                return "Pass the GuildEmoji or GuildSticker returned by Fluxer, or an object with a decimal id and boolean animated"
+            return "Pass the object returned by Fluxer, such as a User, Guild, Member, Role, GuildEmoji or Sticker"
+        case "id":
+            return "Keep Fluxer IDs as decimal strings rather than numbers"
+        case "hash":
+            return "Pass the asset hash string from Fluxer, or check that the hash is non-null before building a custom asset URL"
+        case "options":
+            return operation === "assets.sticker"
+                ? "Pass only size (0 through 4,294,967,295) and boolean animated"
+                : "Pass only size (0 through 4,294,967,295), format from AssetFormats, and boolean animated. Set animated to false when requesting png or jpeg"
+    }
+}
 
 /** Describe what the asset helper accepts, without the rejected value */
 function assetErrorMessage(operation: AssetOperation, reason: AssetUrlError["reason"]): string {

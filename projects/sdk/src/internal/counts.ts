@@ -77,11 +77,12 @@ function copyIdentifiers(
     path: "guildIds" | "channelIds",
     maximum: number,
 ): readonly string[] | InputValidationFailure {
-    if (!Array.isArray(value)) return inputValidationFailure(path, "type", "Must be a non-empty array of canonical IDs")
+    if (!Array.isArray(value))
+        return inputValidationFailure(path, "type", `The ${path} list must be a non-empty array of canonical IDs`)
     // Copy once and validate the copy, so the validated IDs are the ones requested
     const copied = snapshotArray(value, maximum)
     if (copied === undefined || copied.length < 1)
-        return inputValidationFailure(path, "length", `Must contain from 1 through ${maximum} IDs`)
+        return inputValidationFailure(path, "length", `The ${path} list must contain from 1 through ${maximum} IDs`)
     // The kept list holds the trimmed IDs, and uniqueness is checked on them
     const ids = copied.map(inputGatewayId)
     if (!ids.every((id) => id !== undefined))
@@ -92,12 +93,12 @@ function copyIdentifiers(
         )
     return new Set(ids).size === ids.length
         ? Object.freeze(ids)
-        : inputValidationFailure(path, "unique", "Must not contain duplicate IDs")
+        : inputValidationFailure(path, "unique", `The ${path} list must not contain duplicate IDs`)
 }
 
 function timeout(value: unknown): number | InputValidationFailure {
     if (value !== undefined && !record(value))
-        return inputValidationFailure("options", "type", "Must be an options object when supplied")
+        return inputValidationFailure("options", "type", "The options value must be an options object when supplied")
     const unsupported =
         value === undefined
             ? undefined
@@ -106,13 +107,17 @@ function timeout(value: unknown): number | InputValidationFailure {
     const timeoutMs = value === undefined ? undefined : value.timeoutMs
     const duration = timeoutMs === undefined ? defaultTimeoutMs : timeoutMs
     if (typeof duration !== "number")
-        return inputValidationFailure("options.timeoutMs", "type", "Must be an integer number of milliseconds")
+        return inputValidationFailure(
+            "options.timeoutMs",
+            "type",
+            "The options.timeoutMs setting must be an integer number of milliseconds",
+        )
     return Number.isSafeInteger(duration) && duration >= 1 && duration <= 2_147_483_647
         ? duration
         : inputValidationFailure(
               "options.timeoutMs",
               "range",
-              "Must be an integer from 1 through 2147483647 milliseconds",
+              "The options.timeoutMs setting must be an integer from 1 through 2,147,483,647 milliseconds",
           )
 }
 
@@ -293,7 +298,7 @@ export class CountOwner implements CountGatewayOwner {
                         inputValidation: inputValidationFailure(
                             "guildId",
                             "format",
-                            "Must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
+                            "The guildId must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
                         ).detail,
                     }),
                 )

@@ -31,6 +31,7 @@ import {
     type WebhookCredentials,
 } from "#sdk/webhooks"
 import { decodeMessage, encodeForward, encodeMessage, encodeEdit, messageObject, snapshotReference } from "./message.js"
+import { unsupportedKeyHint } from "./suggest.js"
 import {
     count as nonNegativeInt32,
     fieldsOnce,
@@ -755,16 +756,22 @@ export function makeWebhookClient(
     native = false,
 ): Effect.Effect<WebhookOwner, ConfigurationError> {
     return suspendInput(() => {
-        if (
-            !record(options) ||
-            Object.keys(options).some(
-                (key) => !["id", "token", "revealToken", "uploadMaxBytes", "instance", "logging"].includes(key),
-            )
-        )
+        const webhookClientKeys = ["id", "token", "revealToken", "uploadMaxBytes", "instance", "logging"] as const
+        if (!record(options))
             return Effect.fail(
                 new ConfigurationError(
                     "configuration",
-                    "Webhook client options must be an object with only id, token or revealToken, uploadMaxBytes, instance, and logging",
+                    "Webhook client options must be an object with id and token or revealToken",
+                    { hint: `Supported options are ${webhookClientKeys.join(", ")}` },
+                ),
+            )
+        const unsupported = Object.keys(options).find((key) => !(webhookClientKeys as readonly string[]).includes(key))
+        if (unsupported !== undefined)
+            return Effect.fail(
+                new ConfigurationError(
+                    "configuration",
+                    `Unsupported webhook client option ${JSON.stringify(unsupported)}`,
+                    { hint: unsupportedKeyHint(unsupported, webhookClientKeys) },
                 ),
             )
         const id = inputId(options.id)

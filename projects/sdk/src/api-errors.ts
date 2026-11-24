@@ -704,9 +704,9 @@ export function unrecognizedProviderCode(body: unknown): string | null {
 
 /**
  * @internal Suggested fixes by API error category. The rejection's explanation says what Fluxer refused, and this text
- * says what to change. Categories without an actionable fix have no entry
+ * says what to change
  */
-const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
+const apiErrorHints: Readonly<Record<ApiErrorCode, string>> = {
     missingPermissions:
         "Grant the bot's role the permission this operation needs in the community settings or the channel's permission overrides",
     missingAccess: `Give the bot's role ${label("ViewChannel")} for this channel or its category, and check that the bot is still in the community. For a private thread, ask a thread member to add the bot, or grant ${label("ManageThreads")} in the parent channel. Hidden community channels can also return UNKNOWN_CHANNEL (HTTP 404) instead`,
@@ -766,7 +766,8 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     slowmodeRateLimited: "Wait for the channel's slowmode interval before sending again",
     resourceLimit: "Remove unused items before creating more. Fluxer sets this limit",
     missingOAuthScope: "Request the missing scope when the user authorizes the application",
-    fileSizeTooLarge: "Send a smaller file",
+    fileSizeTooLarge:
+        "Send a smaller file, compress it or split it into separate uploads. Fluxer rejected the file before applying the request",
     serviceUnavailable: "Fluxer had a temporary problem. Retry later",
     serviceFailure: "Fluxer had a temporary problem. Retry later",
     featureTemporarilyDisabled:
@@ -788,8 +789,30 @@ const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     discoveryApplicationNotFound: "Apply with discovery.apply first",
     discoveryApplicationAlreadyReviewed:
         "Read the result with discovery.fetchStatus, then apply again with discovery.apply if the community should be listed",
-    resourceLocked: "Retry later",
+    resourceLocked: "Fluxer is applying another change to this resource. Wait briefly, then send the change again",
     cannotExecuteOnDirectMessage: "Use this operation in a community channel",
+    invitesDisabled:
+        "Invites are turned off for this community, so retrying does not help unless a community administrator enables them",
+    featureNotAvailableSelfHosted:
+        "This self-hosted Fluxer instance does not support this feature, so retrying does not help",
+    guildVerificationRequired:
+        "The community's verification level blocks this request. Check the calling account's verification status before trying again",
+    botIsPrivate:
+        "Only the application owner can add a private bot, or enable public installation in the application's Fluxer settings",
+    applicationNotOwned: "Use credentials for the account that owns this application",
+    captchaRequired:
+        "Fluxer requires interactive CAPTCHA verification, which a bot cannot complete automatically, so retrying does not help",
+    invalidCaptcha:
+        "Fluxer rejected the CAPTCHA verification. Request a new challenge rather than repeating the same submission",
+    botAlreadyInGuild: "The bot is already a member of this community, so no action is needed",
+    notBotApplication: "Use a bot application ID rather than a non-bot application",
+    badRequest: "Check the request parameters and resource state against Fluxer's requirements. Nothing was applied",
+    conflict: "Fetch the resource's current state and reconcile it before repeating the change",
+    gone: "This resource is permanently gone, so retrying does not help",
+    notImplemented: "This Fluxer server does not implement this operation, so retrying does not help",
+    accessDenied: "Check the bot's permissions, role position and access to this resource",
+    forbidden: "Check the bot's permissions, role position and account eligibility for this resource",
+    rateLimited: "The request was rate-limited. Wait before retrying",
 }
 
 /** Suggested fixes for the standard OAuth error codes that the SDK keeps in oauthError */
@@ -810,12 +833,25 @@ function oauthErrorHint(oauthError: string | null): string | undefined {
 
 /** Suggested fixes for rejections without a recognized code, by HTTP status */
 const statusHints: Readonly<Record<number, string | undefined>> = {
+    400: "Check the request parameters and body against Fluxer's requirements. Nothing was applied",
     401: apiErrorHints.unauthorized,
     403: "Check the bot's permissions and role position for this resource",
     404: apiErrorHints.unknownResource,
+    405: "Check the HTTP method for this route",
+    408: "The server timed out waiting for the request. Retry later",
+    409: "Fetch the resource's current state and reconcile it before repeating the change",
+    410: "This resource is permanently gone, so retrying does not help",
+    413: "Send a smaller request body or file",
+    415: "Check the request Content-Type and body format",
+    422: "Check the request fields against Fluxer's validation rules",
     // Fluxer sends GENERAL_ERROR with HTTP 423 and Retry-After 2 while it holds a lock on the resource, such as a role or
     // channel reorder or a community settings update (packages/errors/src/domains/core/ResourceLockedError.ts at 5f3fc0b1)
     423: "Fluxer is applying another change to this resource, such as a role or channel reorder. Wait retryAfterMs, then send the change again",
+    500: "Fluxer had a temporary server problem. Retry later",
+    501: "This Fluxer server does not implement this operation, so retrying does not help",
+    502: "Fluxer had a temporary server problem. Retry later",
+    503: "Fluxer had a temporary server problem. Retry later",
+    504: "Fluxer had a temporary server problem. Retry later",
 }
 
 /**
@@ -882,6 +918,30 @@ export function rejectedWebhookToken(apiError: ApiErrorDetail | null): boolean {
     return apiError?.providerCode === "UNKNOWN_WEBHOOK"
 }
 
+/** Wait-specific hint formatters when Fluxer supplied a concrete retryAfterMs delay */
+const retryAfterFormatters: Readonly<Partial<Record<ApiErrorCode, (ms: number) => string>>> = {
+    messageCrosspostRateLimited: (ms) => `Wait at least ${ms} ms before publishing another message in this channel`,
+    publishedMessageEditRateLimited: (ms) => `Wait at least ${ms} ms before editing this published message again`,
+    slowmodeRateLimited: (ms) => `Wait at least ${ms} ms for the channel's slowmode interval before sending again`,
+    rateLimited: (ms) => `The request was rate-limited. Wait at least ${ms} ms before retrying`,
+    resourceLocked: (ms) =>
+        `Fluxer is applying another change to this resource. Wait at least ${ms} ms, then send the change again`,
+}
+
+/** Wait-specific fix when Fluxer supplied a concrete retryAfterMs delay */
+function retryAfterHint(
+    apiError: ApiErrorDetail | null,
+    status: number | null,
+    retryAfterMs: number | null,
+): string | undefined {
+    if (retryAfterMs === null) return undefined
+    const formatter = apiError === null ? undefined : retryAfterFormatters[apiError.code]
+    if (formatter !== undefined) return formatter(retryAfterMs)
+    return apiError === null && status === 423
+        ? `Fluxer is applying another change to this resource, such as a role or channel reorder. Wait at least ${retryAfterMs} ms, then send the change again`
+        : undefined
+}
+
 /**
  * @internal The suggested fix for a Fluxer rejection, from its recognized category or else its HTTP status.
  * A rejected credential is described for the credential the request sent, which defaults to the bot token, and a
@@ -891,8 +951,11 @@ export function apiErrorHint(
     apiError: ApiErrorDetail | null,
     status: number | null,
     credential: RequestCredential = "bot",
-    action: RequestAction = "other",
+    actionOrOptions:
+        RequestAction | { readonly action?: RequestAction; readonly retryAfterMs?: number | null } = "other",
 ): string | undefined {
+    const action = typeof actionOrOptions === "string" ? actionOrOptions : (actionOrOptions.action ?? "other")
+    const retryAfterMs = typeof actionOrOptions === "string" ? null : (actionOrOptions.retryAfterMs ?? null)
     if (credential !== "bot" && (apiError === null ? status === 401 : apiError.code === "unauthorized"))
         return credentialHints[credential]
     if (credential === "webhook" && rejectedWebhookToken(apiError)) return credentialHints.webhook
@@ -900,6 +963,10 @@ export function apiErrorHint(
     // (webhook/WebhookService.ts:572, channel/services/message/MessageSendService.ts:1161 and MessageDeleteService.ts:160 at 5f3fc0b1)
     if (credential === "webhook" && apiError?.code === "missingPermissions") return webhookMessageHint
     if (apiError?.code === "missingPermissions" && action !== "other") return missingPermissionHints[action]
+    if (apiError?.code === "invalidFormBody" && (apiError.validationErrors?.length ?? 0) === 0)
+        return "Check the request fields against Fluxer's constraints, because Fluxer rejected the form body without naming individual fields"
+    const waited = retryAfterHint(apiError, status, retryAfterMs)
+    if (waited !== undefined) return waited
     const categoryHint = apiError === null ? undefined : apiErrorHints[apiError.code]
     return categoryHint ?? (status === null ? undefined : statusHints[status])
 }
@@ -1029,21 +1096,32 @@ export function operationFailureHint(input: {
 }): string | undefined {
     const { reason, outcome } = input
     const read = input.read === true
-    const general = operationHint(reason, outcome, input.retryAfterMs ?? null, {
+    const retryAfterMs = input.retryAfterMs ?? null
+    const general = operationHint(reason, outcome, retryAfterMs, {
         read,
         streamUsed: input.streamUsed === true,
     })
-    if (reason === "rateLimit" || (outcome === "unknown" && !read)) return general
+    if (reason === "rateLimit") {
+        if (
+            input.streamUsed !== true &&
+            (input.apiError?.code === "messageCrosspostRateLimited" ||
+                input.apiError?.code === "publishedMessageEditRateLimited" ||
+                input.apiError?.code === "slowmodeRateLimited")
+        )
+            return apiErrorHint(input.apiError, input.status ?? null, input.credential, { retryAfterMs })
+        return general
+    }
+    if (outcome === "unknown" && !read) return general
     // Fluxer's busy upload slots answer applied nothing and asks for another try later
     if (input.uploadSlotsBusy === true)
         return input.streamUsed === true
-            ? `Fluxer's upload slots were busy and nothing was applied. Wait at least ${input.retryAfterMs ?? 0} ms, then send it again with a new stream or with the file as bytes`
-            : `Fluxer's upload slots were busy and nothing was applied. Wait at least ${input.retryAfterMs ?? 0} ms, then send it again`
+            ? `Fluxer's upload slots were busy and nothing was applied. Wait at least ${retryAfterMs ?? 0} ms, then send it again with a new stream or with the file as bytes`
+            : `Fluxer's upload slots were busy and nothing was applied. Wait at least ${retryAfterMs ?? 0} ms, then send it again`
     if (reason === "rejected" || reason === "notFound")
         return (
             (input.requirement === undefined ? undefined : requiredPermissionsHint(input.requirement)) ??
             oauthErrorHint(input.oauthError ?? null) ??
-            apiErrorHint(input.apiError ?? null, input.status ?? null, input.credential) ??
+            apiErrorHint(input.apiError ?? null, input.status ?? null, input.credential, { retryAfterMs }) ??
             (reason === "notFound" ? apiErrorHints.unknownResource : undefined)
         )
     if (reason === "input" && input.inputPath) return `Correct ${input.inputPath}. Nothing was sent to Fluxer`
@@ -1184,9 +1262,11 @@ export function operationErrorSettings(
             status: fields.status,
             retryAfterMs: fields.retryAfterMs,
             apiError: fields.apiError?.providerCode,
+            apiCode: fields.apiError?.code,
             providerCode: fields.providerCode,
             responseField: fields.responseField,
             inputPath: fields.inputValidation?.path,
+            inputConstraint: fields.inputValidation?.constraint,
             read: fields.read || undefined,
             streamUsed: fields.streamUsed || undefined,
             uploadSlotsBusy: fields.uploadSlotsBusy || undefined,

@@ -490,7 +490,9 @@ export function snapshotCommandCooldown(value: unknown): StoredCooldown | undefi
         store !== undefined &&
         (typeof store !== "object" || store === null || typeof (store as { claim?: unknown }).claim !== "function")
     )
-        throw new ConfigurationError("cooldown", 'The cooldown option "store" must be an object with a claim method')
+        throw new ConfigurationError("cooldown", 'The cooldown option "store" must be an object with a claim method', {
+            hint: "Pass commands.memoryCooldowns() or a custom store implementing claim({ key, durationMs })",
+        })
     if (key !== undefined && typeof key !== "function")
         throw new ConfigurationError("cooldown", 'The cooldown option "key" must be a function')
     if (per !== undefined && per !== "user" && per !== "channel" && per !== "guild")
@@ -696,7 +698,11 @@ function guardVerdict(value: unknown): true | { readonly reason?: string } {
         (value as { deny: string }).deny.length > 0
     )
         return { reason: (value as { deny: string }).deny }
-    throw new ConfigurationError("command", "A command guard must return a boolean or { deny: string }")
+    throw new ConfigurationError(
+        "command",
+        "A command guard must return a boolean or an object with a non-empty deny string",
+        { hint: 'Return true to allow, false to deny silently, or { deny: "Reason" } to deny with a message' },
+    )
 }
 
 /** Prefixes to try for one message: The configured or resolved prefixes, plus the bot mention when enabled */
@@ -1133,13 +1139,15 @@ function copyOptions<M extends MessageCore>(
         throw new ConfigurationError("prefix", 'The option "prefix" is required', {
             hint: 'Set the text that starts a command, such as prefix: "!"',
         })
+    const prefixHint = 'Pass a non-empty prefix string such as "!", an array such as ["!", "?"], or a resolver function'
     if (typeof value.prefix !== "string" && !Array.isArray(value.prefix) && typeof value.prefix !== "function")
         throw new ConfigurationError(
             "prefix",
             'The option "prefix" must be a string, an array of strings or a function',
+            { hint: prefixHint },
         )
     if (typeof value.prefix === "string" && value.prefix.length === 0)
-        throw new ConfigurationError("prefix", 'The option "prefix" must not be empty')
+        throw new ConfigurationError("prefix", 'The option "prefix" must not be empty', { hint: prefixHint })
     const prefix = Array.isArray(value.prefix) ? copyNonemptyStringArray(value.prefix, "prefix") : value.prefix
     if (value.parse !== undefined && typeof value.parse !== "function")
         throw new ConfigurationError("parser", 'The option "parse" must be a function')

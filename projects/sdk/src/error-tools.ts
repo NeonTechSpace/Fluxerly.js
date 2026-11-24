@@ -1,9 +1,8 @@
 import * as Cause from "effect/Cause"
-import { FluxerlyError, type ConnectionError, type OperationOutcome } from "./errors.js"
-import { retryableConnection } from "#sdk/internal/retryable-connection"
+import { FluxerlyError, type OperationOutcome } from "./errors.js"
 import { HelperError } from "./helpers.js"
 import type { ApiErrorCode, ApiErrorDetail, ApiProviderCode } from "./api-errors.js"
-import { errorInfo, errorText } from "#sdk/internal/logging"
+import { errorInfo, errorText, isRetryableSdkError, ownRetryAfterMs } from "#sdk/internal/logging"
 
 /**
  * Settings for describeError
@@ -16,6 +15,8 @@ export interface DescribeErrorOptions {
      * ConfigurationError and SdkDefect print no frames, because their stacks only show SDK internals
      */
     readonly stack?: boolean
+    /** Format the error with ANSI colors, vertical gutter rails and icons for terminal output. Defaults to false */
+    readonly color?: boolean
 }
 
 /**
@@ -48,25 +49,26 @@ export interface DescribeErrorOptions {
  */
 export function describeError(error: unknown, options?: DescribeErrorOptions): string {
     const stack = options?.stack !== false
+    const color = options?.color === true
     const cause = causeOf(error)
-    if (!cause) return describeOne(error, "", stack)
+    if (!cause) return describeOne(error, "", stack, color)
     // Each reason of an Effect Cause is described in order, so a cleanup defect is not lost behind the first failure
     const reasons = cause.reasons.map((reason) =>
         reason._tag === "Interrupt"
-            ? "Interrupted"
+            ? color
+                ? "\u001b[1;33mInterrupted\u001b[0m"
+                : "Interrupted"
             : reason._tag === "Fail"
-              ? `Failure:\n${describeOne(reason.error, "  ", stack)}`
-              : `Defect:\n${describeOne(reason.defect, "  ", stack)}`,
+              ? `${color ? "\u001b[1;31mFailure:\u001b[0m" : "Failure:"}\n${describeOne(reason.error, "  ", stack, color)}`
+              : `${color ? "\u001b[1;35mDefect:\u001b[0m" : "Defect:"}\n${describeOne(reason.defect, "  ", stack, color)}`,
     )
     return reasons.length ? reasons.join("\n") : "Empty Cause with no failure, defect or interruption"
 }
 
 /** Describe one failure or defect value with masked text, indented for a Cause reason */
-function describeOne(error: unknown, indent: string, stack: boolean): string {
-    return errorText(errorInfo(error, sdkErrorOf(error) ? "sdk" : "application"), indent, stack)
+function describeOne(error: unknown, indent: string, stack: boolean, color: boolean): string {
+    return errorText(errorInfo(error, sdkErrorOf(error) ? "sdk" : "application"), indent, stack, "", color)
 }
-
-const retryableReasons = new Set(["busy", "network", "timeout", "rateLimit"])
 
 /** The Effect Cause a value is, or undefined for any other value, including a proxy that rejects inspection */
 function causeOf(value: unknown): Cause.Cause<unknown> | undefined {
@@ -88,34 +90,6 @@ function sdkErrorOf(value: unknown): FluxerlyError | undefined {
     }
 }
 
-/** Whether one failure value is an SDK error whose call is safe to repeat */
-function isRetryableError(error: unknown): boolean {
-    if (!(error instanceof FluxerlyError)) return false
-    switch (error._tag) {
-        case "RateLimitError":
-        case "ConnectionTimeoutError":
-            return true
-        case "ConnectionError":
-            return retryableConnection(error as ConnectionError)
-        case "ShardConnectionError":
-            return isRetryableError(error.cause)
-        case "MessageCleanupError":
-            // A failed cleanup is never retryable, because its plan works only once
-            if ((error as unknown as { phase?: unknown }).phase === "cleanup") return false
-    }
-    const fields = error as unknown as { reason?: unknown; outcome?: unknown }
-    // Fluxer's busy upload slots answer changed nothing and asks for a retry like a rate limit does, unless the call
-    // already read its caller's stream. The REST classifier marks it, since other rejected 503s, such as an OAuth read's,
-    // are no such answer
-    if (error.details.uploadSlotsBusy === true) return error.details.streamUsed !== true
-    if (typeof fields.reason !== "string" || !retryableReasons.has(fields.reason)) return false
-    // A rate-limited upload already read its caller's stream, so the same call would send it again empty
-    if (error.details.streamUsed === true) return false
-    const outcome = fields.outcome
-    // A read cannot have changed remote state, so an unknown outcome only matters for writes
-    return outcome !== "unknown" || fields.reason === "rateLimit" || error.details.read === true
-}
-
 /** Whether repeating the same call is safe and may succeed. True for rate limits, except an upload that read a stream,
  * marked by details.streamUsed, for full local capacity, and for network
  * failures and timeouts of reads or of writes that were not sent. Also true for Fluxer's answer that its file upload
@@ -128,24 +102,9 @@ function isRetryableError(error: unknown): boolean {
  */
 function isRetryable(error: unknown): boolean {
     const cause = causeOf(error)
-    if (cause === undefined) return isRetryableError(error)
+    if (cause === undefined) return isRetryableSdkError(error)
     const reasons = cause.reasons
-    return reasons.length > 0 && reasons.every((reason) => reason._tag === "Fail" && isRetryableError(reason.error))
-}
-
-/** The server-required wait of one failure value in milliseconds, or undefined when it carries none */
-function ownRetryAfterMs(error: unknown): number | undefined {
-    const sdk = sdkErrorOf(error)
-    if (sdk === undefined) return undefined
-    try {
-        // A shard failure carries the wait of the failure that stopped it
-        if (sdk._tag === "ShardConnectionError") return ownRetryAfterMs(sdk.cause)
-        const wait = (sdk as { readonly retryAfterMs?: unknown }).retryAfterMs
-        return typeof wait === "number" && Number.isFinite(wait) && wait >= 0 ? wait : undefined
-    } catch {
-        // allow-silent: a proxy of an SDK error whose properties reject reads carries no usable wait
-        return undefined
-    }
+    return reasons.length > 0 && reasons.every((reason) => reason._tag === "Fail" && isRetryableSdkError(reason.error))
 }
 
 /** The wait of an error, or the largest wait among the failures of an Effect Cause */

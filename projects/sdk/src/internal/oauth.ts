@@ -33,6 +33,7 @@ import { defaultHttpTransport, type HttpTransport } from "#sdk/internal/transpor
 import { InstanceResolver, instanceConfiguration } from "#sdk/internal/instance"
 import { guildList } from "#sdk/internal/guild-lifecycle"
 import { identifier, inputId, int32, record } from "#sdk/internal/decode/primitives"
+import { unsupportedKeyHint } from "#sdk/internal/suggest"
 import { failingFieldPath } from "#sdk/internal/decode/trace"
 import { readCaller, suspendInput, suspendMarked } from "#sdk/internal/defects"
 import type { GuildListQuery, GuildListSummary } from "#sdk/guilds"
@@ -1338,12 +1339,20 @@ export function makeOAuthOwner(
     native = false,
 ): Effect.Effect<OAuthOwner, ConfigurationError> {
     return suspendInput(() => {
-        if (!record(config) || Object.keys(config).some((key) => !oauthConfigKeys.includes(key)))
+        if (!record(config))
             return Effect.fail(
                 new ConfigurationError(
                     "configuration",
-                    "OAuth configuration must be an object with only clientId, clientSecret, instance, and logging",
+                    "OAuth configuration must be an object with clientId and clientSecret",
+                    { hint: `Supported options are ${oauthConfigKeys.join(", ")}` },
                 ),
+            )
+        const unsupported = Object.keys(config).find((key) => !oauthConfigKeys.includes(key))
+        if (unsupported !== undefined)
+            return Effect.fail(
+                new ConfigurationError("configuration", `Unsupported OAuth option ${JSON.stringify(unsupported)}`, {
+                    hint: unsupportedKeyHint(unsupported, oauthConfigKeys),
+                }),
             )
         const clientId = inputId(config.clientId)
         const clientSecret = config.clientSecret

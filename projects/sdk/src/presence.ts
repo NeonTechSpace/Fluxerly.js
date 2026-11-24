@@ -107,7 +107,11 @@ export class PresenceError extends FluxerlyError {
                               inputPath: inputValidation?.path ?? null,
                           }),
                 cause: options.cause,
-                details: operationDetails({ reason }),
+                details: operationDetails({
+                    reason,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
+                }),
             },
         )
         this.name = this._tag

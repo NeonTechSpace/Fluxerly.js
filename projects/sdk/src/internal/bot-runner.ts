@@ -73,6 +73,7 @@ export function snapshotBotEvents(
         throw new ConfigurationError(
             "configuration",
             'The option "events" must be an object that maps event names to handlers',
+            { hint: "Pass handlers keyed by EventMap name, such as { messageCreate: ({ message, reply }) => ... }" },
         )
     const bus = new EventBus()
     const entries: { event: EventName; handler: unknown; options: Readonly<Record<string, unknown>> }[] = []
@@ -88,6 +89,9 @@ export function snapshotBotEvents(
             throw new ConfigurationError(
                 "handler",
                 `The ${JSON.stringify(event)} entry in events must be a function or an object with a handler`,
+                {
+                    hint: "Pass a handler function directly or an object such as { handler: ({ message, reply }) => ... }",
+                },
             )
         const unknown = Object.keys(entry).find((key) => !handlerOptionKeys.includes(key))
         if (unknown !== undefined)

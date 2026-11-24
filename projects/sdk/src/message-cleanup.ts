@@ -174,6 +174,44 @@ export type MessageCleanupOutcome = "notDispatched" | "rejected" | "unknown"
 /** Transient cleanup failures whose usual advice, to retry, does not work because the plan is single-use */
 const planUsedUpReasons: ReadonlySet<string> = new Set(["busy", "timeout", "network", "rateLimit"])
 
+/** Suggested next step for a cleanup or preview failure, accounting for closure and single-use plans */
+function cleanupErrorHint(input: {
+    readonly phase: "preview" | "cleanup"
+    readonly reason: MessageCleanupErrorReason
+    readonly outcome: MessageCleanupOutcome
+    readonly status: number | null
+    readonly retryAfterMs: number | null
+    readonly apiError: ApiErrorDetail | null
+    readonly inputPath: string | null
+    readonly hasSubmittedBatches: boolean
+}): string | undefined {
+    const { phase, reason, outcome, status, retryAfterMs, apiError, inputPath, hasSubmittedBatches } = input
+    if (reason === "closed")
+        return phase === "preview"
+            ? "Create a new client to run the preview again. Nothing was deleted"
+            : "The client closed and this preview plan is used up. Check submittedBatches and terminalBatchIds, then preview again with a new client to delete the rest"
+    if (phase === "cleanup" && planUsedUpReasons.has(reason))
+        return "This preview plan is used up. Check submittedBatches and terminalBatchIds, then preview again to delete the rest"
+    const base = operationFailureHint({
+        reason,
+        outcome,
+        status,
+        retryAfterMs,
+        apiError,
+        read: phase === "preview",
+        inputPath,
+    })
+    if (
+        phase === "cleanup" &&
+        hasSubmittedBatches &&
+        (reason === "rejected" || reason === "notFound" || reason === "response")
+    )
+        return base === undefined
+            ? "Earlier batches in submittedBatches were already sent, so preview again before deleting the rest"
+            : `${base}. Earlier batches in submittedBatches were already sent, so preview again before deleting the rest`
+    return base
+}
+
 /** A cleanup preview or deletion failed, with selected IDs and batch progress where available.
  * Preview never deletes. Cleanup can fail after earlier batches received successful responses.
  * The submittedBatches field describes only those earlier responses. The terminalBatchIds field identifies the failed or uncertain request when reached.
@@ -260,19 +298,17 @@ export class MessageCleanupError extends FluxerlyError {
             }),
             {
                 code: `cleanup.${reason}`,
-                // A plan works only once, so a cleanup stopped by a transient failure needs a new preview
-                hint:
-                    phase === "cleanup" && planUsedUpReasons.has(reason)
-                        ? "This preview plan is used up. Check submittedBatches and terminalBatchIds, then preview again to delete the rest"
-                        : operationFailureHint({
-                              reason,
-                              outcome,
-                              status,
-                              retryAfterMs,
-                              apiError,
-                              read: phase === "preview",
-                              inputPath: inputValidation?.path ?? null,
-                          }),
+                // A plan works only once, so a cleanup stopped by a transient failure or closure needs a new preview
+                hint: cleanupErrorHint({
+                    phase,
+                    reason,
+                    outcome,
+                    status,
+                    retryAfterMs,
+                    apiError,
+                    inputPath: inputValidation?.path ?? null,
+                    hasSubmittedBatches: submittedBatches.length > 0,
+                }),
                 cause: options.cause,
                 details: operationDetails({
                     phase,
@@ -281,8 +317,12 @@ export class MessageCleanupError extends FluxerlyError {
                     status,
                     retryAfterMs,
                     scannedCount,
+                    apiError: apiError?.providerCode,
+                    apiCode: apiError?.code,
                     providerCode,
                     responseField,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
                     read: phase === "preview" ? true : undefined,
                 }),
             },

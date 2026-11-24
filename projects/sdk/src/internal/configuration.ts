@@ -68,7 +68,10 @@ function cacheConfiguration<M extends MessageCore = Message>(
     value: unknown,
 ): CacheConfiguration<M> | ConfigurationError | undefined {
     if (value === undefined) return undefined
-    if (!record(value)) return new ConfigurationError("cache", "Cache settings must be an object")
+    if (!record(value))
+        return new ConfigurationError("cache", "Cache settings must be an object", {
+            hint: "Pass an object keyed by cache kind, enabling each with true or { maxEntries, maxBytes, maxAgeMs }",
+        })
     const unsupportedKind = Object.keys(value).find((key) => !(cacheKinds as readonly string[]).includes(key))
     if (unsupportedKind !== undefined)
         return new ConfigurationError("cache", `Unsupported cache setting ${JSON.stringify(unsupportedKind)}`, {
@@ -80,6 +83,7 @@ function cacheConfiguration<M extends MessageCore = Message>(
         return new ConfigurationError(
             "messages",
             'The option "cache.messages" must be true, false or a settings object',
+            { hint: "Enable a cache with true or configure { maxEntries, maxBytes, maxAgeMs }" },
         )
     const settings = messages === true ? {} : messages
     const unsupported = Object.keys(settings).find((key) => !budgetKeys.includes(key))
@@ -134,7 +138,9 @@ function resourceConfiguration(value: unknown): ResourceSettings | Configuration
         const input = value[kind]
         if (input === undefined || input === false) continue
         if (input !== true && !record(input))
-            return new ConfigurationError(kind, `The option "cache.${kind}" must be true, false or a settings object`)
+            return new ConfigurationError(kind, `The option "cache.${kind}" must be true, false or a settings object`, {
+                hint: "Enable a cache with true or configure { maxEntries, maxBytes, maxAgeMs }",
+            })
         const options = input === true ? {} : input
         const unsupported = Object.keys(options).find((key) => !budgetKeys.includes(key))
         if (unsupported !== undefined)
@@ -523,6 +529,9 @@ function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfigu
             : new ConfigurationError(
                   field,
                   `The option "connection.recovery.${field}" must be an integer from ${minimum.toLocaleString("en-US")} through 2,147,483,647 milliseconds`,
+                  field === "maxDelayMs"
+                      ? { hint: "Set connection.recovery.maxDelayMs to at least minDelayMs" }
+                      : undefined,
               )
     }
     const minDelayMs = integer("minDelayMs", 100, defaultRecovery.minDelayMs)

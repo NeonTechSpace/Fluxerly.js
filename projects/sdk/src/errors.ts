@@ -229,11 +229,12 @@ export function operationHint(
 
 /** Next steps for failure reasons that need no knowledge of Fluxer's answer */
 const reasonHints: Readonly<Record<string, string | undefined>> = {
-    busy: "Wait for pending requests to finish, then retry",
-    input: "Correct the input named by inputValidation.path. Nothing was sent to Fluxer",
+    busy: "Send fewer requests at once, wait for pending requests to finish, or raise rest.maxQueued, rest.queuedJsonMaxBytes or uploads.maxBytes before retrying",
+    input: "Correct the invalid input. Nothing was sent to Fluxer",
     network: "Check network access to Fluxer, then retry",
     timeout: "Retry, or pass a larger timeoutMs",
-    notConnected: "Connect the client and wait until it is ready before calling this",
+    notConnected:
+        "Connect the client and wait until the community's shard is ready before calling this, and check that this client owns that shard",
     connectionLost: "Retry after the shard reconnects",
     response:
         "Fluxer's answer changed shape, or a test fixture is wrong. Check the fixture, or report this error with details.responseField when it is present",
@@ -241,6 +242,7 @@ const reasonHints: Readonly<Record<string, string | undefined>> = {
     untrustedUrl: "Pass an attachment URL received from this client's Fluxer instance",
     overflow: "Read the batches faster, or raise maxPendingBytes",
     filter: "Make the filter return true or false without throwing",
+    closed: "Create a new client to run this again",
 }
 
 /** @internal Build the frozen details shared by resource operation errors */
@@ -478,7 +480,39 @@ export type Operation =
     | "paginate"
 
 const rejectedTokenHint =
-    "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed or disabled, which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it"
+    "Check the whole bot token and the application owner's account standing. A valid token can be rejected if that account is closed, disabled or limited (ACCOUNT_LIMITED), which a new token cannot fix. The rejection alone does not identify the cause. The SDK does not retry it"
+
+/** Suggested next step for a discovery or gateway connection failure */
+function connectionErrorHint(
+    phase: "discovery" | "gateway",
+    reason: "network" | "protocol" | "closed",
+    status: number | null,
+): string {
+    if (phase === "gateway") {
+        if (status === CloseCode.authenticationFailed) return rejectedTokenHint
+        if (status === CloseCode.shardingRequired)
+            return 'Set sharding to "auto", or configure sharding with a larger totalShards'
+        if (status === CloseCode.invalidShard) return "Check the configured shard IDs and total shard count"
+        if (status === CloseCode.invalidApiVersion)
+            return "Check instance.url and update @neontechspace/fluxerly if Fluxer changed its gateway API version"
+        if (status === CloseCode.unknownOpcode || status === CloseCode.decodeError)
+            return "Check any gateway.send payloads and gateway.ignoredEvents settings. Older Fluxer instances limit gateway payloads to 4,096 bytes"
+        if (status === CloseCode.notAuthenticated || status === CloseCode.alreadyAuthenticated)
+            return "This is a gateway session state error. Create a new client to reconnect, or report it with describeError if it repeats"
+        if (status === CloseCode.invalidPayload || status === CloseCode.messageTooBig)
+            return "The received gateway frame failed local UTF-8 or size checks, so the SDK stopped retrying. Report it with describeError if the Fluxer instance sent valid data"
+        if (reason === "closed") return "The gateway connection closed. Create a new client before calling run again"
+        if (reason === "protocol")
+            return "The gateway sent data the SDK could not decode. Report this error with describeError and details if Fluxer's gateway payloads changed"
+        return "Check network access to the Fluxer instance, then retry"
+    }
+    if (reason === "network" && status !== null && status < 500)
+        return "Check instance.url, because the discovery endpoint returned a client error status"
+    if (reason === "protocol")
+        return "Check instance.url and proxy redirects, because the endpoint did not return a valid Fluxer discovery document"
+    if (reason === "closed") return "Create a new client to connect again"
+    return "Check network access to the Fluxer instance, then retry"
+}
 
 /** Fluxer rejected the bot token during connection startup or recovery.
  * Check the token and the application owner's account standing before connecting again.
@@ -532,17 +566,7 @@ export class ConnectionError extends FluxerlyError {
     ) {
         super(connectionErrorMessage(phase, reason, status, options?.details?.detail), {
             code: `connection.${phase}.${reason}`,
-            hint:
-                options?.hint ??
-                (status === CloseCode.authenticationFailed
-                    ? rejectedTokenHint
-                    : status === CloseCode.shardingRequired
-                      ? 'Set sharding to "auto", or configure sharding with a larger totalShards'
-                      : status === CloseCode.invalidShard
-                        ? "Check the configured shard IDs and total shard count"
-                        : reason === "network"
-                          ? "Check network access to the Fluxer instance"
-                          : undefined),
+            hint: options?.hint ?? connectionErrorHint(phase, reason, status),
             cause: options?.cause,
             details: { phase, reason, ...(status === null ? {} : { status }), ...options?.details },
         })
@@ -627,7 +651,12 @@ export class RateLimitError extends FluxerlyError {
             `Fluxer rate-limited the ${source === "gateway" ? "gateway connection" : "connection setup request"}${retryAfterMs === null ? " without saying how long to wait" : ` (retry after ${retryAfterMs} ms)`}`,
             {
                 code: "ratelimit.connection",
-                hint: operationHint("rateLimit", "notDispatched", retryAfterMs),
+                hint:
+                    source === "gateway"
+                        ? retryAfterMs === null
+                            ? "Wait before connecting again. After a failed run, create a new client"
+                            : `Wait at least ${retryAfterMs} ms before connecting again. After a failed run, create a new client`
+                        : operationHint("rateLimit", "notDispatched", retryAfterMs),
                 details: { source, ...(retryAfterMs === null ? {} : { retryAfterMs }) },
             },
         )
@@ -713,17 +742,22 @@ export class ClientClosedError extends FluxerlyError {
     ) {
         const outcome = options?.outcome
         const read = options?.read === true
-        super("The client is shutting down or has shut down, so it cannot do more work", {
-            code: "client.closed",
-            hint:
-                outcome === "unknown" && !read
-                    ? "Check whether Fluxer applied the change before repeating it with a new client"
-                    : "Create a new client to connect again",
-            details:
-                outcome === undefined && !read
-                    ? undefined
-                    : { ...(outcome === undefined ? {} : { outcome }), ...(read ? { read } : {}) },
-        })
+        super(
+            outcome === "unknown" && !read
+                ? "The client is shutting down or has shut down, so it cannot do more work. The change may still have been applied"
+                : "The client is shutting down or has shut down, so it cannot do more work",
+            {
+                code: "client.closed",
+                hint:
+                    outcome === "unknown" && !read
+                        ? "Check whether Fluxer applied the change before repeating it with a new client"
+                        : "Create a new client to connect again",
+                details:
+                    outcome === undefined && !read
+                        ? undefined
+                        : { ...(outcome === undefined ? {} : { outcome }), ...(read ? { read } : {}) },
+            },
+        )
         this.outcome = outcome
         this.name = this._tag
     }
@@ -746,7 +780,7 @@ export class CancelledError extends FluxerlyError {
             `${operation === undefined ? "The operation" : `The operation ${operation}`} was cancelled before it finished`,
             {
                 code: "operation.cancelled",
-                hint: "Its AbortSignal was aborted. Signals that the SDK passes to handlers abort when the client shuts down, so this is expected during shutdown",
+                hint: "Its AbortSignal was aborted. Signals that the SDK passes to handlers abort when the client shuts down, so this is expected during shutdown. Cancellation does not undo a write that was already sent",
                 details: operation === undefined ? undefined : { operation },
             },
         )

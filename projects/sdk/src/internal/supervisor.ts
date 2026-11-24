@@ -482,7 +482,9 @@ function supervisorSettings(
     const entry = readCaller(() => childEntry(field("entry")))
     if (!entry)
         return Effect.fail(
-            new ConfigurationError("entry", 'The supervisor option "entry" must be an absolute path or a file URL'),
+            new ConfigurationError("entry", 'The supervisor option "entry" must be an absolute path or a file URL', {
+                hint: 'Pass an absolute file path or file URL, such as new URL("./worker.js", import.meta.url) or fileURLToPath(new URL("./worker.js", import.meta.url))',
+            }),
         )
     const totalShards = field("totalShards")
     if (totalShards !== "auto" && !shardTotal(totalShards))
@@ -627,6 +629,7 @@ function processSplit(
         return new ConfigurationError(
             "processes",
             'The supervisor option "processes" can be at most totalShards, because each child needs at least one shard',
+            { hint: "Set processes to at most totalShards, or omit it to let the supervisor match totalShards" },
         )
     return name === "processes" ? { processes: value } : { shardsPerProcess: value }
 }
@@ -682,6 +685,7 @@ function fixedAssignments(value: unknown, totalShards: number): readonly ChildCo
             return new ConfigurationError(
                 "assignments",
                 "Each supervisor assignment must contain exactly id and shardIds",
+                { hint: 'Pass { id: "worker-0", shardIds: [0] } for each supervisor assignment' },
             )
         const id = current.id
         if (typeof id === "string" && seenIds.has(id))

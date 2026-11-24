@@ -153,10 +153,24 @@ const cachePairKeys = {
     emojis: "guildId:id",
     stickers: "guildId:id",
 } as const
+/** Build a ConfigurationError for an invalid cache kind with typo suggestions */
+function invalidCacheKind(kind: unknown): ConfigurationError {
+    return new ConfigurationError(
+        "kind",
+        typeof kind === "string" && kind.length <= 64
+            ? `Unknown cache kind ${JSON.stringify(kind)}`
+            : `The cache kind must be one of ${cacheKinds.join(", ")}`,
+        {
+            hint:
+                typeof kind === "string"
+                    ? unsupportedKeyHint(kind, cacheKinds, "cache kinds")
+                    : `Supported cache kinds are ${cacheKinds.join(", ")}`,
+        },
+    )
+}
 /** The cache kind, or ConfigurationError for misuse */
 function validCacheKind(kind: unknown): CacheKind {
-    if (!(cacheKinds as readonly unknown[]).includes(kind))
-        throw new ConfigurationError("kind", `The cache kind must be one of ${cacheKinds.join(", ")}`)
+    if (!(cacheKinds as readonly unknown[]).includes(kind)) throw invalidCacheKind(kind)
     return kind as CacheKind
 }
 const disabledCacheDiagnostic: CacheDiagnostic = Object.freeze({
@@ -774,10 +788,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         options?: CacheEntriesOptions,
     ): Effect.Effect<readonly CachedResources<M>[K][], ConfigurationError> {
         return suspendInput(() => {
-            if (!cacheKinds.includes(kind))
-                return Effect.fail(
-                    new ConfigurationError("kind", `The cache kind must be one of ${cacheKinds.join(", ")}`),
-                )
+            if (!cacheKinds.includes(kind)) return Effect.fail(invalidCacheKind(kind))
             if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
                 return Effect.fail(new ConfigurationError("limit", "Cache entry options must contain only limit"))
             const unsupported = options && Object.keys(options).find((key) => key !== "limit")

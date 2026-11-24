@@ -33,7 +33,10 @@ export type CommandArgumentConversion =
 /** Validate and snapshot one local argument schema before a router retains it */
 export function snapshotCommandArguments(value: CommandArgumentSchema | undefined): CommandArgumentSchema | undefined {
     if (value === undefined) return undefined
-    if (!isObject(value)) throw new ConfigurationError("command", 'The option "arguments" must be an object')
+    if (!isObject(value))
+        throw new ConfigurationError("command", 'The option "arguments" must be an object', {
+            hint: 'Pass an object keyed by argument name, such as { text: { type: "text", rest: true } }',
+        })
     const entries: Record<string, CommandArgumentDescriptor> = {}
     let optional = false
     const names = schemaNames(value)
@@ -46,9 +49,13 @@ export function snapshotCommandArguments(value: CommandArgumentSchema | undefine
             )
         const descriptor = argumentDescriptor(name, value[name]!)
         if (optional && !omittable(descriptor))
-            throw new ConfigurationError("command", "Required arguments cannot follow optional arguments")
+            throw new ConfigurationError("command", "Required arguments cannot follow optional arguments", {
+                hint: "List required arguments first, then optional or default arguments, and any rest: true argument last",
+            })
         if (hasRest(descriptor) && descriptor.rest === true && index + 1 !== names.length)
-            throw new ConfigurationError("command", "A rest argument must be the final argument")
+            throw new ConfigurationError("command", "A rest argument must be the final argument", {
+                hint: "Move the rest: true argument to the end, after required and optional arguments",
+            })
         optional ||= omittable(descriptor)
         entries[name] = descriptor
     }
@@ -548,6 +555,7 @@ function asynchronousParse(): ConfigurationError {
     return new ConfigurationError(
         "command",
         "A custom argument parse function must return its value synchronously, not a Promise or Effect",
+        { hint: "Keep parse synchronous and perform async lookups inside the command's execute handler" },
     )
 }
 

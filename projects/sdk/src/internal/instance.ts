@@ -116,7 +116,10 @@ function localUrl(value: unknown, allowInsecure: boolean): string | undefined {
 /** Validate and normalize selection locally without fetching its discovery document */
 export function instanceConfiguration(value: unknown): InstanceConfiguration | ConfigurationError {
     if (value === undefined) return Object.freeze({ bootstrap: hostedBootstrap, allowInsecure: false })
-    if (!record(value)) return new ConfigurationError("instance", "Instance settings must be an object with url")
+    if (!record(value))
+        return new ConfigurationError("instance", "Instance settings must be an object with url", {
+            hint: 'Pass an origin URL without a path, such as { url: "https://api.example.com" }, or add allowInsecure: true for local http:// URLs',
+        })
     const unsupported = Object.keys(value).find((key) => key !== "url" && key !== "allowInsecure")
     if (unsupported !== undefined)
         return new ConfigurationError("instance", `Unsupported instance setting ${JSON.stringify(unsupported)}`, {
@@ -132,6 +135,9 @@ export function instanceConfiguration(value: unknown): InstanceConfiguration | C
         : new ConfigurationError(
               "instance",
               'The option "instance.url" must be an absolute HTTPS URL without a path, or HTTP when instance.allowInsecure is true',
+              {
+                  hint: 'Pass an origin URL without a path, such as { url: "https://api.example.com" }, or add allowInsecure: true for local http:// URLs',
+              },
           )
 }
 

@@ -65,6 +65,12 @@ function hook<K extends string>(
             field === "identify"
                 ? 'The option "sharding.identify" must be an object with a permit function'
                 : 'The option "sharding.sessions" must be an object with load and save functions',
+            {
+                hint:
+                    field === "identify"
+                        ? "Pass an object with a permit function"
+                        : "Pass fileSessionStore(directory) or a custom store with load and save functions",
+            },
         )
     // Bind the methods now so later caller mutation cannot change the hooks this client calls
     return Object.freeze(
@@ -85,7 +91,10 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
             sessions: undefined,
             refillCaches: true,
         })
-    if (!record(input)) return new ConfigurationError("sharding", 'Sharding settings must be an object or "auto"')
+    if (!record(input))
+        return new ConfigurationError("sharding", 'Sharding settings must be an object or "auto"', {
+            hint: 'Set sharding to "auto", or pass { totalShards, shardIds, sessions, identify, refillCaches }',
+        })
     const shardingKeys = ["totalShards", "shardIds", "identify", "sessions", "refillCaches"]
     const unsupported = Reflect.ownKeys(input).find((key) => typeof key !== "string" || !shardingKeys.includes(key))
     if (unsupported !== undefined)
@@ -129,6 +138,7 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
         return new ConfigurationError(
             "totalShards",
             'The option "sharding.totalShards" must be "auto" or an integer from 1 through 16,384',
+            { hint: 'Set totalShards to "auto" to size shards automatically, or pass a positive integer' },
         )
     }
 
@@ -144,7 +154,9 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
         })
     }
     if (!Array.isArray(inputShardIds) || inputShardIds.length === 0)
-        return new ConfigurationError("shardIds", 'The option "sharding.shardIds" must be a non-empty array')
+        return new ConfigurationError("shardIds", 'The option "sharding.shardIds" must be a non-empty array', {
+            hint: `Shard IDs are 0-based integers from 0 through ${totalShards - 1}`,
+        })
 
     const shardIds: number[] = []
     const seen = new Set<number>()
@@ -159,6 +171,7 @@ export function parseSharding(input: unknown): ShardingConfiguration | Configura
             return new ConfigurationError(
                 "shardIds",
                 `The option "sharding.shardIds" must contain unique integers from 0 through ${totalShards - 1}`,
+                { hint: `Shard IDs are 0-based integers from 0 through ${totalShards - 1}` },
             )
         }
         seen.add(shardId)

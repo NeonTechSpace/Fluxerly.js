@@ -1013,6 +1013,9 @@ function snapshotDefaultCommandBatch<M extends MessageCore>(commands: unknown): 
             throw new ConfigurationError(
                 "command",
                 `The command batch entry ${JSON.stringify(name)} must not set "name", because its object key is the name`,
+                {
+                    hint: "Remove the name property from the command object, or register it with router.register instead",
+                },
             )
         stored.push(snapshotDefaultCommand(value as PrefixCommand<CommandArgumentSchema, M>, name))
     }
@@ -1058,7 +1061,9 @@ export function botRouter<M extends MessageCore>(
             registered === null ||
             !(registered instanceof DefaultPrefixCommandRouterOwner)
         )
-            throw new ConfigurationError("commands", "A commands register callback must return the registered router")
+            throw new ConfigurationError("commands", "A commands register callback must return the registered router", {
+                hint: "Return the new router that router.register returns, because routers are immutable",
+            })
         return registered as PrefixCommandRouter<M>
     }
     return router.registerMany(definitions as PrefixCommandBatch<M, Readonly<Record<string, undefined>>>)

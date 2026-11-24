@@ -110,7 +110,9 @@ function settings<M extends MessageCore>(
             typeof signal.addEventListener !== "function" ||
             typeof signal.removeEventListener !== "function")
     )
-        return new ConfigurationError("signal", "Collector signal must be an AbortSignal")
+        return new ConfigurationError("signal", "Collector signal must be an AbortSignal", {
+            hint: "Pass controller.signal from an AbortController, or AbortSignal.timeout(ms)",
+        })
     return {
         ...result,
         channelId: trimmedChannelId,

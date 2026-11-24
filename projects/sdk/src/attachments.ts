@@ -450,16 +450,26 @@ export class AttachmentDownloadError extends FluxerlyError {
             {
                 code: `attachment.download.${reason}`,
                 hint: refused
-                    ? "Fetch the message again to get a current attachment URL, and check that the attachment still exists"
-                    : operationFailureHint({
-                          reason,
-                          outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
-                          status,
-                          read: true,
-                          inputPath: inputValidation?.path ?? null,
-                      }),
+                    ? status === 401 || status === 403
+                        ? "Refresh the URL with attachments.refreshUrls or fetch the message again, check that the attachment still exists, and check the bot token and channel access if this instance proxies attachments through the API"
+                        : "Refresh the URL with attachments.refreshUrls or fetch the message again, and check that the attachment still exists"
+                    : reason === "busy"
+                      ? "Await the current stream read before reading the next chunk, or wait for pending media downloads and raise rest.mediaConcurrency or rest.maxQueued"
+                      : operationFailureHint({
+                            reason,
+                            outcome: reason === "input" || reason === "untrustedUrl" ? "notDispatched" : "unknown",
+                            status,
+                            read: true,
+                            inputPath: inputValidation?.path ?? null,
+                        }),
                 cause: options.cause,
-                details: operationDetails({ reason, status }),
+                details: operationDetails({
+                    reason,
+                    status,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
+                    read: true,
+                }),
             },
         )
         this.name = this._tag

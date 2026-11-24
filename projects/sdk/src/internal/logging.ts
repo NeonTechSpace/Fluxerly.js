@@ -15,11 +15,12 @@ import * as Logger from "effect/Logger"
 import * as References from "effect/References"
 import type { EventName } from "#sdk/events"
 import type { ClientCounters, ErrorInfo, LogCategory, LogLevel, LogRecord, LogSink, LogThreshold } from "#sdk/logging"
-import { ConfigurationError, FluxerlyError } from "#sdk/errors"
+import { ConfigurationError, FluxerlyError, type ConnectionError } from "#sdk/errors"
 import { record } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 import { metrics } from "./metrics.js"
 import { maskedErrorCode, maskedSummary, maskPayload, maskText, maskValue } from "./masking.js"
+import { retryableConnection } from "./retryable-connection.js"
 import { unsupportedKeyHint } from "./suggest.js"
 import { errorCodes, type LogCode } from "./code-catalogue.js"
 
@@ -94,8 +95,151 @@ type Counters = {
 export type CounterName = Exclude<keyof ClientCounters, "eventsDropped" | "eventsDroppedByEvent">
 export type DropReason = keyof ClientCounters["eventsDropped"]
 
+/** Extra safe presentation lines for SDK errors in describeError and pretty logs */
+interface ErrorPresentation {
+    readonly retry?: string | undefined
+    readonly validation?: readonly string[] | undefined
+}
+
 /** ErrorInfo values built from SDK errors, whose stacks only show SDK internals */
 const sdkInfos = new WeakSet<ErrorInfo>()
+/** Retry guidance and structured validation lines attached to SDK ErrorInfo instances */
+const sdkPresentation = new WeakMap<ErrorInfo, ErrorPresentation>()
+
+const retryableReasons = new Set(["busy", "network", "timeout", "rateLimit"])
+const connectionTags = new Set([
+    "AuthenticationError",
+    "ConnectionError",
+    "ConnectionTimeoutError",
+    "RateLimitError",
+    "ShardConnectionError",
+])
+const localMisuseTags = new Set([
+    "ConfigurationError",
+    "HelperError",
+    "AssetUrlError",
+    "ApplicationError",
+    "SdkDefect",
+    "UnhandledTestFailuresError",
+    "TestTimeoutError",
+])
+
+/** Whether one failure value is an SDK error whose call is safe to repeat */
+export function isRetryableSdkError(error: unknown): boolean {
+    try {
+        if (!(error instanceof FluxerlyError)) return false
+        switch (error._tag) {
+            case "RateLimitError":
+            case "ConnectionTimeoutError":
+                return true
+            case "ConnectionError":
+                return retryableConnection(error as ConnectionError)
+            case "ShardConnectionError":
+                return isRetryableSdkError(error.cause)
+            case "MessageCleanupError":
+                // A failed cleanup is never retryable, because its plan works only once
+                if ((error as unknown as { phase?: unknown }).phase === "cleanup") return false
+        }
+        const fields = error as unknown as { reason?: unknown; outcome?: unknown }
+        // Fluxer's busy upload slots answer changed nothing and asks for a retry like a rate limit does, unless the call
+        // already read its caller's stream. The REST classifier marks it, since other rejected 503s, such as an OAuth read's,
+        // are no such answer
+        if (error.details.uploadSlotsBusy === true) return error.details.streamUsed !== true
+        if (typeof fields.reason !== "string" || !retryableReasons.has(fields.reason)) return false
+        // A rate-limited upload already read its caller's stream, so the same call would send it again empty
+        if (error.details.streamUsed === true) return false
+        const outcome = fields.outcome
+        // A read cannot have changed remote state, so an unknown outcome only matters for writes
+        return outcome !== "unknown" || fields.reason === "rateLimit" || error.details.read === true
+    } catch {
+        // allow-silent: A proxy of an SDK error whose properties reject reads is not treated as retryable
+        return false
+    }
+}
+
+/** The server-required wait of one failure value in milliseconds, or undefined when it carries none */
+export function ownRetryAfterMs(error: unknown): number | undefined {
+    try {
+        if (!(error instanceof FluxerlyError)) return undefined
+        // A shard failure carries the wait of the failure that stopped it
+        if (error._tag === "ShardConnectionError") return ownRetryAfterMs(error.cause)
+        const wait = (error as { readonly retryAfterMs?: unknown }).retryAfterMs
+        return typeof wait === "number" && Number.isFinite(wait) && wait >= 0 ? wait : undefined
+    } catch {
+        // allow-silent: A proxy of an SDK error whose properties reject reads carries no usable wait
+        return undefined
+    }
+}
+
+/** Readable retry guidance line for a FluxerlyError, or undefined for local misuse and defects */
+function retryGuidance(error: FluxerlyError): string | undefined {
+    if (localMisuseTags.has(error._tag)) return undefined
+    const fields = error as unknown as { outcome?: unknown; phase?: unknown }
+    const outcome = fields.outcome
+    const read = error.details.read === true
+    if (error._tag === "MessageCleanupError" && fields.phase === "cleanup")
+        return outcome === "unknown"
+            ? "Do not retry blindly (outcome is unknown and the change may have been applied. Create a new preview plan after checking submittedBatches and terminalBatchIds)"
+            : "Do not retry unchanged (this preview plan is single-use)"
+    if (error._tag === "ClientClosedError")
+        return outcome === "unknown" && !read
+            ? "Do not retry blindly (outcome is unknown and the change may have been applied)"
+            : "Do not retry on this client (create a new client)"
+    if (error._tag === "CancelledError") return "Do not retry blindly if a write was already sent"
+    const wait = ownRetryAfterMs(error)
+    if (connectionTags.has(error._tag)) {
+        if (!isRetryableSdkError(error)) return "Do not retry unchanged"
+        return wait !== undefined
+            ? `Safe to retry after ${wait} ms (create a new client if run ended)`
+            : "Safe to retry (create a new client if run ended)"
+    }
+    if (error.details.streamUsed === true)
+        return wait !== undefined
+            ? `Do not retry unchanged (wait at least ${wait} ms and retry with a fresh stream or bytes)`
+            : "Do not retry unchanged (retry with a fresh stream or bytes)"
+    if (isRetryableSdkError(error)) return wait !== undefined ? `Safe to retry after ${wait} ms` : "Safe to retry"
+    if (outcome === "unknown" && !read)
+        return "Do not retry blindly (outcome is unknown and the change may have been applied)"
+    return "Do not retry unchanged"
+}
+
+/** Safe allowlisted validation entries from a recognized ApiErrorDetail for indented display */
+function validationLines(apiError: unknown, secrets: readonly string[]): readonly string[] {
+    if (!record(apiError) || !Array.isArray(apiError.validationErrors) || apiError.validationErrors.length === 0)
+        return []
+    const lines: string[] = []
+    for (const item of apiError.validationErrors.slice(0, 32)) {
+        if (!record(item) || typeof item.explanation !== "string") continue
+        const path = typeof item.path === "string" ? maskText(item.path, secrets) : undefined
+        const providerCode =
+            typeof item.providerCode === "string" && item.providerCode.length > 0
+                ? maskText(item.providerCode, secrets)
+                : undefined
+        const explanation = maskText(item.explanation, secrets)
+        if (path !== undefined && providerCode !== undefined) lines.push(`${path} [${providerCode}]: ${explanation}`)
+        else if (path !== undefined) lines.push(`${path}: ${explanation}`)
+        else if (providerCode !== undefined) lines.push(`[${providerCode}]: ${explanation}`)
+        else lines.push(explanation)
+    }
+    return Object.freeze(lines)
+}
+
+/** Attach SDK presentation lines (retry guidance and validation fields) to an ErrorInfo */
+function attachSdkPresentation(
+    info: ErrorInfo,
+    value: FluxerlyError,
+    apiError: unknown,
+    secrets: readonly string[],
+): void {
+    sdkInfos.add(info)
+    const retry = retryGuidance(value)
+    const validation = validationLines(apiError, secrets)
+    if (retry !== undefined || validation.length > 0)
+        sdkPresentation.set(info, {
+            ...(retry === undefined ? {} : { retry }),
+            ...(validation.length > 0 ? { validation } : {}),
+        })
+}
 
 /** Catalogued SDK error codes as patterns, where a family such as guild.<reason> matches any one reason */
 const sdkCodePatterns = Object.keys(errorCodes).map(
@@ -156,7 +300,7 @@ export function errorInfo(
                       }),
                 ...(sdk && Object.keys(value.details).length ? { details: value.details } : {}),
             })
-            if (sdk) sdkInfos.add(info)
+            if (sdk) attachSdkPresentation(info, value, apiError, secrets)
             return info
         }
     } catch {
@@ -280,38 +424,163 @@ function detailText(value: unknown): string {
     return typeof value === "string" ? maskText(value) : maskPayload(value)
 }
 
+/** Whether the current terminal safely renders Unicode log icons and vertical gutter rails */
+function supportsLogUnicode(): boolean {
+    if (process.platform === "win32") {
+        return Boolean(
+            process.env.WT_SESSION ||
+            process.env.TERM_PROGRAM ||
+            process.env.ConEmuANSI === "ON" ||
+            process.env.TERM === "xterm-256color" ||
+            process.env.TERM === "xterm" ||
+            process.env.COLORTERM,
+        )
+    }
+    const locale = process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG || ""
+    if (/^(?:C|POSIX)(?:\..+)?$/i.test(locale) && !/utf-?8/i.test(locale)) return false
+    return true
+}
+
+const ansi = {
+    reset: "\u001b[0m",
+    bold: "\u001b[1m",
+    dim: "\u001b[2m",
+    red: "\u001b[31m",
+    green: "\u001b[32m",
+    yellow: "\u001b[33m",
+    magenta: "\u001b[35m",
+    cyan: "\u001b[36m",
+    boldRed: "\u001b[1;31m",
+    boldGreen: "\u001b[1;32m",
+    boldYellow: "\u001b[1;33m",
+    boldMagenta: "\u001b[1;35m",
+    boldCyan: "\u001b[1;36m",
+} as const
+
+function logSymbols(unicode: boolean) {
+    return unicode
+        ? {
+              trace: "·",
+              debug: "◆",
+              info: "ℹ",
+              ok: "✓",
+              warn: "▲",
+              error: "✖",
+              fatal: "✖",
+              rail: "│",
+              hint: "→",
+              retry: "↻",
+              cause: "↳",
+          }
+        : {
+              trace: ".",
+              debug: "*",
+              info: "i",
+              ok: "+",
+              warn: "!",
+              error: "x",
+              fatal: "x",
+              rail: "|",
+              hint: "->",
+              retry: "~",
+              cause: "->",
+          }
+}
+
+function styledValidationEntry(item: string): string {
+    const colon = item.indexOf(": ")
+    if (colon <= 0) return item
+    return `${ansi.yellow}${item.slice(0, colon + 1)}${ansi.reset}${item.slice(colon + 1)}`
+}
+
 /** Readable multi-line text for an ErrorInfo, indented for console output: Title, hint, safe details and stack frames
  * for each error in the cause chain. Consecutive frames inside the SDK and Effect collapse into one line, and SDK
  * errors other than SdkDefect and ConfigurationError print no frames. JSON output keeps the full stack
  */
-export function errorText(info: ErrorInfo, indent = "    ", stack = true, label = ""): string {
+export function errorText(info: ErrorInfo, indent = "    ", stack = true, label = "", color = false): string {
     const lines: string[] = []
-    const add = (start: ErrorInfo, at: string, label: string) => {
+    const symbols = color ? logSymbols(supportsLogUnicode()) : undefined
+    const add = (start: ErrorInfo, at: string, startLabel: string) => {
         let current: ErrorInfo | undefined = start
-        let prefix = label
+        let prefix = startLabel
         while (current) {
-            const title = `${current.name}${current.code === undefined ? "" : ` [${current.code}]`}: ${current.message}`
-            lines.push(`${at}${prefix}${title}`)
-            if (current.hint) lines.push(`${at}  Hint: ${current.hint}`)
-            const details = Object.entries(current.details ?? {})
-            if (details.length)
-                lines.push(`${at}  Details: ${details.map(([key, value]) => `${key}=${detailText(value)}`).join(" ")}`)
-            if (stack && current.stack && !internalStack(current)) {
-                let hidden = 0
-                const flush = () => {
-                    if (hidden > 0)
-                        lines.push(`${at}  ... ${hidden} SDK and Effect frame${hidden === 1 ? "" : "s"} hidden`)
-                    hidden = 0
+            if (!color) {
+                const title = `${current.name}${current.code === undefined ? "" : ` [${current.code}]`}: ${current.message}`
+                lines.push(`${at}${prefix}${title}`)
+                if (current.hint) lines.push(`${at}  Hint: ${current.hint}`)
+                const details = Object.entries(current.details ?? {})
+                if (details.length)
+                    lines.push(
+                        `${at}  Details: ${details.map(([key, value]) => `${key}=${detailText(value)}`).join(" ")}`,
+                    )
+                const presentation = sdkPresentation.get(current)
+                if (presentation?.retry) lines.push(`${at}  Retry: ${presentation.retry}`)
+                if (presentation?.validation && presentation.validation.length > 0) {
+                    lines.push(`${at}  Validation:`)
+                    for (const item of presentation.validation) lines.push(`${at}    ${item}`)
                 }
-                for (const frame of current.stack.split("\n").filter((line) => /^\s+at /.test(line))) {
-                    if (internalFrame(frame)) {
-                        hidden++
-                        continue
+                if (stack && current.stack && !internalStack(current)) {
+                    let hidden = 0
+                    const flush = () => {
+                        if (hidden > 0)
+                            lines.push(`${at}  ... ${hidden} SDK and Effect frame${hidden === 1 ? "" : "s"} hidden`)
+                        hidden = 0
+                    }
+                    for (const frame of current.stack.split("\n").filter((line) => /^\s+at /.test(line))) {
+                        if (internalFrame(frame)) {
+                            hidden++
+                            continue
+                        }
+                        flush()
+                        lines.push(`${at}  ${frame.trim()}`)
                     }
                     flush()
-                    lines.push(`${at}  ${frame.trim()}`)
                 }
-                flush()
+            } else {
+                const sym = symbols!
+                const nested = prefix.length > 0
+                const rail = `${nested ? ansi.yellow : ansi.red}${sym.rail}${ansi.reset}`
+                const lead = `${at}${rail} `
+                const prefixText = nested ? `${ansi.boldYellow}${sym.cause} ${prefix}${ansi.reset}` : ""
+                const codeText = current.code === undefined ? "" : ` ${ansi.dim}[${current.code}]${ansi.reset}`
+                const nameText = `${ansi.boldRed}${nested ? "" : `${sym.error} `}${current.name}${ansi.reset}`
+                lines.push(`${lead}${prefixText}${nameText}${codeText}: ${ansi.bold}${current.message}${ansi.reset}`)
+                if (current.hint) lines.push(`${lead}  ${ansi.boldCyan}${sym.hint} Hint:${ansi.reset} ${current.hint}`)
+                const details = Object.entries(current.details ?? {})
+                if (details.length) {
+                    const pairs = details
+                        .map(([key, value]) => `${ansi.dim}${key}=${ansi.reset}${detailText(value)}`)
+                        .join(" ")
+                    lines.push(`${lead}  ${ansi.dim}Details:${ansi.reset} ${pairs}`)
+                }
+                const presentation = sdkPresentation.get(current)
+                if (presentation?.retry) {
+                    const retryTone = presentation.retry.startsWith("Safe to retry") ? ansi.boldGreen : ansi.boldYellow
+                    lines.push(`${lead}  ${retryTone}${sym.retry} Retry:${ansi.reset} ${presentation.retry}`)
+                }
+                if (presentation?.validation && presentation.validation.length > 0) {
+                    lines.push(`${lead}  ${ansi.boldYellow}Validation:${ansi.reset}`)
+                    for (const item of presentation.validation) lines.push(`${lead}    ${styledValidationEntry(item)}`)
+                }
+                if (stack && current.stack && !internalStack(current)) {
+                    let hidden = 0
+                    const flush = () => {
+                        if (hidden > 0)
+                            lines.push(
+                                `${lead}  ${ansi.dim}... ${hidden} SDK and Effect frame${hidden === 1 ? "" : "s"} hidden${ansi.reset}`,
+                            )
+                        hidden = 0
+                    }
+                    for (const frame of current.stack.split("\n").filter((line) => /^\s+at /.test(line))) {
+                        if (internalFrame(frame)) {
+                            hidden++
+                            continue
+                        }
+                        flush()
+                        lines.push(`${lead}  ${ansi.dim}${frame.trim()}${ansi.reset}`)
+                    }
+                    flush()
+                }
             }
             // The members of an AggregateError print under it, one level deeper
             for (const member of current.errors ?? []) add(member, `${at}  `, "Contains: ")
@@ -328,13 +597,15 @@ function formatTime(date: Date) {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`
 }
 
-const colors: Record<LogLevel, string> = {
-    trace: "\u001b[90m",
-    debug: "\u001b[36m",
-    info: "\u001b[32m",
-    warn: "\u001b[33m",
-    error: "\u001b[31m",
-    fatal: "\u001b[35m",
+const successInfoCodes = new Set<string>(["lifecycle.connected", "lifecycle.drained", "lifecycle.shutdownComplete"])
+
+const levelStyles: Record<LogLevel, string> = {
+    trace: ansi.dim,
+    debug: ansi.cyan,
+    info: ansi.cyan,
+    warn: ansi.boldYellow,
+    error: ansi.boldRed,
+    fatal: ansi.boldMagenta,
 }
 
 const recordKeys = [
@@ -361,14 +632,34 @@ export function prettyLine(entry: LogRecord, color: boolean): string {
     for (const [key, value] of Object.entries(entry.fields ?? {}))
         facts.push(`${key}=${typeof value === "string" && /\s/.test(value) ? JSON.stringify(value) : value}`)
     const level = entry.level.toUpperCase().padEnd(5)
-    const code = color ? `\u001b[90m[${entry.code}]\u001b[0m` : `[${entry.code}]`
-    const head = `${formatTime(new Date(entry.time))} ${color ? `${colors[entry.level]}${level}\u001b[0m` : level} ${entry.category.padEnd(10)} ${code} ${entry.message}`
-    const line = facts.length
-        ? `${head} ${color ? "\u001b[90m" : ""}${facts.join(" ")}${color ? "\u001b[0m" : ""}`
-        : head
+    const timestamp = formatTime(new Date(entry.time))
+    let head: string
+    let line: string
+    if (!color) {
+        head = `${timestamp} ${level} ${entry.category.padEnd(10)} [${entry.code}] ${entry.message}`
+        line = facts.length ? `${head} ${facts.join(" ")}` : head
+    } else {
+        const sym = logSymbols(supportsLogUnicode())
+        const positiveInfo = entry.level === "info" && successInfoCodes.has(entry.code)
+        const icon = positiveInfo ? sym.ok : sym[entry.level]
+        const levelColor = positiveInfo ? ansi.boldGreen : levelStyles[entry.level]
+        const badge = `${levelColor}${icon} ${level}${ansi.reset}`
+        const category = `${ansi.magenta}${entry.category.padEnd(10)}${ansi.reset}`
+        const code = `${ansi.dim}[${entry.code}]${ansi.reset}`
+        const message =
+            entry.level === "error" || entry.level === "fatal"
+                ? `${ansi.bold}${entry.message}${ansi.reset}`
+                : entry.level === "trace"
+                  ? `${ansi.dim}${entry.message}${ansi.reset}`
+                  : entry.message
+        head = `${ansi.dim}${timestamp}${ansi.reset} ${badge} ${category} ${code} ${message}`
+        line = facts.length ? `${head} ${ansi.dim}${facts.join(" ")}${ansi.reset}` : head
+    }
     if (!entry.error) return line
-    const others = (entry.otherErrors ?? []).map((other) => `\n${errorText(other, "    ", true, "Also failed: ")}`)
-    return `${line}\n${errorText(entry.error)}${others.join("")}`
+    const others = (entry.otherErrors ?? []).map(
+        (other) => `\n${errorText(other, "    ", true, "Also failed: ", color)}`,
+    )
+    return `${line}\n${errorText(entry.error, "    ", true, "", color)}${others.join("")}`
 }
 
 function jsonLine(entry: LogRecord): string {
@@ -1002,8 +1293,13 @@ function sinkSetting(sink: unknown): LogSink[] | undefined | ConfigurationError 
 function dedupeSetting(dedupe: unknown): number | undefined | ConfigurationError {
     if (dedupe === false) return undefined
     if (dedupe === undefined) return 60_000
-    if (!record(dedupe) || Object.keys(dedupe).some((key) => key !== "windowMs"))
+    if (!record(dedupe))
         return new ConfigurationError("dedupe", 'The option "logging.dedupe" must be false or an object with windowMs')
+    const unsupported = Object.keys(dedupe).find((key) => key !== "windowMs")
+    if (unsupported !== undefined)
+        return new ConfigurationError("dedupe", `Unsupported logging.dedupe setting ${JSON.stringify(unsupported)}`, {
+            hint: unsupportedKeyHint(unsupported, ["windowMs"], "settings"),
+        })
     const windowMs = dedupe.windowMs
     if (windowMs !== undefined && (typeof windowMs !== "number" || !Number.isSafeInteger(windowMs) || windowMs < 0))
         return new ConfigurationError(
@@ -1015,25 +1311,42 @@ function dedupeSetting(dedupe: unknown): number | undefined | ConfigurationError
 
 function unsafeSetting(option: unknown): Set<LogCategory> | undefined | ConfigurationError {
     if (option === undefined) return undefined
-    if (
-        !record(option) ||
-        option.payloads !== true ||
-        Object.keys(option).some((key) => key !== "payloads" && key !== "categories")
-    )
+    if (!record(option))
+        return new ConfigurationError(
+            "unsafe",
+            'The option "logging.unsafe" must be { payloads: true }, with optional categories',
+        )
+    const unsupported = Object.keys(option).find((key) => key !== "payloads" && key !== "categories")
+    if (unsupported !== undefined)
+        return new ConfigurationError("unsafe", `Unsupported logging.unsafe setting ${JSON.stringify(unsupported)}`, {
+            hint: unsupportedKeyHint(unsupported, ["payloads", "categories"], "settings"),
+        })
+    if (option.payloads !== true)
         return new ConfigurationError(
             "unsafe",
             'The option "logging.unsafe" must be { payloads: true }, with optional categories',
         )
     const unsafeCategories = option.categories
     if (unsafeCategories === undefined) return new Set(logCategories)
-    if (
-        !Array.isArray(unsafeCategories) ||
-        unsafeCategories.some((category) => !(logCategories as readonly unknown[]).includes(category))
-    )
+    if (!Array.isArray(unsafeCategories))
         return new ConfigurationError(
             "unsafe",
             'The option "logging.unsafe.categories" must be an array of log category names',
             { hint: `Known categories are ${logCategories.join(", ")}` },
+        )
+    const badCategory = unsafeCategories.find((category) => !(logCategories as readonly unknown[]).includes(category))
+    if (badCategory !== undefined)
+        return new ConfigurationError(
+            "unsafe",
+            typeof badCategory === "string"
+                ? `Unknown log category ${JSON.stringify(badCategory)} in logging.unsafe.categories`
+                : 'The option "logging.unsafe.categories" must be an array of log category names',
+            {
+                hint:
+                    typeof badCategory === "string"
+                        ? unsupportedKeyHint(badCategory, logCategories, "categories")
+                        : `Known categories are ${logCategories.join(", ")}`,
+            },
         )
     return new Set(unsafeCategories as LogCategory[])
 }

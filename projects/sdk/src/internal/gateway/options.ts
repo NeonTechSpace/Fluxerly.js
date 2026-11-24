@@ -139,11 +139,16 @@ function ignoredList(
 
 function flagBits(value: unknown): number | ConfigurationError {
     if (value === undefined) return 0
-    if (!record(value) || Object.keys(value).some((key) => key !== "debounceMessageReactions"))
+    if (!record(value))
         return new ConfigurationError(
             "flags",
-            'The option "gateway.flags" must contain only the boolean debounceMessageReactions',
+            'The option "gateway.flags" must be an object containing only debounceMessageReactions',
         )
+    const unsupported = Object.keys(value).find((key) => key !== "debounceMessageReactions")
+    if (unsupported !== undefined)
+        return new ConfigurationError("flags", `Unsupported gateway.flags setting ${JSON.stringify(unsupported)}`, {
+            hint: unsupportedKeyHint(unsupported, ["debounceMessageReactions"], "settings"),
+        })
     const debounce = value.debounceMessageReactions
     if (debounce !== undefined && typeof debounce !== "boolean")
         return new ConfigurationError(

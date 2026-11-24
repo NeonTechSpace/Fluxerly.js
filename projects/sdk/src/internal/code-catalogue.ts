@@ -217,7 +217,7 @@ export const errorCodes = {
         values: ["input", "untrustedUrl", "busy", "network", "response", "tooLarge", "timeout"],
         meaning:
             "An attachment download failed. The reason untrustedUrl means the URL is not on this instance's media or API attachment path, and tooLarge means the attachment is larger than maxBytes. The reason response with a non-2xx status means the media or API server refused the download",
-        action: "Pass attachments received from this client, and raise maxBytes for tooLarge",
+        action: "Pass attachments received from this client, refresh expired URLs with attachments.refreshUrls or fetch the message again for refused downloads, and raise maxBytes for tooLarge",
     },
     "oauth.<reason>": {
         error: "OAuthOperationError",
@@ -236,7 +236,7 @@ export const errorCodes = {
         values: ["input", "notConnected", "busy", "timeout", "connectionLost", "response"],
         meaning:
             "A fresh member or presence count over the gateway failed. The reason notConnected means the community's shard is not ready, and connectionLost means it disconnected before the answer",
-        action: "Connect the client first, and retry after a timeout or lost connection",
+        action: "Connect the client first, check that this client owns the community's shard for notConnected, and retry after a timeout or lost connection",
     },
     "memberChunks.<reason>": {
         error: "MemberChunkError",
@@ -287,19 +287,19 @@ export const errorCodes = {
             "audio",
         ],
         meaning: "A formatting, parsing, text, audio or error helper received a value it cannot use",
-        action: "Pass a value of the documented form",
+        action: "Read the error's hint and pass a value of the documented form",
     },
     "asset.<reason>": {
         error: "AssetUrlError",
         values: ["target", "id", "hash", "options"],
         meaning: "An asset URL could not be built from the given object or options",
-        action: "Pass the object received from Fluxer and supported size and format options",
+        action: "Read the error's hint and pass the object received from Fluxer with supported size and format options",
     },
     "supervisor.<reason>": {
         error: "SupervisorError",
         values: ["closed", "spawn", "protocol", "restartLimit", "startupTimeout", "shardCount"],
         meaning: "The shard supervisor failed to start or keep its child processes",
-        action: "Read the supervisor log records for the child that failed",
+        action: "Read the supervisor log records for the child that failed, inspect cause for shardCount, and call start before waiting on closed",
     },
     "supervisor.child.<reason>": {
         error: "SupervisorChildError",

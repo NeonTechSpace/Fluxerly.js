@@ -49,9 +49,18 @@ export class GatewaySendError extends FluxerlyError {
             }`,
             {
                 code: `gateway.send.${reason}`,
-                hint: hints[reason],
+                hint:
+                    reason === "input" && inputValidation?.path
+                        ? `Correct ${inputValidation.path}. Nothing was sent to Fluxer`
+                        : hints[reason],
                 cause: options.cause,
-                details: operationDetails({ reason, shardId, opcode }),
+                details: operationDetails({
+                    reason,
+                    shardId,
+                    opcode,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
+                }),
             },
         )
         this.name = this._tag
@@ -73,7 +82,8 @@ const explanations: Record<GatewaySendError["reason"], string> = {
 const hints: Record<GatewaySendError["reason"], string> = {
     input: "Pass a non-negative integer shard ID and opcode, and JSON data that encodes to at most 16,384 bytes with its opcode",
     reserved: "Use the SDK's own methods, such as presence.set, instead of sending session opcodes",
-    notOwned: "Send on a shard listed in client.shards",
+    notOwned:
+        "Send on a shard listed in client.shards. Use snowflakes.shardFor(guildId, totalShards) to find the shard that owns a community",
     notReady: "Retry after the shard is Connected again, for example after observing client state",
     busy: "Wait for earlier gateway.send operations to complete before sending more",
 }

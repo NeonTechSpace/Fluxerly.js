@@ -5,6 +5,7 @@
  */
 import { ConfigurationError } from "#sdk/errors"
 import { decodeGatewayMessage, decodeMessage } from "./message.js"
+import { unsupportedKeyHint } from "./suggest.js"
 import type { MessageCore, MessageField, MessageFields, SelectedMessage } from "#sdk/messages"
 
 /** Internal observation when the caller's runtime selection is not known statically */
@@ -53,11 +54,20 @@ export function snapshotMessageFields(value: unknown): ReadonlySet<MessageField>
             "The option messageFields must be an array of known Message field names",
         )
     const selected = new Set<MessageField>()
+    const fieldNames = Object.keys(fields)
     for (const field of value) {
         if (typeof field !== "string" || !Object.hasOwn(fields, field))
             throw new ConfigurationError(
                 "messageFields",
-                "The option messageFields must be an array of known Message field names",
+                typeof field === "string" && field.length <= 64
+                    ? `Unknown message field ${JSON.stringify(field)} in messageFields`
+                    : "The option messageFields must be an array of known Message field names",
+                {
+                    hint:
+                        typeof field === "string"
+                            ? unsupportedKeyHint(field, fieldNames, "fields")
+                            : `Supported fields are ${fieldNames.join(", ")}`,
+                },
             )
         selected.add(field as MessageField)
     }

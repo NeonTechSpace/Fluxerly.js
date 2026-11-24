@@ -14,12 +14,19 @@ import {
     type RequestAction,
     type RequestCredential,
 } from "../../src/api-errors.js"
+import { AssetUrlError } from "../../src/assets.js"
+import { AttachmentDownloadError } from "../../src/attachments.js"
 import { CollectorError } from "../../src/collectors.js"
-import { ConnectionError, operationHint } from "../../src/errors.js"
+import { CountOperationError } from "../../src/counts.js"
+import { CancelledError, ClientClosedError, ConnectionError, operationHint, RateLimitError } from "../../src/errors.js"
 import { GatewaySendError } from "../../src/gateway.js"
+import { HelperError } from "../../src/helpers.js"
 import { errorCodes, logCodes, operationReasonMeanings, type CodeEntry } from "../../src/internal/code-catalogue.js"
 import { CloseCode, closeActionText, closeCodeInfo } from "../../src/internal/protocol/gateway.js"
+import { MemberChunkError } from "../../src/member-chunks.js"
+import { MessageCleanupError } from "../../src/message-cleanup.js"
 import { PaginationError } from "../../src/pagination.js"
+import { PresenceError } from "../../src/presence.js"
 import { SupervisorError } from "../../src/supervisor.js"
 
 // Plain lowercase words that are exact option values, such as `confirm: true`, may follow a colon
@@ -82,7 +89,7 @@ const operationReasons = [
 ]
 const outcomes = ["notDispatched", "rejected", "unknown"]
 const providerCodes = Object.keys(apiErrorMappings) as (keyof typeof apiErrorMappings)[]
-const statuses = [null, 400, 401, 403, 404, 423, 429, 500]
+const statuses = [null, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 423, 429, 500, 501, 502, 503, 504]
 const credentials: RequestCredential[] = ["bot", "webhook", "oauthClient", "oauthUser"]
 const actions: RequestAction[] = [
     "message",
@@ -125,15 +132,26 @@ test("Fluxer rejection explanations and hints follow the wording rules", () => {
         for (const status of statuses)
             for (const credential of credentials)
                 for (const action of actions)
-                    texts.push([
-                        `apiErrorHint ${providerCode} ${status} ${credential} ${action}`,
-                        apiErrorHint(
-                            providerCode === null ? null : apiErrorDetail({ code: providerCode }),
-                            status,
-                            credential,
-                            action,
-                        ),
-                    ])
+                    for (const retryAfterMs of [null, 2000])
+                        texts.push([
+                            `apiErrorHint ${providerCode} ${status} ${credential} ${action} ${retryAfterMs}`,
+                            apiErrorHint(
+                                providerCode === null ? null : apiErrorDetail({ code: providerCode }),
+                                status,
+                                credential,
+                                { action, retryAfterMs },
+                            ),
+                        ])
+    texts.push([
+        "apiErrorHint INVALID_FORM_BODY populated",
+        apiErrorHint(
+            apiErrorDetail({
+                code: "INVALID_FORM_BODY",
+                errors: [{ path: "content", code: "CONTENT_EXCEEDS_MAX_LENGTH" }],
+            }),
+            400,
+        ),
+    ])
     expect(problemsIn(texts)).toEqual({})
 })
 
@@ -228,5 +246,93 @@ test("connection, gateway command, collector, pagination and supervisor errors f
                     `close action ${rateLimited} ${resume} ${established}`,
                     closeActionText(rateLimited, resume, "1.5 s", established),
                 ])
+    expect(problemsIn(texts)).toEqual({})
+})
+
+test("helper, asset, cleanup, download, count, member-chunk, presence and lifecycle errors follow the wording rules", () => {
+    const errors: Error[] = []
+    const helperPairs: readonly (readonly [HelperError["operation"], HelperError["reason"]])[] = [
+        ["format.userMention", "id"],
+        ["format.parseMention", "markup"],
+        ["format.parseTimestamp", "markup"],
+        ["format.parseCustomEmoji", "markup"],
+        ["format.timestamp", "markup"],
+        ["format.customEmoji", "markup"],
+        ["format.parseTimestamp", "time"],
+        ["snowflakes.boundary", "time"],
+        ["embed.timestamp", "time"],
+        ["format.timestamp", "time"],
+        ["permissionBits.patchOverwrite", "permissionBits"],
+        ["permissionBits.refusedGrants", "permissionBits"],
+        ["permissionBits.sameOverwrites", "permissionBits"],
+        ["permissionBits.label", "permissionBits"],
+        ["permissionBits.from", "permissionBits"],
+        ["links.installation", "link"],
+        ["links.message", "link"],
+        ["links.channel", "link"],
+        ["colors.parse", "color"],
+        ["colors.toHex", "color"],
+        ["text.split", "text"],
+        ["voiceWaveform", "limit"],
+        ["text.truncate", "limit"],
+        ["text.split", "limit"],
+        ["snowflakes.shardFor", "shardCount"],
+        ["errors.isNotFound", "resource"],
+        ["voiceWaveform", "audio"],
+    ]
+    for (const [operation, reason] of helperPairs) errors.push(new HelperError(operation, reason))
+    const assetOps: readonly AssetUrlError["operation"][] = [
+        "assets.avatar",
+        "assets.displayMemberAvatar",
+        "assets.emoji",
+        "assets.sticker",
+    ]
+    for (const operation of assetOps)
+        for (const reason of ["target", "id", "hash", "options"] as const)
+            errors.push(new AssetUrlError(operation, reason))
+    for (const phase of ["preview", "cleanup"] as const)
+        for (const reason of ["closed", "busy", "rejected", "notFound", "response", "input", "filter"] as const)
+            for (const hasBatch of [false, true])
+                errors.push(
+                    new MessageCleanupError({
+                        phase,
+                        reason,
+                        outcome: reason === "input" || reason === "filter" ? "notDispatched" : "unknown",
+                        status: reason === "rejected" ? 403 : reason === "notFound" ? 404 : null,
+                        retryAfterMs: null,
+                        scannedCount: 1,
+                        selectedMessageIds: ["1"],
+                        submittedBatches: hasBatch ? [{ batchIndex: 0, messageIds: ["1"] }] : [],
+                        terminalBatchIds: ["1"],
+                    }),
+                )
+    for (const reason of ["input", "untrustedUrl", "busy", "network", "response", "tooLarge", "timeout"] as const)
+        for (const status of [null, 403, 404]) errors.push(new AttachmentDownloadError({ reason, status }))
+    for (const reason of ["input", "notConnected", "busy", "timeout", "connectionLost", "response"] as const)
+        errors.push(new CountOperationError({ operation: "guilds.fetchCounts", reason }))
+    for (const reason of [
+        "input",
+        "notConnected",
+        "busy",
+        "response",
+        "overflow",
+        "timeout",
+        "connectionLost",
+        "rateLimit",
+    ] as const)
+        for (const retryAfterMs of [null, 2000]) errors.push(new MemberChunkError({ reason, retryAfterMs }))
+    for (const reason of ["input", "limit"] as const) errors.push(new PresenceError({ reason }))
+    for (const outcome of [undefined, "notDispatched", "rejected", "unknown"] as const)
+        for (const read of [false, true]) errors.push(new ClientClosedError({ outcome, read }))
+    errors.push(
+        new CancelledError("send"),
+        new RateLimitError("http", 1500),
+        new RateLimitError("gateway", 1500),
+        new RateLimitError("gateway", null),
+    )
+    const texts: [string, string | undefined][] = errors.flatMap((error, index) => [
+        [`${index} ${error.name} message`, error.message],
+        [`${index} ${error.name} hint`, (error as { hint?: string }).hint],
+    ])
     expect(problemsIn(texts)).toEqual({})
 })

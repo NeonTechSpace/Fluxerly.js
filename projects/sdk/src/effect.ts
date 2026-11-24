@@ -55,195 +55,56 @@
  */
 // Checked first, so an unsupported Node.js version fails with a clear message before any other SDK code runs
 import "./internal/node-version.js"
-export { MemberChunkError } from "./member-chunks.js"
-export type { MemberChunk, MemberChunkQuery, MemberChunkFailure, MemberChunkOptions } from "./member-chunks.js"
-export { CountOperationError } from "./counts.js"
+
+// ---------------------------------------------------------------------------
+// Core entry points: Bot runner, client, service layer, webhooks and OAuth
+// ---------------------------------------------------------------------------
+export { defineBot, runBot } from "./api/effect/bot.js"
 export type {
-    CountOperation,
-    CountOperationFailure,
-    GuildCount,
-    GuildCountsResult,
-    ChannelMemberCount,
-    ChannelMemberCountsResult,
-} from "./counts.js"
-export type { ColorInput, RgbColor } from "./colors.js"
-export type { TextSplitOptions, TextTruncateOptions } from "./text.js"
-export { voiceWaveform } from "./voice-notes.js"
-export type { VoiceWaveform, VoiceWaveformOptions } from "./voice-notes.js"
-export { AssetFormats, AssetUrlError } from "./assets.js"
-export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
-export { HelperError, TimestampStyles } from "./helpers.js"
-export type {
-    ChannelLinkTarget,
-    CustomEmojiMarkup,
-    InstallationLinkOptions,
-    Mention,
-    PermissionName,
-    PermissionBitInspection,
-    OverwritePatch,
-    TimestampMarkup,
-    TimestampStyle,
-} from "./helpers.js"
-export type { GuildListQuery, GuildListSummary } from "./guilds.js"
-export type { GuildIterationQuery } from "./pagination.js"
-export { GuildMemberJoinSourceTypes } from "./member-search.js"
-export type { GuildMemberJoinSourceType } from "./member-search.js"
-export type { ChannelPermissions, PermissionFetchOptions, PermissionInput, PermissionTarget } from "./permissions.js"
-export type { HierarchyHelpers, RoleHierarchyInput, RoleManagementInput } from "./role-hierarchy.js"
-export { BotApplicationOperationError } from "./application.js"
-export type { BotApplication, BotApplicationOperation, BotApplicationOperationFailure } from "./application.js"
-export type {
-    MemberSearchQuery,
-    MemberSearchPage,
-    MemberSearchHit,
-    MemberSearchIterationLimits,
-} from "./member-search.js"
-export type {
-    MessageSearchAuthorType,
-    MessageSearchChannel,
-    MessageSearchContentType,
-    MessageSearchContext,
-    MessageSearchEmbedType,
-    MessageSearchIndexingPage,
-    MessageSearchIterationLimits,
-    MessageSearchPage,
-    MessageSearchQuery,
-    MessageSearchResultsPage,
-} from "./message-search.js"
-export type {
-    DiscoveryApplication,
-    DiscoveryApplicationInput,
-    DiscoveryApplicationEdit,
-    DiscoveryCategory,
-    DiscoverySearchPage,
-    DiscoverySearchQuery,
-    DiscoveryStatus,
-} from "./discovery.js"
-export type { DiscoveryCategoryCount, DiscoveryGuild } from "./discovery.js"
-export { DiscoveryCategories } from "./discovery.js"
-export type { AuditLogEntry, AuditLogPage, AuditLogQuery, AuditLogIterationQuery } from "./audit-logs.js"
-export type {
-    GuildCreate,
-    GuildHealthUpdate,
-    GuildEmojisUpdate,
-    GuildStickersUpdate,
-    GuildLifecycleEvents,
-    WebhooksUpdate,
-    InviteDeleteEvent,
-    GuildAuditLogEntryCreate,
-} from "./events.js"
-export { AuditLogActions } from "./audit-logs.js"
-export type {
-    AuditLogActionType,
-    AuditLogPermissionsDiff,
-    AuditLogChangeValue,
-    AuditLogChange,
-    AuditLogOptions,
-    AuditLogWebhook,
-} from "./audit-logs.js"
-export type { GuildEdit, GuildVanityUrl, GuildVanityUrlUsage } from "./guilds.js"
-export {
-    GuildSystemChannelFlags,
-    GuildDefaultMessageNotifications,
-    GuildVerificationLevels,
-    GuildMfaLevels,
-    GuildNsfwLevels,
-    GuildExplicitContentFilters,
-    GuildContentWarningLevels,
-    GuildSplashCardAlignments,
-    GuildFeatureToggles,
-} from "./guilds.js"
-export type {
-    GuildSystemChannelFlag,
-    GuildDefaultMessageNotification,
-    GuildVerificationLevel,
-    GuildMfaLevel,
-    GuildNsfwLevel,
-    GuildExplicitContentFilter,
-    GuildContentWarningLevel,
-    GuildSplashCardAlignment,
-    GuildFeatureToggle,
-} from "./guilds.js"
-export type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
-export type {
-    GuildEmoji,
-    GuildSticker,
-    ExpressionReference,
-    ExpressionMetadata,
-    ExpressionSourceGuild,
-    EmojiCreate,
-    EmojiEdit,
-    StickerCreate,
-    StickerEdit,
-    ExpressionBatch,
-    ExpressionDeleteOptions,
-} from "./expressions.js"
-export { PresenceError } from "./presence.js"
-export type {
-    PresenceInput,
-    PresenceStatus,
-    CustomStatusInput,
-    CustomStatusEmoji,
-    PresenceFailure,
-} from "./presence.js"
-export type { MemberProfileEdit, MemberMentionPreference } from "./guilds.js"
-export { GuildMemberProfileFlags, MemberMentionPreferences } from "./guilds.js"
-export { UserOperationError } from "./users.js"
-export type {
-    User,
-    ProfileBadge,
-    UserProfile,
-    UserProfileFields,
-    UserProfileQuery,
-    DirectMessageChannel,
-    DirectMessageGroupEdit,
-    DirectMessageLatestMessages,
-    DirectMessageRecipientChange,
-    UserOperation,
-    UserOperationFailure,
-} from "./users.js"
-export { WebhookOperationError, WebhookType } from "./webhooks.js"
-export type {
-    Webhook,
-    WebhookBase,
-    IncomingWebhook,
-    ChannelFollowerWebhook,
-    UnknownWebhook,
-    WebhookSourceGuild,
-    WebhookSourceChannel,
-    WebhookCredentials,
-    CreatedWebhook,
-    WebhookCreate,
-    WebhookEdit,
-    WebhookTokenEdit,
-    WebhookMessageInput,
-    WebhookMessageReference,
-    WebhookReplyReference,
-    WebhookForwardReference,
-    WebhookMessageEdit,
-    WebhookClientOptions,
-    WebhookOperation,
-    WebhookOperationFailure,
-} from "./webhooks.js"
+    BotCommandCallbackServices,
+    BotCommandEntries,
+    BotCommandsOptions,
+    BotEventContext,
+    BotEventHandler,
+    BotEventOptions,
+    BotEventServices,
+    BotEvents,
+    BotOptions,
+    HandlerServices,
+} from "./api/effect/bot.js"
 export { CriticalWorkerStoppedError } from "./bot-runner.js"
 export type { RunBotOptions } from "./bot-runner.js"
-export { OAuthOperationError, OAuthScopes } from "./oauth.js"
+export { createClient } from "./api/effect/client.js"
+export type { Client, ClientOptions, ScheduledTask } from "./api/effect/client.js"
+export { FluxerClient } from "./api/effect/service.js"
+export type { FluxerClientConfigOptions } from "./api/effect/service.js"
 export type {
-    OAuthAuthorizationInput,
-    OAuthActiveIntrospection,
-    OAuthAuthorization,
-    OAuthConnection,
-    OAuthCodeExchangeInput,
-    OAuthConfig,
-    OAuthIdentity,
-    OAuthInactiveIntrospection,
-    OAuthIntrospection,
-    OAuthOperation,
-    OAuthOperationFailure,
-    OAuthPkce,
-    OAuthScope,
-    OAuthTokens,
-} from "./oauth.js"
+    AuditedRequestOptions,
+    CacheDiagnostic,
+    CacheEntriesOptions,
+    CachedResources,
+    CacheKind,
+    ClientDiagnostics,
+    ConnectionRecoveryOptions,
+    ConnectionState,
+    GatewayOptions,
+    OperationSignal,
+    RequestOptions,
+    RestRateLimitHold,
+    ScheduleOptions,
+    ShutdownOptions,
+} from "./client.js"
+export { createWebhookClient } from "./api/effect/webhook-client.js"
+export type { WebhookClient } from "./api/effect/webhook-client.js"
+export { oauth } from "./api/effect/oauth.js"
+export type { OAuthClient } from "./api/effect/oauth.js"
+
+// ---------------------------------------------------------------------------
+// Commands, guards and builders
+// ---------------------------------------------------------------------------
+export { commands } from "./api/effect/commands.js"
+export { guards } from "./api/effect/guards.js"
+export type { Guards } from "./api/effect/guards.js"
 export { builders, EmbedBuilder, MessageBuilder } from "./builders.js"
 export type { EmbedFieldOptions, MissingMessageBody } from "./builders.js"
 export type {
@@ -269,6 +130,7 @@ export type {
     CommandArgumentCustom,
     CommandArgumentValues,
     CommandArgumentValue,
+    CommandArgumentOptionalValue,
     CommandArgumentParseOptions,
     CommandArgumentRejectionReason,
 } from "./command-arguments.js"
@@ -294,9 +156,14 @@ export type {
     PrefixCommandUnmatched,
 } from "./commands.js"
 export type {
+    BatchRequirements,
+    CommandRequirements,
+    Commands,
     CooldownStore,
+    EffectRequirements,
     MemoryCooldownStore,
     PrefixCommand,
+    PrefixCommandBatch,
     PrefixCommandContext,
     PrefixCommandExecutionContext,
     PrefixCommandCooldown,
@@ -307,36 +174,195 @@ export type {
     PrefixCommandRejectionFeedback,
     PrefixCommandRouter,
 } from "./native-commands.js"
-export { SupervisorChildError, SupervisorError } from "./supervisor.js"
+
+// ---------------------------------------------------------------------------
+// Errors, logging and observability
+// ---------------------------------------------------------------------------
+export { describeError, errors } from "./error-tools.js"
+export type { DescribeErrorOptions, ErrorMatchHandlers, ErrorTools, NotFoundResource } from "./error-tools.js"
+export {
+    ApplicationError,
+    AuthenticationError,
+    ShardConnectionError,
+    ClientBusyError,
+    ClientClosedError,
+    ConfigurationError,
+    ConnectionError,
+    ConnectionTimeoutError,
+    FluxerlyError,
+    RateLimitError,
+} from "./errors.js"
 export type {
-    SupervisorAssignment,
-    SupervisorAssignmentOptions,
-    SupervisorChildDiagnostics,
-    SupervisorChildSharding,
-    SupervisorChildState,
-    SupervisorChildStatus,
-    SupervisorFileUrl,
-    SupervisorIdentifyOptions,
-    SupervisorOptions,
-    SupervisorRestartOptions,
-    SupervisorState,
-    SupervisorStatus,
-    SupervisorWaitOptions,
-} from "./supervisor.js"
+    ConnectError,
+    ConnectionFailure,
+    FluxerlyErrorJson,
+    FluxerlyErrorOptions,
+    Operation,
+    OperationErrorOptions,
+    OperationOutcome,
+    OperationReason,
+} from "./errors.js"
 export type {
-    Supervisor,
-    SupervisorChildContext,
-    SupervisorChildOptions,
-    SupervisorTools,
-} from "./native-supervisor.js"
-export { PaginationError } from "./pagination.js"
+    ApiErrorCode,
+    ApiErrorDetail,
+    ApiProviderCode,
+    ApiValidationCode,
+    ApiValidationErrorDetail,
+} from "./api-errors.js"
+export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
+export type { FailureReport } from "./api/effect/failures.js"
+export type { FailureKind, FailureMessageReference } from "./failures.js"
+export type { ClientLogging } from "./api/effect/logging.js"
 export type {
-    PaginationQuery,
-    HistoryIterationQuery,
-    UserIterationQuery,
-    PinIterationQuery,
-    PaginationOperation,
-} from "./pagination.js"
+    ClientCounters,
+    ErrorInfo,
+    LogCategory,
+    LogLevel,
+    LoggingOptions,
+    LogLevelSettings,
+    LogRecord,
+    LogSink,
+    LogThreshold,
+} from "./logging.js"
+export type {
+    HandlerObservation,
+    Observation,
+    Observer,
+    RateLimitObservation,
+    ReconnectObservation,
+    RestObservation,
+    ResumeObservation,
+} from "./observer.js"
+
+// ---------------------------------------------------------------------------
+// Events, gateway and raw REST
+// ---------------------------------------------------------------------------
+export type { EventHandlerOptions, EventMiddleware, MiddlewareRegistration, Subscription } from "./api/effect/events.js"
+export type {
+    EventBufferOptions,
+    HandlerOptions,
+    EventMap,
+    EventName,
+    EventWaitOptions,
+    EventContext,
+    EventInvocation,
+    EventInvocationOf,
+    PreviousSnapshot,
+    PreviousSnapshots,
+    RawDispatch,
+    RawDispatchEvent,
+    DocumentedRawDispatch,
+    UndocumentedRawDispatch,
+    GatewayErrorEvent,
+    TypingStart,
+    PresenceUpdate,
+    ObservedPresenceStatus,
+    ObservedCustomStatus,
+    ObservedCustomStatusEmoji,
+    PresenceUpdateBulk,
+    VoiceState,
+    VoiceStateSnapshot,
+    CallCreate,
+    CallDelete,
+    CallUpdate,
+    CallVoiceState,
+    EntranceSoundPlay,
+    GuildCreate,
+    GuildHealthUpdate,
+    GuildEmojisUpdate,
+    GuildStickersUpdate,
+    GuildLifecycleEvents,
+    WebhooksUpdate,
+    InviteDeleteEvent,
+    GuildAuditLogEntryCreate,
+    ThreadCreateEvent,
+    ThreadDeletion,
+    ThreadListSync,
+    ThreadMembersUpdate,
+} from "./events.js"
+export type { GatewayDispatchPayloads, GatewayErrorData, GatewayPayloadObjects } from "./gateway-payloads.js"
+export type { GatewayCommands } from "./api/effect/gateway.js"
+export { GatewaySendError } from "./gateway.js"
+export type { GatewaySendFailure } from "./gateway.js"
+export type { RestRequests } from "./api/effect/rest.js"
+export { RestRequestError } from "./rest.js"
+export type { RestRoutes } from "./rest-routes.js"
+export type {
+    RestCallArguments,
+    RestCallInput,
+    RestOperation,
+    RestOptions,
+    RestRequest,
+    RestRequestFailure,
+    RestResponse,
+    RestRoute,
+    RestRouteInput,
+    RestRouteOptions,
+    RestRouteResponse,
+    TransportOptions,
+    WebSocketLike,
+    WebSocketOptions,
+} from "./rest.js"
+
+// ---------------------------------------------------------------------------
+// Messages, embeds, attachments, reactions, pins and collectors
+// ---------------------------------------------------------------------------
+export type { Messages } from "./api/effect/messages.js"
+export { MessageFlags, MessageType } from "./messages.js"
+export type {
+    Message,
+    MessageBody,
+    MessageContent,
+    MessageCore,
+    MessageField,
+    MessageFields,
+    SelectedMessage,
+    ForwardMessageInput,
+    MessageSnapshot,
+    MessageFlag,
+    MessageSticker,
+    MessageUser,
+    ReferencedMessage,
+    MessageChannelMention,
+    MessageReactionEmoji,
+    MessageReactionSummary,
+    MessageContextReference,
+    CrosspostSource,
+    CrosspostSourceGuild,
+    MessageHistoryQuery,
+    MessageDeletion,
+    MessageBulkDeletion,
+    MessageReference,
+    MessageInput,
+    MessageNonce,
+    ReplyInput,
+    AllowedMentions,
+    EditMessageInput,
+    EditMessageOptions,
+    OwnMessageDeletionOptions,
+} from "./messages.js"
+export {
+    EventOverflowError,
+    EventReadBusyError,
+    EventWaitError,
+    MessageError,
+    MessageOperationError,
+} from "./message-errors.js"
+export type { EventReadError, EventWaitFailure, SendError, MessageOperationFailure } from "./message-errors.js"
+export { MessageCleanupError } from "./message-cleanup.js"
+export type {
+    MessageCleanupBatch,
+    MessageCleanupErrorReason,
+    MessageCleanupFailure,
+    MessageCleanupFailureMetadata,
+    MessageCleanupOptions,
+    MessageCleanupOutcome,
+    MessageCleanupPlan,
+    MessageCleanupProgress,
+    MessageCleanupReport,
+    MessageCleanupSelection,
+    MessageCleanupStopReason,
+} from "./message-cleanup.js"
 export type {
     EmbedInput,
     EmbedAuthorInput,
@@ -351,7 +377,7 @@ export type {
     EmbedMedia,
     EmbedField,
 } from "./embeds.js"
-export type { MessageBody } from "./messages.js"
+export type { Attachments } from "./api/effect/attachments.js"
 export { AttachmentDownloadError, AttachmentRefreshError } from "./attachments.js"
 export type {
     Attachment,
@@ -382,27 +408,37 @@ export type {
     MessageReactionBatch,
     MessageReactionEmojiRemoval,
 } from "./reactions.js"
+export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
 export type {
-    ClientCounters,
-    ErrorInfo,
-    LogCategory,
-    LogLevel,
-    LoggingOptions,
-    LogLevelSettings,
-    LogRecord,
-    LogSink,
-    LogThreshold,
-} from "./logging.js"
+    Collector,
+    CollectorOptions,
+    ReactionCollector,
+    ReactionCollectorOptions,
+} from "./api/effect/collectors.js"
+export { CollectorError } from "./collectors.js"
+export type { CollectorResult, CollectorFailure, ReactionCollectorResult } from "./collectors.js"
 export type {
-    HandlerObservation,
-    Observation,
-    Observer,
-    RateLimitObservation,
-    ReconnectObservation,
-    RestObservation,
-    ResumeObservation,
-} from "./observer.js"
-export { ChannelOperationError, ChannelType } from "./channels.js"
+    ChannelPaginateOptions,
+    PageInput,
+    PageTurners,
+    PaginateFailure,
+    PaginateOptions,
+    PaginateResult,
+} from "./reaction-pages.js"
+
+// ---------------------------------------------------------------------------
+// Channels, threads, forums and counts
+// ---------------------------------------------------------------------------
+export type { Channels } from "./api/effect/channels.js"
+export {
+    ChannelFlags,
+    ChannelOperationError,
+    ChannelType,
+    ForumLayout,
+    ForumSortOrder,
+    ThreadAutoArchiveMinutes,
+    isThreadChannel,
+} from "./channels.js"
 export type {
     PermissionOverwrite,
     GuildChannel,
@@ -429,9 +465,6 @@ export type {
     GuildChannelUpdateBulk,
     ChannelOperation,
     ChannelOperationFailure,
-} from "./channels.js"
-export { ChannelFlags, ForumLayout, ForumSortOrder, ThreadAutoArchiveMinutes, isThreadChannel } from "./channels.js"
-export type {
     GuildThreadChannelBase,
     GuildAnnouncementThreadChannel,
     GuildPublicThreadChannel,
@@ -444,8 +477,13 @@ export type {
     GuildMediaChannel,
     ForumTag,
     ForumDefaultReaction,
+    ThreadParentDefaults,
+    ForumTagInput,
+    ForumDefaultReactionInput,
+    ForumChannelCreateBase,
+    ForumChannelCreate,
+    MediaChannelCreate,
 } from "./channels.js"
-// Threads: The client.threads namespace with its inputs, results and options
 export type { Threads } from "./api/effect/threads.js"
 export type {
     ThreadCreate,
@@ -467,23 +505,55 @@ export type {
     ThreadMemberPageQuery,
     ThreadMemberIterationQuery,
 } from "./threads.js"
-// Forum channels and webhook threads: Forum channel and tag inputs and webhook thread options
+export { CountOperationError } from "./counts.js"
 export type {
-    ThreadParentDefaults,
-    ForumTagInput,
-    ForumDefaultReactionInput,
-    ForumChannelCreateBase,
-    ForumChannelCreate,
-    MediaChannelCreate,
-} from "./channels.js"
-export type { WebhookForumPostOptions, WebhookMessageOperationOptions } from "./webhooks.js"
-// Thread events: Payloads of the thread gateway events
-export type { ThreadCreateEvent, ThreadDeletion, ThreadListSync, ThreadMembersUpdate } from "./events.js"
-// Thread permissions: Permission inputs for threads
-export { GuildOperationError, Permissions } from "./guilds.js"
+    CountOperation,
+    CountOperationFailure,
+    GuildCount,
+    GuildCountsResult,
+    ChannelMemberCount,
+    ChannelMemberCountsResult,
+} from "./counts.js"
+
+// ---------------------------------------------------------------------------
+// Communities (guilds), roles, members, permissions, expressions and moderation
+// ---------------------------------------------------------------------------
+export type { Guilds } from "./api/effect/guilds.js"
+export type { Members } from "./api/effect/members.js"
+export type { Roles } from "./api/effect/roles.js"
+export type { PermissionHelpers } from "./api/effect/permissions.js"
+export {
+    GuildOperationError,
+    Permissions,
+    GuildSystemChannelFlags,
+    GuildDefaultMessageNotifications,
+    GuildVerificationLevels,
+    GuildMfaLevels,
+    GuildNsfwLevels,
+    GuildExplicitContentFilters,
+    GuildContentWarningLevels,
+    GuildSplashCardAlignments,
+    GuildFeatureToggles,
+    GuildMemberProfileFlags,
+    MemberMentionPreferences,
+} from "./guilds.js"
 export type {
     Guild,
     GuildDeletion,
+    GuildEdit,
+    GuildListQuery,
+    GuildListSummary,
+    GuildVanityUrl,
+    GuildVanityUrlUsage,
+    GuildSystemChannelFlag,
+    GuildDefaultMessageNotification,
+    GuildVerificationLevel,
+    GuildMfaLevel,
+    GuildNsfwLevel,
+    GuildExplicitContentFilter,
+    GuildContentWarningLevel,
+    GuildSplashCardAlignment,
+    GuildFeatureToggle,
     GuildRole,
     GuildRoleUpdateBulk,
     RoleReference,
@@ -494,17 +564,161 @@ export type {
     GuildMember,
     DeletedMessageMember,
     MemberReference,
+    MemberProfileEdit,
+    MemberMentionPreference,
     VoiceConnectionReference,
     VoiceMuteInput,
     VoiceDeafenInput,
     MemberQuery,
+    BanInput,
+    GuildBan,
+    CanManageOptions,
+    TimeoutOptions,
+    TimeoutStateOptions,
+    MemberTimeoutState,
     GuildOperation,
     GuildOperationFailure,
-    CanManageOptions,
 } from "./guilds.js"
-export type { BanInput, GuildBan, MemberTimeoutState, TimeoutOptions, TimeoutStateOptions } from "./guilds.js"
-export type { MessageCacheOptions, MessageCacheSettings } from "./cache.js"
-export type { ResourceCacheSettings } from "./cache.js"
+export type { ChannelPermissions, PermissionFetchOptions, PermissionInput, PermissionTarget } from "./permissions.js"
+export { hierarchy } from "./api/effect/hierarchy.js"
+export type { HierarchyHelpers, RoleHierarchyInput, RoleManagementInput } from "./role-hierarchy.js"
+export { MemberChunkError } from "./member-chunks.js"
+export type { MemberChunk, MemberChunkQuery, MemberChunkFailure, MemberChunkOptions } from "./member-chunks.js"
+export { GuildMemberJoinSourceTypes } from "./member-search.js"
+export type {
+    GuildMemberJoinSourceType,
+    MemberSearchQuery,
+    MemberSearchPage,
+    MemberSearchHit,
+    MemberSearchIterationLimits,
+} from "./member-search.js"
+export type {
+    MessageSearchAuthorType,
+    MessageSearchChannel,
+    MessageSearchContentType,
+    MessageSearchContext,
+    MessageSearchEmbedType,
+    MessageSearchIndexingPage,
+    MessageSearchIterationLimits,
+    MessageSearchPage,
+    MessageSearchQuery,
+    MessageSearchResultsPage,
+} from "./message-search.js"
+export type { Emojis } from "./api/effect/emojis.js"
+export type { Stickers } from "./api/effect/stickers.js"
+export type {
+    GuildEmoji,
+    GuildSticker,
+    ExpressionReference,
+    ExpressionMetadata,
+    ExpressionSourceGuild,
+    EmojiCreate,
+    EmojiEdit,
+    StickerCreate,
+    StickerEdit,
+    ExpressionBatch,
+    ExpressionDeleteOptions,
+} from "./expressions.js"
+export type { Invites } from "./api/effect/invites.js"
+export type { Invite, InviteCreate, InviteMetadata } from "./invites.js"
+export type { Discovery } from "./api/effect/discovery.js"
+export { DiscoveryCategories } from "./discovery.js"
+export type {
+    DiscoveryApplication,
+    DiscoveryApplicationInput,
+    DiscoveryApplicationEdit,
+    DiscoveryCategory,
+    DiscoveryCategoryCount,
+    DiscoveryGuild,
+    DiscoverySearchPage,
+    DiscoverySearchQuery,
+    DiscoveryStatus,
+} from "./discovery.js"
+export type { AuditLogs } from "./api/effect/audit-logs.js"
+export { AuditLogActions } from "./audit-logs.js"
+export type {
+    AuditLogActionType,
+    AuditLogEntry,
+    AuditLogFilter,
+    AuditLogIterationQuery,
+    AuditLogIterationQueryBase,
+    AuditLogPage,
+    AuditLogPermissionsDiff,
+    AuditLogQuery,
+    AuditLogQueryBase,
+    AuditLogChangeValue,
+    AuditLogChange,
+    AuditLogOptions,
+    AuditLogWebhook,
+} from "./audit-logs.js"
+
+// ---------------------------------------------------------------------------
+// Webhooks, OAuth, users, direct messages, application, instance and presence
+// ---------------------------------------------------------------------------
+export type { Webhooks } from "./api/effect/webhooks.js"
+export { WebhookOperationError, WebhookType } from "./webhooks.js"
+export type {
+    Webhook,
+    WebhookBase,
+    IncomingWebhook,
+    ChannelFollowerWebhook,
+    UnknownWebhook,
+    WebhookSourceGuild,
+    WebhookSourceChannel,
+    WebhookCredentials,
+    CreatedWebhook,
+    WebhookCreate,
+    WebhookEdit,
+    WebhookTokenEdit,
+    WebhookMessageInput,
+    WebhookMessageOperationOptions,
+    WebhookMessageOptions,
+    WebhookMessageReference,
+    WebhookReplyReference,
+    WebhookForwardReference,
+    WebhookMessageEdit,
+    WebhookForumPostOptions,
+    WebhookClientOptions,
+    WebhookOperation,
+    WebhookOperationFailure,
+} from "./webhooks.js"
+export { OAuthOperationError, OAuthScopes } from "./oauth.js"
+export type {
+    OAuthAuthorizationInput,
+    OAuthActiveIntrospection,
+    OAuthAuthorization,
+    OAuthConnection,
+    OAuthCodeExchangeInput,
+    OAuthConfig,
+    OAuthIdentity,
+    OAuthInactiveIntrospection,
+    OAuthIntrospection,
+    OAuthOperation,
+    OAuthOperationFailure,
+    OAuthPkce,
+    OAuthScope,
+    OAuthTokens,
+} from "./oauth.js"
+export type { Users } from "./api/effect/users.js"
+export type { DirectMessages } from "./api/effect/direct-messages.js"
+export { UserOperationError } from "./users.js"
+export type {
+    User,
+    ProfileBadge,
+    UserProfile,
+    UserProfileFields,
+    UserProfileQuery,
+    DirectMessageChannel,
+    DirectMessageGroupEdit,
+    DirectMessageLatestMessages,
+    DirectMessageRecipientChange,
+    UserOperation,
+    UserOperationFailure,
+} from "./users.js"
+export type { CurrentBotApplication } from "./api/effect/application.js"
+export { BotApplicationOperationError } from "./application.js"
+export type { BotApplication, BotApplicationOperation, BotApplicationOperationFailure } from "./application.js"
+export type { Instance, ResolvedInstance } from "./api/effect/instance.js"
 export type {
     InstanceBadge,
     InstanceBadgeLookup,
@@ -516,227 +730,20 @@ export type {
     InstanceOptions,
     InstanceResolveError,
 } from "./instance.js"
-export type { MessagePinsQuery, MessagePinsPage, MessagePin, ChannelPinsUpdate } from "./pins.js"
-export type { ReactionCollectorResult } from "./collectors.js"
-export { CollectorError } from "./collectors.js"
-export type { CollectorResult, CollectorFailure } from "./collectors.js"
-export type {
-    PageInput,
-    PageTurners,
-    PaginateOptions,
-    ChannelPaginateOptions,
-    PaginateResult,
-    PaginateFailure,
-} from "./reaction-pages.js"
-export type { FailureKind, FailureMessageReference } from "./failures.js"
-export { EventOverflowError, EventReadBusyError, MessageError, MessageOperationError } from "./message-errors.js"
-export { EventWaitError } from "./message-errors.js"
-export type { EventWaitFailure } from "./message-errors.js"
-export type { EventWaitOptions } from "./events.js"
-export type {
-    ApiErrorCode,
-    ApiErrorDetail,
-    ApiProviderCode,
-    ApiValidationCode,
-    ApiValidationErrorDetail,
-} from "./api-errors.js"
-export type { InputValidationConstraint, InputValidationDetail } from "./input-validation.js"
-export { MessageCleanupError } from "./message-cleanup.js"
-export { MessageFlags, MessageType } from "./messages.js"
-export type { EventReadError, SendError, MessageOperationFailure } from "./message-errors.js"
-export type {
-    MessageCleanupBatch,
-    MessageCleanupErrorReason,
-    MessageCleanupFailure,
-    MessageCleanupFailureMetadata,
-    MessageCleanupOptions,
-    MessageCleanupOutcome,
-    MessageCleanupPlan,
-    MessageCleanupProgress,
-    MessageCleanupReport,
-    MessageCleanupSelection,
-    MessageCleanupStopReason,
-} from "./message-cleanup.js"
-export type {
-    Message,
-    MessageCore,
-    MessageField,
-    MessageFields,
-    SelectedMessage,
-    ForwardMessageInput,
-    MessageSnapshot,
-    MessageFlag,
-    MessageSticker,
-    MessageUser,
-    ReferencedMessage,
-    MessageChannelMention,
-    MessageReactionEmoji,
-    MessageReactionSummary,
-    MessageContextReference,
-    CrosspostSource,
-    CrosspostSourceGuild,
-    MessageHistoryQuery,
-    MessageDeletion,
-    MessageBulkDeletion,
-    MessageReference,
-    MessageInput,
-    MessageNonce,
-    ReplyInput,
-    AllowedMentions,
-    EditMessageInput,
-    OwnMessageDeletionOptions,
-} from "./messages.js"
-export type {
-    EventBufferOptions,
-    HandlerOptions,
-    EventMap,
-    EventName,
-    RawDispatch,
-    RawDispatchEvent,
-    DocumentedRawDispatch,
-    UndocumentedRawDispatch,
-    GatewayErrorEvent,
-    TypingStart,
-    PresenceUpdate,
-    ObservedPresenceStatus,
-    ObservedCustomStatus,
-    ObservedCustomStatusEmoji,
-    PresenceUpdateBulk,
-    VoiceState,
-    VoiceStateSnapshot,
-} from "./events.js"
-export type { GatewayDispatchPayloads, GatewayErrorData, GatewayPayloadObjects } from "./gateway-payloads.js"
-export type {
-    CacheDiagnostic,
-    CacheEntriesOptions,
-    CachedResources,
-    CacheKind,
-    ClientDiagnostics,
-    RestRateLimitHold,
-    ConnectionRecoveryOptions,
-    ConnectionState,
-    OperationSignal,
-    RequestOptions,
-    AuditedRequestOptions,
-    ScheduleOptions,
-    ShutdownOptions,
-} from "./client.js"
-export {
-    ApplicationError,
-    AuthenticationError,
-    ShardConnectionError,
-    ClientBusyError,
-    ClientClosedError,
-    ConfigurationError,
-    ConnectionError,
-    ConnectionTimeoutError,
-    FluxerlyError,
-    RateLimitError,
-} from "./errors.js"
-export type {
-    ConnectError,
-    ConnectionFailure,
-    FluxerlyErrorJson,
-    FluxerlyErrorOptions,
-    OperationErrorOptions,
-    OperationOutcome,
-    OperationReason,
-} from "./errors.js"
-export { describeError, errors } from "./error-tools.js"
-export type { DescribeErrorOptions, ErrorTools, NotFoundResource } from "./error-tools.js"
-export type { ShardingOptions, ShardRecoveryDiagnostic, ShardState } from "./sharding.js"
-export type {
-    CallCreate,
-    CallDelete,
-    CallUpdate,
-    CallVoiceState,
-    EntranceSoundPlay,
-    EventContext,
-    EventInvocation,
-    EventInvocationOf,
-    PreviousSnapshot,
-    PreviousSnapshots,
-} from "./events.js"
-export type { CacheChange, CacheObserverOptions } from "./cache.js"
-export type { IdentifyCoordinator, SessionSnapshot, SessionStore } from "./sharding.js"
-export { fileSessionStore } from "./sharding.js"
-export type { GatewayOptions } from "./client.js"
-export type { EventMiddleware, MiddlewareRegistration } from "./api/effect/events.js"
-export type { CacheObserver } from "./api/effect/cache.js"
-export { FluxerClient } from "./api/effect/service.js"
-export type { FluxerClientConfigOptions } from "./api/effect/service.js"
-export { format, snowflakes, display, permissionBits, colors, text, links, assets } from "./api/effect/helpers.js"
-export type { ResolvedInstance, Instance } from "./api/effect/instance.js"
-export { oauth } from "./api/effect/oauth.js"
-export type { OAuthClient } from "./api/effect/oauth.js"
-export { commands } from "./api/effect/commands.js"
-export { supervisor } from "./api/effect/supervisor.js"
-export { hierarchy } from "./api/effect/hierarchy.js"
-export { createClient } from "./api/effect/client.js"
-export type { ClientOptions, Client, ScheduledTask } from "./api/effect/client.js"
-export type {
-    ReactionCollectorOptions,
-    CollectorOptions,
-    Collector,
-    ReactionCollector,
-} from "./api/effect/collectors.js"
-export type { FailureReport } from "./api/effect/failures.js"
-export type { Subscription, EventHandlerOptions } from "./api/effect/events.js"
-export type { Attachments } from "./api/effect/attachments.js"
-export type { Messages } from "./api/effect/messages.js"
-export type { AuditLogs } from "./api/effect/audit-logs.js"
-export type { Invites } from "./api/effect/invites.js"
-export type { Emojis } from "./api/effect/emojis.js"
-export type { Stickers } from "./api/effect/stickers.js"
-export type { Discovery } from "./api/effect/discovery.js"
-export type { Guilds } from "./api/effect/guilds.js"
-export type { Channels } from "./api/effect/channels.js"
-export type { Members } from "./api/effect/members.js"
-export type { PermissionHelpers } from "./api/effect/permissions.js"
-export type { Roles } from "./api/effect/roles.js"
-export type { Webhooks } from "./api/effect/webhooks.js"
-export { createWebhookClient } from "./api/effect/webhook-client.js"
-export type { WebhookClient } from "./api/effect/webhook-client.js"
-export type { ClientCache } from "./api/effect/cache.js"
-export type { RestRequests } from "./api/effect/rest.js"
-export type { GatewayCommands } from "./api/effect/gateway.js"
-export type { ClientLogging } from "./api/effect/logging.js"
-export { RestRequestError } from "./rest.js"
-export type { RestRoutes } from "./rest-routes.js"
-export type {
-    RestCallArguments,
-    RestCallInput,
-    RestOperation,
-    RestOptions,
-    RestRequest,
-    RestRequestFailure,
-    RestResponse,
-    RestRoute,
-    RestRouteInput,
-    RestRouteOptions,
-    RestRouteResponse,
-    TransportOptions,
-    WebSocketLike,
-    WebSocketOptions,
-} from "./rest.js"
-export { GatewaySendError } from "./gateway.js"
-export type { GatewaySendFailure } from "./gateway.js"
 export type { Presence } from "./api/effect/presence.js"
-export type { CurrentBotApplication } from "./api/effect/application.js"
-export type { Users } from "./api/effect/users.js"
-export type { DirectMessages } from "./api/effect/direct-messages.js"
-export { defineBot, runBot } from "./api/effect/bot.js"
+export { PresenceError } from "./presence.js"
 export type {
-    BotCommandEntries,
-    BotCommandsOptions,
-    BotEventContext,
-    BotEventHandler,
-    BotEventOptions,
-    BotEvents,
-    BotOptions,
-} from "./api/effect/bot.js"
-export { guards } from "./api/effect/guards.js"
-export type { Guards } from "./api/effect/guards.js"
+    PresenceInput,
+    PresenceStatus,
+    CustomStatusInput,
+    CustomStatusEmoji,
+    PresenceFailure,
+} from "./presence.js"
+
+// ---------------------------------------------------------------------------
+// Pure helpers: Formatting, snowflakes, permissions, colors, text, links and assets
+// ---------------------------------------------------------------------------
+export { format, snowflakes, display, permissionBits, colors, text, links, assets } from "./api/effect/helpers.js"
 export type {
     AssetHelpers,
     ColorHelpers,
@@ -746,18 +753,75 @@ export type {
     SnowflakeHelpers,
     TextHelpers,
 } from "./api/effect/helpers.js"
-export type { DisplayHelpers } from "./helpers.js"
-export type { AuditLogFilter, AuditLogIterationQueryBase, AuditLogQueryBase } from "./audit-logs.js"
-export type { CommandArgumentOptionalValue } from "./command-arguments.js"
-export type { EditMessageOptions, MessageContent } from "./messages.js"
-export type { WebhookMessageOptions } from "./webhooks.js"
-export type { ErrorMatchHandlers } from "./error-tools.js"
+export { HelperError, TimestampStyles } from "./helpers.js"
 export type {
-    BatchRequirements,
-    CommandRequirements,
-    Commands,
-    EffectRequirements,
-    PrefixCommandBatch,
-} from "./native-commands.js"
-export type { BotCommandCallbackServices, BotEventServices, HandlerServices } from "./api/effect/bot.js"
-export type { Operation } from "./errors.js"
+    ChannelLinkTarget,
+    CustomEmojiMarkup,
+    DisplayHelpers,
+    InstallationLinkOptions,
+    Mention,
+    PermissionBitInspection,
+    PermissionName,
+    OverwritePatch,
+    TimestampMarkup,
+    TimestampStyle,
+} from "./helpers.js"
+export { AssetFormats, AssetUrlError } from "./assets.js"
+export type { AssetFormat, AssetUrlOptions, StickerAssetUrlOptions } from "./assets.js"
+export type { ColorInput, RgbColor } from "./colors.js"
+export type { TextSplitOptions, TextTruncateOptions } from "./text.js"
+export { voiceWaveform } from "./voice-notes.js"
+export type { VoiceWaveform, VoiceWaveformOptions } from "./voice-notes.js"
+
+// ---------------------------------------------------------------------------
+// Sharding, supervisor, caching and pagination
+// ---------------------------------------------------------------------------
+export { fileSessionStore } from "./sharding.js"
+export type {
+    IdentifyCoordinator,
+    SessionSnapshot,
+    SessionStore,
+    ShardingOptions,
+    ShardRecoveryDiagnostic,
+    ShardState,
+} from "./sharding.js"
+export { supervisor } from "./api/effect/supervisor.js"
+export { SupervisorChildError, SupervisorError } from "./supervisor.js"
+export type {
+    SupervisorAssignment,
+    SupervisorAssignmentOptions,
+    SupervisorChildDiagnostics,
+    SupervisorChildSharding,
+    SupervisorChildState,
+    SupervisorChildStatus,
+    SupervisorFileUrl,
+    SupervisorIdentifyOptions,
+    SupervisorOptions,
+    SupervisorRestartOptions,
+    SupervisorState,
+    SupervisorStatus,
+    SupervisorWaitOptions,
+} from "./supervisor.js"
+export type {
+    Supervisor,
+    SupervisorChildContext,
+    SupervisorChildOptions,
+    SupervisorTools,
+} from "./native-supervisor.js"
+export type { CacheObserver, ClientCache } from "./api/effect/cache.js"
+export type {
+    CacheChange,
+    CacheObserverOptions,
+    MessageCacheOptions,
+    MessageCacheSettings,
+    ResourceCacheSettings,
+} from "./cache.js"
+export { PaginationError } from "./pagination.js"
+export type {
+    GuildIterationQuery,
+    HistoryIterationQuery,
+    PaginationOperation,
+    PaginationQuery,
+    PinIterationQuery,
+    UserIterationQuery,
+} from "./pagination.js"

@@ -80,7 +80,7 @@ function memberSelection(
     limitInput: unknown,
 ): MemberSelection | InputValidationFailure {
     if (all !== undefined && all !== true)
-        return inputValidationFailure("query.all", "allowedValue", "Must be true when supplied")
+        return inputValidationFailure("query.all", "allowedValue", "The query.all option must be true when supplied")
     if (all === true) {
         if (userIdsInput !== undefined || text !== undefined || limitInput !== undefined)
             return inputValidationFailure("query", "relationship", "Use all or one explicit selection, not both")
@@ -90,11 +90,19 @@ function memberSelection(
         if (text !== undefined || limitInput !== undefined)
             return inputValidationFailure("query", "relationship", "Use userIds or a text query, not both")
         if (!Array.isArray(userIdsInput))
-            return inputValidationFailure("query.userIds", "type", "Must be an array of canonical user IDs")
+            return inputValidationFailure(
+                "query.userIds",
+                "type",
+                "The query.userIds list must be an array of canonical user IDs",
+            )
         // Copy once and validate the copy, so the validated IDs are the ones requested
         const copied = snapshotArray(userIdsInput, 100)
         if (copied === undefined || copied.length < 1)
-            return inputValidationFailure("query.userIds", "length", "Must contain from 1 through 100 user IDs")
+            return inputValidationFailure(
+                "query.userIds",
+                "length",
+                "The query.userIds list must contain from 1 through 100 user IDs",
+            )
         // The kept list holds the trimmed IDs, and uniqueness is checked on them
         const trimmed = copied.map(inputGatewayId)
         if (!trimmed.every((id) => id !== undefined))
@@ -105,25 +113,50 @@ function memberSelection(
             )
         const userIds = Object.freeze(trimmed)
         if (new Set(userIds).size !== userIds.length)
-            return inputValidationFailure("query.userIds", "unique", "Must not contain duplicate user IDs")
+            return inputValidationFailure(
+                "query.userIds",
+                "unique",
+                "The query.userIds list must not contain duplicate user IDs",
+            )
         return { userIds, maximumMembers: userIds.length, selection: { user_ids: userIds } }
     }
     if (text !== undefined) {
         if (typeof text !== "string")
-            return inputValidationFailure("query.query", "type", "Must be a string when supplied")
+            return inputValidationFailure("query.query", "type", "The query.query value must be a string when supplied")
         if (text.length > 4_096)
-            return inputValidationFailure("query.query", "length", "Must contain at most 4096 UTF-16 code units")
+            return inputValidationFailure(
+                "query.query",
+                "length",
+                "The query.query value must contain at most 4,096 UTF-16 code units",
+            )
         if (!text.isWellFormed())
-            return inputValidationFailure("query.query", "format", "Must be a well-formed Unicode string")
+            return inputValidationFailure(
+                "query.query",
+                "format",
+                "The query.query value must be a well-formed Unicode string",
+            )
         const limit = limitInput === undefined ? 25 : limitInput
         if (typeof limit !== "number")
-            return inputValidationFailure("query.limit", "type", "Must be an integer when supplied")
+            return inputValidationFailure(
+                "query.limit",
+                "type",
+                "The query.limit option must be an integer when supplied",
+            )
         if (!positive(limit) || limit > 100)
-            return inputValidationFailure("query.limit", "range", "Must be an integer from 1 through 100")
+            return inputValidationFailure(
+                "query.limit",
+                "range",
+                "The query.limit option must be an integer from 1 through 100",
+            )
         return { maximumMembers: limit, selection: { query: text, limit } }
     }
-    if (limitInput !== undefined) return inputValidationFailure("query", "relationship", "limit requires a text query")
-    return inputValidationFailure("query", "required", "Must select all members, user IDs, or a text query")
+    if (limitInput !== undefined)
+        return inputValidationFailure("query", "relationship", "The query.limit option requires a text query")
+    return inputValidationFailure(
+        "query",
+        "required",
+        "The query object must select all members, user IDs, or a text query",
+    )
 }
 
 /** Validate one request, reading each caller query and option field once so the validated value is the one sent */
@@ -133,9 +166,10 @@ function settings(rawGuildId: unknown, query: unknown, options: unknown): Settin
         return inputValidationFailure(
             "guildId",
             "format",
-            "Must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
+            "The guildId must be a canonical positive decimal string no greater than 9223372036854775807, because JavaScript numbers cannot hold Fluxer IDs exactly",
         )
-    if (!record(query)) return inputValidationFailure("query", "type", "Must be a member-chunk query object")
+    if (!record(query))
+        return inputValidationFailure("query", "type", "The query value must be a member-chunk query object")
     const unsupported = unsupportedKeyFailure(
         query,
         ["all", "userIds", "query", "limit", "presences"],
@@ -146,9 +180,14 @@ function settings(rawGuildId: unknown, query: unknown, options: unknown): Settin
     const field = fieldsOnce(query)
     const presencesInput = field("presences")
     if (presencesInput !== undefined && typeof presencesInput !== "boolean")
-        return inputValidationFailure("query.presences", "type", "Must be a boolean when supplied")
+        return inputValidationFailure(
+            "query.presences",
+            "type",
+            "The query.presences option must be a boolean when supplied",
+        )
     const input = options === undefined ? {} : options
-    if (!record(input)) return inputValidationFailure("options", "type", "Must be an options object when supplied")
+    if (!record(input))
+        return inputValidationFailure("options", "type", "The options value must be an options object when supplied")
     const unsupportedOption = unsupportedKeyFailure(
         input,
         ["timeoutMs", "maxPendingBytes"],
@@ -161,24 +200,28 @@ function settings(rawGuildId: unknown, query: unknown, options: unknown): Settin
     const timeoutMs = timeoutInput === undefined ? 30_000 : timeoutInput
     const maxPendingBytes = maxPendingInput === undefined ? 4_194_304 : maxPendingInput
     if (typeof timeoutMs !== "number")
-        return inputValidationFailure("options.timeoutMs", "type", "Must be an integer number of milliseconds")
+        return inputValidationFailure(
+            "options.timeoutMs",
+            "type",
+            "The options.timeoutMs setting must be an integer number of milliseconds",
+        )
     if (!positive(timeoutMs) || timeoutMs > 2_147_483_647)
         return inputValidationFailure(
             "options.timeoutMs",
             "range",
-            "Must be an integer from 1 through 2147483647 milliseconds",
+            "The options.timeoutMs setting must be an integer from 1 through 2,147,483,647 milliseconds",
         )
     if (typeof maxPendingBytes !== "number")
         return inputValidationFailure(
             "options.maxPendingBytes",
             "type",
-            "Must be a positive safe integer number of bytes",
+            "The options.maxPendingBytes setting must be a positive safe integer number of bytes",
         )
     if (!positive(maxPendingBytes))
         return inputValidationFailure(
             "options.maxPendingBytes",
             "range",
-            "Must be a positive safe integer number of bytes",
+            "The options.maxPendingBytes setting must be a positive safe integer number of bytes",
         )
     const presences = presencesInput === true
     const all = field("all")
@@ -666,7 +709,8 @@ export class MemberChunkOwner {
 /** Copy the default stream's options before opening intake, without giving native streams a signal contract */
 export function memberChunkIterationOptions(value: unknown, signal: unknown) {
     const input = value === undefined ? {} : value
-    if (!record(input)) return inputValidationFailure("options", "type", "Must be an options object when supplied")
+    if (!record(input))
+        return inputValidationFailure("options", "type", "The options value must be an options object when supplied")
     const unsupported = unsupportedKeyFailure(
         input,
         ["timeoutMs", "maxPendingBytes", "signal"],

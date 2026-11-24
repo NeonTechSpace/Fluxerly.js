@@ -167,7 +167,12 @@ export class PaginationError extends FluxerlyError {
                         ? operationFailureHint({ reason, outcome: "notDispatched", inputPath: inputValidation?.path })
                         : paginationHints[reason],
                 cause: options.cause,
-                details: operationDetails({ operation, reason }),
+                details: operationDetails({
+                    operation,
+                    reason,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
+                }),
             },
         )
         this.name = this._tag

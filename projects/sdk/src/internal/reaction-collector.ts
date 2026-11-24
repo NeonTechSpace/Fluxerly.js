@@ -108,6 +108,9 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
         return new ConfigurationError(
             "emoji",
             "Collector emoji must be Unicode, custom emoji markup or an emoji identity",
+            {
+                hint: 'Pass a Unicode emoji such as "👍", custom markup such as "<:name:123>", or an object such as { id, name }',
+            },
         )
     if (input.onReaction !== undefined && typeof input.onReaction !== "function")
         return new ConfigurationError("onReaction", 'The collector option "onReaction" must be a function')
@@ -119,7 +122,9 @@ function settings(options: unknown, defaultApi: boolean): Settings | Configurati
             typeof signal.addEventListener !== "function" ||
             typeof signal.removeEventListener !== "function")
     )
-        return new ConfigurationError("signal", "Collector signal must be an AbortSignal")
+        return new ConfigurationError("signal", "Collector signal must be an AbortSignal", {
+            hint: "Pass controller.signal from an AbortController, or AbortSignal.timeout(ms)",
+        })
     return {
         ...result,
         ...(trimmedGuildId === undefined ? {} : { guildId: trimmedGuildId }),

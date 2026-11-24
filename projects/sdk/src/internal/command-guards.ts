@@ -13,6 +13,7 @@ import type { MessageCore } from "#sdk/messages"
 import { UserOperationError } from "#sdk/users"
 import { inputId } from "./decode/primitives.js"
 import { permissionLabel } from "./permission-labels.js"
+import { suggestName } from "./suggest.js"
 
 /** Deny reasons the built-in guards return, written for a reply to the invoking user */
 export const guardDenials = Object.freeze({
@@ -53,15 +54,24 @@ export const applicationOwners = new WeakMap<object, string>()
 export function permissionNames(value: unknown): readonly PermissionName[] {
     if (!Array.isArray(value) || value.length === 0)
         throw new ConfigurationError("command", "The requirePermissions guard needs one or more permission names")
+    const knownPermissions = Object.keys(Permissions)
     for (const name of value)
-        if (typeof name !== "string" || !Object.hasOwn(Permissions, name))
+        if (typeof name !== "string" || !Object.hasOwn(Permissions, name)) {
+            const suggestion =
+                typeof name === "string" && name.length <= 64 ? suggestName(name, knownPermissions) : undefined
             throw new ConfigurationError(
                 "command",
                 typeof name === "string" && name.length <= 64
                     ? `The requirePermissions guard got an unknown permission name ${JSON.stringify(name)}`
                     : "The requirePermissions guard needs permission names as strings",
-                { hint: "Use names from Permissions, such as ManageMessages or BanMembers" },
+                {
+                    hint:
+                        suggestion === undefined
+                            ? "Use names from Permissions, such as ManageMessages or BanMembers"
+                            : `Did you mean ${JSON.stringify(suggestion)}? Use names from Permissions, such as ManageMessages or BanMembers`,
+                },
             )
+        }
     return Object.freeze([...(value as PermissionName[])])
 }
 

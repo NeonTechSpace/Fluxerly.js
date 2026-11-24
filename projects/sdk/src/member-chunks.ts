@@ -164,17 +164,26 @@ export class MemberChunkError extends FluxerlyError {
                 hint:
                     reason === "rateLimit"
                         ? retryAfterMs === null
-                            ? "Wait before requesting members again"
-                            : `Wait at least ${retryAfterMs} ms before requesting members again`
-                        : operationFailureHint({
-                              reason,
-                              outcome: reason === "input" ? "notDispatched" : "unknown",
-                              retryAfterMs,
-                              read: true,
-                              inputPath: inputValidation?.path ?? null,
-                          }),
+                            ? "Fluxer limits member requests to 12 per account every 10 seconds and limits repeated full-list requests. Wait before requesting members again"
+                            : `Fluxer limits member requests to 12 per account every 10 seconds and limits repeated full-list requests. Wait at least ${retryAfterMs} ms before requesting members again`
+                        : reason === "busy"
+                          ? "Finish or close the active member chunk stream and wait for pending gateway requests, then retry"
+                          : operationFailureHint({
+                                reason,
+                                outcome: reason === "input" ? "notDispatched" : "unknown",
+                                retryAfterMs,
+                                read: true,
+                                inputPath: inputValidation?.path ?? null,
+                            }),
                 cause: options.cause,
-                details: operationDetails({ reason, retryAfterMs }),
+                details: operationDetails({
+                    operation: "members.iterateChunks",
+                    reason,
+                    retryAfterMs,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
+                    read: true,
+                }),
             },
         )
         this.name = this._tag

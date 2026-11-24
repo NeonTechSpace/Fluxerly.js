@@ -13,7 +13,7 @@ Paths starting with `node_modules/@neontechspace/fluxerly/` point into the insta
 2. Use `runBot` for a bot, as in the starter bot. Use `createClient` only when the application needs manual control of connection and shutdown
 3. In the default API, network calls return a Result for expected failures. Check `result.isErr()` before reading `result.value`, or return the call from a handler so the SDK reports the failure. In the Effect API, execute the Effect and handle its error channel
 4. Read the bot token from the environment, such as `FLUXER_BOT_TOKEN`, and keep it out of code, logs and commits
-5. The SDK is ESM-only and needs Node.js 24.15 or newer. Use `import` in a project whose `package.json` sets `"type": "module"`
+5. The SDK is ESM-only and needs Node.js 26.13 or newer. Use `import` in a project whose `package.json` sets `"type": "module"`
 6. Use only methods declared in the installed type files, even when a familiar method name seems likely, and report a missing method instead of inventing one
 7. Test a default API bot with `createTestBot` from `@neontechspace/fluxerly/testing`, or a native Effect bot with `createTestBot` from `@neontechspace/fluxerly/effect/testing`. Neither needs a token or network
 
@@ -97,7 +97,7 @@ Paths in the map are relative to `node_modules/@neontechspace/fluxerly/`. The Ef
 - Channels, threads and forums: `dist/api/default/channels.d.ts`, `dist/api/default/threads.d.ts`, starting with `client.channels`, `client.threads`
 - Community data and settings: `dist/api/default/guilds.d.ts`, starting with `client.guilds`
 - Event names, payloads and handler context: `dist/events.d.ts`, starting with `EventMap`, `EventContext`
-- Errors and Results: `dist/errors.d.ts`, `dist/error-tools.d.ts`, starting with `errors`, `describeError`
+- Errors and Results: `dist/errors.d.ts`, `dist/api-errors.d.ts`, `dist/input-validation.d.ts`, `dist/error-tools.d.ts`, starting with `errors`, `describeError`
 - Upload, refresh, download or stream attachments: `dist/api/default/attachments.d.ts`, `dist/attachments.d.ts`, starting with `client.attachments`
 - Webhooks: `dist/api/default/webhooks.d.ts` for `client.webhooks`, and `dist/api/default/webhook-client.d.ts` for `createWebhookClient`, which sends through a webhook without a bot token
 - Community emoji and stickers: `dist/api/default/emojis.d.ts`, `dist/api/default/stickers.d.ts`, starting with `client.emojis`, `client.stickers`
@@ -106,7 +106,7 @@ Paths in the map are relative to `node_modules/@neontechspace/fluxerly/`. The Ef
 - Tests without a token or network: `dist/testing.d.ts`, starting with `createTestBot`
 
 When the declarations do not answer a question, the documentation website has Markdown files for AI tools.
-Start with the task index at https://fluxerly.neontechspace.com/docs/where-do-i.md, which links the guide section for each common task, or the list of every client method by task at https://fluxerly.neontechspace.com/docs/api/tasks.md.
+Start with the task index at https://fluxerly.neontechspace.com/docs/where-do-i.md, which links the guide section for each common task, or the client method lists by task at https://fluxerly.neontechspace.com/docs/api/tasks-js.md, https://fluxerly.neontechspace.com/docs/api/tasks-effect.md and https://fluxerly.neontechspace.com/docs/api/tasks.md.
 The index of all guides is https://fluxerly.neontechspace.com/docs/llms.txt, and its first lines name the SDK version it documents. These files follow the newest release, so when that version differs from the installed one, trust the installed declarations
 
 ## Project requirements
@@ -135,9 +135,12 @@ Methods returning `AsyncIterable`, such as `messages.iterateHistory`, start work
 
 ## Errors and cleanup
 
-Expected runtime failures return `Err`. Unexpected SDK failures can throw or reject a Promise, so release clients with `await using` or in `finally`.
-Every SDK error extends `FluxerlyError` with a stable `code`, an optional `hint` and a `cause`. Use `describeError(error)` to print one, `errors.apiCode(error)` to branch on a Fluxer rejection such as `"missingPermissions"` or `"fileSizeTooLarge"`, and `errors.isRetryable(error)` before repeating a call.
-A retryable failure can still require a wait, as a rate limit or Fluxer's busy upload slots answer does, so first wait `errors.retryAfterMs(error)` milliseconds when it returns a number. An upload that read a `ReadableStream`, marked by `details.streamUsed`, is not retryable and needs a new stream
+Expected runtime failures return `Err` in the default API (or fail the Effect channel in the native API). Unexpected faults reject or throw `SdkDefect` (wrapping callback faults as `ApplicationError`), and invalid local options throw `ConfigurationError` synchronously, so release clients with `await using` or in `finally`.
+Every SDK error extends `FluxerlyError` with a stable `code`, an actionable `hint`, structured `details` and an optional `cause`. Use `describeError(error)` to print one with retry safety and validation fields, and inspect `errors.apiCode(error)` to branch on a Fluxer rejection such as `"missingPermissions"` or `"fileSizeTooLarge"`, `errors.isNotFound(error, resource?)` for HTTP 404s (noting hidden community channels also return HTTP 404 `UNKNOWN_CHANNEL`), `errors.match(error, handlers)` to branch on `_tag`, `errors.outcome(error)` (`"notDispatched"`, `"rejected"`, `"unknown"` or `undefined`) and `errors.isRetryable(error)` before repeating a call.
+Only `"notDispatched"` proves a write was not sent: Never repeat a write whose `errors.outcome(error)` is `"unknown"` or `undefined` without reconciling Fluxer's current state first, because the change may already have applied.
+Read structured inspection fields programmatically instead of parsing messages: `error.hint`, `error.inputValidation` (`path`, `constraint`, `explanation`), `error.apiError` (`code`, `providerCode`, `validationErrors`), `error.details.requiredPermissions` and `error.details.streamUsed`.
+A retryable failure can still require a wait, as a rate limit or Fluxer's busy upload slots answer does, so first wait `errors.retryAfterMs(error)` milliseconds when it returns a number. An upload that read a `ReadableStream`, marked by `details.streamUsed`, is not retryable and needs a fresh stream or bytes.
+Retrying after a failed `client.run()` requires creating a new client, because `run()` permanently closes its client. Operations on a closed client return `ClientClosedError`, and aborted signals in the default API return `CancelledError` (cancellation does not undo a write that was already sent)
 
 Failures without a returned result, such as a handler that throws or returns an `Err`, go to the client's `onError` option or are logged at Error with the full error.
 Do not wrap every handler in a catch that only logs. Let the SDK report it, or pass `onError` to route reports to the application's own error tracking

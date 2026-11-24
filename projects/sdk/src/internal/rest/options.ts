@@ -9,6 +9,7 @@ import { ConfigurationError } from "#sdk/errors"
 import type { WebSocketLike, WebSocketOptions } from "#sdk/rest"
 import { record } from "../decode/primitives.js"
 import { readCaller } from "../defects.js"
+import { unsupportedKeyHint } from "../suggest.js"
 import {
     defaultTransport,
     defaultUserAgent,
@@ -73,17 +74,20 @@ const restBounds = {
 /** Configuration fields this module reports. The public field union lists each of them */
 type OptionField = "rest" | "transport" | keyof typeof restBounds | "fetch" | "webSocket" | "userAgent"
 
-const configurationError = (field: OptionField, message: string) => new ConfigurationError(field, message)
+const configurationError = (field: OptionField, message: string, hint?: string) =>
+    new ConfigurationError(field, message, hint === undefined ? undefined : { hint })
 
 /** Validate the rest client option */
 export function restConfiguration(value: unknown): RestConfiguration | ConfigurationError {
     if (value === undefined) return defaultRestConfiguration
     if (!record(value)) return configurationError("rest", "The option rest must be an object")
     const keys = Object.keys(restBounds)
-    if (Object.keys(value).some((key) => !keys.includes(key)))
+    const unsupported = Object.keys(value).find((key) => !keys.includes(key))
+    if (unsupported !== undefined)
         return configurationError(
             "rest",
-            "The option rest may contain only concurrency, mediaConcurrency, maxQueued, queuedJsonMaxBytes, and defaultTimeoutMs",
+            `Unsupported rest option ${JSON.stringify(unsupported)}`,
+            unsupportedKeyHint(unsupported, keys),
         )
     const result: Record<string, number | boolean> = { ...defaultRestConfiguration }
     for (const [field, [minimum, maximum, message]] of Object.entries(restBounds) as [
@@ -108,13 +112,28 @@ export function restConfiguration(value: unknown): RestConfiguration | Configura
 export function transportConfiguration(value: unknown): Transport | ConfigurationError {
     if (value === undefined) return defaultTransport
     if (!record(value)) return configurationError("transport", "The option transport must be an object")
-    const read = readCaller(() => {
-        if (Object.keys(value).some((key) => !["fetch", "webSocket", "userAgent"].includes(key))) return undefined
-        const { fetch, webSocket, userAgent } = value
-        return { fetch, webSocket, userAgent }
-    })
-    if (read === undefined)
-        return configurationError("transport", "The option transport may contain only fetch, webSocket, and userAgent")
+    const transportKeys = ["fetch", "webSocket", "userAgent"] as const
+    const read = readCaller(
+        ():
+            | { readonly unsupported: string }
+            | {
+                  readonly unsupported?: undefined
+                  readonly fetch: unknown
+                  readonly webSocket: unknown
+                  readonly userAgent: unknown
+              } => {
+            const unsupported = Object.keys(value).find((key) => !(transportKeys as readonly string[]).includes(key))
+            if (unsupported !== undefined) return { unsupported }
+            const { fetch, webSocket, userAgent } = value
+            return { fetch, webSocket, userAgent }
+        },
+    )
+    if (read.unsupported !== undefined)
+        return configurationError(
+            "transport",
+            `Unsupported transport option ${JSON.stringify(read.unsupported)}`,
+            unsupportedKeyHint(read.unsupported, transportKeys),
+        )
     const { fetch, webSocket, userAgent } = read
     if (fetch !== undefined && typeof fetch !== "function")
         return configurationError("fetch", "The option transport.fetch must be a function")

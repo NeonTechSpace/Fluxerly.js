@@ -204,11 +204,72 @@ export class HelperError extends FluxerlyError {
             }),
             {
                 code: `helper.${reason}`,
+                hint: helperHint(operation, reason),
                 cause: options?.cause,
                 details: operationDetails({ operation, reason }),
             },
         )
         this.name = this._tag
+    }
+}
+
+/** Suggested next step for a HelperError, without including the rejected value */
+function helperHint(operation: HelperError["operation"], reason: HelperError["reason"]): string {
+    switch (reason) {
+        case "id":
+            return 'Keep Fluxer IDs as decimal strings, such as "123456789012345678", rather than converting them to numbers'
+        case "markup":
+            if (operation === "format.parseMention")
+                return "Use format.tryParseMention for untrusted user text, or check that the text is a single user, role or channel mention"
+            if (operation === "format.parseTimestamp")
+                return "Use format.tryParseTimestamp for untrusted user text, or check that the text is valid timestamp markup such as <t:1700000000:R>"
+            if (operation === "format.parseCustomEmoji")
+                return "Use format.tryParseCustomEmoji for untrusted user text, or check that the text is custom emoji markup such as <:name:123>"
+            if (operation === "format.timestamp")
+                return "Pass a style from TimestampStyles, such as TimestampStyles.RelativeTime, or omit style to use the default"
+            return "Pass an object with a valid emoji name, a decimal string id and an optional boolean animated"
+        case "time":
+            if (operation === "format.parseTimestamp")
+                return "Use format.tryParseTimestamp for untrusted user text, because timestamp values outside the supported Date range cannot be converted"
+            if (operation === "snowflakes.boundary")
+                return "Pass a valid Date on or after 2015-01-01T00:00:00Z and within the Fluxer snowflake time range"
+            if (operation === "embed.timestamp")
+                return "Pass a valid Date or finite Unix epoch milliseconds within the Date range"
+            return "Pass a valid Date on or after 1970-01-01T00:00:00Z"
+        case "permissionBits":
+            if (operation === "permissionBits.patchOverwrite")
+                return "Pass undefined or an overwrite with bigint allow and deny, and put each permission name from Permissions in at most one of allow, deny or inherit"
+            if (operation === "permissionBits.refusedGrants")
+                return "Pass overwrites with bigint allow and deny and a bigint held-permissions bitfield, such as Permissions.ManageRoles"
+            if (operation === "permissionBits.sameOverwrites")
+                return "Pass arrays of overwrites with unique decimal IDs, type set to role or member, and bigint allow and deny"
+            if (operation === "permissionBits.label")
+                return 'Pass a key of Permissions, such as "ManageMessages" or "SendMessages"'
+            return "Use Permissions flags such as Permissions.SendMessages, permissionBits.from([...]), or a bigint bitfield"
+        case "link":
+            if (operation === "links.installation")
+                return "Omit options, or pass { permissions } with an unsigned 64-bit bigint bitfield from Permissions"
+            if (operation === "links.message")
+                return "Pass the message and the matching channel it belongs to, with a decimal guildId for community channels and no guildId for direct messages"
+            return "Pass a channel object with a decimal id, including guildId for community channels and omitting guildId for direct messages"
+        case "color":
+            return operation === "colors.parse" || operation === "embed.color"
+                ? 'Pass an integer from 0 through 16,777,215, a 6-digit hex string such as "#ff8800", or an [r, g, b] array of 0 through 255 integers'
+                : "Convert hex strings or RGB tuples with colors.parse first, or pass an integer from 0 through 16,777,215"
+        case "text":
+            return "Pass a string value, converting numbers or other values explicitly before calling this helper"
+        case "limit":
+            if (operation === "voiceWaveform")
+                return "Omit options, or pass { maxPoints } with an integer from 1 through 256"
+            if (operation === "text.truncate")
+                return "Pass { maxLength } with a positive safe integer, and keep any suffix at most maxLength code units long"
+            return "Pass { maxLength } with a positive safe integer, using at least 2 when the text contains emoji or other surrogate pairs"
+        case "shardCount":
+            return "Pass the positive integer total shard count, from 1 through 16,384"
+        case "resource":
+            return "Pass one of the NotFoundResource strings, namely application, channel, emoji, forumTag, guild, invite, member, message, role, sticker, threadMember, user or webhook"
+        case "audio":
+            return "Pass a Float32Array or number array of finite audio samples and a positive finite sampleRate in hertz, such as 48000"
     }
 }
 
