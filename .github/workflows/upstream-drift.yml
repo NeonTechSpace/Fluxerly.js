@@ -158,8 +158,8 @@ jobs:
         with:
           name: upstream-report
           path: ${{ runner.temp }}/upstream-current
-      # The report goes to the open issue this workflow opened, as the GitHub Actions bot. With none open, it opens one
-      # that explains itself, so closing a reviewed issue starts the next one fresh
+      # Reports append to the open bot issue for the current review pin. When the review pin moves, open issues from an
+      # earlier pin (or without a pin marker) are closed automatically, and a new issue opens when new changes appear
       - name: Post to the drift issue
         id: post
         shell: bash
@@ -167,19 +167,74 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TITLE: Fluxer upstream changes to review
         run: |
+          baseline="$RUNNER_TEMP/upstream-current/baseline.json"
           comment="$RUNNER_TEMP/upstream-current/comment.md"
           summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-          if [[ ! -f "$comment" ]]; then
-            printf '## Upstream report posting\n\nNothing to post, no watched Fluxer document, voice folder or source commit changed since the last report\n' >> "$summary"
-            exit 0
+          if [[ ! -f "$baseline" ]]; then
+            printf 'Upstream baseline file is missing at %s\n' "$baseline" >&2
+            exit 1
           fi
+          current_pin=$(jq -r '.pin // empty' "$baseline")
+          if [[ ! "$current_pin" =~ ^[a-f0-9]{40}$ ]]; then
+            printf 'Upstream baseline file has no valid review pin\n' >&2
+            exit 1
+          fi
+          short_pin="${current_pin:0:10}"
           # The jq filter reads $ENV itself, so the single quotes are meant
           # shellcheck disable=SC2016
-          issue=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
-            --jq '[.[] | select(.pull_request == null and .title == $ENV.TITLE)][0].number // empty')
-          if [[ -n "$issue" ]]; then
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue/comments" --silent -F "body=@$comment"
-            printf '## Upstream report posting\n\nPosted the report as a comment on [issue #%s](%s/%s/issues/%s)\n\n### Next action\n\nReview each listed change. Update the SDK where needed, move the review pin and close the issue\n' "$issue" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$issue" >> "$summary"
+          open_issues=$(gh api "repos/$GITHUB_REPOSITORY/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
+            --jq '.[] | select(.pull_request == null and .title == $ENV.TITLE) | [.number, ([(.body // "") | scan("<!-- fluxer-pin: ([a-f0-9]{40}) -->")][0][0] // "")] | @tsv')
+          matching_issue=""
+          closed_issues=()
+          while IFS=$'\t' read -r issue_number issue_pin; do
+            [[ -n "$issue_number" ]] || continue
+            if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
+              printf 'Issue lookup returned an invalid issue number\n' >&2
+              exit 1
+            fi
+            if [[ "$issue_pin" == "$current_pin" ]]; then
+              if [[ -z "$matching_issue" ]]; then
+                matching_issue="$issue_number"
+              fi
+              continue
+            fi
+            # The backticks are Markdown code spans, so the single quotes are meant
+            # shellcheck disable=SC2016
+            close_note=$(printf 'Closing this report because the Fluxer review pin moved to `%s`. Any changes after that pin will open a new issue' "$short_pin")
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$issue_number/comments" --silent -f "body=$close_note"
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/$issue_number" --silent -f state=closed -f state_reason=completed
+            closed_issues+=("#$issue_number")
+          done <<< "$open_issues"
+          closed_summary=""
+          if (( ${#closed_issues[@]} > 0 )); then
+            closed_list=""
+            for closed in "${closed_issues[@]}"; do
+              closed_list="${closed_list:+$closed_list, }$closed"
+            done
+            closed_summary="Closed previous drift issues ${closed_list} after the review pin moved to ${short_pin}"
+            if (( ${#closed_issues[@]} == 1 )); then
+              closed_summary="Closed previous drift issue ${closed_list} after the review pin moved to ${short_pin}"
+            fi
+          fi
+          if [[ ! -f "$comment" ]]; then
+            {
+              printf '## Upstream report posting\n\n'
+              if [[ -n "$closed_summary" ]]; then
+                printf '%s\n\n' "$closed_summary"
+              fi
+              printf 'Nothing to post, no watched Fluxer document, voice folder or source commit changed since the last report\n'
+            } >> "$summary"
+            exit 0
+          fi
+          if [[ -n "$matching_issue" ]]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$matching_issue/comments" --silent -F "body=@$comment"
+            {
+              printf '## Upstream report posting\n\n'
+              if [[ -n "$closed_summary" ]]; then
+                printf '%s\n\n' "$closed_summary"
+              fi
+              printf 'Posted the report as a comment on [issue #%s](%s/%s/issues/%s)\n\n### Next action\n\nReview each listed change. Update the SDK where needed and move the review pin\n' "$matching_issue" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$matching_issue"
+            } >> "$summary"
             exit 0
           fi
           body="$RUNNER_TEMP/upstream-current/issue.md"
@@ -187,12 +242,19 @@ jobs:
           # The backticks are Markdown code spans, so the single quotes are meant
           # shellcheck disable=SC2016
           {
-            printf 'This issue collects the reports of the [upstream drift check](%s/actions/workflows/upstream-drift.yml). Each report lists what changed in Fluxer since the last one: its API description, its gateway event docs, its rate limit docs, its voice docs and code, new folders that may hold voice work and the Fluxer commits that touched the paths the SDK watches\n\n' "$repository"
-            printf 'A listed change is something to review, not proof that bots are affected. To finish a review, update the SDK where needed and move the review pin as [Repository](%s/blob/main/docs/REPOSITORY.md) describes for `node release/upstream.js`, then close this issue. The next report opens a new one\n\n' "$repository"
+            printf '<!-- fluxer-pin: %s -->\n\n' "$current_pin"
+            printf 'This issue collects the reports of the [upstream drift check](%s/actions/workflows/upstream-drift.yml). Each report lists what changed in Fluxer since the last one: Its API description, its gateway event docs, its rate limit docs, its voice docs and code, new folders that may hold voice work and the Fluxer commits that touched the paths the SDK watches\n\n' "$repository"
+            printf 'A listed change is something to review, not proof that bots are affected. To finish a review, update the SDK where needed and move the review pin as [Repository](%s/blob/main/docs/REPOSITORY.md) describes for `node release/upstream.js`. Moving the review pin automatically closes this issue on the next run and opens a fresh one when new changes appear\n\n' "$repository"
             cat "$comment"
           } > "$body"
           gh api --method POST "repos/$GITHUB_REPOSITORY/issues" --silent -f "title=$TITLE" -F "body=@$body"
-          printf '## Upstream report posting\n\nOpened a new issue titled "%s" with the report, in [the repository issues](%s/%s/issues)\n\n### Next action\n\nReview each listed change. Update the SDK where needed, move the review pin and close the issue\n' "$TITLE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" >> "$summary"
+          {
+            printf '## Upstream report posting\n\n'
+            if [[ -n "$closed_summary" ]]; then
+              printf '%s\n\n' "$closed_summary"
+            fi
+            printf 'Opened a new issue titled "%s" with the report, in [the repository issues](%s/%s/issues)\n\n### Next action\n\nReview each listed change. Update the SDK where needed and move the review pin\n' "$TITLE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY"
+          } >> "$summary"
       # Only now does the observation become the next run's baseline, so a failed post repeats instead of losing changes
       - name: Retain the reported upstream observation
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

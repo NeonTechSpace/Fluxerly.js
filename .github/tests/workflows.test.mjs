@@ -445,23 +445,47 @@ test("Upstream drift runs on Monday, Wednesday and Friday, compares read-only an
     assert.equal(handoff.uses, existingUpload.uses)
 })
 
-test("Upstream posting comments on the open bot issue, opens an explained one when none is open, skips an empty week and fails on a failed post", () => {
+test("Upstream posting rotates issues by review pin, appends on the same pin, closes stale or unmarked issues and fails on API errors", () => {
     const post = workflows["upstream-drift.yml"].jobs.report.steps.find((step) => step.id === "post")
     assert.equal(post.shell, "bash")
     assert.equal(post.env.GH_TOKEN, "${{ github.token }}")
     assert.equal(post.env.TITLE, "Fluxer upstream changes to review")
     const directory = mkdtempSync(join(realpathSync(tmpdir()), "fluxerly-drift post-"))
-    const comment = join(directory, "upstream-current/comment.md")
-    const body = join(directory, "upstream-current/issue.md")
+    const currentDir = join(directory, "upstream-current")
+    const baseline = join(currentDir, "baseline.json")
+    const comment = join(currentDir, "comment.md")
+    const body = join(currentDir, "issue.md")
     const calls = join(directory, "calls")
-    // The lookup prints the open issue's number, or nothing. GH_FAIL names the call kind that fails
+    const summary = join(directory, "posting-summary.md")
+    const oldPin = "a".repeat(40)
+    const newPin = "b".repeat(40)
+    // Fake gh runs real jq on GH_ISSUES_JSON for the GET lookup so the real filter is exercised end to end
     const fakeGh = `gh() {
       printf '%s\\n' "$@" >> "$GH_CALLS"
-      if [[ "$2" != "--method" ]]; then [[ "$GH_FAIL" != lookup ]] || return 1; printf '%s' "$GH_FOUND"; return 0; fi
+      if [[ "$2" != "--method" ]]; then
+        [[ "$GH_FAIL" != lookup ]] || return 1
+        jq -r "$4" <<< "$GH_ISSUES_JSON"
+        return 0
+      fi
+      if [[ "$3" == "PATCH" ]]; then
+        [[ "$GH_FAIL" != close ]] || return 1
+        return 0
+      fi
+      if [[ "$4" == *"/comments" ]]; then
+        [[ "$GH_FAIL" != comment ]] || return 1
+        [[ "$GH_FAIL" != post ]] || return 1
+        return 0
+      fi
       [[ "$GH_FAIL" != post ]]
     }\n`
-    const run = ({ found = "", fail = "" } = {}) => {
+    const run = ({ issues = [], pin = newPin, withComment = true, fail = "" } = {}) => {
         rmSync(calls, { force: true })
+        rmSync(summary, { force: true })
+        rmSync(body, { force: true })
+        if (pin === null) rmSync(baseline, { force: true })
+        else writeFileSync(baseline, JSON.stringify(pin === "invalid" ? { pin: "main" } : { pin }))
+        if (withComment) writeFileSync(comment, "## Upstream Fluxer drift\n\nReport\n")
+        else rmSync(comment, { force: true })
         const output = spawnSync(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", fakeGh + post.run], {
             cwd: directory,
             encoding: "utf8",
@@ -473,37 +497,111 @@ test("Upstream posting comments on the open bot issue, opens an explained one wh
                 RUNNER_TEMP: directory,
                 GITHUB_REPOSITORY: "owner/repo",
                 GITHUB_SERVER_URL: "https://github.com",
-                GITHUB_STEP_SUMMARY: join(directory, "posting-summary.md"),
+                GITHUB_STEP_SUMMARY: summary,
                 GH_CALLS: calls,
-                GH_FOUND: found,
+                GH_ISSUES_JSON: JSON.stringify(issues),
                 GH_FAIL: fail,
             },
         })
         assert.ifError(output.error)
-        return output
+        return {
+            status: output.status,
+            stderr: output.stderr,
+            calls: existsSync(calls) ? readFileSync(calls, "utf8").trim().split(/\r?\n/) : [],
+            summary: existsSync(summary) ? readFileSync(summary, "utf8") : "",
+            body: existsSync(body) ? readFileSync(body, "utf8") : "",
+        }
     }
-    const lookup = [
-        "api", "repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100",
-        "--jq", "[.[] | select(.pull_request == null and .title == $ENV.TITLE)][0].number // empty",
+    const lookupQuery = "repos/owner/repo/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100"
+    const issue = (number, issueBody, extra = {}) => ({
+        number,
+        title: post.env.TITLE,
+        body: issueBody,
+        pull_request: null,
+        ...extra,
+    })
+    const closeCalls = (number, shortPin) => [
+        "api", "--method", "POST", `repos/owner/repo/issues/${number}/comments`, "--silent",
+        "-f", `body=Closing this report because the Fluxer review pin moved to \`${shortPin}\`. Any changes after that pin will open a new issue`,
+        "api", "--method", "PATCH", `repos/owner/repo/issues/${number}`, "--silent",
+        "-f", "state=closed", "-f", "state_reason=completed",
     ]
     try {
-        mkdirSync(join(directory, "upstream-current"))
-        assert.equal(run().status, 0)
-        assert.equal(existsSync(calls), false, "A week with nothing new posts nothing")
-        writeFileSync(comment, "## Upstream Fluxer drift\n\nReport\n")
-        assert.equal(run({ found: "7" }).status, 0)
-        assert.deepEqual(readFileSync(calls, "utf8").trim().split(/\r?\n/), [
-            ...lookup, "api", "--method", "POST", "repos/owner/repo/issues/7/comments", "--silent", "-F", `body=@${comment}`,
+        mkdirSync(currentDir)
+        // Missing or invalid baseline pin fails before touching GitHub
+        assert.notEqual(run({ pin: null }).status, 0, "Missing baseline.json fails cleanly")
+        assert.notEqual(run({ pin: "invalid" }).status, 0, "Invalid baseline pin fails cleanly")
+
+        // 1. Same pin + new comment -> appends comment to existing open issue without closing or opening a new issue
+        const samePin = run({
+            pin: newPin,
+            issues: [
+                issue(7, `<!-- fluxer-pin: ${newPin} -->\n\nExisting`),
+                issue(99, "Other title", { title: "Unrelated issue" }),
+                issue(100, "PR", { pull_request: { url: "https://github.com/owner/repo/pull/100" } }),
+            ],
+        })
+        assert.equal(samePin.status, 0, samePin.stderr)
+        assert.equal(samePin.calls[0], "api")
+        assert.equal(samePin.calls[1], lookupQuery)
+        assert.deepEqual(samePin.calls.slice(4), [
+            "api", "--method", "POST", "repos/owner/repo/issues/7/comments", "--silent", "-F", `body=@${comment}`,
         ])
-        assert.equal(run().status, 0)
-        assert.deepEqual(readFileSync(calls, "utf8").trim().split(/\r?\n/), [
-            ...lookup, "api", "--method", "POST", "repos/owner/repo/issues", "--silent", "-f", "title=Fluxer upstream changes to review", "-F", `body=@${body}`,
+        assert.match(samePin.summary, /issue #7/)
+
+        // 2. Moved pin + new comment -> closes old issue and opens a fresh issue stamped with the new pin marker
+        const movedWithComment = run({
+            pin: newPin,
+            issues: [issue(7, `<!-- fluxer-pin: ${oldPin} -->\n\nOld pin body`)],
+        })
+        assert.equal(movedWithComment.status, 0, movedWithComment.stderr)
+        assert.deepEqual(movedWithComment.calls.slice(4), [
+            ...closeCalls(7, newPin.slice(0, 10)),
+            "api", "--method", "POST", "repos/owner/repo/issues", "--silent",
+            "-f", "title=Fluxer upstream changes to review", "-F", `body=@${body}`,
         ])
-        const opened = readFileSync(body, "utf8")
-        assert.match(opened, /^This issue collects the reports of the \[upstream drift check\]\(https:\/\/github\.com\/owner\/repo\/actions\/workflows\/upstream-drift\.yml\)/)
-        assert.match(opened, /then close this issue\. The next report opens a new one\n\n## Upstream Fluxer drift\n\nReport\n$/)
+        assert.match(movedWithComment.body, new RegExp(`^<!-- fluxer-pin: ${newPin} -->\\n\\nThis issue collects the reports of the \\[upstream drift check\\]\\(https://github\\.com/owner/repo/actions/workflows/upstream-drift\\.yml\\)`))
+        assert.match(movedWithComment.body, /Moving the review pin automatically closes this issue on the next run and opens a fresh one when new changes appear\n\n## Upstream Fluxer drift\n\nReport\n$/)
+        assert.match(movedWithComment.summary, /Closed previous drift issue #7/)
+
+        // 3. Moved pin + NO comment -> closes old issue and opens no new issue
+        const movedNoComment = run({
+            pin: newPin,
+            withComment: false,
+            issues: [issue(12, `<!-- fluxer-pin: ${oldPin} -->\n\nOld pin body`)],
+        })
+        assert.equal(movedNoComment.status, 0, movedNoComment.stderr)
+        assert.deepEqual(movedNoComment.calls.slice(4), closeCalls(12, newPin.slice(0, 10)))
+        assert.equal(movedNoComment.body, "")
+        assert.match(movedNoComment.summary, /Closed previous drift issue #12/)
+        assert.match(movedNoComment.summary, /Nothing to post/)
+
+        // 4. Legacy open issue with NO pin marker -> treated as stale and closed cleanly
+        const legacyUnmarked = run({
+            pin: newPin,
+            withComment: false,
+            issues: [issue(5, "Legacy issue body with no pin comment")],
+        })
+        assert.equal(legacyUnmarked.status, 0, legacyUnmarked.stderr)
+        assert.deepEqual(legacyUnmarked.calls.slice(4), closeCalls(5, newPin.slice(0, 10)))
+
+        // Empty week with no open issues posts nothing after the lookup
+        const quietWeek = run({ pin: newPin, withComment: false, issues: [] })
+        assert.equal(quietWeek.status, 0, quietWeek.stderr)
+        assert.equal(quietWeek.calls.length, 4)
+
+        // 5. Failed lookup, close or post exits non-zero so the workflow does not upload a new baseline
         assert.notEqual(run({ fail: "lookup" }).status, 0, "A failed lookup stops the job before the observation is retained")
-        assert.notEqual(run({ found: "7", fail: "post" }).status, 0, "A failed comment stops the job before the observation is retained")
+        assert.notEqual(
+            run({ issues: [issue(7, `<!-- fluxer-pin: ${oldPin} -->`)], fail: "close" }).status,
+            0,
+            "A failed close stops the job before the observation is retained",
+        )
+        assert.notEqual(
+            run({ issues: [issue(7, `<!-- fluxer-pin: ${newPin} -->`)], fail: "comment" }).status,
+            0,
+            "A failed comment stops the job before the observation is retained",
+        )
         assert.notEqual(run({ fail: "post" }).status, 0, "A failed new issue stops the job before the observation is retained")
     } finally {
         rmSync(directory, { recursive: true, force: true })

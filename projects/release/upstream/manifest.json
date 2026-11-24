@@ -278,86 +278,32 @@
         {
             "path": "fluxer_app/src/features/voice/utils/VoiceMessageRecordingUtils.ts",
             "sha256": "d799e1958d27af9b7c79708f9f941353eb72bfe37b07fe5c3f92dcf6c0cf6bb5"
+        }
+    ],
+    "sourceTrees": [
+        {
+            "path": "fluxer_gateway/rust/crates",
+            "sha256": "a1e58a64792bec60a4b27610df9cb450212b5ad16b6d3460c295c6e3c4969c06"
         },
         {
-            "path": "packages/constants/src/AssetFormatPolicy.ts",
-            "sha256": "6fd4f40bf53d1582788a21dccd674c976b9ac15350dc5f7bd168970c90042720"
+            "path": "fluxer_gateway/src",
+            "sha256": "be98a8c87f24a62e04ec8b0e8b8aae145f9b7334f97ba00d28fb08da68b4fa33"
         },
         {
-            "path": "packages/constants/src/ChannelConstants.ts",
-            "sha256": "9c55aa5bacb51b1eeeec3260a958bc6ebecbaf102269022f1070ae48bd55948d"
+            "path": "packages/constants/src",
+            "sha256": "69ec8f1a1b407c3a372293626ecdea357d75886a2688342f14fe583a33423735"
         },
         {
-            "path": "packages/constants/src/GuildConstants.ts",
-            "sha256": "28c7d1aa8feeb3ba268763baca52a04957aa67dd25519aca353bbc2ed65500b5"
+            "path": "packages/errors/src",
+            "sha256": "5c2c3ce9ea23b4b0347dabc74ba1847ba58c0e56d114a99b4c2580c98870b18f"
         },
         {
-            "path": "packages/constants/src/ThreadPermissionUtils.ts",
-            "sha256": "4c50d68e0b6297d5e013f65d59c6c9689c36786ee853c43a83b35ac1343f78a4"
+            "path": "packages/limits/src",
+            "sha256": "8aca0ce1a6f76d868fba52c4978539618f4b78edba491617baa78246df1e5aa5"
         },
         {
-            "path": "packages/schema/src/domains/channel/ChannelRequestSchemas.ts",
-            "sha256": "93ced01caa4a80adf2769559d33d10598cf7b07cc9d649774f015288080b3e8d"
-        },
-        {
-            "path": "packages/schema/src/domains/channel/ForumRequestSchemas.ts",
-            "sha256": "e903a894fb055302b894d05b6c312a309deca13a4f646b693725d4fd217c99ad"
-        },
-        {
-            "path": "packages/schema/src/domains/common/CommonParamSchemas.ts",
-            "sha256": "3983a9a237aa7fec3da7e70258419a83a76c356d32f353bb0ac381a8d9a51cf2"
-        },
-        {
-            "path": "packages/schema/src/domains/common/ErrorSchemas.ts",
-            "sha256": "7307b0be3508e08f9791810b3a8a8d4fbce92d1fdc1b4b1322bb5f83c2225421"
-        },
-        {
-            "path": "packages/schema/src/domains/guild/GuildDiscoverySchemas.ts",
-            "sha256": "4724689e046929c34e5350228c21baa9870ef2a85a7b68902aa4f2a45c28aa7f"
-        },
-        {
-            "path": "packages/schema/src/domains/guild/GuildMemberSearchSchemas.ts",
-            "sha256": "ce819a9a8643d172fb53994254da60c006db5521041de49f0e4243798918c4c7"
-        },
-        {
-            "path": "packages/schema/src/domains/guild/GuildRequestSchemas.ts",
-            "sha256": "b397b8af97709b1a0021b234e9dbc28919c2af7c940f99a7935efb3554e45381"
-        },
-        {
-            "path": "packages/schema/src/domains/message/AttachmentSchemas.ts",
-            "sha256": "2fb45e3465c24ae33b8e8ed36b93eaa57f710e2f36f7c077642f8173df60b960"
-        },
-        {
-            "path": "packages/schema/src/domains/message/MessageRequestSchemas.ts",
-            "sha256": "ed48793db3ac3edf171919c80e5a17f12ab02b94ef17624cd8fde0919b8ef881"
-        },
-        {
-            "path": "packages/schema/src/domains/oauth/OAuthSchemas.ts",
-            "sha256": "1144bb184ba4e1d7a44138f38b041b05be4742ece398db300483a4b12548782e"
-        },
-        {
-            "path": "packages/schema/src/domains/webhook/WebhookRequestSchemas.ts",
-            "sha256": "83311f16b24332fabaa43943074b891d7aaa32d8b049fcbe7fab85c3cd97b0e6"
-        },
-        {
-            "path": "packages/schema/src/primitives/ChannelValidators.ts",
-            "sha256": "dc7696d90c9f9ae3af182d4900001e3063480d2a1da4bc571ffc443f192915ad"
-        },
-        {
-            "path": "packages/schema/src/primitives/FileValidators.ts",
-            "sha256": "27b31d79a106f625bcb76e636b9738575fd69a7e70191ed3dd6db813b1c0534a"
-        },
-        {
-            "path": "packages/schema/src/primitives/MessageValidators.ts",
-            "sha256": "cc522c6ba1194749912e34a0256f668fde256600a4a42d7648caf0ce591a335c"
-        },
-        {
-            "path": "packages/schema/src/primitives/SchemaPrimitives.ts",
-            "sha256": "eea91bc73feb3b62c75d680b664d18598d67563b2128b48f584953a50d8ae3d4"
-        },
-        {
-            "path": "packages/schema/src/primitives/UrlValidators.ts",
-            "sha256": "191eda95385e261dfe754a89b5701fe2361ff9df741d72b8b4a40f48b5e780fe"
+            "path": "packages/schema/src",
+            "sha256": "169f909bc2576638269b7db899e1cd02790a8bc934c63a746164259c17430e92"
         }
     ],
     "voice": [

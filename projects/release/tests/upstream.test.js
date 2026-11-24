@@ -1456,6 +1456,7 @@ test("The command exits 0 when Fluxer changed and 1 when the check itself breaks
             if (process.env.FAKE_FAILURE && url.pathname.endsWith(process.env.FAKE_FAILURE)) return new Response("", { status: 404 })
             if (url.host === "raw.githubusercontent.com") return new Response("{}")
             if (url.pathname.endsWith("/commits/main")) return new Response(head)
+            if (url.pathname.includes("/git/trees/")) return json({ truncated: false, tree: [] })
             if (url.pathname.includes("/contents/")) return json([])
             if (url.pathname.endsWith("/commits")) {
                 if (url.searchParams.get("sha") !== head || url.searchParams.get("per_page") !== "100") return new Response("", { status: 400 })
@@ -1788,16 +1789,18 @@ test("The manifest's watched source files are relative, hashed and listed once",
     assert.throws(() => validateManifest({ ...value, sourceFacts }), /invalid/);
 });
 
-test("Every Fluxer schema, constants or voice note file the SDK cites as the source of a copied rule is watched", () => {
+test("Every Fluxer schema, constants, limits, errors, gateway or voice note file the SDK cites as the source of a copied rule is watched", () => {
   const sdk = fileURLToPath(new URL("../../sdk/", import.meta.url));
-  const watched = new Set(
-    JSON.parse(
-      readFileSync(
-        new URL("../upstream/manifest.json", import.meta.url),
-        "utf8",
-      ),
-    ).sourceFacts.map(({ path }) => path),
+  const manifest = JSON.parse(
+    readFileSync(new URL("../upstream/manifest.json", import.meta.url), "utf8"),
   );
+  const watchedFiles = new Set(
+    (manifest.sourceFacts ?? []).map(({ path }) => path),
+  );
+  const watchedTrees = (manifest.sourceTrees ?? []).map(({ path }) => path);
+  const covered = (path) =>
+    watchedFiles.has(path) ||
+    watchedTrees.some((tree) => path === tree || path.startsWith(`${tree}/`));
   const cited = new Set();
   const sources = [
     ...readdirSync(join(sdk, "src"), { recursive: true })
@@ -1807,11 +1810,11 @@ test("Every Fluxer schema, constants or voice note file the SDK cites as the sou
   ];
   for (const file of sources)
     for (const [path] of readFileSync(file, "utf8").matchAll(
-      /(?:packages\/(?:schema|constants)\/src|fluxer_app\/src\/features\/voice)\/[\w/.-]+\.ts/g,
+      /(?:fluxer_gateway\/(?:src|rust\/crates)|packages\/(?:schema|constants|limits|errors)\/src|fluxer_app\/src\/features\/voice)\/[\w/.-]+\.(?:ts|gleam|rs)/g,
     ))
       cited.add(path);
   assert.ok(cited.size > 5);
-  assert.deepEqual([...cited].filter((path) => !watched.has(path)).sort(), []);
+  assert.deepEqual([...cited].filter((path) => !covered(path)).sort(), []);
 });
 
 // Fluxer's voice docs and code are hashed by the Git object ID of each file under a watched path, as GitHub's listings name it
@@ -2100,7 +2103,22 @@ test("The repository pin watches Fluxer's voice docs and code, and its folder li
   ])
     assert.ok(value.folders.includes(path), path);
   const voice = value.voice;
+  const sourceTrees = value.sourceTrees;
+  assert.deepEqual(
+    sourceTrees.map(({ path }) => path),
+    [
+      "fluxer_gateway/rust/crates",
+      "fluxer_gateway/src",
+      "packages/constants/src",
+      "packages/errors/src",
+      "packages/limits/src",
+      "packages/schema/src",
+    ],
+  );
   for (const invalid of [
+    { sourceTrees: [...sourceTrees, sourceTrees[0]] },
+    { sourceTrees: [{ path: "../outside", sha256: sourceTrees[0].sha256 }] },
+    { sourceTrees: [{ ...sourceTrees[0], sha256: "main" }] },
     { voice: [...voice, voice[0]] },
     { voice: [{ path: "../outside", sha256: voice[0].sha256 }] },
     { voice: [{ ...voice[0], sha256: "main" }] },
@@ -2111,4 +2129,103 @@ test("The repository pin watches Fluxer's voice docs and code, and its folder li
     { folders: "packages" },
   ])
     assert.throws(() => validateManifest({ ...value, ...invalid }), /invalid/);
+});
+
+test("Watched sourceTrees catch newly added, removed and changed files via listTree and fall back on truncation", async (t) => {
+  const gatewayTree = "fluxer_gateway/src";
+  const initialFiles = {
+    ...document,
+    [`${gatewayTree}/opcode.gleam`]: "pub const op = 1\n",
+    [`${gatewayTree}/old.gleam`]: "pub const old = 1\n",
+  };
+  const updatedFiles = {
+    ...document,
+    [`${gatewayTree}/opcode.gleam`]: "pub const op = 2\n",
+    [`${gatewayTree}/brand_new.gleam`]: "pub const added = 1\n",
+  };
+  const makeTreeEntries = (files) =>
+    Object.entries(files).map(([path, text]) => ({
+      path,
+      type: "blob",
+      mode: "100644",
+      sha: gitId(text),
+    }));
+  const treeCalls = [];
+  const { manifest, source } = upstream({
+    [pinned]: initialFiles,
+    [current]: updatedFiles,
+  });
+  const treeSource = {
+    ...source,
+    checkPath: async () => {},
+    listCommits: async (_repository, _head, { page }) =>
+      page === 1
+        ? [
+            { sha: current, subject: "Gateway change" },
+            { sha: pinned, subject: "Baseline" },
+          ]
+        : [],
+    listTree: async (_repository, commit) => {
+      treeCalls.push(commit);
+      return {
+        truncated: false,
+        entries: makeTreeEntries(commit === pinned ? initialFiles : updatedFiles),
+      };
+    },
+  };
+  const watchedManifest = {
+    ...manifest,
+    sourceTrees: [
+      { path: gatewayTree, sha256: voiceHash(initialFiles, gatewayTree) },
+    ],
+  };
+  const files = workspace(t, watchedManifest);
+  const first = await runUpstream(
+    [
+      "--baseline",
+      files.baselineFile,
+      "--record",
+      files.recordFile,
+      "--comment",
+      files.commentFile,
+    ],
+    { ...files, source: treeSource },
+  );
+  assert.equal(first.result.drift, true);
+  assert.deepEqual(first.result.sourceTrees[0].files, {
+    added: [`${gatewayTree}/brand_new.gleam`],
+    removed: [`${gatewayTree}/old.gleam`],
+    changed: [`${gatewayTree}/opcode.gleam`],
+  });
+  assert.match(first.report, /### Fluxer source folders the SDK tracks/);
+  assert.match(first.report, /brand&#95;new\.gleam/);
+  assert.deepEqual(
+    treeCalls,
+    [current, pinned],
+    "listTree is cached per commit via remembering",
+  );
+  assert.equal(
+    source.reads.filter((read) => read.includes(`${gatewayTree}/`)).length,
+    0,
+    "listTree avoids recursive listDirectory calls when not truncated",
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(files.recordFile, "utf8")).sourceTrees,
+    [{ path: gatewayTree, sha256: voiceHash(updatedFiles, gatewayTree) }],
+  );
+
+  // Truncated listTree falls back cleanly to recursive listDirectory and computes the identical hash
+  const fallback = await checkUpstream(watchedManifest, {
+    ...source,
+    listTree: async () => ({ truncated: true, entries: [] }),
+  });
+  assert.equal(fallback.sourceTrees[0].current, first.result.sourceTrees[0].current);
+  assert.deepEqual(fallback.sourceTrees[0].files, first.result.sourceTrees[0].files);
+
+  // --update refreshes sourceTrees hashes automatically
+  await runUpstream(["--update", current], { ...files, source: treeSource });
+  assert.deepEqual(
+    JSON.parse(readFileSync(files.manifestFile, "utf8")).sourceTrees,
+    [{ path: gatewayTree, sha256: voiceHash(updatedFiles, gatewayTree) }],
+  );
 });

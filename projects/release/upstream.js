@@ -115,11 +115,12 @@ const setKeys = new Set(["enum", "required", "type", "tokens"]);
 
 /**
  * @typedef {{ path: string, sha256: string }} PinnedFile
- * @typedef {{ repository: string, branch: string, commit: string, pin?: string, files: { openapi: PinnedFile }, endpointDocs?: PinnedFile[], gatewayDocs: PinnedFile, rateLimits: PinnedFile, sourceFacts?: PinnedFile[], voice?: PinnedFile[], folders?: string[] }} Manifest
+ * @typedef {{ repository: string, branch: string, commit: string, pin?: string, files: { openapi: PinnedFile }, endpointDocs?: PinnedFile[], gatewayDocs: PinnedFile, rateLimits: PinnedFile, sourceFacts?: PinnedFile[], sourceTrees?: PinnedFile[], voice?: PinnedFile[], folders?: string[] }} Manifest
  * @typedef {{
  *     resolveCommit(repository: string, branch: string): Promise<string>,
  *     fetchFile(repository: string, commit: string, path: string): Promise<Buffer>,
  *     listDirectory(repository: string, commit: string, directory: string): Promise<{ path: string, type: string, sha?: string }[]>,
+ *     listTree?(repository: string, commit: string): Promise<{ truncated: boolean, entries: { path: string, type: string, mode?: string, sha?: string }[] } | undefined>,
  *     listCommits(repository: string, head: string, options: { path?: string, page: number }): Promise<{ sha: string, subject: string }[]>,
  *     checkPath(repository: string, commit: string, path: string): Promise<void>,
  * }} Source
@@ -204,6 +205,8 @@ export function validateManifest(manifest) {
     !pinnedPath(manifest.rateLimits) ||
     !endpointDocsValid(manifest.endpointDocs) ||
     !sourceFactsValid(manifest.sourceFacts) ||
+    // Whole Fluxer source folders watched recursively by Git object ID, catching added, removed and renamed files
+    !sourceFactsValid(manifest.sourceTrees) ||
     // Fluxer's voice docs and code, each a file or folder hashed with everything under it, each path once
     !sourceFactsValid(manifest.voice) ||
     !foldersValid(manifest.folders)
@@ -754,17 +757,42 @@ const findEntry = async (manifest, source, commit, path) =>
   ).find((entry) => entry.path === path);
 
 /**
- * Every file under a watched voice path, which may be a file or a folder, by its Git object ID. The listings name each
- * ID, so nothing is downloaded unless a listing leaves one out. A path that does not exist has no files, so Fluxer
- * removing its current voice code is reported as a change instead of failing the check
+ * Every file under a watched path, which may be a file or a folder, by its Git object ID. Uses a single recursive Git
+ * tree listing when available and not truncated, falling back to folder listings otherwise, so nothing is downloaded
+ * unless a listing leaves an ID out. A path that does not exist has no files, so removing or renaming a watched tree
+ * is reported as a change instead of failing the check
  * @param {Manifest} manifest
  * @param {Source} source
  * @param {string} commit
  * @param {string} path
  */
-async function readVoiceFiles(manifest, source, commit, path) {
+async function readPathFiles(manifest, source, commit, path) {
   /** @type {Map<string, string>} */
   const ids = new Map();
+  const tree = source.listTree
+    ? await source.listTree(manifest.repository, commit)
+    : undefined;
+  if (tree && !tree.truncated) {
+    const prefix = `${path}/`;
+    for (const entry of tree.entries) {
+      if (entry.path !== path && !entry.path.startsWith(prefix)) continue;
+      if (entry.type === "tree") continue;
+      if (entry.type === "blob" && entry.mode !== "120000")
+        ids.set(
+          entry.path,
+          entry.sha ??
+            gitObjectId(
+              await source.fetchFile(manifest.repository, commit, entry.path),
+            ),
+        );
+      else if (entry.type === "blob" && entry.mode === "120000")
+        ids.set(entry.path, `symlink ${entry.sha ?? ""}`);
+      else if (entry.type === "commit")
+        ids.set(entry.path, `submodule ${entry.sha ?? ""}`);
+      else ids.set(entry.path, `${entry.type} ${entry.sha ?? ""}`);
+    }
+    return ids;
+  }
   const add = async (
     /** @type {{ path: string, type: string, sha?: string }} */ entry,
   ) => {
@@ -791,7 +819,7 @@ async function readVoiceFiles(manifest, source, commit, path) {
   return ids;
 }
 
-const voiceHash = (/** @type {Map<string, string>} */ ids) =>
+const treeHash = (/** @type {Map<string, string>} */ ids) =>
   sha256(
     Buffer.from(
       [...ids]
@@ -800,6 +828,55 @@ const voiceHash = (/** @type {Map<string, string>} */ ids) =>
         .join("\n"),
     ),
   );
+
+/**
+ * Compares watched file or folder trees against their baseline hashes and names added, removed and changed files when
+ * a tree hash differs
+ * @param {Manifest} manifest
+ * @param {Source} source
+ * @param {string} commit
+ * @param {PinnedFile[] | undefined} entries
+ */
+async function checkWatchedTrees(manifest, source, commit, entries) {
+  /** @type {{ path: string, pinned: string, current: string, changed: boolean, found: boolean, files?: { added: string[], removed: string[], changed: string[] } }[]} */
+  const results = [];
+  for (const watched of entries ?? []) {
+    const ids = await readPathFiles(manifest, source, commit, watched.path);
+    const hash = treeHash(ids);
+    const entry = {
+      path: watched.path,
+      pinned: watched.sha256,
+      current: hash,
+      changed: hash !== watched.sha256,
+      found: ids.size > 0,
+    };
+    if (entry.changed) {
+      // Only a changed path reads the baseline's listings, to name the files that differ
+      const before = await readPathFiles(
+        manifest,
+        source,
+        manifest.commit,
+        watched.path,
+      );
+      const after = [...ids.keys()];
+      results.push({
+        ...entry,
+        files: {
+          added: after.filter((path) => !before.has(path)).sort(compare),
+          removed: [...before.keys()]
+            .filter((path) => !ids.has(path))
+            .sort(compare),
+          changed: after
+            .filter(
+              (path) => before.has(path) && before.get(path) !== ids.get(path),
+            )
+            .sort(compare),
+        },
+      });
+    } else results.push(entry);
+  }
+  return results;
+}
 
 /**
  * The subfolders of each folder in folderParents at a commit, in path order
@@ -1004,39 +1081,18 @@ export async function checkUpstream(manifest, source) {
       },
     );
   }
-  /** @type {{ path: string, pinned: string, current: string, changed: boolean, found: boolean, files?: { added: string[], removed: string[], changed: string[] } }[]} */
-  const voice = [];
-  for (const watched of manifest.voice ?? []) {
-    const ids = await readVoiceFiles(manifest, source, commit, watched.path);
-    const hash = voiceHash(ids);
-    const entry = {
-      path: watched.path,
-      pinned: watched.sha256,
-      current: hash,
-      changed: hash !== watched.sha256,
-      found: ids.size > 0,
-    };
-    if (entry.changed) {
-      // Only a changed path reads the baseline's listings, to name the files that differ
-      const before = await readVoiceFiles(
-        manifest,
-        source,
-        manifest.commit,
-        watched.path,
-      );
-      const after = [...ids.keys()];
-      voice.push({
-        ...entry,
-        files: {
-          added: after.filter((path) => !before.has(path)),
-          removed: [...before.keys()].filter((path) => !ids.has(path)),
-          changed: after.filter(
-            (path) => before.has(path) && before.get(path) !== ids.get(path),
-          ),
-        },
-      });
-    } else voice.push(entry);
-  }
+  const sourceTrees = await checkWatchedTrees(
+    manifest,
+    source,
+    commit,
+    manifest.sourceTrees,
+  );
+  const voice = await checkWatchedTrees(
+    manifest,
+    source,
+    commit,
+    manifest.voice,
+  );
   // A new folder is reported for review, not counted as drift, since no watched document changed
   const folders =
     manifest.folders && (await readFolders(manifest, source, commit));
@@ -1083,6 +1139,7 @@ export async function checkUpstream(manifest, source) {
       rateLimits.changed ||
       Object.values(files).some((file) => file.changed) ||
       sourceFacts.some((fact) => fact.changed) ||
+      sourceTrees.some((entry) => entry.changed) ||
       voice.some((entry) => entry.changed),
     files: Object.fromEntries(
       Object.entries(files).map(([key, { path, pinned, current, changed }]) => [
@@ -1093,6 +1150,7 @@ export async function checkUpstream(manifest, source) {
     gatewayDocs,
     rateLimits,
     sourceFacts,
+    sourceTrees,
     voice,
     ...(folders ? { folders } : {}),
     newVoiceFolders,
@@ -1261,6 +1319,11 @@ function changeReport(result) {
       "",
     ],
     ...result.sourceFacts.map((fact) => [escape(fact.path), fact.changed, ""]),
+    ...(result.sourceTrees ?? []).map((entry) => [
+      `Source files in ${escape(entry.path)}`,
+      entry.changed,
+      entry.found ? "" : ", not found",
+    ]),
     ...result.voice.map((entry) => [
       `Voice files in ${escape(entry.path)}`,
       entry.changed,
@@ -1289,6 +1352,20 @@ function changeReport(result) {
       "Review the SDK limits and checks that cite each changed file",
       "",
       ...nameList("Changed", facts),
+      "",
+    );
+  const sourceTrees = (result.sourceTrees ?? []).filter((entry) => entry.files);
+  if (sourceTrees.length)
+    lines.push(
+      "### Fluxer source folders the SDK tracks",
+      "",
+      "Review added, removed or changed files in each watched source folder",
+      "",
+      ...sourceTrees.flatMap(({ path, files }) => [
+        ...nameList(`Files added in ${escape(path)}`, files?.added ?? []),
+        ...nameList(`Files removed from ${escape(path)}`, files?.removed ?? []),
+        ...nameList(`Files changed in ${escape(path)}`, files?.changed ?? []),
+      ]),
       "",
     );
   const voice = result.voice.filter((entry) => entry.files);
@@ -1535,6 +1612,32 @@ export const githubSource = {
       ...(commitPattern.test(sha ?? "") ? { sha } : {}),
     }));
   },
+  async listTree(repository, commit) {
+    if (!commitPattern.test(commit))
+      throw new Error("Upstream files are read only at exact commits");
+    const url = `https://api.github.com/repos/${repository}/git/trees/${commit}?recursive=1`;
+    const body = JSON.parse(
+      (
+        await download(url, githubHeaders("application/vnd.github+json"))
+      ).toString("utf8"),
+    );
+    if (!body || !Array.isArray(body.tree))
+      throw new Error("Upstream Git tree listing is invalid");
+    const entries = [];
+    for (const entry of body.tree) {
+      if (typeof entry?.path !== "string" || typeof entry.type !== "string")
+        throw new Error("Upstream Git tree listing is invalid");
+      if (entry.path.startsWith("/") || entry.path.split("/").includes(".."))
+        throw new Error("Upstream Git tree listing is outside the repository");
+      entries.push({
+        path: entry.path,
+        type: entry.type,
+        ...(typeof entry.mode === "string" ? { mode: entry.mode } : {}),
+        ...(commitPattern.test(entry.sha ?? "") ? { sha: entry.sha } : {}),
+      });
+    }
+    return { truncated: Boolean(body.truncated), entries };
+  },
   async listCommits(repository, head, { path, page }) {
     if (!commitPattern.test(head))
       throw new Error("Upstream files are read only at exact commits");
@@ -1600,6 +1703,20 @@ function remembering(source) {
       once(`list ${repository} ${commit} ${directory}`, () =>
         source.listDirectory(repository, commit, directory),
       ),
+    ...(source.listTree
+      ? {
+          listTree: (
+            /** @type {string} */ repository,
+            /** @type {string} */ commit,
+          ) =>
+            once(`tree ${repository} ${commit}`, () =>
+              /** @type {NonNullable<Source["listTree"]>} */ (source.listTree)(
+                repository,
+                commit,
+              ),
+            ),
+        }
+      : {}),
   };
 }
 
@@ -1771,6 +1888,10 @@ async function readBaseline(manifest, path) {
       (fact) =>
         previous.sourceFacts?.find(({ path }) => path === fact.path) ?? fact,
     );
+    const sourceTrees = manifest.sourceTrees?.map(
+      (entry) =>
+        previous.sourceTrees?.find(({ path }) => path === entry.path) ?? entry,
+    );
     // The same goes for a watched voice path, and for the folder list when the previous run recorded none
     const voice = manifest.voice?.map(
       (entry) =>
@@ -1781,6 +1902,7 @@ async function readBaseline(manifest, path) {
       manifest: {
         ...previous,
         ...(sourceFacts ? { sourceFacts } : {}),
+        ...(sourceTrees ? { sourceTrees } : {}),
         ...(voice ? { voice } : {}),
         ...(folders ? { folders } : {}),
       },
@@ -1825,6 +1947,14 @@ function observation(manifest, result, pin) {
     ...(manifest.sourceFacts
       ? {
           sourceFacts: result.sourceFacts.map(({ path, current }) => ({
+            path,
+            sha256: current,
+          })),
+        }
+      : {}),
+    ...(manifest.sourceTrees
+      ? {
+          sourceTrees: result.sourceTrees.map(({ path, current }) => ({
             path,
             sha256: current,
           })),
@@ -1885,6 +2015,7 @@ export async function runUpstream(
       gatewayDocs,
       rateLimits,
       sourceFacts,
+      sourceTrees,
       voice,
       folders,
       ...identity
@@ -1901,6 +2032,7 @@ export async function runUpstream(
       gatewayDocs,
       rateLimits,
       ...(sourceFacts ? { sourceFacts } : {}),
+      ...(sourceTrees ? { sourceTrees } : {}),
       ...(voice ? { voice } : {}),
       ...(folders ? { folders } : {}),
     };
