@@ -39,7 +39,7 @@
         "directory": "projects/sdk"
     },
     "engines": {
-        "node": ">=24.15.0"
+        "node": ">=26.13.0"
     },
     "imports": {
         "#sdk/*": {
@@ -78,6 +78,7 @@
         "esm-only.cjs",
         "examples/starter",
         "agents/AGENTS.md",
+        "agents/TRIAGE.md",
         "LICENSE",
         "CHANGELOG.md"
     ],
@@ -103,6 +104,7 @@
         "test:examples": "node --import ../scripts/no-fluxer-network.mjs --test --test-timeout=30000 --test-force-exit \"examples/**/*.test.*\"",
         "test:public-contract": "node tests/contract/public-client-contract.js",
         "test:upstream:guild-features": "pnpm run build && node tests/contract/upstream-guild-features.js",
+        "test:upstream:gateway": "pnpm run build && node tests/contract/upstream-gateway.js",
         "test:package": "node tests/packaging/package-check.js",
         "test:npm": "node tests/packaging/npm-package-check.js",
         "test:live": "node tests/live/sandbox.js",
@@ -191,7 +193,7 @@
     },
     "devDependencies": {
         "@effect/tsgo": "0.73.4",
-        "@types/node": "24.19.2",
+        "@types/node": "26.6.7",
         "@types/ws": "8.18.2",
         "effect": "4.1.5",
         "npm": "12.2.3",

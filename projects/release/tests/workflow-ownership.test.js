@@ -61,7 +61,7 @@ test("A broken website workflow fails the repository suite but not npm validatio
         // The same break in a workflow that publishes to npm
         copyWith(release, "release-prepare.yml", (text) => text.replace(pinned, "uses: $1@v7"))
         // A Check that no longer certifies the declared Node floor consumers
-        copyWith(matrix, "ci.yml", (text) => text.replace("          - name: SDK consumers on the declared Node floor\n            runtime: node@24.15.0\n", ""))
+        copyWith(matrix, "ci.yml", (text) => text.replace("          - name: SDK consumers on the declared Node floor\n            runtime: node@26.13.0\n", ""))
         const [websiteGeneral, websiteRelease, releaseGeneral, releaseRelease, matrixRelease] = await Promise.all([
             run("general", website), run("release", website), run("general", release), run("release", release), run("release", matrix),
         ])

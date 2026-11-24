@@ -9,7 +9,7 @@ search:
     - my first bot
 ---
 
-Before starting, [create a Fluxer bot](/docs/create-a-bot/), copy its token when Fluxer shows it and add the bot to a community. Fluxer shows a token only once, and the project below has a file for it. Fluxerly is tested against Node.js 24.15 or newer
+Before starting, [create a Fluxer bot](/docs/create-a-bot/), copy its token when Fluxer shows it and add the bot to a community. Fluxer shows a token only once, and the project below has a file for it. Fluxerly is tested against Node.js 26.13 or newer
 
 ## Generate the project
 

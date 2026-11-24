@@ -6,7 +6,7 @@ description: Check a bot before it runs unattended, with the guide section that 
 
 ## Before the first start
 
-- Run Node.js 24.15 or newer
+- Run Node.js 26.13 or newer
 - Read the token from `process.env.FLUXER_BOT_TOKEN`, never from a source file or an image
 
 Explained in: [Runtime requirements](/docs/support-and-compatibility/#runtime-and-upgrade-requirements) · [Preparing the bot](/docs/deploying/#prepare-the-bot)

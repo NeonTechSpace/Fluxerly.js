@@ -10,7 +10,7 @@ Use [the repository guide](/docs/REPOSITORY.md) for setup and file locations
 | Package | `@neontechspace/fluxerly`, initially one published package with internal module boundaries |
 | Language | TypeScript 7 |
 | Module format | ECMAScript modules (ESM) |
-| Runtime | Tested against Node.js 24.15 or newer |
+| Runtime | Tested against Node.js 26.13 or newer |
 | Internal implementation | Effect 4 |
 | WebSocket transport | `ws`, kept behind internal SDK boundaries |
 | Public entry points | Default JavaScript/TypeScript and Effect, sharing one implementation |
@@ -25,7 +25,7 @@ The SDK supports JavaScript and TypeScript 7.
 TypeScript 6 and earlier are outside the SDK's support policy.
 JavaScript consumers do not need a TypeScript installation
 
-Fluxerly is tested against Node.js 24.15 or newer, the oldest Node 24 release that npm 12 supports.
+Fluxerly is tested against Node.js 26.13 or newer, the first Node.js 26 Active LTS release.
 Use current security updates within a supported Node.js release line. The development pin is maintained separately from this compatibility floor
 
 ### Support policy

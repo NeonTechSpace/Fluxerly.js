@@ -14,7 +14,7 @@ export const site = siteOrigin
 const base = import.meta.env.PUBLIC_DOCS_BASE ?? "/docs/"
 const version = process.env.DOCS_VERSION ?? (JSON.parse(readFileSync("../sdk/package.json", "utf8")) as { version: string }).version
 const packageSpec = process.env.DOCS_PACKAGE_SPEC ?? "@neontechspace/fluxerly"
-const about = `Fluxerly.js is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect. Requires Node.js 24.15 or newer, ESM and TypeScript 7\n\nVoice: Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it\n\nThese files describe SDK version ${version}`
+const about = `Fluxerly.js is a Fluxer-native bot SDK for JavaScript, TypeScript and Effect. Requires Node.js 26.13 or newer, ESM and TypeScript 7\n\nVoice: Fluxerly waits for Fluxer's new voice system and does not support voice over LiveKit. Fluxer is replacing LiveKit with its own voice system, which should arrive soon, and bot voice will come with it\n\nThese files describe SDK version ${version}`
 
 export const guides = Object.entries(raw)
     .map(([path, source]) => ({
@@ -95,7 +95,7 @@ export function skillMarkdown(): string {
 
 ## Requirements and install
 
-- Package: \`@neontechspace/fluxerly\` (ESM-only, \`"type": "module"\` in \`package.json\`, Node.js 24.15 or newer)
+- Package: \`@neontechspace/fluxerly\` (ESM-only, \`"type": "module"\` in \`package.json\`, Node.js 26.13 or newer)
 - TypeScript: Node.js runs \`.ts\` directly without building. Typechecking requires TypeScript 7 and \`@types/node\`
 - Entry points: \`@neontechspace/fluxerly\`, \`/effect\`, \`/testing\`, \`/effect/testing\`. Never import from \`dist\` or \`src\`
 

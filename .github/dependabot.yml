@@ -18,7 +18,7 @@ updates:
     cooldown:
       default-days: 7
     # The Effect peer minimum and development pin change only by decision. TypeScript and
-    # @types/node majors are separate decisions (web TypeScript 6, Node 24 floor)
+    # @types/node majors are separate decisions (web TypeScript 6, Node 26 floor)
     ignore:
       - dependency-name: effect
       - dependency-name: typescript

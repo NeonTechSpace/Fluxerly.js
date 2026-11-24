@@ -1175,7 +1175,7 @@
             "source": "troubleshooting guide"
         },
         {
-            "q": "Error: Fluxerly needs Node.js 24.15 or newer, but this is Node.js 22.12.0",
+            "q": "Error: Fluxerly needs Node.js 26.13 or newer, but this is Node.js 24.15.0",
             "kind": "log-line",
             "set": "tune",
             "expect": [

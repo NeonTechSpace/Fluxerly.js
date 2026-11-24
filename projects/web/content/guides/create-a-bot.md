@@ -8,7 +8,7 @@ A Fluxer bot is an application with its own bot account. This page creates the a
 
 ## What is needed
 
-- Node.js 24.15 or newer, which Fluxerly is tested against. Run `node --version` to check
+- Node.js 26.13 or newer, which Fluxerly is tested against. Run `node --version` to check
 - A registered Fluxer account. If the Fluxer app shows **Claim account**, use it first to add an email and password, because an unclaimed account cannot create applications
 - A community where that account has the `ManageGuild` or `Administrator` permission, such as a private test community
 

@@ -12,7 +12,7 @@ Start with the [small bot](/docs/small-bot/) for a guided tour of commands, argu
 
 ## Run an example
 
-Set up a project as in the [quick start](/docs/quick-start/): A folder with `"type": "module"` in `package.json` and the SDK installed. Save the example as `bot.js`, or as `bot.ts` to keep the TypeScript version, which Node.js 24 runs directly
+Set up a project as in the [quick start](/docs/quick-start/): A folder with `"type": "module"` in `package.json` and the SDK installed. Save the example as `bot.js`, or as `bot.ts` to keep the TypeScript version, which Node.js 26 runs directly
 
 Each example's folder on GitHub also holds its own test, `bot.test.js` or `bot.test.ts`, to use instead of the generated project's `!ping` test. It runs the example without a token or a network, as [Testing a bot](/docs/testing/) shows. Examples with required variables read them in `setup`, so their tests set them before calling `ready()`
 

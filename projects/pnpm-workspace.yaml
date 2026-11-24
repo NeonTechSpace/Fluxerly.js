@@ -12,6 +12,7 @@ minimumReleaseAgeExclude:
   - '@cloudflare/workers-utils@0.57.0'
   - miniflare@5.20261123.1-beta
   - wrangler@4.168.0
+  - '@types/node@26.6.7'
 overrides:
   # TypeDoc 0.28 allows only minimatch 10, which every advisory below 11.0.1 covers. Its patch below replaces the one call
   # minimatch 11 removed

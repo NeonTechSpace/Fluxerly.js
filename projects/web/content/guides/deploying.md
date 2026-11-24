@@ -14,7 +14,7 @@ A bot started with the default API's `runBot` handles both signals by default, c
 
 Every setup below expects the same project:
 
-- Node.js 24.15 or newer on the server or in the image
+- Node.js 26.13 or newer on the server or in the image
 - The `"type": "module"` field in `package.json`, because the SDK is ESM-only
 - A bot started with `runBot`. The default API stops cleanly on SIGINT and SIGTERM unless `processSignals` is `false`. The native Effect API does so only when `processSignals` is `true`, and otherwise relies on its launcher to stop the program on those signals
 - The token read from `process.env.FLUXER_BOT_TOKEN`, never written in a source file, committed to version control or copied into an image
@@ -32,7 +32,7 @@ The file holds one `KEY=value` line per variable. Write the value without quotes
 FLUXER_BOT_TOKEN=paste-the-token-here
 ```
 
-For TypeScript, run `bot.ts` instead of `bot.js`. Node.js 24 runs TypeScript files directly, so no build step is required
+For TypeScript, run `bot.ts` instead of `bot.js`. Node.js 26 runs TypeScript files directly, so no build step is required
 
 ## What happens on shutdown
 
@@ -139,7 +139,7 @@ node_modules
 ```
 
 ```dockerfile
-FROM node:24-slim
+FROM node:26-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
@@ -148,7 +148,7 @@ USER node
 CMD ["node", "bot.js"]
 ```
 
-The `node:24-slim` image tracks the newest Node.js 24 release. Adjust the copy and install lines for pnpm or another lockfile
+The `node:26-slim` image tracks the newest Node.js 26 release. Adjust the copy and install lines for pnpm or another lockfile
 
 ```sh
 docker build -t fluxer-bot .

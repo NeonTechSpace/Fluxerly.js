@@ -42,7 +42,7 @@ test("a description long enough stays as it is", () => {
 test("a short description goes on with the page's lead and opening paragraphs, whole sentences only", () => {
     const text = completeDescription(
         "Send !ping and receive Pong! from a bot",
-        ["", "Before starting, create a Fluxer bot, store its token and add it to a community. Fluxerly is tested against Node.js 24.15 or newer, and this sentence is far too long to fit in what remains of a search result"],
+        ["", "Before starting, create a Fluxer bot, store its token and add it to a community. Fluxerly is tested against Node.js 26.13 or newer, and this sentence is far too long to fit in what remains of a search result"],
         ["Install the SDK", "Write the bot"],
     )
     assert.equal(text, "Send !ping and receive Pong! from a bot. Before starting, create a Fluxer bot, store its token and add it to a community")

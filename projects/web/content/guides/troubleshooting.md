@@ -9,7 +9,7 @@ search:
 
 Start with what the bot printed. The client logs startup, readiness, lost connections, rate-limit waits, shutdown and every application error by default. Each readable log line shows its record code in brackets after the category, such as `[lifecycle.connectionLost]`. Then check the operation's [Result](/docs/glossary/#result) or native Effect error. The `describeError(error)` function prints any SDK error with its code, suggested fix and cause chain
 
-The [error and log codes](/docs/codes/) page lists every code with its meaning and fix. The table below covers the most common ones
+The [error and log codes](/docs/codes/) page lists every code with its meaning and fix. Run `fluxerly doctor` in a bot project for an offline static check of Node.js, ESM, `tsconfig.json`, TypeScript 7, Effect and installed package drift, or `fluxerly triage` to investigate a bot or SDK bug with a coding agent (or `fluxerly triage --print` to print the redacted brief). The table below covers the most common log codes
 
 ## Match a log line with its fix
 
@@ -64,7 +64,7 @@ Node.js could not open the file named after `--env-file`. Run the command from t
 ## The process fails with a Node.js version error
 
 ```text
-Error: Fluxerly needs Node.js 24.15 or newer, but this is Node.js 22.12.0. Install a current Node.js release from https://nodejs.org, then run the bot again
+Error: Fluxerly needs Node.js 26.13 or newer, but this is Node.js 24.15.0. Install a current Node.js release from https://nodejs.org, then run the bot again
 ```
 
 The SDK checks the Node.js version when it loads. Run `node --version` to see the version in use, install a newer release, and open a new terminal so that it is found first

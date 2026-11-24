@@ -10,7 +10,7 @@ Before production use, check how the application handles failures, restarts and 
 
 | Area              | Current policy                                                                                   |
 | ----------------- | ------------------------------------------------------------------------------------------------ |
-| Runtime           | Tested against Node.js 24.15 or newer                                                            |
+| Runtime           | Tested against Node.js 26.13 or newer                                                            |
 | Modules           | ESM only, with `"type": "module"` in `package.json` or `.mjs` files                              |
 | Package managers  | npm, pnpm or Bun installs the package, and Node.js runs the bot                                  |
 | JavaScript        | No TypeScript compiler requirement                                                               |
