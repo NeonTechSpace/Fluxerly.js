@@ -1614,7 +1614,7 @@ field|shared|GatewayDispatchPayloads.CALL_CREATE|CallCreatePayload|optional=fals
 field|shared|GatewayDispatchPayloads.CALL_DELETE|CallDeletePayload|optional=false|nullable=false
 field|shared|GatewayDispatchPayloads.CALL_UPDATE|CallUpdatePayload|optional=false|nullable=false
 field|shared|GatewayDispatchPayloads.CHANNEL_CREATE|ChannelObject|optional=false|nullable=false
-field|shared|GatewayDispatchPayloads.CHANNEL_DELETE|ChannelObject|optional=false|nullable=false
+field|shared|GatewayDispatchPayloads.CHANNEL_DELETE|ChannelDeletePayload|optional=false|nullable=false
 field|shared|GatewayDispatchPayloads.CHANNEL_MEMBER_COUNTS_UPDATE|ChannelMemberCountsUpdatePayload|optional=false|nullable=false
 field|shared|GatewayDispatchPayloads.CHANNEL_PINS_ACK|ChannelPinsAckPayload|optional=false|nullable=false
 field|shared|GatewayDispatchPayloads.CHANNEL_PINS_UPDATE|ChannelPinsUpdatePayload|optional=false|nullable=false
@@ -1842,7 +1842,7 @@ field|shared|GuildChannel.parentId|null | string | undefined|optional=true|nulla
 field|shared|GuildChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
 field|shared|GuildChannel.position|number | undefined|optional=true|nullable=false
 field|shared|GuildChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
-field|shared|GuildChannel.rawType|number | undefined|optional=true|nullable=false
+field|shared|GuildChannel.rawType|null | number | undefined|optional=true|nullable=true
 field|shared|GuildChannel.rtcRegion|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.topic|null | string | undefined|optional=true|nullable=true
 field|shared|GuildChannel.totalMessageSent|number | undefined|optional=true|nullable=false
@@ -2181,7 +2181,7 @@ field|shared|GuildUnknownChannel.parentId|null | string | undefined|optional=tru
 field|shared|GuildUnknownChannel.permissionOverwrites|readonly PermissionOverwrite[] | undefined|optional=true|nullable=false
 field|shared|GuildUnknownChannel.position|number | undefined|optional=true|nullable=false
 field|shared|GuildUnknownChannel.rateLimitPerUser|number | undefined|optional=true|nullable=false
-field|shared|GuildUnknownChannel.rawType|number|optional=false|nullable=false
+field|shared|GuildUnknownChannel.rawType|null | number|optional=false|nullable=true
 field|shared|GuildUnknownChannel.rtcRegion|null | string | undefined|optional=true|nullable=true
 field|shared|GuildUnknownChannel.topic|null | string | undefined|optional=true|nullable=true
 field|shared|GuildUnknownChannel.type|"unknown"|optional=false|nullable=false
@@ -2575,7 +2575,7 @@ field|shared|MessageReaction.userId|string|optional=false|nullable=false
 field|shared|MessageReactionBatch.channelId|string|optional=false|nullable=false
 field|shared|MessageReactionBatch.guildId|string | undefined|optional=true|nullable=false
 field|shared|MessageReactionBatch.id|string|optional=false|nullable=false
-field|shared|MessageReactionBatch.reactions|readonly { readonly userId: string; readonly emoji: ReactionEmoji; }[]|optional=false|nullable=false
+field|shared|MessageReactionBatch.reactions|readonly { readonly userId: string; readonly emoji: ReactionEmoji; readonly member?: GuildMember; }[]|optional=false|nullable=false
 field|shared|MessageReactionEmoji.animated|boolean | null | undefined|optional=true|nullable=true
 field|shared|MessageReactionEmoji.id|null | string | undefined|optional=true|nullable=true
 field|shared|MessageReactionEmoji.name|string|optional=false|nullable=false
@@ -2868,7 +2868,7 @@ field|shared|RateLimitError.hint|string | undefined|optional=true|nullable=false
 field|shared|RateLimitError.retryAfterMs|null | number|optional=false|nullable=true
 field|shared|RateLimitError.source|"gateway" | "http"|optional=false|nullable=false
 field|shared|RateLimitError.toJSON|() => FluxerlyErrorJson|optional=false|nullable=false
-field|shared|RawDispatchEvent.d|AuthSessionChangePayload | CallCreatePayload | CallDeletePayload | CallUpdatePayload | ChannelMemberCountsUpdatePayload | ChannelObject | ChannelPinsAckPayload | ChannelPinsUpdatePayload | ChannelRecipientAddPayload | ChannelRecipientRemovePayload | ChannelUpdateBulkPayload | EntranceSoundPlayPayload | FavoriteMemeDeletePayload | ForumUnreadsPayload | GuildAuditLogEntryCreatePayload | GuildBanAddPayload | GuildBanRemovePayload | GuildCountsUpdatePayload | GuildDeletePayload | GuildEmojisUpdatePayload | GuildHealthUpdatePayload | GuildMemberAddPayload | GuildMemberListUpdatePayload | GuildMemberRemovePayload | GuildMemberUpdatePayload | GuildMembersChunkPayload | GuildReadyObject | GuildRoleCreatePayload | GuildRoleDeletePayload | GuildRoleUpdateBulkPayload | GuildRoleUpdatePayload | GuildStickersUpdatePayload | GuildUpdatePayload | InviteCreatePayload | InviteDeletePayload | MemeObject | MessageAckPayload | MessageCreatePayload | MessageDeleteBulkPayload | MessageDeletePayload | MessageObject | MessageReactionAddManyPayload | MessageReactionAddPayload | MessageReactionRemoveAllPayload | MessageReactionRemoveEmojiPayload | MessageReactionRemovePayload | MessageUpdatePayload | PassiveUpdatesPayload | PresenceObject | PresenceUpdateBulkPayload | RateLimitedPayload | ReadyPayload | RecentMentionDeletePayload | RelationshipAddPayload | RelationshipRemovePayload | ResumedPayload | SavedMessageDeletePayload | SessionsReplacePayload | ThreadCreatePayload | ThreadDeletePayload | ThreadListSyncPayload | ThreadMemberListUpdatePayload | ThreadMemberUpdatePayload | ThreadMembersUpdatePayload | ThreadObject | TypingStartPayload | UserConnectionsUpdatePayload | UserGuildSettingsObject | UserNoteUpdatePayload | UserObject | UserPinnedDmsUpdatePayload | UserSettingsObject | VoiceServerUpdatePayload | VoiceSignalPayload | VoiceStateObject | WebauthnCredentialsUpdatePayload | WebhooksUpdatePayload | unknown|optional=false|nullable=false
+field|shared|RawDispatchEvent.d|AuthSessionChangePayload | CallCreatePayload | CallDeletePayload | CallUpdatePayload | ChannelDeletePayload | ChannelMemberCountsUpdatePayload | ChannelObject | ChannelPinsAckPayload | ChannelPinsUpdatePayload | ChannelRecipientAddPayload | ChannelRecipientRemovePayload | ChannelUpdateBulkPayload | EntranceSoundPlayPayload | FavoriteMemeDeletePayload | ForumUnreadsPayload | GuildAuditLogEntryCreatePayload | GuildBanAddPayload | GuildBanRemovePayload | GuildCountsUpdatePayload | GuildDeletePayload | GuildEmojisUpdatePayload | GuildHealthUpdatePayload | GuildMemberAddPayload | GuildMemberListUpdatePayload | GuildMemberRemovePayload | GuildMemberUpdatePayload | GuildMembersChunkPayload | GuildReadyObject | GuildRoleCreatePayload | GuildRoleDeletePayload | GuildRoleUpdateBulkPayload | GuildRoleUpdatePayload | GuildStickersUpdatePayload | GuildUpdatePayload | InviteCreatePayload | InviteDeletePayload | MemeObject | MessageAckPayload | MessageCreatePayload | MessageDeleteBulkPayload | MessageDeletePayload | MessageObject | MessageReactionAddManyPayload | MessageReactionAddPayload | MessageReactionRemoveAllPayload | MessageReactionRemoveEmojiPayload | MessageReactionRemovePayload | MessageUpdatePayload | PassiveUpdatesPayload | PresenceObject | PresenceUpdateBulkPayload | RateLimitedPayload | ReadyPayload | RecentMentionDeletePayload | RelationshipAddPayload | RelationshipRemovePayload | ResumedPayload | SavedMessageDeletePayload | SessionsReplacePayload | ThreadCreatePayload | ThreadDeletePayload | ThreadListSyncPayload | ThreadMemberListUpdatePayload | ThreadMemberUpdatePayload | ThreadMembersUpdatePayload | ThreadObject | TypingStartPayload | UserConnectionsUpdatePayload | UserGuildSettingsObject | UserNoteUpdatePayload | UserObject | UserPinnedDmsUpdatePayload | UserSettingsObject | VoiceServerUpdatePayload | VoiceSignalPayload | VoiceStateObject | WebauthnCredentialsUpdatePayload | WebhooksUpdatePayload | unknown|optional=false|nullable=false
 field|shared|RawDispatchEvent.documented|false | true|optional=false|nullable=false
 field|shared|RawDispatchEvent.s|number|optional=false|nullable=false
 field|shared|RawDispatchEvent.shardId|number|optional=false|nullable=false

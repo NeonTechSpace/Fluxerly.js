@@ -2,7 +2,8 @@
  * Guild channel projection: Decoders for REST and gateway channel, thread, thread member and forum tag data, shared by
  * channel operations, the channel cache, gateway dispatch and the message, search and audit-log projections.
  * Invariant: Each known ChannelType number decodes into its own frozen shape and any other number into "unknown" with
- * rawType. A thread needs its parent, owner, name and metadata. Unknown flag bits, enum numbers and tag-setting strings
+ * rawType, while a synthesized CHANNEL_DELETE omitting type decodes into "unknown" with rawType null. A thread needs
+ * its parent, owner, name and metadata. Unknown flag bits, enum numbers and tag-setting strings
  * are kept, and a malformed field rejects the whole payload rather than being dropped.
  * Implements [SDK contracts: Validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements)
  */
@@ -102,11 +103,14 @@ function decodeOverwrites(value: unknown): readonly PermissionOverwrite[] | unde
 
 /** Fields any community channel can carry, validated whatever its type */
 // oxlint-disable-next-line complexity -- a flat decoder, one check and one field mapping per common channel field
-function decodeCommonFields(value: Record<string, unknown>): Record<string, unknown> | undefined {
+function decodeCommonFields(
+    value: Record<string, unknown>,
+    allowMissingType = false,
+): Record<string, unknown> | undefined {
     if (
         !identifier(value.id) ||
         !identifier(value.guild_id) ||
-        !nonNegativeInt32(value.type) ||
+        !(value.type === undefined ? allowMissingType : nonNegativeInt32(value.type)) ||
         (value.name !== undefined && typeof value.name !== "string") ||
         !optionalNullableText(value.topic) ||
         (value.url !== undefined && value.url !== null && !url(value.url)) ||
@@ -341,8 +345,22 @@ export function decodeGuildChannels(value: unknown, guildId: string): readonly G
     return Object.freeze(channels)
 }
 
+/**
+ * Decode a guild CHANNEL_DELETE body. When a session loses ViewChannel, Fluxer's gateway synthesizes CHANNEL_DELETE
+ * with only id and guild_id and no type (fluxer_gateway/src/fluxer_gateway/guild/dispatch/visibility.gleam:593-604 at
+ * 66cede64). Only CHANNEL_DELETE accepts an omitted type, decoding it as GuildUnknownChannel with rawType null
+ */
+function decodeGuildChannelDelete(value: unknown): GuildChannel | undefined {
+    if (!record(value)) return undefined
+    if (value.type !== undefined) return decodeGuildChannel(value)
+    const decoded = decodeCommonFields(value, true)
+    if (!decoded) return undefined
+    return Object.freeze({ ...decoded, type: "unknown" as const, rawType: null }) as GuildChannel
+}
+
 /** Decode only guild-scoped channel events, with private-channel events intentionally returning undefined */
 export function decodeChannelEvent(event: keyof typeof channelEvents, value: unknown) {
+    if (event === "CHANNEL_DELETE") return decodeGuildChannelDelete(value)
     if (event !== "CHANNEL_UPDATE_BULK") return decodeGuildChannel(value)
     if (!record(value) || !identifier(value.guild_id)) return undefined
     const channels = decodeGuildChannels(value.channels, value.guild_id)

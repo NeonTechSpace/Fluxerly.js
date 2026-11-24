@@ -376,10 +376,11 @@ export interface GatewayOptions {
      */
     readonly flags?: {
         /**
-         * Ask Fluxer to merge runs of reaction additions in direct messages and group direct messages into one
-         * messageReactionAddMany event (MESSAGE_REACTION_ADD_MANY) instead of many messageReactionAdd events.
-         * Community reactions always arrive individually. This is Fluxer's DEBOUNCE_MESSAGE_REACTIONS flag, value 2.
-         * Defaults to false
+         * Ask Fluxer to buffer community and direct-message reaction additions for 650 ms (up to 512 buffered entries),
+         * cancelling additions removed within that window, and flush multi-reaction runs on the same message as
+         * messageReactionAddMany (MESSAGE_REACTION_ADD_MANY) with optional guildId and per-entry member.
+         * A single addition still arrives as messageReactionAdd. This is Fluxer's DEBOUNCE_MESSAGE_REACTIONS flag,
+         * value 2. Defaults to false
          */
         readonly debounceMessageReactions?: boolean
     }

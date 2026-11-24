@@ -295,6 +295,8 @@ export type ObservedPresenceStatus = "online" | "idle" | "dnd" | "offline" | "in
 
 /**
  * Visible online presences grouped into one event after a community becomes available again.
+ * Fluxer's gateway at commit 66cede64 emits individual presenceUpdate frames instead of bulk batches, so this event
+ * stays decoded for documented-protocol compatibility when an instance sends PRESENCE_UPDATE_BULK.
  * Fluxer supplies community context for every entry, omits the recipient's own presence and splits batches at 500 entries.
  * A batch can include visible members outside this client's selected member IDs.
  * The frozen batch does not refill a cache, acknowledge subscriptions or emit individual presenceUpdate events
@@ -456,9 +458,9 @@ export interface CallUpdate {
  * @category Events and collectors
  */
 export interface CallCreate extends CallUpdate {
-    /** Every recipient of the channel, whether or not they joined the call. Present only on initial or recovered call state */
+    /** Every recipient of the channel, whether or not they joined the call. Fluxer's gateway at commit 66cede64 omits this field on gateway CALL_CREATE dispatches, and the SDK still decodes it when supplied */
     readonly recipientIds?: readonly string[]
-    /** Unix time in milliseconds when the call was opened. Present only on initial or recovered call state */
+    /** Unix time in milliseconds when the call was opened. Fluxer's gateway at commit 66cede64 omits this field on gateway CALL_CREATE dispatches, and the SDK still decodes it when supplied */
     readonly createdAtMs?: number
 }
 
@@ -471,7 +473,7 @@ export interface CallDelete {
     /** Private channel ID the call took place in */
     readonly channelId: string
     /** True when the call became unavailable rather than ending.
-     * An unavailable call can return with a later callCreate that includes its recipients and creation time, although Fluxer does not guarantee recovery
+     * An unavailable call can return with a later callCreate, although Fluxer does not guarantee recovery
      */
     readonly unavailable: boolean
 }

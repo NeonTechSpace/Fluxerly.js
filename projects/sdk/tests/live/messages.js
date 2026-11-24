@@ -1684,16 +1684,23 @@ async function verifyEmbeds(ops, channelId) {
     assert.equal(paddedFetch.channelId, channelId)
     report(stage, true)
 
-    // Message sends parse the raw body, so Fluxer takes empty embed text literally there: An empty author name fails its
-    // own length check, which the SDK checks locally, while an embed with no values is kept
-    // (MessageRequestParser.ts:383-402, MessageRequestSchemas.ts:34-53, 100-120)
+    // Fluxer's embed send schema strips nested objects whose required field is omitted, null or "", so author: { name: "" }
+    // succeeds with HTTP 200 and omits author, while a blank name such as "   " is kept and fails length validation with
+    // HTTP 400 (packages/schema/src/domains/message/MessageRequestSchemas.ts:39-62, 104-123 at 66cede64)
     stage = "embeds_empty_text_literal_on_sends"
     const emptyName = await sandboxApi("POST", `/channels/${channelId}/messages`, {
         content: "Text",
         embeds: [{ title: `embed-empty-${randomUUID()}`, author: { name: "" } }],
         allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
     })
-    assert.equal(emptyName.status, 400)
+    assert.equal(emptyName.status, 200)
+    assert.equal(emptyName.data?.embeds?.[0]?.author ?? null, null)
+    const blankName = await sandboxApi("POST", `/channels/${channelId}/messages`, {
+        content: "Text",
+        embeds: [{ title: `embed-blank-${randomUUID()}`, author: { name: "   " } }],
+        allowed_mentions: { parse: [], users: [], roles: [], replied_user: false },
+    })
+    assert.equal(blankName.status, 400)
     const withoutValues = await ops.send({ content: `embed-none-${randomUUID()}`, embeds: [{}] })
     assert.equal((await api("GET", `/channels/${channelId}/messages/${withoutValues.id}`)).status, 200)
     report(stage, true)

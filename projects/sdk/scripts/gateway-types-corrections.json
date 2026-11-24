@@ -234,6 +234,140 @@
                     }
                 }
             ]
+        },
+        {
+            "event": "CHANNEL_DELETE",
+            "reason": "When a session loses ViewChannel, the gateway synthesizes CHANNEL_DELETE with only id and guild_id and omits type",
+            "evidence": [
+                "fluxer_gateway/src/fluxer_gateway/guild/dispatch/visibility.gleam:510-515",
+                "fluxer_gateway/src/fluxer_gateway/guild/dispatch/visibility.gleam:593-604"
+            ],
+            "addFields": [
+                {
+                    "name": "type",
+                    "optional": true,
+                    "description": "The type of the channel, omitted when the gateway synthesizes CHANNEL_DELETE after the session loses ViewChannel",
+                    "shape": {
+                        "kind": "integer"
+                    }
+                }
+            ]
+        },
+        {
+            "event": "FORUM_UNREADS",
+            "reason": "The document leaves the forum unread entry shape in prose, so the generated type fell back to unknown[]",
+            "evidence": [
+                "fluxer_gateway/src/fluxer_gateway/guild/requests/forum_unreads.gleam:219-233",
+                "fluxer_gateway/src/fluxer_gateway/guild/requests/forum_unreads.gleam:293-303",
+                "fluxer_gateway/src/fluxer_gateway/guild/requests/forum_unreads.gleam:312-321"
+            ],
+            "replaceFields": [
+                {
+                    "name": "threads",
+                    "optional": false,
+                    "description": "One entry for each requested post found in the channel",
+                    "shape": {
+                        "kind": "array",
+                        "item": {
+                            "kind": "struct",
+                            "fields": [
+                                {
+                                    "name": "thread_id",
+                                    "optional": false,
+                                    "description": "The ID of the forum or media post",
+                                    "shape": {
+                                        "kind": "snowflake"
+                                    }
+                                },
+                                {
+                                    "name": "count",
+                                    "optional": true,
+                                    "description": "Messages after the requested ack_message_id, capped at 25. Present unless missing is true",
+                                    "shape": {
+                                        "kind": "integer"
+                                    }
+                                },
+                                {
+                                    "name": "missing",
+                                    "optional": true,
+                                    "description": "Always true when the request had no valid ack_message_id for this post",
+                                    "shape": {
+                                        "kind": "true"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "event": "THREAD_MEMBER_LIST_UPDATE",
+            "reason": "The document leaves the thread member list entry shape in prose, so the generated type fell back to unknown[]",
+            "evidence": ["fluxer_gateway/src/fluxer_gateway/threads/subscriptions.gleam:534-595"],
+            "replaceFields": [
+                {
+                    "name": "members",
+                    "optional": false,
+                    "description": "The members of the thread, at most 1,000",
+                    "shape": {
+                        "kind": "array",
+                        "item": {
+                            "kind": "struct",
+                            "fields": [
+                                {
+                                    "name": "user_id",
+                                    "optional": false,
+                                    "description": "The ID of the user",
+                                    "shape": {
+                                        "kind": "snowflake"
+                                    }
+                                },
+                                {
+                                    "name": "join_timestamp",
+                                    "optional": false,
+                                    "description": "When the user joined the thread",
+                                    "shape": {
+                                        "kind": "timestamp"
+                                    }
+                                },
+                                {
+                                    "name": "flags",
+                                    "optional": false,
+                                    "description": "Thread member flags",
+                                    "shape": {
+                                        "kind": "integer"
+                                    }
+                                },
+                                {
+                                    "name": "member",
+                                    "optional": false,
+                                    "description": "The guild member of the user, or null when the guild has none",
+                                    "shape": {
+                                        "kind": "rest",
+                                        "name": "guild member",
+                                        "link": "/http-api/guild-members/#guild-member-object",
+                                        "nullable": true
+                                    }
+                                },
+                                {
+                                    "name": "presence",
+                                    "optional": false,
+                                    "description": "The presence of the member, with status offline, mobile false and afk false when not visibly online",
+                                    "shape": {
+                                        "kind": "partial",
+                                        "of": {
+                                            "kind": "ref",
+                                            "object": "presence-object"
+                                        },
+                                        "require": ["status", "mobile", "afk"]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
         }
     ],
     "newEvents": [

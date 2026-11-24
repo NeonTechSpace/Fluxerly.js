@@ -11,6 +11,7 @@ export const Opcode = Object.freeze({
     heartbeat: 1,
     identify: 2,
     presenceUpdate: 3,
+    voiceStateUpdate: 4,
     voiceServerPing: 5,
     resume: 6,
     reconnect: 7,
@@ -19,6 +20,7 @@ export const Opcode = Object.freeze({
     hello: 10,
     heartbeatAck: 11,
     gatewayError: 12,
+    voiceSignal: 13,
     memberSubscriptions: 14,
     requestGuildCounts: 15,
     requestChannelMemberCounts: 16,
@@ -29,6 +31,7 @@ const opcodeNames = new Map<number, string>([
     [Opcode.heartbeat, "HEARTBEAT"],
     [Opcode.identify, "IDENTIFY"],
     [Opcode.presenceUpdate, "PRESENCE_UPDATE"],
+    [Opcode.voiceStateUpdate, "VOICE_STATE_UPDATE"],
     [Opcode.voiceServerPing, "VOICE_SERVER_PING"],
     [Opcode.resume, "RESUME"],
     [Opcode.reconnect, "RECONNECT"],
@@ -37,11 +40,14 @@ const opcodeNames = new Map<number, string>([
     [Opcode.hello, "HELLO"],
     [Opcode.heartbeatAck, "HEARTBEAT_ACK"],
     [Opcode.gatewayError, "GATEWAY_ERROR"],
+    [Opcode.voiceSignal, "VOICE_SIGNAL"],
     [Opcode.memberSubscriptions, "MEMBER_SUBSCRIPTIONS"],
     [Opcode.requestGuildCounts, "REQUEST_GUILD_COUNTS"],
     [Opcode.requestChannelMemberCounts, "REQUEST_CHANNEL_MEMBER_COUNTS"],
-    // Fluxer's gateway names opcode 28 RequestForumUnreads (fluxer_gateway/src/fluxer_gateway/gateway/opcode.gleam:68 at 66cede64). Only the log name
-    // is known here, so the opcode stays out of Opcode and the commands the SDK sends
+    // Fluxer's gateway defines opcode 28 RequestForumUnreads (fluxer_gateway/src/fluxer_gateway/gateway/opcode.gleam:44, 68
+    // at 66cede64). It is bot-accessible without session flags, silently rate-limited at 5 per 5,000 ms, accepts up to 40
+    // unique thread IDs and returns FORUM_UNREADS with counts capped at 25 (session/server.gleam:609-618,
+    // gateway/rate_limit.gleam:108-112, config/settings.gleam:606, guild/requests/forum_unreads.gleam:31-33)
     [28, "REQUEST_FORUM_UNREADS"],
 ])
 
@@ -71,7 +77,9 @@ export const reservedClientOpcodes: ReadonlySet<number> = new Set([
 
 /**
  * Maximum encoded client gateway payload, in UTF-8 bytes on the wire and after decompression. Fluxer instances older than
- * October 2026 allow 4,096 bytes. Larger payloads close with 4002, which stops the shard
+ * October 2026 allow 4,096 bytes. Uncompressed frames over 16,384 bytes close with WebSocket 1009 (MESSAGE_TOO_BIG)
+ * before socket decoding, while payloads that exceed the limit only after decompression close with 4002, which stops
+ * the shard (fluxer_gateway/src/fluxer_gateway/gateway/limits.gleam:6-8, gateway/ws/server.gleam:358-361, socket.gleam:435-452 at 66cede64)
  */
 export const maxClientPayloadBytes = 16_384
 
@@ -79,7 +87,7 @@ export const maxClientPayloadBytes = 16_384
  * Identify session flags sent by this SDK. Fluxer also defines CHANNEL_THREADS at bit 2 and GUILD_VISITS at bit 3
  */
 export const IdentifyFlag = Object.freeze({
-    /** DEBOUNCE_MESSAGE_REACTIONS: Merge runs of direct-message reaction additions into MESSAGE_REACTION_ADD_MANY */
+    /** DEBOUNCE_MESSAGE_REACTIONS: Buffer community and direct-message reaction additions for 650 ms (cap 512) and flush multi-reaction runs as MESSAGE_REACTION_ADD_MANY */
     debounceMessageReactions: 1 << 1,
 } as const)
 

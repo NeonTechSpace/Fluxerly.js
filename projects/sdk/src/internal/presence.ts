@@ -128,7 +128,7 @@ export function decodePresenceUpdate(value: unknown): PresenceUpdate | undefined
     return Object.freeze(guildId === undefined ? presence : { guildId, ...presence })
 }
 
-/** Decode one provider recovery batch without flattening it into individual notifications or retaining current presence */
+/** Decode one provider recovery batch without flattening it into individual notifications or retaining current presence. Fluxer's gateway at commit 66cede64 emits individual PRESENCE_UPDATE frames instead of bulk batches, so this stays for compatibility */
 export function decodePresenceUpdateBulk(value: unknown): PresenceUpdateBulk | undefined {
     if (
         !record(value) ||

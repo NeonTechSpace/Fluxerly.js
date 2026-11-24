@@ -58,6 +58,7 @@ export interface ChannelMemberCount extends GuildCount {
 /**
  * Results from one community's requested channel counts, ordered to match the requested channel IDs.
  * The `omittedChannelIds` field lists requested IDs for which Fluxer returned no count. The SDK does not substitute zero or infer why.
+ * When the bot is the community owner or has Administrator, Fluxer's gateway returns `{ memberCount: 0, onlineCount: 0 }` for unknown channel IDs instead of omitting them, while non-administrators and thread IDs are omitted.
  * A community assigned to an unowned or unready shard fails the call with notConnected instead
  *
  * @category Channels
@@ -121,7 +122,13 @@ export class CountOperationError extends FluxerlyError {
                     inputPath: inputValidation?.path ?? null,
                 }),
                 cause: options.cause,
-                details: operationDetails({ operation, reason }),
+                details: operationDetails({
+                    operation,
+                    reason,
+                    inputPath: inputValidation?.path,
+                    inputConstraint: inputValidation?.constraint,
+                    read: true,
+                }),
             },
         )
         this.name = this._tag

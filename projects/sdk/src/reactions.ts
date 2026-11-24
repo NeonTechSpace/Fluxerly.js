@@ -98,7 +98,8 @@ export interface ReactionEmoji {
  * Gateway reconnection can miss events. An event does not show current counts or everyone who reacted.
  * Fluxer's session_id field, which names the client session that made a change in a private channel, is not kept,
  * because it identifies a connection, not an account or message. The raw event carries it as d.session_id. The acting
- * member of an addition or removal is available only as MessageReaction.member
+ * member of an addition or removal is available as MessageReaction.member or on each entry of
+ * MessageReactionBatch.reactions
  *
  * @category Messages
  */
@@ -153,5 +154,13 @@ export interface MessageReactionBatch extends ReactionTarget {
         readonly userId: string
         /** Emoji used for this addition */
         readonly emoji: ReactionEmoji
+        /**
+         * Community membership of the user whose reaction was added, as Fluxer attached it when the batch has guildId.
+         * Omitted in direct messages, for users who left the community, and when the member Fluxer sent does not decode
+         * or comes without the user's name, which never costs the event itself.
+         * With the members cache enabled, the SDK also stores each decoded member there, completing a nameless one from
+         * the member already cached for the user, and dropping the cached member when the one sent does not decode
+         */
+        readonly member?: GuildMember
     }[]
 }

@@ -185,8 +185,9 @@ function applyThreadEffects<M extends MessageCore>(
         const channel = message as GuildChannel
         cache?.deleteChannel(channel.id)
         // Fluxer deletes a parent's threads without THREAD_DELETE, and a message does not record its thread's parent.
-        // The channel cache already evicted the parent's threads, so every channel it still holds is placed elsewhere
-        if (threadParentTypes.has(channel.type))
+        // The channel cache already evicted the parent's threads, so every channel it still holds is placed elsewhere.
+        // A synthesized CHANNEL_DELETE omits type (rawType null), so the hidden channel could also have been a thread parent
+        if (threadParentTypes.has(channel.type) || (channel.type === "unknown" && channel.rawType === null))
             cache?.deleteUnplaced(channel.guildId, (channelId) => channelCache?.holds(channelId) === true)
     } else if (event === "threadDelete") cache?.deleteChannel((message as EventMap["threadDelete"]).id)
     else {
@@ -212,6 +213,19 @@ function guildIntake<M extends MessageCore>(
     if (!resources && !channelCache && !cache) return undefined
     return (event, value) => {
         if (memberDecoratedDispatches.has(event)) {
+            if (event === "MESSAGE_REACTION_ADD_MANY") {
+                if (applyReactionBatchMembers(resources, value)) {
+                    const guildId = record(value) && identifier(value.guild_id) ? value.guild_id : undefined
+                    logging.log({
+                        level: "warn",
+                        category: "gateway",
+                        code: "gateway.memberSkipped",
+                        message: `Skipped the member of a ${event} dispatch${guildId === undefined ? "" : ` in community ${guildId}`} because its data did not match the expected shape. The member cache dropped its entry for the account, and handlers still receive the event without the member`,
+                        fields: { dispatch: event, ...(guildId === undefined ? {} : { guildId }) },
+                    })
+                }
+                return
+            }
             // Only the member cache reads the decoration, whatever message fields the subscribers selected
             if (resources?.decoratedEvent(event, value)) {
                 const guildId = record(value) && identifier(value.guild_id) ? value.guild_id : undefined
@@ -250,7 +264,10 @@ function guildIntake<M extends MessageCore>(
 export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M>, type: string, body: unknown) {
     const { cache, resources, channelCache, userCache } = caches
     const value = record(body) ? body : undefined
-    if (memberDecoratedDispatches.has(type)) resources?.evictRejectedMember(type, value)
+    if (memberDecoratedDispatches.has(type)) {
+        if (type === "MESSAGE_REACTION_ADD_MANY") evictRejectedReactionBatchMembers(resources, value)
+        else resources?.evictRejectedMember(type, value)
+    }
     if (type.startsWith("MESSAGE_")) {
         invalidateMessageDispatch(caches, type, value)
         return
@@ -293,6 +310,51 @@ export function invalidateDispatch<M extends MessageCore>(caches: ClientCaches<M
         return
     }
     clearCaches(caches)
+}
+
+/** Apply every acting member attached to a MESSAGE_REACTION_ADD_MANY batch, returning whether any entry was skipped */
+function applyReactionBatchMembers(resources: GuildCache | undefined, value: unknown): boolean {
+    if (!resources || !record(value) || !identifier(value.guild_id) || !Array.isArray(value.reactions)) return false
+    let skipped = false
+    for (const item of value.reactions) {
+        if (
+            record(item) &&
+            identifier(item.user_id) &&
+            item.member !== undefined &&
+            item.member !== null &&
+            resources.decoratedEvent("MESSAGE_REACTION_ADD", {
+                guild_id: value.guild_id,
+                user_id: item.user_id,
+                member: item.member,
+            })
+        )
+            skipped = true
+    }
+    return skipped
+}
+
+/** Clear cached members that a rejected MESSAGE_REACTION_ADD_MANY dispatch could have updated */
+function evictRejectedReactionBatchMembers(
+    resources: GuildCache | undefined,
+    value: Record<string, unknown> | undefined,
+) {
+    if (!resources || !value) return
+    if (!Array.isArray(value.reactions)) {
+        if (value.guild_id !== undefined)
+            resources.evictRejectedMember("MESSAGE_REACTION_ADD", { guild_id: value.guild_id, member: {} })
+        return
+    }
+    for (const item of value.reactions) {
+        if (record(item)) {
+            if (item.member !== undefined && item.member !== null)
+                resources.evictRejectedMember("MESSAGE_REACTION_ADD", {
+                    guild_id: value.guild_id,
+                    user_id: item.user_id,
+                    member: item.member,
+                })
+        } else if (value.guild_id !== undefined)
+            resources.evictRejectedMember("MESSAGE_REACTION_ADD", { guild_id: value.guild_id, member: {} })
+    }
 }
 
 /** Clear cached messages that a skipped message dispatch could have changed */

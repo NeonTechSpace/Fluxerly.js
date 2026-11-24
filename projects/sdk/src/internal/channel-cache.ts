@@ -272,11 +272,19 @@ export class ChannelCache {
             this.#evict({ guildId: (value as EventMap["guildChannelUpdateBulk"]).guildId })
         } else if (event === "guildChannelCreate" || event === "guildChannelUpdate" || event === "guildChannelDelete") {
             const channel = value as GuildChannel
+            const held = event === "guildChannelDelete" ? this.#entries.get(channel.id)?.value : undefined
             // A category can change its children's parentage and order. Its own observation is insufficient to retain
-            // the rest of the guild, so evict every affected channel rather than caching a partial reconciliation
-            if (channel.type === categoryType && event !== "guildChannelCreate")
+            // the rest of the guild, so evict every affected channel rather than caching a partial reconciliation. A
+            // synthesized CHANNEL_DELETE omits type, so the cached snapshot reveals when the hidden channel was a category
+            if ((channel.type === categoryType || held?.type === categoryType) && event !== "guildChannelCreate")
                 this.#evict({ guildId: channel.guildId })
-            else if (event === "guildChannelDelete") this.#removeChannel(channel.id, channel, true)
+            else if (event === "guildChannelDelete")
+                this.#removeChannel(
+                    channel.id,
+                    channel.guildId,
+                    threadParentTypes.has(channel.type) ||
+                        (channel.type === "unknown" && (held === undefined || threadParentTypes.has(held.type))),
+                )
             else {
                 if (event === "guildChannelUpdate") this.#updated(channel)
                 this.#observe(channel)
@@ -424,7 +432,12 @@ export class ChannelCache {
             if (place === undefined) return this.gap()
             if (place.type === categoryType) this.#evict({ guildId: place.guildId }, guard)
             else {
-                this.#removeChannel(guard.channelId, place, guard.changesThreads === true, guard)
+                this.#removeChannel(
+                    guard.channelId,
+                    place.guildId,
+                    guard.changesThreads === true && threadParentTypes.has(place.type),
+                    guard,
+                )
                 if (guard.removesTag !== undefined && !guard.changesThreads && forumTypes.has(place.type)) {
                     const forum = { id: guard.channelId, guildId: place.guildId }
                     const removed = guard.removesTag
@@ -496,11 +509,11 @@ export class ChannelCache {
      * parent takes its threads, and Fluxer sends no THREAD_DELETE for them. The guild-wide request also stops ID-only
      * reads in flight, which can name one of those threads
      */
-    #removeChannel(channelId: string, place: ChannelPlace, threads: boolean, except?: ChannelCacheGuard) {
-        this.#evict({ channelId, guildId: place.guildId }, except)
-        if (threads && threadParentTypes.has(place.type))
+    #removeChannel(channelId: string, guildId: string, threads: boolean, except?: ChannelCacheGuard) {
+        this.#evict({ channelId, guildId }, except)
+        if (threads)
             this.#evict(
-                { guildId: place.guildId },
+                { guildId },
                 except,
                 (candidate) => isThreadChannel(candidate) && candidate.parentId === channelId,
             )

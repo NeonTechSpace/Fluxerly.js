@@ -179,7 +179,21 @@ export function decodeReaction(event: keyof typeof reactionEvents, value: unknow
             if (!record(item) || !identifier(item.user_id)) return undefined
             const decoded = emoji(item.emoji)
             if (!decoded) return undefined
-            reactions.push(Object.freeze({ userId: item.user_id, emoji: decoded }))
+            const member =
+                value.guild_id === undefined
+                    ? undefined
+                    : decodeDispatchMember("MESSAGE_REACTION_ADD", {
+                          guild_id: value.guild_id,
+                          user_id: item.user_id,
+                          member: item.member,
+                      })
+            reactions.push(
+                Object.freeze({
+                    userId: item.user_id,
+                    emoji: decoded,
+                    ...(member === undefined ? {} : { member }),
+                }),
+            )
         }
         return Object.freeze({ ...target, reactions: Object.freeze(reactions) })
     }

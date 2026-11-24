@@ -7,7 +7,7 @@ import { freezeInputValidationDetail, type InputValidationDetail } from "./input
 /** Choose what a new community channel does: Text messages, announcements, voice calls, a category that groups channels, or a link.
  * Received channels use the same constants in GuildChannel.type, including threads, forum channels and media channels.
  * A future Fluxer type that this SDK version does not know arrives as a GuildUnknownChannel, whose type is "unknown"
- * and whose rawType keeps the number
+ * and whose rawType keeps the number, or null when Fluxer omits type on a synthesized channel deletion
  *
  * @category Channels
  */
@@ -519,11 +519,12 @@ export function isThreadChannel(channel: GuildChannel | undefined): channel is G
 }
 
 /**
- * A community channel of a type this SDK version does not know, such as a type Fluxer adds later, selected by
+ * A community channel of a type this SDK version does not know, such as a type Fluxer adds later, or a synthesized
+ * guildChannelDelete that Fluxer emits without a channel type when the session loses ViewChannel, selected by
  * `type === "unknown"`. No ChannelType constant equals "unknown", so a ChannelType comparison always excludes this
- * shape, and rawType keeps the number Fluxer sent. The common optional fields of text, voice and link channels stay
- * readable, so the channel remains usable without a type-specific shape. A later SDK version that knows the type
- * returns the matching shape instead
+ * shape, and rawType keeps the number Fluxer sent or null when Fluxer omitted type. The common optional fields of text,
+ * voice and link channels stay readable, so the channel remains usable without a type-specific shape. A later SDK
+ * version that knows a numeric type returns the matching shape instead
  *
  * @category Channels
  */
@@ -535,15 +536,16 @@ export interface GuildUnknownChannel
         Omit<GuildLinkChannel, "type"> {
     /** Always "unknown" */
     readonly type: "unknown"
-    /** Numeric channel type Fluxer sent, outside the known ChannelType constants */
-    readonly rawType: number
+    /** Numeric channel type Fluxer sent outside the known ChannelType constants, or null when Fluxer omitted type on a synthesized CHANNEL_DELETE dispatch after the session lost ViewChannel */
+    readonly rawType: number | null
 }
 
 /** Settings and identity of a community channel returned by a read or gateway event, as one shape per channel type.
  * Compare `type` with ChannelType constants to narrow to exactly one shape, such as `channel.type === ChannelType.Voice`
  * before reading `bitrate`. Threads, forum channels and media channels have their own shapes, and isThreadChannel
- * selects every thread type at once. A type this SDK version does not know is a GuildUnknownChannel with type
- * "unknown", its Fluxer number in rawType and the common optional text, voice and link fields, so a switch on type
+ * selects every thread type at once. A type this SDK version does not know, or a synthesized deletion without a type,
+ * is a GuildUnknownChannel with type "unknown", its Fluxer number or null in rawType and the common optional text, voice
+ * and link fields, so a switch on type
  * that also handles "unknown" is exhaustive. The object is frozen and does not update when the channel changes.
  * Optional fields may be unavailable rather than set to their creation defaults. This excludes private conversations,
  * which use DirectMessageChannel

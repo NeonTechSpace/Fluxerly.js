@@ -83,7 +83,8 @@ export interface Channels {
      * The community must have a ready shard assigned to this client, or the call fails with notConnected instead of listing omitted channels.
      * Fluxer requires ViewChannel and ViewChannelMembers.
      * The result has frozen counts and omittedChannelIds in requested order.
-     * Omission means unavailable, not zero, and does not explain access or other causes
+     * Omission means unavailable, not zero, and does not explain access or other causes.
+     * When the bot is the community owner or holds Administrator, Fluxer's gateway returns memberCount 0 and onlineCount 0 for unknown channel IDs instead of omitting them, while non-administrator bots and thread IDs are omitted
      *
      * The guilds.fetchCounts method's four shared gateway slots, default 30,000 ms deadline and failure rules apply.
      * There is no waiting queue for request slots, implicit connection, REST fallback, cache write or retry.

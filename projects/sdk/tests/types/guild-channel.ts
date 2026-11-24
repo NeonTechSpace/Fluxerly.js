@@ -137,11 +137,11 @@ export function threadFields(channel: GuildChannel) {
     return [thread.archived, thread.autoArchiveMinutes, thread.membership?.joinedAt, invitable, tags] as const
 }
 
-/** A channel type outside the known constants keeps its Fluxer number in rawType and every optional field */
+/** A channel type outside the known constants keeps its Fluxer number in rawType, or null when Fluxer omits type on a synthesized CHANNEL_DELETE, and every optional field */
 export function unknownFields(channel: GuildUnknownChannel) {
     const asUnion: GuildChannel = channel
     void asUnion
-    const rawType: number = channel.rawType
+    const rawType: number | null = channel.rawType
     return [
         rawType,
         channel.topic,
@@ -162,7 +162,7 @@ export function rawTypeOnlyOnUnknown(channel: GuildVoiceChannel) {
     return channel.rawType
 }
 
-// An unknown channel literal needs only the base fields and its Fluxer number, and may carry any optional field
+// An unknown channel literal needs only the base fields and its Fluxer number or null, and may carry any optional field
 export const futureChannel: GuildChannel = {
     id: "1",
     guildId: "2",
@@ -171,6 +171,13 @@ export const futureChannel: GuildChannel = {
     bitrate: 64_000,
     topic: null,
     url: null,
+}
+
+export const synthesizedDeleteChannel: GuildChannel = {
+    id: "1",
+    guildId: "2",
+    type: "unknown",
+    rawType: null,
 }
 
 // @ts-expect-error A numeric type outside the known constants is not a GuildChannel type

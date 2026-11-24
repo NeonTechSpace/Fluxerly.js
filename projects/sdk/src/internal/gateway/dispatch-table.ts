@@ -390,7 +390,7 @@ const entries: Record<string, DispatchEntry<unknown>> = {
             entry({
                 event: reactionEvents[type],
                 decode: (body) => decodeReaction(type, body),
-                // Only the addition or removal of one user's reaction carries the member
+                // Single reaction additions, batched additions and removals can carry acting members
                 ...(memberDecoratedDispatches.has(type)
                     ? { cache: (_value: unknown, body: unknown, sinks: DispatchSinks) => guildCache(body, sinks, type) }
                     : {}),

@@ -66,7 +66,7 @@ export function decodeCallUpdate(value: unknown): CallUpdate | undefined {
     return call && Object.freeze(call)
 }
 
-/** CALL_CREATE: Current call state plus the recipients and creation time that initial or recovered state carries */
+/** CALL_CREATE: Current call state, with optional recipients and creation time kept for compatibility even though Fluxer's gateway omits both on CALL_CREATE dispatches (voice/call/state.gleam:478-507 at 66cede64) */
 export function decodeCallCreate(value: unknown): CallCreate | undefined {
     const call = decodeCallState(value)
     if (!call || !record(value)) return undefined

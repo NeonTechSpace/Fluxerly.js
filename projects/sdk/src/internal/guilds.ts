@@ -439,6 +439,7 @@ export const memberDecoratedDispatches: ReadonlySet<string> = new Set([
     "MESSAGE_CREATE",
     "MESSAGE_UPDATE",
     "MESSAGE_REACTION_ADD",
+    "MESSAGE_REACTION_ADD_MANY",
     "MESSAGE_REACTION_REMOVE",
     "TYPING_START",
 ])

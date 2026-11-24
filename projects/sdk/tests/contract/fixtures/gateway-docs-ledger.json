@@ -127,10 +127,6 @@
         "category": "intentionally dropped",
         "reason": "The requesting session's gateway identifier in a private channel, which is session bookkeeping rather than reaction data"
     },
-    "MESSAGE_REACTION_ADD_MANY reactions[].member": {
-        "category": "always empty, null or false here",
-        "reason": "Guild-channel additions are never batched, so a batch never carries a member"
-    },
     "MESSAGE_REACTION_REMOVE session_id": {
         "category": "intentionally dropped",
         "reason": "The requesting session's gateway identifier in a private channel, which is session bookkeeping rather than reaction data"

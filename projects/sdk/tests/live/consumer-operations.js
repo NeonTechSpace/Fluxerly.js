@@ -502,7 +502,17 @@ async function verifyCounts(channelId) {
         "channelId",
         channelId,
     )
-    assert.deepEqual(partialChannels.omittedChannelIds, [knownAbsentId])
+    // Fluxer's gateway returns zero counts for unknown channel IDs when the bot is community owner or holds
+    // Administrator, and omits them otherwise (fluxer_gateway/rust/crates/perm_core/src/views.rs:124-158 at 66cede64)
+    const absentChannelCount = partialChannels.counts.find((count) => count.channelId === knownAbsentId)
+    if (absentChannelCount !== undefined) {
+        assert.equal(absentChannelCount.memberCount, 0)
+        assert.equal(absentChannelCount.onlineCount, 0)
+        assert.deepEqual(partialChannels.omittedChannelIds, [])
+    } else {
+        assert.deepEqual(partialChannels.omittedChannelIds, [knownAbsentId])
+    }
+    assert.equal(partialChannels.counts.length + partialChannels.omittedChannelIds.length, 2)
     report(stage)
 
     stage = "gateway_counts_dropped_response_timeout"
