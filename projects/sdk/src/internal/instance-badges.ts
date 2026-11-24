@@ -5,7 +5,15 @@
  */
 import type { InstanceBadge, InstanceBadgePage } from "#sdk/instance"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { fieldsOnce, identifier, inputId, integerInRange, record, snapshotArray } from "./decode/primitives.js"
+import {
+    fieldsOnce,
+    identifier,
+    inputId,
+    integerInRange,
+    nullableText,
+    record,
+    snapshotArray,
+} from "./decode/primitives.js"
 import type { GuildRequest } from "./guilds.js"
 
 /** Fluxer's lookup and page limits for community badges */
@@ -13,8 +21,6 @@ const maxLookupIds = 100
 const maxPageLimit = 200
 const defaultPageLimit = 100
 const position = /^-?[0-9]{1,19}$/
-
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 
 function decodeBadge(value: unknown): InstanceBadge | undefined {
     if (

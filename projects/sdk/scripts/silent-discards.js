@@ -15,14 +15,14 @@ function isNode(value) {
     return typeof value === "object" && value !== null && typeof value.type === "string"
 }
 
-/** A function that declares no parameters, so it cannot look at the error it receives */
+/** A function that declares no parameters or only an unused underscore error binding */
 function ignoresArgument(value) {
-    return (
-        isNode(value) &&
-        (value.type === "ArrowFunctionExpression" || value.type === "FunctionExpression") &&
-        Array.isArray(value.params) &&
-        value.params.length === 0
-    )
+    if (!isNode(value) || (value.type !== "ArrowFunctionExpression" && value.type !== "FunctionExpression"))
+        return false
+    if (!Array.isArray(value.params)) return false
+    if (value.params.length === 0) return true
+    const first = value.params[0]
+    return isNode(first) && first.type === "Identifier" && first.name.startsWith("_")
 }
 
 function propertyName(value) {
@@ -31,8 +31,36 @@ function propertyName(value) {
     return isNode(property) && property.type === "Identifier" ? property.name : undefined
 }
 
+/** Collects namespace aliases and named imports from effect/Effect */
+function effectBindings(program) {
+    const namespaces = new Set(["Effect"])
+    const named = new Map()
+    for (const statement of program.body ?? []) {
+        if (statement.type !== "ImportDeclaration" || statement.source?.value !== "effect/Effect") continue
+        for (const spec of statement.specifiers ?? []) {
+            if (spec.type === "ImportNamespaceSpecifier") namespaces.add(spec.local.name)
+            if (spec.type === "ImportSpecifier" && spec.imported.type === "Identifier")
+                named.set(spec.local.name, spec.imported.name)
+        }
+    }
+    return { namespaces, named }
+}
+
+/** The Effect helper name called or referenced by a node, if any */
+function effectHelper(node, bindings) {
+    if (
+        node.type === "MemberExpression" &&
+        node.computed !== true &&
+        node.object?.type === "Identifier" &&
+        bindings.namespaces.has(node.object.name)
+    )
+        return propertyName(node)
+    if (node.type === "Identifier") return bindings.named.get(node.name)
+    return undefined
+}
+
 /** The discard form a node represents, if any */
-function discardForm(node) {
+function discardForm(node, bindings) {
     if (node.type === "CatchClause") {
         const param = node.param
         if (param === null || param === undefined) return "catch without a binding"
@@ -41,17 +69,24 @@ function discardForm(node) {
         return undefined
     }
     if (node.type === "MemberExpression") {
-        const object = node.object
-        const name = propertyName(node)
-        if (isNode(object) && object.type === "Identifier" && object.name === "Effect" && name?.startsWith("ignore"))
-            return `Effect.${name}`
+        const name = effectHelper(node, bindings)
+        if (name?.startsWith("ignore") || name === "option") return `Effect.${name}`
         return undefined
     }
     if (node.type !== "CallExpression") return undefined
     const args = node.arguments
+    const helper = effectHelper(node.callee, bindings)
+    if (helper?.startsWith("ignore") || helper === "option") {
+        // MemberExpression already reports Effect.ignore* / Effect.option
+        if (node.callee.type === "Identifier") return `Effect.${helper}`
+        return undefined
+    }
+    if (helper === "orElseSucceed" || helper === "orElse") return `Effect.${helper}`
+    if (helper === "catchCause" && ignoresArgument(args.at(-1))) return "catchCause that ignores its cause"
+    if (helper === "catch" && ignoresArgument(args.at(-1))) return "Effect.catch that ignores its failure"
     const method = propertyName(node.callee)
     if (method === "catchCause" && ignoresArgument(args.at(-1))) return "catchCause that ignores its cause"
-    if (method === "catch" && ignoresArgument(args[0])) return "promise catch that ignores its reason"
+    if (method === "catch" && !helper && ignoresArgument(args[0])) return "promise catch that ignores its reason"
     if (method === "then" && ignoresArgument(args[1])) return "promise rejection handler that ignores its reason"
     if (method === "call" && propertyName(node.callee.object) === "then" && ignoresArgument(args[2]))
         return "promise rejection handler that ignores its reason"
@@ -76,10 +111,12 @@ function scan(source, file = "sample.ts") {
         }
         return low
     }
+    const program = parseAst(source, { lang: "ts" })
+    const bindings = effectBindings(program)
     const results = []
     const visit = (node, statement) => {
         const enclosing = isStatement(node) ? node : statement
-        const form = discardForm(node)
+        const form = discardForm(node, bindings)
         if (form !== undefined) {
             const line = lineOf(node.start)
             // Allow the comment on up to three lines above the construct, but not above its own statement's line before
@@ -93,7 +130,7 @@ function scan(source, file = "sample.ts") {
             } else if (isNode(value)) visit(value, enclosing)
         }
     }
-    visit(parseAst(source, { lang: "ts" }), undefined)
+    visit(program, undefined)
     return results
 }
 
@@ -102,10 +139,17 @@ const flagged = [
     "try { x() } catch { }",
     "try { x() } catch (_error) { }",
     "effect.pipe(Effect.catchCause(() => Effect.void))",
-    "effect.pipe(Effect.catchCause(() => Effect.succeed(1)))",
+    "effect.pipe(Effect.catchCause((_cause) => Effect.succeed(1)))",
+    "effect.pipe(Effect.catch(() => Effect.void))",
+    "effect.pipe(Effect.catch((_error) => Effect.void))",
+    "effect.pipe(Effect.orElseSucceed(() => undefined))",
+    "effect.pipe(Effect.option)",
     "effect.pipe(Effect.ignore)",
     "effect.pipe(Effect.ignoreCause)",
+    'import * as E from "effect/Effect"\neffect.pipe(E.ignore)',
+    'import { orElseSucceed } from "effect/Effect"\neffect.pipe(orElseSucceed(() => 1))',
     "promise.catch(() => undefined)",
+    "promise.catch((_error) => undefined)",
     "promise.then(() => 1, () => undefined)",
     // Split across lines, which a line-based scan missed
     "state.settled = request.then(\n    () => undefined,\n    () => undefined,\n)",

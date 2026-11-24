@@ -775,7 +775,7 @@ export class ClientLogger {
      * Warn and higher records go to standard error
      */
     consoleFormat(stream: "stdout" | "stderr"): { readonly format: "pretty" | "json"; readonly color: boolean } {
-        const terminal = (stream === "stderr" ? process.stderr : process.stdout).isTTY === true
+        const terminal = Boolean((stream === "stderr" ? process.stderr : process.stdout).isTTY)
         const format = this.#settings.format ?? this.#settings.environmentFormat ?? (terminal ? "pretty" : "json")
         const color =
             format === "pretty" && process.env.NO_COLOR === undefined && (this.#settings.environmentColor ?? terminal)

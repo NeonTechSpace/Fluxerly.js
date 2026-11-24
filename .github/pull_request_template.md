@@ -57,6 +57,7 @@ Describe the checks actually performed and their observed results
 Include relevant test commands, manual reproduction, or measurements
 For a bug fix, identify a regression check that fails without the fix and passes
 with it, or explain why that evidence is unavailable
+For a bug fix, note whether a type invariant, lint rule, or property test was added to prevent this class of bug from recurring
 
 Include exact SDK, Node.js, and Effect versions where relevant
 Distinguish in-memory tests from checks against a live Fluxer instance

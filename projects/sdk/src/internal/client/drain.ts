@@ -10,15 +10,13 @@ import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { ConfigurationError } from "#sdk/errors"
+import { maximumTimerMs } from "../clock.js"
 import { record } from "../decode/primitives.js"
 import type { EventBus } from "../events.js"
 import type { ClientLogger } from "../logging.js"
 import type { ScheduledTasks } from "../scheduled-tasks.js"
 import { unsupportedKeyHint } from "../suggest.js"
 import { formatDuration } from "./lifetime.js"
-
-/** Longest drain, the longest single timer delay */
-const maximumDrainMs = 2_147_483_647
 
 /**
  * Read the drain time from shutdown options, 0 when omitted. Misuse returns ConfigurationError without the rejected value.
@@ -34,7 +32,7 @@ export function shutdownDrainMs(options: unknown): number | ConfigurationError {
         })
     const value = options.drainMs
     if (value === undefined) return 0
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximumDrainMs)
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximumTimerMs)
         return new ConfigurationError(
             "drainMs",
             'The option "drainMs" must be an integer from 0 through 2,147,483,647 milliseconds',

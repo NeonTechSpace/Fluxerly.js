@@ -19,7 +19,7 @@ import { decodeForumDefaultReaction, decodeForumTag, decodeThread } from "./chan
 import { decodeUser } from "./users.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import type { GuildRequest } from "./guilds.js"
-import { count as nonNegativeInt32, identifier, inputId, record } from "./decode/primitives.js"
+import { count as nonNegativeInt32, identifier, inputId, optionalNullableText, record } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
 
 /** Filters accept only known actions, while entries keep any action number, including one Fluxer adds later */
@@ -27,7 +27,6 @@ const actionTypes = new Set<number>(Object.values(AuditLogActions))
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value)
 const actionType = (value: unknown): value is AuditLogActionType => typeof value === "number" && actionTypes.has(value)
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 
 function changeValue(value: unknown): AuditLogChangeValue | undefined {
     if (typeof value === "string" || typeof value === "boolean" || value === null) return value
@@ -134,7 +133,7 @@ function entry(value: unknown): AuditLogEntry | undefined {
         !identifier(value.id) ||
         !nonNegativeInt32(value.action_type) ||
         (value.user_id !== undefined && !nullableIdentifier(value.user_id)) ||
-        (value.target_id !== undefined && !nullableText(value.target_id)) ||
+        !optionalNullableText(value.target_id) ||
         (value.reason !== undefined && typeof value.reason !== "string")
     )
         return undefined
@@ -189,7 +188,7 @@ function webhook(value: unknown): AuditLogWebhook | undefined {
         (value.guild_id !== undefined && !nullableIdentifier(value.guild_id)) ||
         (value.channel_id !== undefined && !nullableIdentifier(value.channel_id)) ||
         typeof value.name !== "string" ||
-        (value.avatar_hash !== undefined && !nullableText(value.avatar_hash))
+        !optionalNullableText(value.avatar_hash)
     )
         return undefined
     return Object.freeze({

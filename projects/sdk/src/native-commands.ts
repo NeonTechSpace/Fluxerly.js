@@ -370,7 +370,7 @@ export interface PrefixCommand<
  */
 export type PrefixCommandBatch<M extends MessageCore, S extends Readonly<Record<string, unknown>>> = {
     readonly [K in keyof S]: Omit<
-        PrefixCommand<unknown, any, S[K] extends CommandArgumentSchema ? S[K] : {}, M>,
+        PrefixCommand<unknown, unknown, S[K] extends CommandArgumentSchema ? S[K] : {}, M>,
         "name" | "arguments"
     > & {
         /** Argument schema for the command under this key. Omit it to leave positional arguments unrestricted.
@@ -387,7 +387,7 @@ export type PrefixCommandBatch<M extends MessageCore, S extends Readonly<Record<
  *
  * @category Commands
  */
-export type EffectRequirements<F> = F extends (...arguments_: any[]) => Effect.Effect<unknown, unknown, infer R>
+export type EffectRequirements<F> = F extends (...arguments_: never[]) => Effect.Effect<unknown, unknown, infer R>
     ? R
     : never
 
@@ -413,7 +413,7 @@ export type CommandRequirements<C> = C extends unknown
                 ? Cooldown[keyof Cooldown & "store"] extends infer Store
                     ? Store extends {
                           /** Reservation method, whose returned Effect may require services */
-                          readonly claim: (...arguments_: any[]) => infer Claim
+                          readonly claim: (...arguments_: never[]) => infer Claim
                       }
                         ? Claim extends Effect.Effect<unknown, unknown, infer R>
                             ? R

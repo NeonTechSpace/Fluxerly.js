@@ -136,9 +136,7 @@ export function readIgnoreBots(ignoreBots: unknown): boolean {
 /** Whether a runBot handler skips this event: A messageCreate or messageUpdate whose author is a bot, while ignoreBots is on */
 export function skipsBotMessage(event: EventName, payload: unknown, ignoreBots: boolean): boolean {
     return (
-        ignoreBots &&
-        (event === "messageCreate" || event === "messageUpdate") &&
-        (payload as MessageCore).author.isBot === true
+        ignoreBots && (event === "messageCreate" || event === "messageUpdate") && (payload as MessageCore).author.isBot
     )
 }
 

@@ -6,7 +6,7 @@
  * Implements [SDK contracts: Logging](/docs/SDK-CONTRACTS.md#logging)
  */
 import type { Observation, Observer } from "#sdk/observer"
-import type { ClientLogger } from "./logging.js"
+import { isThenable, type ClientLogger } from "./logging.js"
 import { maskedErrorCode, maskText } from "./masking.js"
 
 const observers = new WeakMap<ClientLogger, Observer>()
@@ -19,14 +19,6 @@ export function setObserver(logger: ClientLogger, observer: Observer) {
 /** Whether this logger has an observer, so callers can skip measuring work nobody reads */
 export function observing(logger: ClientLogger | undefined): logger is ClientLogger {
     return logger !== undefined && observers.has(logger)
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-    return (
-        (typeof value === "object" || typeof value === "function") &&
-        value !== null &&
-        typeof (value as { then?: unknown }).then === "function"
-    )
 }
 
 /** Deliver one observation synchronously. Faults are counted and reported like log sink faults, and never thrown */

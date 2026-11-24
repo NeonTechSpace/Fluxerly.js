@@ -11,23 +11,80 @@ import { rateLimitParameters } from "./rate-limit-templates.js"
 
 const capacity = 2048
 const aliasIdleMs = 300_000
+
+declare const rateRouteKeyBrand: unique symbol
+declare const rateBucketKeyBrand: unique symbol
+declare const rateOverflowBrand: unique symbol
+
+/** Opaque route key passed through admission queues, pairing an endpoint identity with its provisional bucket */
+export type RateRouteKey = string & { readonly [rateRouteKeyBrand]: "RateRouteKey" }
+
+/** Opaque key identifying one learned or provisional rate-limit bucket */
+export type RateBucketKey = string & { readonly [rateBucketKeyBrand]: "RateBucketKey" }
+
+/** Branded sentinel indicating conservative client-wide overflow pacing */
+export type RateOverflowTarget = "overflow" & { readonly [rateOverflowBrand]: "RateOverflowTarget" }
+
+/** The rate-limit target reported by observe and accepted by pause */
+export type RateTarget = RateBucketKey | RateOverflowTarget
+
+/** State of the single refill probe allowed once integer remaining reaches zero */
+export type BucketProbe =
+    | { readonly kind: "none" }
+    | {
+          readonly kind: "reserved"
+          readonly route: string
+          remaining: number | undefined
+          incomplete: boolean
+      }
+    | {
+          readonly kind: "inFlight"
+          readonly route: string
+          readonly sequence: number
+          remaining: number | undefined
+          incomplete: boolean
+      }
+
+const noProbe: BucketProbe = Object.freeze({ kind: "none" })
+const overflowTarget = "overflow" as RateOverflowTarget
+const provisionalSeparator = "|"
+
 type Bucket = {
     remaining: number
     until: number
     limit?: number
     next?: number
     sequence: number
-    probeRoute?: string
-    probeSequence?: number
-    probeRemaining?: number
-    probeIncomplete?: true
+    probe: BucketProbe
 }
-type Alias = { key: string; sequence: number; expires: number; carryUntil: number }
-export type RateRoute = { readonly key: string; readonly parameters: Readonly<Record<string, string>> }
+type Alias = { key: RateBucketKey; sequence: number; expires: number; carryUntil: number }
+export interface RateRoute {
+    readonly key: RateRouteKey
+    readonly endpoint: RateBucketKey
+    readonly provisional: RateBucketKey
+    readonly parameters: Readonly<Record<string, string>>
+}
 export type RateAttempt = { readonly route: RateRoute; readonly sequence: number }
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex")
-const provisional = (key: string) => key.split("|")[1] ?? key
+const bucketKey = (value: string) => value as RateBucketKey
+const formatRouteKey = (endpoint: RateBucketKey, fallback: RateBucketKey) =>
+    `${endpoint}${provisionalSeparator}${fallback}` as RateRouteKey
+
+function resolveRoute(route: RateRoute | string): { readonly key: string; readonly provisional: RateBucketKey } {
+    if (typeof route !== "string") return { key: route.key, provisional: route.provisional }
+    const separator = route.indexOf(provisionalSeparator)
+    return {
+        key: route,
+        provisional: bucketKey(separator === -1 ? route : route.slice(separator + 1)),
+    }
+}
+
+type ParsedTarget = { readonly kind: "overflow" } | { readonly kind: "bucket"; readonly key: RateBucketKey }
+
+function parseTarget(target: RateTarget | RateRouteKey): ParsedTarget {
+    return target === overflowTarget ? { kind: "overflow" } : { kind: "bucket", key: target as RateBucketKey }
+}
 
 /** Request paths are SDK-built. Retained keys exclude queries, invite codes and webhook credentials */
 export function rateRoute(
@@ -60,11 +117,11 @@ export function rateRoute(
             /^\d+$/.test(part) || names[parts[index - 1] ?? ""] || parts[index - 1] === "reactions" ? ":id" : part,
         )
         .join("/")
-    const route = `r:${digest(JSON.stringify([method, normalized, major, operation, parameters]))}`
+    const endpoint = bucketKey(`r:${digest(JSON.stringify([method, normalized, major, operation, parameters]))}`)
     // Retain explicitly shared SDK operation groups before the provider supplies
     // an identity. Learning is still per endpoint, so distinct server buckets split
-    const fallback = operation ? `r:${digest(JSON.stringify([operation, major]))}` : route
-    return { key: `${route}|${fallback}`, parameters }
+    const provisional = operation ? bucketKey(`r:${digest(JSON.stringify([operation, major]))}`) : endpoint
+    return { key: formatRouteKey(endpoint, provisional), endpoint, provisional, parameters }
 }
 
 /** The values one response reports for a bucket */
@@ -81,17 +138,42 @@ function compareObservation(active: Bucket | undefined, observation: BucketObser
     const { remaining, sequence, limit } = observation
     const newest = !active || sequence >= active.sequence
     const changedLimit = active?.limit !== undefined && limit !== undefined && active.limit !== limit
-    const refreshedProbe = active?.probeSequence !== undefined && sequence === active.probeSequence
-    const observedProbeRemaining =
-        active?.probeRoute === undefined ? undefined : Math.min(active.probeRemaining ?? remaining, remaining)
-    const conservativeProbe = active?.probeIncomplete === true || (active?.probeRoute !== undefined && changedLimit)
+    const probe = active?.probe ?? noProbe
+    const refreshedProbe = probe.kind === "inFlight" && sequence === probe.sequence
+    const observedProbeRemaining = probe.kind === "none" ? undefined : Math.min(probe.remaining ?? remaining, remaining)
+    const conservativeProbe = probe.kind !== "none" && (probe.incomplete || changedLimit)
     const refreshesSchedule = newest || refreshedProbe
     const retainedLimit = newest
         ? changedLimit
             ? Math.min(active!.limit!, limit!)
             : (limit ?? active?.limit)
         : active?.limit
-    return { changedLimit, refreshedProbe, observedProbeRemaining, conservativeProbe, refreshesSchedule, retainedLimit }
+    return {
+        changedLimit,
+        refreshedProbe,
+        observedProbeRemaining,
+        conservativeProbe,
+        refreshesSchedule,
+        retainedLimit,
+    }
+}
+
+/** Advance a live probe after an observation from another attempt, or clear it once the probe itself answered */
+function nextProbe(
+    probe: BucketProbe,
+    refreshed: boolean,
+    remaining: number | undefined,
+    incomplete: boolean,
+): BucketProbe {
+    if (refreshed) return noProbe
+    switch (probe.kind) {
+        case "none":
+            return noProbe
+        case "reserved":
+            return { kind: "reserved", route: probe.route, remaining, incomplete }
+        case "inFlight":
+            return { kind: "inFlight", route: probe.route, sequence: probe.sequence, remaining, incomplete }
+    }
 }
 
 /** The bucket after one observation, which can only tighten a live bucket's remaining requests and pause */
@@ -119,29 +201,29 @@ function mergedBucket(active: Bucket | undefined, observation: BucketObservation
               : {}),
         ...(retainedLimit === undefined ? {} : { limit: retainedLimit }),
         sequence: Math.max(active?.sequence ?? 0, sequence),
-        ...(!refreshedProbe && active?.probeRoute !== undefined
-            ? {
-                  probeRoute: active.probeRoute,
-                  ...(active.probeSequence === undefined ? {} : { probeSequence: active.probeSequence }),
-                  ...(observedProbeRemaining === undefined ? {} : { probeRemaining: observedProbeRemaining }),
-                  ...(conservativeProbe ? { probeIncomplete: true as const } : {}),
-              }
-            : {}),
+        probe: nextProbe(active?.probe ?? noProbe, refreshedProbe, observedProbeRemaining, conservativeProbe),
     }
 }
 
 /** Per-client bucket learning. Eviction cannot discard an unexpired denial */
 export class RateLimits {
     #aliases = new Map<string, Alias>()
-    #buckets = new Map<string, Bucket>()
+    #buckets = new Map<RateBucketKey, Bucket>()
     #sequence = 0
     #overflowUntil = 0
 
     begin(route: RateRoute): RateAttempt {
         const sequence = ++this.#sequence
         const alias = this.#aliases.get(route.key)
-        const bucket = this.#buckets.get(alias?.key ?? provisional(route.key))
-        if (bucket?.probeRoute === route.key && bucket.probeSequence === undefined) bucket.probeSequence = sequence
+        const bucket = this.#buckets.get(alias?.key ?? route.provisional)
+        if (bucket?.probe.kind === "reserved" && bucket.probe.route === route.key)
+            bucket.probe = {
+                kind: "inFlight",
+                route: bucket.probe.route,
+                sequence,
+                remaining: bucket.probe.remaining,
+                incomplete: bucket.probe.incomplete,
+            }
         return { route, sequence }
     }
 
@@ -156,19 +238,19 @@ export class RateLimits {
         return alias
     }
 
-    #protected(key: string, now: number) {
+    #protected(key: RateBucketKey, now: number) {
         const bucket = this.#buckets.get(key)
         return bucket !== undefined && bucket.until > now && bucket.remaining <= 0
     }
 
-    #wait(key: string, now: number, firm = false) {
+    #wait(key: RateBucketKey, now: number, firm = false) {
         const bucket = this.#buckets.get(key)
         if (bucket && bucket.until <= now) {
             this.#buckets.delete(key)
             return 0
         }
         if (!bucket || bucket.remaining > 0) return 0
-        if (bucket.probeRoute !== undefined && !firm) return bucket.until
+        if (bucket.probe.kind !== "none" && !firm) return bucket.until
         return bucket.next !== undefined && bucket.next < bucket.until ? bucket.next : bucket.until
     }
 
@@ -176,52 +258,46 @@ export class RateLimits {
      * The logical time before which the route may not send, or 0 when it may send now. A firm wait leaves out the hold
      * of an outstanding refill probe, whose answer can reopen the bucket early, so the route cannot send before it
      */
-    wait(route: string, now: number, firm = false): number {
-        const alias = this.#alias(route, now)
+    wait(route: RateRoute | string, now: number, firm = false): number {
+        const resolved = resolveRoute(route)
+        const alias = this.#alias(resolved.key, now)
         const until = Math.max(
             this.#overflowUntil,
             alias?.carryUntil ?? 0,
-            this.#wait(alias?.key ?? provisional(route), now, firm),
+            this.#wait(alias?.key ?? resolved.provisional, now, firm),
         )
         return until > now ? until : 0
     }
 
-    reserve(route: string, now: number) {
-        const alias = this.#alias(route, now)
-        const bucket = this.#buckets.get(alias?.key ?? provisional(route))
+    reserve(route: RateRoute | string, now: number) {
+        const resolved = resolveRoute(route)
+        const alias = this.#alias(resolved.key, now)
+        const bucket = this.#buckets.get(alias?.key ?? resolved.provisional)
         if (!bucket || bucket.until <= now) return
         if (bucket.remaining > 0) {
             bucket.remaining--
             return
         }
-        if (bucket.next !== undefined && bucket.next <= now && bucket.probeRoute === undefined) {
+        if (bucket.next !== undefined && bucket.next <= now && bucket.probe.kind === "none") {
             // Once integer remaining reaches zero, only one request may test the
             // next refill. Its response must refresh the schedule before another
             // request can use the same bucket
-            bucket.probeRoute = route
+            bucket.probe = { kind: "reserved", route: resolved.key, remaining: undefined, incomplete: false }
         }
     }
 
-    #store(
-        key: string,
-        remaining: number,
-        until: number,
-        now: number,
-        sequence: number,
-        limit?: number,
-        next?: number,
-    ) {
+    #store(key: RateBucketKey, observation: BucketObservation, now: number) {
         const previous = this.#buckets.get(key)
-        if ((!previous || previous.until <= now) && !this.#roomFor(key, until, now)) return
+        if ((!previous || previous.until <= now) && !this.#roomFor(key, observation.until, now)) return
         const active = previous && previous.until > now ? previous : undefined
-        this.#buckets.set(key, mergedBucket(active, { remaining, until, sequence, limit, next }))
+        this.#buckets.set(key, mergedBucket(active, observation))
     }
 
     /**
      * Make room for a bucket with no live entry, dropping expired buckets and then one bucket with requests left. Without
      * room this returns false and pauses conservatively rather than forgetting a known limit
      */
-    #roomFor(key: string, until: number, now: number): boolean {
+    #roomFor(key: RateBucketKey, until: number, now: number): boolean {
         for (const [candidate, bucket] of this.#buckets) if (bucket.until <= now) this.#buckets.delete(candidate)
         if (!this.#buckets.has(key) && this.#buckets.size >= capacity) {
             for (const [candidate, bucket] of this.#buckets) {
@@ -244,7 +320,9 @@ export class RateLimits {
         const { route, sequence } = attempt
         const parameters = rateLimitParameters.get(header) ?? []
         let missingParameters = parameters.some((name) => route.parameters[name] === undefined)
-        const key = `b:${header}:${digest(JSON.stringify(parameters.map((name) => route.parameters[name] ?? "")))}`
+        const key = bucketKey(
+            `b:${header}:${digest(JSON.stringify(parameters.map((name) => route.parameters[name] ?? "")))}`,
+        )
         // A response from an older dispatched attempt must not undo a newer mapping
         if (!previous || sequence >= previous.sequence) {
             if (!previous && this.#aliases.size >= capacity) {
@@ -264,7 +342,7 @@ export class RateLimits {
                     carryUntil: Math.max(
                         previous?.carryUntil ?? 0,
                         previous && previous.key !== key ? this.#wait(previous.key, now) : 0,
-                        this.#wait(provisional(route.key), now),
+                        this.#wait(route.provisional, now),
                     ),
                 })
             } else missingParameters = true
@@ -272,11 +350,11 @@ export class RateLimits {
         return { key, missingParameters }
     }
 
-    observe(attempt: RateAttempt, response: Response, now: number): string {
+    observe(attempt: RateAttempt, response: Response, now: number): RateTarget {
         const { route, sequence } = attempt
         const previous = this.#alias(route.key, now)
         const header = response.headers.get("x-ratelimit-bucket")
-        let key = previous?.key ?? provisional(route.key)
+        let key: RateBucketKey = previous?.key ?? route.provisional
         let missingParameters = false
         if (header !== null && /^[a-zA-Z0-9_-]{1,128}$/.test(header))
             ({ key, missingParameters } = this.#learnBucket(attempt, header, previous, now))
@@ -295,11 +373,16 @@ export class RateLimits {
             // in-flight probe then refreshes the schedule. No leak rate is inferred
             // from (limit - remaining), whose fractional level is not observable
             const next = complete && remaining === 0 ? now + Math.ceil(delay / limit) : undefined
-            this.#store(key, remaining, until, now, sequence, complete ? limit : undefined, next)
+            this.#store(key, { remaining, until, sequence, limit: complete ? limit : undefined, next }, now)
             if (missingParameters) this.#overflowUntil = Math.max(this.#overflowUntil, until)
         } else {
             const bucket = this.#buckets.get(key)
-            if (bucket?.probeRoute !== undefined && sequence !== bucket.probeSequence) bucket.probeIncomplete = true
+            if (
+                bucket !== undefined &&
+                bucket.probe.kind !== "none" &&
+                (bucket.probe.kind === "reserved" || sequence !== bucket.probe.sequence)
+            )
+                bucket.probe.incomplete = true
             if (bucket && sequence >= bucket.sequence) {
                 // Incomplete or changing metadata cannot keep a speculative refill
                 // schedule. Preserve the known full-drain pause instead
@@ -309,17 +392,24 @@ export class RateLimits {
         }
         // Missing resource bindings or pinned-capacity pressure must not let the
         // attempt's later body-only denial bypass the conservative overflow gate
-        return missingParameters ? "overflow" : key
+        return missingParameters ? overflowTarget : key
     }
 
-    pause(key: string, until: number, now: number, sequence?: number) {
-        if (key === "overflow") {
+    pause(target: RateTarget | RateRouteKey, until: number, now: number, sequence?: number) {
+        const parsed = parseTarget(target)
+        if (parsed.kind === "overflow") {
             this.#overflowUntil = Math.max(this.#overflowUntil, until)
             return
         }
+        const key = parsed.key
         const bucket = this.#buckets.get(key)
-        if (sequence !== undefined && bucket?.probeRoute !== undefined && sequence !== bucket.probeSequence)
-            bucket.probeRemaining = 0
+        if (
+            sequence !== undefined &&
+            bucket !== undefined &&
+            bucket.probe.kind !== "none" &&
+            (bucket.probe.kind === "reserved" || sequence !== bucket.probe.sequence)
+        )
+            bucket.probe.remaining = 0
         if (
             sequence !== undefined &&
             bucket !== undefined &&
@@ -334,15 +424,33 @@ export class RateLimits {
             bucket.until = Math.max(bucket.until, until)
             bucket.next = until
             bucket.sequence = sequence
-            if (bucket.probeSequence !== undefined && sequence === bucket.probeSequence) {
-                delete bucket.probeRoute
-                delete bucket.probeSequence
-                delete bucket.probeRemaining
-                delete bucket.probeIncomplete
-            }
+            if (bucket.probe.kind === "inFlight" && sequence === bucket.probe.sequence) bucket.probe = noProbe
             return
         }
-        this.#store(key, 0, until, now, sequence ?? ++this.#sequence)
+        this.#store(
+            key,
+            { remaining: 0, until, sequence: sequence ?? ++this.#sequence, limit: undefined, next: undefined },
+            now,
+        )
+    }
+
+    /** Read-only summary of retained buckets, aliases and active probes for model verification */
+    inspect(): {
+        readonly buckets: number
+        readonly aliases: number
+        readonly overflowUntil: number
+        readonly probes: readonly { readonly bucket: RateBucketKey; readonly probe: Readonly<BucketProbe> }[]
+    } {
+        const probes: { readonly bucket: RateBucketKey; readonly probe: Readonly<BucketProbe> }[] = []
+        for (const [key, bucket] of this.#buckets) {
+            if (bucket.probe.kind !== "none") probes.push({ bucket: key, probe: { ...bucket.probe } })
+        }
+        return {
+            buckets: this.#buckets.size,
+            aliases: this.#aliases.size,
+            overflowUntil: this.#overflowUntil,
+            probes,
+        }
     }
 
     clear() {

@@ -16,6 +16,7 @@ import {
     type GatewayMessageDecoder,
     type MessageDecoder,
 } from "./message-fields.js"
+import { maximumTimerMs } from "./clock.js"
 import { record } from "./decode/primitives.js"
 import { readCaller, suspendMarked } from "./defects.js"
 import { loggingConfiguration, type ClientLogger } from "./logging.js"
@@ -438,7 +439,7 @@ function readConnection(option: (key: string) => unknown, native: boolean) {
     if (recovery instanceof ConfigurationError) return recovery
     if (
         timeout !== undefined &&
-        (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
+        (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout <= 0 || timeout > maximumTimerMs)
     ) {
         return new ConfigurationError(
             "startupTimeoutMs",
@@ -493,8 +494,6 @@ function readLogging(option: (key: string) => unknown, token: string, native: bo
     return logging
 }
 
-const timerMaximumMs = 2_147_483_647
-
 /** Validate connection.recovery, including the native-only schedule */
 function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfiguration | ConfigurationError {
     if (value === undefined) return defaultRecovery
@@ -519,7 +518,7 @@ function recoveryConfiguration(value: unknown, native: boolean): RecoveryConfigu
     ): number | ConfigurationError => {
         const input = value[field]
         if (input === undefined) return fallback
-        return typeof input === "number" && Number.isSafeInteger(input) && input >= minimum && input <= timerMaximumMs
+        return typeof input === "number" && Number.isSafeInteger(input) && input >= minimum && input <= maximumTimerMs
             ? input
             : new ConfigurationError(
                   field,

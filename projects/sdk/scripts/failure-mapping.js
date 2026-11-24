@@ -8,15 +8,79 @@ import { fileURLToPath } from "node:url"
 // Vitest bundles an ESTree parser that reads TypeScript
 import { parseAst } from "vitest/node"
 
-const forbidden = new Set(["Effect.mapError", "Cause.map"])
+const forbiddenMembers = new Map([
+    ["Effect", new Set(["mapError"])],
+    ["Cause", new Set(["map"])],
+])
+const effectModules = new Map([
+    ["effect/Effect", new Set(["mapError"])],
+    ["effect/Cause", new Set(["map"])],
+])
 const exempt = "internal/effect-failures.ts"
 
 function isNode(value) {
     return typeof value === "object" && value !== null && typeof value.type === "string"
 }
 
+/** Collects Effect and Cause namespace aliases and named/destructured forbidden bindings */
+function collectBindings(program) {
+    const namespaces = new Map([
+        ["Effect", "Effect"],
+        ["Cause", "Cause"],
+    ])
+    const direct = new Map()
+    for (const statement of program.body ?? []) {
+        if (statement.type === "ImportDeclaration" && typeof statement.source?.value === "string") {
+            const mod = statement.source.value
+            const names = effectModules.get(mod)
+            if (!names) continue
+            const kind = mod === "effect/Effect" ? "Effect" : "Cause"
+            for (const spec of statement.specifiers ?? []) {
+                if (spec.type === "ImportNamespaceSpecifier") namespaces.set(spec.local.name, kind)
+                if (
+                    spec.type === "ImportSpecifier" &&
+                    spec.imported.type === "Identifier" &&
+                    names.has(spec.imported.name)
+                )
+                    direct.set(spec.local.name, `${kind}.${spec.imported.name}`)
+            }
+        }
+    }
+    const findDestructured = (node) => {
+        if (
+            node.type === "VariableDeclarator" &&
+            node.id?.type === "ObjectPattern" &&
+            node.init?.type === "Identifier" &&
+            namespaces.has(node.init.name)
+        ) {
+            const kind = namespaces.get(node.init.name)
+            const names = forbiddenMembers.get(kind)
+            for (const prop of node.id.properties ?? []) {
+                if (
+                    prop.type === "Property" &&
+                    !prop.computed &&
+                    prop.key?.type === "Identifier" &&
+                    prop.value?.type === "Identifier" &&
+                    names?.has(prop.key.name)
+                )
+                    direct.set(prop.value.name, `${kind}.${prop.key.name}`)
+            }
+        }
+        for (const [key, value] of Object.entries(node)) {
+            if (key === "start" || key === "end") continue
+            if (Array.isArray(value)) {
+                for (const item of value) if (isNode(item)) findDestructured(item)
+            } else if (isNode(value)) findDestructured(value)
+        }
+    }
+    findDestructured(program)
+    return { namespaces, direct }
+}
+
 /** Every forbidden failure mapping in one source text, as line-numbered descriptions */
 function scan(source, file = "sample.ts") {
+    const program = parseAst(source, { lang: "ts" })
+    const { namespaces, direct } = collectBindings(program)
     const results = []
     const visit = (node) => {
         if (
@@ -25,10 +89,16 @@ function scan(source, file = "sample.ts") {
             node.object.type === "Identifier" &&
             node.property.type === "Identifier"
         ) {
-            const name = `${node.object.name}.${node.property.name}`
-            if (forbidden.has(name)) {
+            const kind = namespaces.get(node.object.name)
+            if (kind && forbiddenMembers.get(kind)?.has(node.property.name)) {
                 const line = source.slice(0, node.start).split("\n").length
-                results.push(`${file}:${line} ${name}`)
+                results.push(`${file}:${line} ${kind}.${node.property.name}`)
+            }
+        } else if (node.type === "CallExpression" && node.callee?.type === "Identifier") {
+            const mapped = direct.get(node.callee.name)
+            if (mapped) {
+                const line = source.slice(0, node.start).split("\n").length
+                results.push(`${file}:${line} ${mapped}`)
             }
         }
         for (const [key, value] of Object.entries(node)) {
@@ -38,7 +108,7 @@ function scan(source, file = "sample.ts") {
             } else if (isNode(value)) visit(value)
         }
     }
-    visit(parseAst(source, { lang: "ts" }))
+    visit(program)
     return results
 }
 
@@ -48,6 +118,10 @@ const flagged = [
     "Effect.mapError(effect, (error) => wrap(error))",
     "const mapped = Cause.map(cause, (error) => wrap(error))",
     "effect.pipe(\n    Effect.mapError(\n        (error) => wrap(error),\n    ),\n)",
+    'import * as E from "effect/Effect"\nE.mapError(effect, wrap)',
+    'import { mapError } from "effect/Effect"\nmapError(effect, wrap)',
+    'import { map as mapCauseRaw } from "effect/Cause"\nmapCauseRaw(cause, wrap)',
+    "const { mapError } = Effect\nmapError(effect, wrap)",
 ]
 const accepted = [
     "effect.pipe(mapFailureCause(failures(RestFailure), (error) => wrap(error)))",

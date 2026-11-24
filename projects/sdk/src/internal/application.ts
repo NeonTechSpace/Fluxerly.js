@@ -4,7 +4,7 @@
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import type { BotApplication } from "#sdk/application"
-import { identifier, record } from "./decode/primitives.js"
+import { identifier, nullableText, record } from "./decode/primitives.js"
 
 /** Validated current-application request. Shared REST owns admission, retries, and cleanup */
 export interface BotApplicationRequest<A> {
@@ -13,8 +13,6 @@ export interface BotApplicationRequest<A> {
     readonly status: 200
     readonly decode: (value: unknown) => A | undefined
 }
-
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 
 function decodeApplication(value: unknown): BotApplication | undefined {
     if (

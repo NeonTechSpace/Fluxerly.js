@@ -1,10 +1,10 @@
 import { availableParallelism } from "node:os"
 
-// Local runs share the machine with other work, so they use half the threads, at most four. CI runners are dedicated.
+// Local runs share the machine with other work, so they use half the threads, at most eight. CI runners are dedicated.
 // VITEST_MAX_WORKERS overrides the limit for local investigation
 const workers =
     Number(process.env.VITEST_MAX_WORKERS) ||
-    (process.env.CI ? availableParallelism() : Math.max(1, Math.min(4, Math.floor(availableParallelism() / 2))))
+    (process.env.CI ? availableParallelism() : Math.max(1, Math.min(8, Math.floor(availableParallelism() / 2))))
 
 // These files start child processes, so each worker can occupy several threads. They run as a second stage with one
 // worker fewer, which keeps the host from saturating without slowing the rest of the suite

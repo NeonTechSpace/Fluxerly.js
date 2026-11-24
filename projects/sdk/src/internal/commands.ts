@@ -32,14 +32,13 @@ import { MessageType, type Message, type MessageCore } from "#sdk/messages"
 import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
 import * as Effect from "effect/Effect"
-import { nowMs } from "./clock.js"
+import { maximumTimerMs, nowMs } from "./clock.js"
 import type { ClientLogger } from "./logging.js"
 import { closestMatch, unsupportedKeyHint } from "./suggest.js"
 import { identifyCommand } from "./events.js"
 import { shareReportQueue, type HookQueue } from "./failures.js"
 
 const commandName = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
-const maxDurationMs = 2_147_483_647
 const emptyCommandMetadata: readonly PrefixCommandMetadata[] = Object.freeze([])
 /** Default key limit of a memory cooldown store, including each router's own store */
 const defaultCooldownEntries = 10_000
@@ -120,7 +119,7 @@ export class PrefixCommandRegistry<D extends PrefixCommandDefinition, M extends 
     ignores(message: M): boolean {
         const { type } = message
         if (type !== undefined && type !== MessageType.Default && type !== MessageType.Reply) return true
-        return this.#options.ignoreBots !== false && message.author.isBot === true
+        return this.#options.ignoreBots !== false && message.author.isBot
     }
 
     private derive(
@@ -481,11 +480,11 @@ export function snapshotCommandCooldown(value: unknown): StoredCooldown | undefi
         typeof durationMs !== "number" ||
         !Number.isSafeInteger(durationMs) ||
         durationMs < 1 ||
-        durationMs > maxDurationMs
+        durationMs > maximumTimerMs
     )
         throw new ConfigurationError(
             "cooldown",
-            `The cooldown option "durationMs" must be a positive safe integer of at most ${maxDurationMs} ms`,
+            `The cooldown option "durationMs" must be a positive safe integer of at most ${maximumTimerMs} ms`,
         )
     if (
         store !== undefined &&
@@ -1370,12 +1369,12 @@ function validateMemoryRequest(input: unknown): LocalMemoryResult<CommandCooldow
         typeof request.durationMs !== "number" ||
         !Number.isSafeInteger(request.durationMs) ||
         request.durationMs < 1 ||
-        request.durationMs > maxDurationMs
+        request.durationMs > maximumTimerMs
     )
         return failure(
             new ConfigurationError(
                 "cooldown",
-                `The cooldown option "durationMs" must be a positive safe integer of at most ${maxDurationMs} ms`,
+                `The cooldown option "durationMs" must be a positive safe integer of at most ${maximumTimerMs} ms`,
             ),
         )
     return success(Object.freeze({ key: request.key, durationMs: request.durationMs }))

@@ -59,6 +59,20 @@ export interface Session {
     commandSentAt?: number[]
 }
 
+/** The session's ID and sequence when both are retained, so callers can resume or snapshot without assertions */
+export function resumableSession(session: Session): { readonly id: string; readonly sequence: number } | undefined {
+    return session.id !== undefined && session.sequence !== null
+        ? { id: session.id, sequence: session.sequence }
+        : undefined
+}
+
+/** Per-attempt socket lifecycle, making invalid phase combinations unrepresentable */
+type SessionPhase =
+    | { readonly kind: "awaitingHello" }
+    | { readonly kind: "handshaking"; readonly mode: "identify" | "resume"; readonly intervalMs: number }
+    | { readonly kind: "ready"; readonly mode: "identify" | "resume"; readonly intervalMs: number }
+    | { readonly kind: "stopping" }
+
 /** Why an attempt ended, for log records. The public failure keeps only reviewed facts */
 export type AttemptEnd =
     | "closed"
@@ -279,15 +293,16 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
             const hello = Deferred.makeUnsafe<number, AttemptFailure>()
             const ready = Deferred.makeUnsafe<void, AttemptFailure>()
             const ended = Deferred.makeUnsafe<never, AttemptFailure>()
-            let stopping = false
-            let receivedHello = false
-            let receivedReady = false
+            let phase: SessionPhase = { kind: "awaitingHello" }
             let pendingHeartbeat: number | undefined
-            const resuming = session.id !== undefined && session.sequence !== null
+            const mode: "identify" | "resume" = resumableSession(session) !== undefined ? "resume" : "identify"
+            const resuming = mode === "resume"
             const fail = (error: AttemptFailure) => {
+                // Capture readiness before settling ended, because settling can run the scope release synchronously
+                const wasReady = phase.kind === "ready"
                 if (Deferred.doneUnsafe(ended, Effect.fail(error))) {
                     onLatency(null)
-                    if (receivedReady && error.retry) onRecovering()
+                    if (wasReady && error.retry) onRecovering()
                 }
             }
             const logger = observer?.logger
@@ -337,7 +352,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         logger,
                         context,
                         shardId,
-                        stopping: () => stopping,
+                        stopping: () => phase.kind === "stopping",
                         failed: ({ error }) => fail(new AttemptFailure(error, true, false, "sendFailed")),
                     })
                     const sentAt = (session.commandSentAt ??= [])
@@ -388,23 +403,29 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         observer.invalidate(type, body)
                     }
                     const dispatch = (payload: Readonly<Record<string, unknown>>, body: unknown, bytes: number) => {
-                        const envelope = readDispatchEnvelope(payload, receivedHello)
+                        if (phase.kind === "stopping") return
+                        const envelope = readDispatchEnvelope(payload, phase.kind !== "awaitingHello")
                         if (envelope.rejected) return protocolFailure(envelope)
+                        if (phase.kind === "awaitingHello") return
                         const { type, sequence } = envelope
                         if (type === "READY") {
-                            const sessionId = readReady(body, { receivedReady, resuming, shard })
+                            const sessionId = readReady(body, {
+                                receivedReady: phase.kind === "ready",
+                                resuming: phase.mode === "resume",
+                                shard,
+                            })
                             if (typeof sessionId !== "string") return protocolFailure(sessionId)
                             session.id = sessionId
-                            receivedReady = true
+                            phase = { kind: "ready", mode: phase.mode, intervalMs: phase.intervalMs }
                         } else if (type === "RESUMED") {
-                            if (!resuming || receivedReady)
+                            if (phase.mode !== "resume" || phase.kind === "ready")
                                 return protocolFailure({
                                     detail: "received an unexpected RESUMED",
                                     opcode: Opcode.dispatch,
                                     dispatch: "RESUMED",
                                 })
-                            receivedReady = true
-                        } else if (!resuming && !receivedReady)
+                            phase = { kind: "ready", mode: phase.mode, intervalMs: phase.intervalMs }
+                        } else if (phase.mode !== "resume" && phase.kind !== "ready")
                             return protocolFailure({
                                 detail: "received a dispatch before READY",
                                 opcode: Opcode.dispatch,
@@ -454,7 +475,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                             )
                     }
                     const processMessage = (data: SocketData, binary: boolean) => {
-                        if (stopping) return
+                        if (phase.kind === "stopping") return
                         const frame = decodeFrame(data, binary)
                         // A binary frame is refused by local policy, so reconnecting would receive it again
                         if (frame.rejected) return protocolFailure(frame, !binary)
@@ -483,9 +504,9 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         )
                         switch (op) {
                             case Opcode.hello: {
-                                const interval = readHello(body, receivedHello)
+                                const interval = readHello(body, phase.kind !== "awaitingHello")
                                 if (typeof interval !== "number") return protocolFailure(interval)
-                                receivedHello = true
+                                phase = { kind: "handshaking", mode, intervalMs: interval }
                                 Deferred.doneUnsafe(hello, Effect.succeed(interval))
                                 break
                             }
@@ -577,7 +598,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         }
                     }
                     const onError = (error: Error & { code?: string }) => {
-                        if (stopping) return
+                        if (phase.kind === "stopping") return
                         const status = localRejectionStatus(error.code)
                         const transportCode =
                             typeof error.code === "string" && /^[A-Z0-9_]{1,64}$/.test(error.code)
@@ -603,7 +624,8 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                         )
                     }
                     const onClose = (code: number, reason?: Uint8Array | string) => {
-                        if (!stopping) fail(classifyClose(code, resuming && !receivedReady, closeReasonText(reason)))
+                        if (phase.kind !== "stopping")
+                            fail(classifyClose(code, resuming && phase.kind !== "ready", closeReasonText(reason)))
                     }
                     socket.on("message", onMessage)
                     socket.on("error", onError)
@@ -622,7 +644,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                 }),
                 (transport, exit) =>
                     Effect.gen(function* () {
-                        stopping = true
+                        phase = { kind: "stopping" }
                         transport.pacer.close()
                         onLatency(null)
                         const retrying =
@@ -638,8 +660,7 @@ export const runGatewaySession = <M extends MessageCore>(options: GatewaySession
                             Exit.isFailure(exit) &&
                             Cause.hasInterruptsOnly(exit.cause) &&
                             options.preserveSessionOnInterrupt?.() === true
-                        const preserveSession =
-                            session.id !== undefined && session.sequence !== null && (retrying || saving)
+                        const preserveSession = resumableSession(session) !== undefined && (retrying || saving)
                         yield* closeSocket(transport.socket, preserveSession).pipe(
                             Effect.ensuring(Effect.sync(transport.detach)),
                         )

@@ -16,14 +16,19 @@ import type {
 } from "#sdk/discovery"
 import type { GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
-import { identifier, inputId, record } from "./decode/primitives.js"
-import { nonNegativeInteger as integer } from "./decode/primitives.js"
+import {
+    identifier,
+    inputId,
+    nonNegativeInteger as integer,
+    nullableText,
+    optionalNullableText,
+    record,
+} from "./decode/primitives.js"
 import { nullableTimestamp as nullableTime, timestamp } from "./decode/timestamp.js"
 import { checkFields, choiceField, field, type FieldRules, integerField, textField } from "./field-rules.js"
 
 const text = (value: unknown, min: number, max: number): value is string =>
     typeof value === "string" && value.length >= min && value.length <= max
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 
 function application(value: unknown, guildId: string): DiscoveryApplication | undefined {
     if (
@@ -111,11 +116,11 @@ function discoveryGuild(value: unknown): DiscoveryGuild | undefined {
         !record(value) ||
         !identifier(value.id) ||
         typeof value.name !== "string" ||
-        (value.icon !== undefined && !nullableText(value.icon)) ||
-        (value.banner !== undefined && !nullableText(value.banner)) ||
-        (value.description !== undefined && !nullableText(value.description)) ||
+        !optionalNullableText(value.icon) ||
+        !optionalNullableText(value.banner) ||
+        !optionalNullableText(value.description) ||
         !integer(value.category_type, 8) ||
-        (value.primary_language !== undefined && !nullableText(value.primary_language)) ||
+        !optionalNullableText(value.primary_language) ||
         !Array.isArray(value.custom_tags) ||
         !value.custom_tags.every((tag) => typeof tag === "string") ||
         !integer(value.member_count) ||

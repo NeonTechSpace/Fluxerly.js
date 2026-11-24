@@ -5,6 +5,9 @@
  */
 import type * as Clock from "effect/Clock"
 
+/** Longest delay host timers accept, the signed 32-bit integer maximum in milliseconds */
+export const maximumTimerMs = 2_147_483_647
+
 /** Current monotonic time in milliseconds from the given Clock. Never wall-clock time */
 export function nowMs(clock: Clock.Clock): number {
     return Number(clock.monotonicTimeNanosUnsafe()) / 1_000_000

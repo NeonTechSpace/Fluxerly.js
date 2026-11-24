@@ -10,13 +10,12 @@
  */
 import * as Effect from "effect/Effect"
 import { ClientClosedError } from "#sdk/errors"
+import { maximumTimerMs } from "../clock.js"
 import type { LogicalScheduler, LogicalTimer } from "../logical-scheduler.js"
 import { RateLimits } from "../rate-limits.js"
 import { RestFailure } from "./classify.js"
 import { concurrencyPerShard, defaultRestConfiguration, maximumConcurrency, type RestConfiguration } from "./options.js"
 
-/** Longest single timer delay */
-const maximumTimerMs = 2_147_483_647
 /** Longest client pause that repeated unidentified 429s grow to, unless a 429 itself asks for longer */
 const maximumUnidentifiedPauseMs = 60_000
 /** Most jitter added to a grown unidentified pause */
@@ -71,6 +70,12 @@ export interface AdmissionRequest {
     readonly probe?: boolean
 }
 
+/** Recovery state after a 429 that did not identify its limit, holding the queue behind one probe */
+export type ProbeState =
+    | { readonly kind: "none" }
+    | { readonly kind: "needed"; readonly repeats: number }
+    | { readonly kind: "inFlight"; readonly repeats: number; readonly attempt: AdmissionRelease }
+
 /** Queued requests that wait for a rate limit, as diagnostics and the ratelimit.queueHeld record report them */
 export interface RateLimitHold {
     readonly reason: "global" | "client" | "route"
@@ -97,12 +102,8 @@ export class RestAdmission {
      * waits its own second and is reported again
      */
     #holdReason: RateLimitHold["reason"] | undefined
-    /** Consecutive 429s that did not identify their limit, which lengthen the next client pause */
-    #unidentified = 0
     /** After an unidentified pause, one request probes before the queue is released */
-    #probe: "none" | "needed" | "inFlight" = "none"
-    /** The admitted attempt selected as the current probe, while it owns it */
-    #probeAttempt: AdmissionRelease | undefined
+    #probe: ProbeState = { kind: "none" }
     /** API request slots: The configured concurrency, or the default scaled with the local shard count */
     #concurrency: number
     /** Learned buckets and aliases for this client's routes */
@@ -144,6 +145,11 @@ export class RestAdmission {
         }
     }
 
+    /** Read-only view of the unidentified-limit probe state machine for verification */
+    get probeState(): ProbeState {
+        return this.#probe
+    }
+
     /**
      * Why queued requests wait for a rate limit now, or null when none does. A request that also waits for a slot
      * counts too. The longest known wait is reported, and the route group is the one with the most requests waiting
@@ -152,7 +158,7 @@ export class RestAdmission {
     rateLimitHold(): RateLimitHold | null {
         const now = this.logical.now()
         const paused = this.#globalUntil > now
-        const probing = this.#probe === "inFlight"
+        const probing = this.#probe.kind === "inFlight"
         let requests = 0
         let until = now
         const groups = new Map<string, number>()
@@ -220,17 +226,27 @@ export class RestAdmission {
         const asked = Math.max(0, until - now)
         // During a recovery, only the selected probe's answer says something new about the limit. Requests that were
         // already sent when the pause began only keep the pause at least as long as they ask
-        if (this.#probe !== "none" && (attempt === undefined || attempt !== this.#probeAttempt)) {
-            this.#pauseUnidentified(until)
-            return Math.max(until, this.#globalUntil)
+        let repeats: number
+        switch (this.#probe.kind) {
+            case "none":
+                repeats = 0
+                break
+            case "needed":
+                this.#pauseUnidentified(until)
+                return Math.max(until, this.#globalUntil)
+            case "inFlight":
+                if (attempt === undefined || attempt !== this.#probe.attempt) {
+                    this.#pauseUnidentified(until)
+                    return Math.max(until, this.#globalUntil)
+                }
+                repeats = this.#probe.repeats
+                break
         }
-        const repeats = this.#unidentified++
         const grown =
             repeats === 0 ? asked : Math.max(asked, Math.min(maximumUnidentifiedPauseMs, asked * 2 ** repeats))
         const jitter =
             repeats === 0 ? 0 : Math.floor(random * Math.min(maximumUnidentifiedJitterMs, Math.floor(grown / 10)))
-        this.#probe = "needed"
-        this.#probeAttempt = undefined
+        this.#probe = { kind: "needed", repeats: repeats + 1 }
         this.#pauseUnidentified(now + grown + jitter)
         return Math.max(until, this.#globalUntil)
     }
@@ -241,10 +257,8 @@ export class RestAdmission {
      * sent before the pause began, says nothing about the limit and is ignored
      */
     responded(attempt?: AdmissionRelease) {
-        if (this.#probe !== "inFlight" || attempt === undefined || attempt !== this.#probeAttempt) return
-        this.#probe = "none"
-        this.#probeAttempt = undefined
-        this.#unidentified = 0
+        if (this.#probe.kind !== "inFlight" || attempt === undefined || attempt !== this.#probe.attempt) return
+        this.#probe = { kind: "none" }
         this.#pump()
     }
 
@@ -278,7 +292,7 @@ export class RestAdmission {
                 (item.media
                     ? this.#activeMedia >= this.settings.mediaConcurrency
                     : this.#active >= this.#concurrency) ||
-                (item.rateLimited && this.#probe === "inFlight")
+                (item.rateLimited && this.#probe.kind === "inFlight")
             ) {
                 index++
                 continue
@@ -303,15 +317,13 @@ export class RestAdmission {
                 else this.#active--
                 // A probe that ended without a response, such as after a network failure, passes the probe on. A probe
                 // that already answered, or whose recovery a newer pause replaced, no longer owns it
-                if (this.#probe === "inFlight" && this.#probeAttempt === release) {
-                    this.#probe = "needed"
-                    this.#probeAttempt = undefined
+                if (this.#probe.kind === "inFlight" && this.#probe.attempt === release) {
+                    this.#probe = { kind: "needed", repeats: this.#probe.repeats }
                 }
                 this.#pump()
             }
-            if (item.rateLimited && item.probe && this.#probe === "needed") {
-                this.#probe = "inFlight"
-                this.#probeAttempt = release
+            if (item.rateLimited && item.probe && this.#probe.kind === "needed") {
+                this.#probe = { kind: "inFlight", repeats: this.#probe.repeats, attempt: release }
             }
             item.resume(Effect.succeed(release))
         }
@@ -400,6 +412,7 @@ export class RestAdmission {
         this.#holdTimer = undefined
         const pending = this.#pending.splice(0)
         this.#bytes = 0
+        this.#probe = { kind: "none" }
         this.rates.clear()
         for (const item of pending) item.resume(Effect.fail(new ClientClosedError()))
     }

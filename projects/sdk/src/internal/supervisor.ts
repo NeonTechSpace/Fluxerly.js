@@ -55,12 +55,12 @@ import {
 import type { LogRecord } from "#sdk/logging"
 import type { ClientDiagnostics, ConnectionState } from "#sdk/client"
 import type { SessionStore } from "#sdk/sharding"
+import { maximumTimerMs } from "./clock.js"
 import { record, safeInteger, snapshotArray } from "#sdk/internal/decode/primitives"
 import { callerFields, readCaller, suspendMarked } from "#sdk/internal/defects"
 import { unsupportedKeyHint } from "#sdk/internal/suggest"
 import type { LogCode } from "#sdk/internal/code-catalogue"
 
-const maximumTimerMs = 2_147_483_647
 const maximumAttempts = 100
 const maximumChildEnvironmentEntries = 64
 const maximumArgumentEntries = 64

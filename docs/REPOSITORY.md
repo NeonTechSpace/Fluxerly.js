@@ -170,7 +170,7 @@ Use [releasing](/docs/RELEASING.md) for registry verification, manual workflow i
 Release preparation stages the SDK through [package preparation](/projects/sdk/scripts/packages.js), under the [registry publication contract](/docs/RELEASING.md#registry-publication-contract).
 Use [documentation maintenance](/docs/DOCUMENTATION.md) for generated reference ownership, published versions and deployment.
 Each workflow job that runs Node, including through the job summary action, first installs Node and pnpm with the pinned upstream `pnpm/setup` action from [projects/](/projects/), which reads `projects/.node-version`, so no workflow script runs on the runner image's Node. JavaScript actions such as checkout still run on the Node bundled with the runner.
-Jobs that check the SDK's Node floor pass the `engines.node` minimum from the SDK manifest as `runtime` instead, and a [workflow test](/projects/release/tests/workflows.test.js) keeps those copies equal to the manifest.
+Jobs that check the SDK's Node floor pass the `engines.node` minimum from the SDK manifest as `runtime` instead, and a [workflow test](/.github/tests/workflows.test.mjs) keeps those copies equal to the manifest.
 The action installs the locked dependencies unless a job that runs only dependency-free scripts disables it.
 Each job's run summary lists the checks the job ran with their results, then the next action for that result. Its `checks` input names the steps worth listing, `results` expands a step that ran check.mjs into one row per check, and `details`, `next`, `failure`, `command` and `reproduce` add the rest. A [workflow test](/projects/release/tests/summary.test.js) keeps those step ids real
 There is no separate `setup-node` step.

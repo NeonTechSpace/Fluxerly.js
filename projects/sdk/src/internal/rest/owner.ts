@@ -45,6 +45,7 @@ import { ChannelOperationError, type ChannelOperation } from "#sdk/channels"
 import { WebhookOperationError, type WebhookOperation } from "#sdk/webhooks"
 import { UserOperationError, type UserOperation } from "#sdk/users"
 import { BotApplicationOperationError, type BotApplicationOperation } from "#sdk/application"
+import { maximumTimerMs } from "../clock.js"
 import { inputId, inputIds, record, snapshotArray } from "../decode/primitives.js"
 import { failingFieldPath } from "../decode/trace.js"
 import { inputDefect, suspendInput } from "../defects.js"
@@ -109,9 +110,6 @@ import {
     type AttachmentDownloadSource,
 } from "./download.js"
 import type { RequestOptions, AuditedRequestOptions } from "#sdk/client"
-
-/** Longest single timer delay, and the largest accepted timeoutMs */
-const maximumTimerMs = 2_147_483_647
 
 /** An attempt that a confirmed rate limit ended */
 type RetryAttempt = Extract<AttemptResult<unknown>, { readonly kind: "retry" }>
@@ -455,17 +453,19 @@ export class RestOwner<M extends MessageCore = Message> {
     }
 
     openDownload(
+        token: Redacted.Redacted<string>,
         attachment: Attachment,
         options?: AttachmentDownloadOptions,
     ): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> {
-        return openAttachmentStream(this.#runtime, attachment, options)
+        return openAttachmentStream(this.#runtime, token, attachment, options)
     }
 
     download(
+        token: Redacted.Redacted<string>,
         attachment: Attachment,
         options?: AttachmentDownloadOptions,
     ): Effect.Effect<Uint8Array, AttachmentDownloadFailure> {
-        return downloadAttachment(this.#runtime, attachment, options)
+        return downloadAttachment(this.#runtime, token, attachment, options)
     }
 
     reply(

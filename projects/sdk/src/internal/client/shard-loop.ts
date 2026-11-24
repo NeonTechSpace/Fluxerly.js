@@ -4,8 +4,8 @@
  * Startup and recovery use separate retry policies, server-required waits are respected, the loop attempts Resume
  * before a new session when the protocol permits it, and it stops on permanent failures, cancellation or SDK defects.
  * A successful Resume replays every retained dispatch after the session's sequence. Fluxer refuses the Resume with
- * INVALID_SESSION instead when it dropped a needed dispatch (the replay floor in fluxer_gateway session_lifecycle.erl at
- * fluxerapp/fluxer commit 858a2d9e2b987330edd81711bb53e4f7edc0bbcc), so guild caches survive a successful Resume and are
+ * INVALID_SESSION instead when it dropped a needed dispatch (the replay buffer in
+ * fluxer_gateway/src/fluxer_gateway/session/replay_buffer.gleam and session/server.gleam at 66cede64), so guild caches survive a successful Resume and are
  * released only when the next handshake is a new session. Cached threads are the exception: Fluxer never replays
  * THREAD_LIST_SYNC, so the client drops a resumed shard's threads.
  * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
@@ -38,7 +38,7 @@ import { failures, mapCause, mapFailureCause, withDeadline } from "../effect-fai
 import type { EventBus } from "../events.js"
 import { documentedDispatchTypes } from "../gateway/documented-dispatches.js"
 import { primaryFault } from "../failures.js"
-import { AttemptFailure, runGatewaySession, type Session } from "../gateway.js"
+import { AttemptFailure, resumableSession, runGatewaySession, type Session } from "../gateway.js"
 import { gatewayUrl, type InstanceResolver } from "../instance.js"
 import type { ClientLogger, LogInput } from "../logging.js"
 import type { MemberChunkOwner } from "../member-chunks.js"
@@ -197,7 +197,7 @@ function closeFields(failure: AttemptFailure): { closeCode?: number } {
  * Identify for a new session. Call it after any session reset, so it follows the attempt the loop will actually make
  */
 function nextHandshake(failure: AttemptFailure, session: Session): "resume" | "identify" {
-    return !failure.resetSession && session.id !== undefined && session.sequence !== null ? "resume" : "identify"
+    return !failure.resetSession && resumableSession(session) !== undefined ? "resume" : "identify"
 }
 
 /** Readable next step after a retryable failure as one sentence, following the handshake that nextHandshake reports */
@@ -431,7 +431,7 @@ export function runShardLoop<M extends MessageCore>(options: ShardLoopOptions<M>
                     shard.gatewayUrl = url
                 }
                 if (!sessionsLoaded) yield* loadSession(url)
-                const mode = shard.session.id !== undefined && shard.session.sequence !== null ? "resume" : "identify"
+                const mode = resumableSession(shard.session) !== undefined ? "resume" : "identify"
                 log({
                     level: "debug",
                     code: "lifecycle.attempt",

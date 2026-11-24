@@ -10,6 +10,7 @@ import type { RestResponse } from "#sdk/rest"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { encodeAttachments, type EncodedBody } from "../attachments.js"
 import { auditSettings } from "../audit.js"
+import { maximumTimerMs } from "../clock.js"
 import { record } from "../decode/primitives.js"
 import { TransportError } from "../effect-failures.js"
 import { callerRouteTemplate } from "../rate-limits.js"
@@ -22,8 +23,6 @@ const pathMaxLength = 2_048
 const queryMaxLength = 8_192
 /** Largest response body read, matching the SDK's JSON response limit */
 const responseMaxBytes = 16_777_216
-/** Longest accepted operation deadline */
-const maximumTimerMs = 2_147_483_647
 
 const methods = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const
 const fields = ["method", "path", "query", "body", "files", "auditReason", "timeoutMs", "signal"]

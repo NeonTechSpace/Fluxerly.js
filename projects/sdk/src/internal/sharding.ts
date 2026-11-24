@@ -18,8 +18,8 @@ export const maximumShardCount = 16_384
 
 /**
  * Average guilds per shard that automatic sharding aims for, four fifths of Fluxer's per-shard ceiling.
- * Fluxer counts the guilds routed to each shard, not the average. The validate_session_guild_count function in
- * fluxer_gateway/src/gateway/gateway_sharding.erl at fluxerapp/fluxer commit 858a2d9e2b987330edd81711bb53e4f7edc0bbcc
+ * Fluxer counts the guilds routed to each shard, not the average. The shard guild limit in
+ * fluxer_gateway/src/fluxer_gateway/session/seed.gleam:114, 148-151 at 66cede64
  * rejects Identify with 4011 when one shard's own guilds exceed 2,500. Routing by (id >> 22) % totalShards is uneven,
  * so a plan sized to the ceiling almost always overfills a shard above about 20,000 guilds. At 2,000 the fullest of
  * 16,384 shards stays near 2,200 and leaves room for growth before a 4011 closure makes the client move to a larger plan

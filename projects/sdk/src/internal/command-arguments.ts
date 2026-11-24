@@ -18,6 +18,7 @@ import { readCaller } from "./defects.js"
 import { inputGatewayId } from "./decode/primitives.js"
 import * as Effect from "effect/Effect"
 import { throwIfErr } from "./failures.js"
+import { isThenable } from "./logging.js"
 import { unsupportedKeyHint } from "./suggest.js"
 
 const argumentName = /^[A-Za-z][A-Za-z0-9_]*$/
@@ -547,14 +548,6 @@ function asynchronousParse(): ConfigurationError {
     return new ConfigurationError(
         "command",
         "A custom argument parse function must return its value synchronously, not a Promise or Effect",
-    )
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-    return (
-        (typeof value === "object" || typeof value === "function") &&
-        value !== null &&
-        typeof (value as { then?: unknown }).then === "function"
     )
 }
 

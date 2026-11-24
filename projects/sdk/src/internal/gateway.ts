@@ -7,4 +7,4 @@
  * and Identify event filter in gateway/commands, gateway/options and gateway/event-dispatches are imported directly.
  * Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
-export { AttemptFailure, runGatewaySession, type Session } from "./gateway/session.js"
+export { AttemptFailure, resumableSession, runGatewaySession, type Session } from "./gateway/session.js"

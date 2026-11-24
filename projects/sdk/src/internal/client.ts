@@ -81,10 +81,10 @@ import { CountOwner } from "./counts.js"
 import { GatewayRequestBudget } from "./gateway-requests.js"
 import { MemberChunkOwner, type MemberRequestGate } from "./member-chunks.js"
 import { LogicalScheduler, type LogicalTimer, makeLogicalScheduler } from "./logical-scheduler.js"
-import { AttemptFailure } from "./gateway.js"
+import { AttemptFailure, resumableSession } from "./gateway.js"
 import { sdkVersion } from "./logging.js"
 import { EventBus } from "./events.js"
-import { nowMs } from "./clock.js"
+import { maximumTimerMs, nowMs } from "./clock.js"
 import { defaultTransport, type Transport } from "./transport/index.js"
 import { identifySpacingMs, startupBudgetMs } from "./client/backoff.js"
 import { clearCaches } from "./client/intake.js"
@@ -294,6 +294,53 @@ export function attachCreationClock<T extends object>(options: T, clock: Clock.C
     return options
 }
 
+/** Connection states while the client is open or draining before permanent closure */
+type LiveConnectionState = "Disconnected" | "Connecting" | "Connected" | "Recovering"
+
+/** Client lifecycle phase so configuration, shutdown state and connection state cannot contradict each other */
+type ClientLifecycle<M extends MessageCore> =
+    | {
+          readonly kind: "open"
+          state: LiveConnectionState
+          readonly configuration: Configuration<M>
+          managed: boolean
+          everStarted: boolean
+      }
+    | {
+          readonly kind: "draining"
+          state: LiveConnectionState
+          readonly configuration: Configuration<M>
+          readonly everStarted: boolean
+          readonly done: Deferred.Deferred<void>
+      }
+    | {
+          readonly kind: "closing"
+          readonly configuration: Configuration<M>
+          readonly everStarted: boolean
+          explicitShutdown: Deferred.Deferred<void> | undefined
+          saveOnClose: ReadonlySet<number> | undefined
+      }
+    | {
+          readonly kind: "closed"
+          readonly explicitShutdown: Deferred.Deferred<void> | undefined
+      }
+
+/** Per-start worker supervision state, pairing readiness, resharding and exit outcomes with one start */
+interface WorkerRun {
+    groupReady: boolean
+    /** The shard whose 4011 closure started a move to a larger plan, until the new plan is adopted */
+    reshardShard: number | undefined
+    /** Final exit of the worker once supervision and any worker-owned cleanup settle */
+    exit: Exit.Exit<void, ConnectionFailure> | undefined
+    /** Service cleanup exit when an explicit shutdown interrupted a ready or defective worker */
+    cleanup: Exit.Exit<void> | undefined
+}
+
+interface ActiveWorker {
+    readonly fiber: Fiber.Fiber<void>
+    readonly run: WorkerRun
+}
+
 export class ClientOwner<M extends MessageCore = Message> {
     readonly presence: PresenceOwner
     readonly #gatewayRequests = new GatewayRequestBudget()
@@ -305,7 +352,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     setPresence(input: PresenceInput) {
         // The presence owner marks its reads of the caller input, so its own faults stay SDK faults
         return suspendMarked((): Effect.Effect<void, PresenceFailure> => {
-            if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
+            if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
             const failure = this.presence.set(input)
             if (failure === undefined) return Effect.void
             if (failure === false) return Effect.fail(new ClientClosedError())
@@ -314,7 +361,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
     setPresenceMembers(guildId: string, memberIds: readonly string[]) {
         return suspendMarked((): Effect.Effect<void, PresenceFailure> => {
-            if (this.#state === "Closing" || this.#state === "Closed") return Effect.fail(new ClientClosedError())
+            if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
             const failure = this.presence.setMembers(guildId, memberIds)
             if (failure === undefined) return Effect.void
             if (failure === "limit") return Effect.fail(new PresenceError({ reason: "limit" }))
@@ -333,8 +380,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.#reactionCollectors.add(collector)
         return () => void (this.#closingOrClosed() || this.#reactionCollectors.delete(collector))
     }
-    #closingOrClosed() {
-        return this.#state === "Closing" || this.#state === "Closed"
+    #closingOrClosed(): boolean {
+        return this.#lifecycle.kind === "closing" || this.#lifecycle.kind === "closed"
+    }
+    #activeConfiguration(): Configuration<M> | undefined {
+        return this.#lifecycle.kind === "open" || this.#lifecycle.kind === "draining"
+            ? this.#lifecycle.configuration
+            : undefined
     }
     readonly logging: ClientLogger
     /** Client-wide failure reports, delivered to onError or logged */
@@ -355,35 +407,21 @@ export class ClientOwner<M extends MessageCore = Message> {
     readonly userCache: UserCache
     /** Client-wide cache change notifications, shared by every cache this client owns */
     readonly cacheChanges = new CacheChangeHub()
-    #configuration: Configuration<M> | undefined
-    #state: ConnectionState = "Disconnected"
+    #lifecycle: ClientLifecycle<M>
     /** Known shard plan. An automatic plan stays undefined until the first connect computes it */
     #plan: ShardPlan | undefined
     readonly #shards = new Map<number, ShardRuntime>()
     readonly #shardListeners = new Map<number, Set<(state: ConnectionState) => void>>()
     readonly #shardHost: ShardLoopHost<M>
-    #groupReady = false
-    /** Shards whose sessions shutdown saves, captured when shutdown begins */
-    #saveOnClose: ReadonlySet<number> | undefined
     /** Logical time before which the next fresh Identify may not be sent */
     #nextIdentifyAt = 0
-    #worker: Fiber.Fiber<void> | undefined
-    #workerExit: Exit.Exit<void, ConnectionFailure> | undefined
-    /** The service cleanup the worker ran when an explicit shutdown interrupted it, which that shutdown logs */
-    #workerCleanup: Exit.Exit<void> | undefined
+    #worker: ActiveWorker | undefined
     #terminal = Deferred.makeUnsafe<void, ConnectionFailure>()
-    #shutdown = Deferred.makeUnsafe<void>()
     #typingClosed = Deferred.makeUnsafe<void>()
     #typing = new Map<symbol, Fiber.Fiber<never, MessageOperationFailure>>()
     #listeners = new Set<(state: ConnectionState) => void>()
-    #managed = false
-    #shutdownStarted = false
-    /** Whether connect or run began, so shutdown records describe a client that did something */
-    #everStarted = false
     /** Logical times of recent moves to a larger automatic plan, oldest first */
     #reshards: number[] = []
-    /** The shard whose 4011 closure started a move to a larger plan, until the new plan is adopted */
-    #reshardShard: number | undefined
     /** Shards that resumed a session from the session store, whose guild caches wait for a refill */
     readonly #restoredShards = new Set<number>()
 
@@ -399,7 +437,13 @@ export class ClientOwner<M extends MessageCore = Message> {
         readonly transport: Transport = defaultTransport,
     ) {
         this.decodeMessage = configuration.decodeMessage
-        this.#configuration = configuration
+        this.#lifecycle = {
+            kind: "open",
+            state: "Disconnected",
+            configuration,
+            managed: false,
+            everStarted: false,
+        }
         const route = (guildId: string) => this.shardIdForGuild(guildId)
         this.presence = new PresenceOwner(
             {
@@ -501,7 +545,7 @@ export class ClientOwner<M extends MessageCore = Message> {
             counts: this.counts,
             memberChunks: this.memberChunks,
             sockets: transport.sockets,
-            state: () => this.#state,
+            state: () => this.state,
             setShardState: (shard, state) => this.#setShardState(shard, state),
             newSession: (shardId) => this.#clearShardGuilds(shardId),
             nextSessionEpoch: () => ++this.#sessionEpochs,
@@ -509,7 +553,9 @@ export class ClientOwner<M extends MessageCore = Message> {
             identifyFields: (shardId) => this.#identifyFields(configuration, shardId),
             sessions: configuration.sessions,
             saveSessionOnClose: (shardId) =>
-                configuration.sessions !== undefined && this.#saveOnClose?.has(shardId) === true,
+                configuration.sessions !== undefined &&
+                this.#lifecycle.kind === "closing" &&
+                this.#lifecycle.saveOnClose?.has(shardId) === true,
             ...(configuration.reshard ? { reshard: (shardId: number) => this.#acceptReshard(shardId) } : {}),
             ...(configuration.sessions && configuration.refillCaches
                 ? { restored: (shardId: number) => void this.#restoredShards.add(shardId) }
@@ -550,7 +596,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     #identifyPermit(shardId: number, send: () => void): Effect.Effect<void, AttemptFailure> {
         const owner = this
         const plan = owner.#plan!
-        const coordinator = owner.#configuration?.identifyCoordinator
+        const coordinator = owner.#activeConfiguration()?.identifyCoordinator
         const permit = coordinator
             ? // @effect-diagnostics-next-line unknownInEffectCatch:off
               Effect.tryPromise({
@@ -622,7 +668,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                     category: "gateway",
                     code: "gateway.ignoredEventRegistered",
                     message: `Handlers for ${suppressed.join(", ")} receive nothing on shard ${shardId}, because gateway.ignoredEvents lists every dispatch type that delivers them${
-                        // Fluxer still sends a mentioning MESSAGE_CREATE (fluxer_gateway/src/session/session_dispatch.erl:383-389 at 5f3fc0b1)
+                        // Fluxer still sends a mentioning MESSAGE_CREATE (fluxer_gateway/src/fluxer_gateway/session/dispatch.gleam:147-160 at 66cede64)
                         suppressed.includes("messageCreate")
                             ? ". The exception is messageCreate, which still receives messages that mention the bot directly, with @here or with @everyone"
                             : ""
@@ -647,14 +693,22 @@ export class ClientOwner<M extends MessageCore = Message> {
         }
     }
     get state(): ConnectionState {
-        return this.#state
+        switch (this.#lifecycle.kind) {
+            case "open":
+            case "draining":
+                return this.#lifecycle.state
+            case "closing":
+                return "Closing"
+            case "closed":
+                return "Closed"
+        }
     }
     /** Default deadline for multi-step REST workflows, from rest.defaultTimeoutMs */
     get defaultTimeoutMs(): number {
         return this.rest.defaultTimeoutMs
     }
     get gatewayLatencyMs(): number | null {
-        if (this.#state !== "Connected") return null
+        if (this.state !== "Connected") return null
         let maximum = 0
         for (const shard of this.#shards.values()) {
             if (shard.latency === null) return null
@@ -827,8 +881,9 @@ export class ClientOwner<M extends MessageCore = Message> {
         return this.shardIdForGuild(id)
     }
     gatewayState(guildId?: string): ConnectionState {
-        if (guildId === undefined) return this.#state
-        if (this.#state === "Closing" || this.#state === "Closed") return this.#state
+        const current = this.state
+        if (guildId === undefined) return current
+        if (current === "Closing" || current === "Closed") return current
         const id = this.shardIdForGuild(guildId)
         return id === undefined ? "Disconnected" : this.#shards.get(id)!.state
     }
@@ -841,7 +896,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         }
         let listeners = this.#shardListeners.get(id)
         if (!listeners) this.#shardListeners.set(id, (listeners = new Set()))
-        if (this.#state !== "Closed") listeners.add(listener)
+        if (this.#lifecycle.kind !== "closed") listeners.add(listener)
         listener(this.gatewayState(guildId))
         return () => {
             listeners.delete(listener)
@@ -878,53 +933,68 @@ export class ClientOwner<M extends MessageCore = Message> {
         this.channelCache?.gap(affects)
     }
     #setShardState(shard: ShardRuntime, state: ConnectionState) {
-        if (this.#state === "Closing" || this.#state === "Closed" || shard.state === state) return
+        if (this.#closingOrClosed() || shard.state === state) return
         if (state === "Recovering") this.#gapShard(shard.shardId, true)
         shard.state = state
         if (state !== "Connected") shard.latency = null
         for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
         if ([...this.#shards.values()].every((value) => value.state === "Connected")) {
-            this.#groupReady = true
-            this.#setState("Connected")
-        } else this.#setState(this.#groupReady ? "Recovering" : "Connecting")
+            if (this.#worker) this.#worker.run.groupReady = true
+            this.#setLiveState("Connected")
+        } else this.#setLiveState(this.#worker?.run.groupReady ? "Recovering" : "Connecting")
     }
 
-    #setState(state: ConnectionState) {
-        if (this.#state === state) return
+    #closeCaches() {
+        this.cache?.close()
+        this.counts.close()
+        this.memberChunks.close()
+        this.resources?.close()
+        this.userCache.close()
+        this.presence.close()
+        this.channelCache?.close()
+    }
+
+    #resetShards(state: "Disconnected" | "Closing" | "Closed") {
+        for (const shard of this.#shards.values()) {
+            shard.state = state
+            shard.latency = null
+            if (state !== "Closing") shard.session = { id: undefined, sequence: null }
+            shard.recovery = null
+            for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
+        }
+    }
+
+    #setLiveState(state: LiveConnectionState) {
+        if (this.#lifecycle.kind !== "open" && this.#lifecycle.kind !== "draining") return
+        if (this.#lifecycle.state === state) return
         if (state === "Disconnected") {
             // A reusable startup can have delivered events from a ready sibling before the group failed
             for (const shard of this.#shards.values())
                 if (shard.state === "Connected" || shard.state === "Recovering") this.#gapShard(shard.shardId, false)
         }
-        if (state === "Closing" || state === "Closed") {
-            this.cache?.close()
-            this.counts.close()
-            this.memberChunks.close()
-            this.resources?.close()
-            this.userCache.close()
-            this.presence.close()
-            this.channelCache?.close()
-        }
-        this.#state = state
-        if (state === "Disconnected" || state === "Closing" || state === "Closed") {
-            for (const shard of this.#shards.values()) {
-                shard.state = state
-                shard.latency = null
-                if (state !== "Closing") shard.session = { id: undefined, sequence: null }
-                shard.recovery = null
-                for (const listener of this.#shardListeners.get(shard.shardId) ?? []) listener(state)
-            }
-        }
+        this.#lifecycle.state = state
+        if (state === "Disconnected") this.#resetShards("Disconnected")
         for (const listener of this.#listeners) listener(state)
-        if (state === "Closed") {
-            this.#listeners.clear()
-            this.#shardListeners.clear()
+    }
+
+    #enterClosing(saveOnClose?: ReadonlySet<number>) {
+        const current = this.#lifecycle
+        if (current.kind === "closing" || current.kind === "closed") return
+        this.#closeCaches()
+        this.#lifecycle = {
+            kind: "closing",
+            configuration: current.configuration,
+            everStarted: current.everStarted,
+            explicitShutdown: current.kind === "draining" ? current.done : undefined,
+            saveOnClose,
         }
+        this.#resetShards("Closing")
+        for (const listener of this.#listeners) listener("Closing")
     }
 
     subscribe(listener: (state: ConnectionState) => void) {
-        if (this.#state !== "Closed") this.#listeners.add(listener)
-        listener(this.#state)
+        if (this.#lifecycle.kind !== "closed") this.#listeners.add(listener)
+        listener(this.state)
         return () => {
             this.#listeners.delete(listener)
         }
@@ -948,12 +1018,25 @@ export class ClientOwner<M extends MessageCore = Message> {
     }
 
     #finish() {
+        const current = this.#lifecycle
+        if (current.kind === "closed") return
         Deferred.doneUnsafe(this.#typingClosed, Effect.void)
         this.events.stop()
         this.rest.stop()
-        if (this.#configuration) Redacted.wipeUnsafe(this.#configuration.token)
-        this.#configuration = undefined
-        this.#setState("Closed")
+        Redacted.wipeUnsafe(current.configuration.token)
+        this.#closeCaches()
+        const explicitShutdown =
+            current.kind === "closing"
+                ? current.explicitShutdown
+                : current.kind === "draining"
+                  ? current.done
+                  : undefined
+        this.#lifecycle = { kind: "closed", explicitShutdown }
+        this.#worker = undefined
+        this.#resetShards("Closed")
+        for (const listener of this.#listeners) listener("Closed")
+        this.#listeners.clear()
+        this.#shardListeners.clear()
     }
 
     /** The last session number given to a shard, which a new plan's shards continue from */
@@ -1104,17 +1187,16 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     /** Run one REST delegation with the bot token, or fail before sending when the client is closing or closed */
     #open<A, E, R>(send: (token: Redacted.Redacted<string>) => Effect.Effect<A, E, R>) {
-        return Effect.suspend((): Effect.Effect<A, E | ClientClosedError, R> =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? send(this.#configuration.token)
-                : Effect.fail(closedBeforeSend()),
-        )
+        return Effect.suspend((): Effect.Effect<A, E | ClientClosedError, R> => {
+            const configuration = this.#activeConfiguration()
+            return configuration ? send(configuration.token) : Effect.fail(closedBeforeSend())
+        })
     }
 
     user<A>(operation: UserOperation, build: () => UserRequest<A> | InputValidationFailure, options?: RequestOptions) {
         return suspendInput(() => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(closedBeforeSend())
+            const configuration = this.#activeConfiguration()
+            if (!configuration) return Effect.fail(closedBeforeSend())
             const request = build()
             if (request instanceof InputValidationFailure)
                 return Effect.fail(
@@ -1126,7 +1208,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                     }),
                 )
             const owner = this
-            const token = this.#configuration.token
+            const token = configuration.token
             // Read the caller's options here, where a throwing getter is reported as an application fault
             const timeout = options?.timeoutMs ?? owner.rest.defaultTimeoutMs
             const unsupportedOption = record(options)
@@ -1155,7 +1237,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                             inputValidation: unsupportedOption.detail,
                         }),
                     )
-                if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2_147_483_647)
+                if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > maximumTimerMs)
                     return yield* Effect.fail(
                         new UserOperationError({
                             operation,
@@ -1242,8 +1324,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     getUserResource<K extends "users" | "directMessages">(kind: K, rawId: string) {
         return Effect.suspend(
             (): Effect.Effect<UserResources[K] | undefined, ClientClosedError | UserOperationError> => {
-                if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                    return Effect.fail(new ClientClosedError())
+                if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
                 const id = inputId(rawId)
                 if (id === undefined)
                     return Effect.fail(
@@ -1283,8 +1364,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     gatewaySend(shardId: number, op: number, d: unknown, options?: unknown): Effect.Effect<void, GatewaySendFailure> {
         // Only encoding the caller data is marked, so a throw from its getters or toJSON is an application fault
         return suspendMarked((): Effect.Effect<void, GatewaySendFailure> => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+            if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
             const validShard = typeof shardId === "number" && Number.isSafeInteger(shardId) && shardId >= 0
             const validOpcode = typeof op === "number" && Number.isSafeInteger(op) && op >= 0
             const input = (path: string, explanation: string, cause?: unknown) =>
@@ -1387,8 +1467,7 @@ export class ClientOwner<M extends MessageCore = Message> {
     getChannel(rawId: string) {
         return Effect.suspend(
             (): Effect.Effect<GuildChannel | undefined, ClientClosedError | ChannelOperationError> => {
-                if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                    return Effect.fail(new ClientClosedError())
+                if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
                 const id = inputId(rawId)
                 if (id === undefined)
                     return Effect.fail(
@@ -1410,8 +1489,7 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     getResource<K extends ResourceKind>(kind: K, target: string | MemberReference | RoleReference) {
         return suspendInput((): Effect.Effect<Resources[K] | undefined, ClientClosedError | GuildOperationError> => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+            if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
             const guildId = inputId(kind === "guilds" ? target : record(target) ? target.guildId : undefined)
             const id =
                 kind === "guilds"
@@ -1453,8 +1531,7 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     #guildLookup<A>(operation: GuildOperation, rawGuildId: string, read: (guildId: string) => A | undefined) {
         return suspendInput((): Effect.Effect<A | undefined, ClientClosedError | GuildOperationError> => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+            if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
             const guildId = inputId(rawGuildId)
             if (guildId === undefined)
                 return Effect.fail(
@@ -1494,21 +1571,23 @@ export class ClientOwner<M extends MessageCore = Message> {
         attachment: Attachment,
         options?: AttachmentDownloadOptions,
     ): Effect.Effect<Uint8Array, AttachmentDownloadFailure> {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.download(attachment, options)
-                : Effect.fail(new ClientClosedError()),
-        )
+        return Effect.suspend(() => {
+            const configuration = this.#activeConfiguration()
+            return configuration
+                ? this.rest.download(configuration.token, attachment, options)
+                : Effect.fail(new ClientClosedError())
+        })
     }
     streamAttachment(
         attachment: Attachment,
         options?: AttachmentDownloadOptions,
     ): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> {
-        return Effect.suspend(() =>
-            this.#configuration && this.#state !== "Closing" && this.#state !== "Closed"
-                ? this.rest.openDownload(attachment, options)
-                : Effect.fail(new ClientClosedError()),
-        )
+        return Effect.suspend(() => {
+            const configuration = this.#activeConfiguration()
+            return configuration
+                ? this.rest.openDownload(configuration.token, attachment, options)
+                : Effect.fail(new ClientClosedError())
+        })
     }
 
     forward(channelId: string, input: ForwardMessageInput, options?: RequestOptions) {
@@ -1517,8 +1596,8 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     sendDirectMessage(rawUserId: string, input: MessageInput | string, options?: RequestOptions) {
         return suspendInput((): Effect.Effect<M, SendError> => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(closedBeforeSend())
+            const configuration = this.#activeConfiguration()
+            if (!configuration) return Effect.fail(closedBeforeSend())
             const userId = inputId(rawUserId)
             if (userId === undefined)
                 return Effect.fail(
@@ -1545,7 +1624,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                     }),
                 )
             // The send encoder rejects a messageReference first, reading it only once with the other fields
-            return this.rest.send(this.#configuration.token, userId, input, options, userId)
+            return this.rest.send(configuration.token, userId, input, options, userId)
         })
     }
 
@@ -1704,8 +1783,8 @@ export class ClientOwner<M extends MessageCore = Message> {
 
     deleteOwnMessages(channelId: string, options: unknown) {
         return suspendInput(() => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(closedBeforeSend())
+            const configuration = this.#activeConfiguration()
+            if (!configuration) return Effect.fail(closedBeforeSend())
             const checked = ownDeletionOptions<RequestOptions>(options)
             if (checked instanceof InputValidationFailure)
                 return Effect.fail(
@@ -1716,14 +1795,13 @@ export class ClientOwner<M extends MessageCore = Message> {
                         inputValidation: checked.detail,
                     }),
                 )
-            return this.rest.deleteOwnMessages(this.#configuration.token, channelId, checked)
+            return this.rest.deleteOwnMessages(configuration.token, channelId, checked)
         })
     }
 
     get(target: MessageReference) {
         return suspendInput((): Effect.Effect<M | undefined, ClientClosedError | MessageOperationError> => {
-            if (!this.#configuration || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
+            if (this.#closingOrClosed()) return Effect.fail(new ClientClosedError())
             const reference = snapshotReference(target)
             if (reference === undefined)
                 return Effect.fail(
@@ -1791,7 +1869,7 @@ export class ClientOwner<M extends MessageCore = Message> {
         )
     }
 
-    #supervise(configuration: Configuration<M>, startup: Deferred.Deferred<void, ConnectError>) {
+    #supervise(configuration: Configuration<M>, startup: Deferred.Deferred<void, ConnectError>, run: WorkerRun) {
         const owner = this
         return Effect.gen(function* () {
             // Automatic sizing counts guilds under its own deadline, so the shard group always gets its full budget
@@ -1806,7 +1884,9 @@ export class ClientOwner<M extends MessageCore = Message> {
                 // Capture and rethrow defects or interruption while masked, as REST attempts do. Otherwise an interruption that
                 // skips this handler discards the plan's typed failure, and one pending at the mask's end discards the whole cause
                 const exit = yield* Effect.uninterruptibleMask((restore) =>
-                    Effect.exit(restore(owner.#runPlan(configuration, startup, plan, first))).pipe(
+                    Effect.exit(
+                        restore(owner.#runPlan(configuration, startup, { plan, loadSessions: first, run })),
+                    ).pipe(
                         Effect.flatMap((exit) =>
                             Exit.isFailure(exit) && (Cause.hasDies(exit.cause) || Cause.hasInterrupts(exit.cause))
                                 ? Effect.failCause(exit.cause)
@@ -1814,10 +1894,10 @@ export class ClientOwner<M extends MessageCore = Message> {
                         ),
                     ),
                 )
-                const shardId = owner.#reshardShard
+                const shardId = run.reshardShard
                 if (Exit.isSuccess(exit)) return
                 if (shardId === undefined || Cause.hasDies(exit.cause)) return yield* Effect.failCause(exit.cause)
-                plan = yield* owner.#reshard(configuration, plan, shardId)
+                plan = yield* owner.#reshard(configuration, plan, shardId, run)
             }
         })
     }
@@ -1829,8 +1909,11 @@ export class ClientOwner<M extends MessageCore = Message> {
     #runPlan(
         configuration: Configuration<M>,
         startup: Deferred.Deferred<void, ConnectError>,
-        plan: ShardPlan,
-        loadSessions: boolean,
+        {
+            plan,
+            loadSessions,
+            run,
+        }: { readonly plan: ShardPlan; readonly loadSessions: boolean; readonly run: WorkerRun },
     ) {
         const owner = this
         return Effect.gen(function* () {
@@ -1865,7 +1948,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                         shard,
                         plan,
                         deadline,
-                        established: owner.#groupReady,
+                        established: run.groupReady,
                         loadSessions,
                     }),
             })
@@ -1877,10 +1960,12 @@ export class ClientOwner<M extends MessageCore = Message> {
      * it does, otherwise why not. Closures of sibling shards during the same move join it
      */
     #acceptReshard(shardId: number): true | string {
-        if (this.#reshardShard !== undefined) return true
+        const run = this.#worker?.run
+        if (run === undefined) return "the client is no longer running a shard group"
+        if (run.reshardShard !== undefined) return true
         const refused = admitReshard(this.#reshards, this.logical.now(), this.#plan!.totalShards)
         if (refused !== undefined) return refused
-        this.#reshardShard = shardId
+        run.reshardShard = shardId
         return true
     }
 
@@ -1894,10 +1979,11 @@ export class ClientOwner<M extends MessageCore = Message> {
         configuration: Configuration<M>,
         previous: ShardPlan,
         shardId: number,
+        run: WorkerRun,
     ): Effect.Effect<ShardPlan, ConnectionFailure> {
         const owner = this
         return Effect.gen(function* () {
-            const waiting = owner.#groupReady ? "Recovering" : "Connecting"
+            const waiting = run.groupReady ? "Recovering" : "Connecting"
             for (const shard of owner.#shards.values()) {
                 owner.#gapShard(shard.shardId, false)
                 shard.state = waiting
@@ -1907,11 +1993,11 @@ export class ClientOwner<M extends MessageCore = Message> {
             }
             const listeners = [...owner.#shardListeners.values()]
             owner.#shardListeners.clear()
-            owner.#setState(waiting)
+            owner.#setLiveState(waiting)
             for (const set of listeners) for (const listener of set) listener(waiting)
             const guilds = yield* owner.countGuilds(configuration.startupTimeoutMs)
             const plan = largerShardPlan(guilds, previous.totalShards)
-            owner.#reshardShard = undefined
+            run.reshardShard = undefined
             owner.#adoptPlan(plan, "Connecting")
             owner.presence.reroute()
             // Omitted settings start with this fixed one-shard plan and switch to automatic sharding at the first move
@@ -2108,32 +2194,44 @@ export class ClientOwner<M extends MessageCore = Message> {
      * full and never block shutdown
      */
     #saveSessions(): Effect.Effect<void> {
-        const store = this.#configuration?.sessions
-        const live = this.#saveOnClose
-        this.#saveOnClose = undefined
+        const lifecycle = this.#lifecycle
+        if (lifecycle.kind !== "closing") return Effect.void
+        const store = lifecycle.configuration.sessions
+        const live = lifecycle.saveOnClose
+        lifecycle.saveOnClose = undefined
         const plan = this.#plan
         if (!store || !live || !plan) return Effect.void
         const owner = this
-        const shards = [...this.#shards.values()].filter(
-            (shard) =>
-                live.has(shard.shardId) &&
-                shard.session.id !== undefined &&
-                shard.session.sequence !== null &&
-                shard.gatewayUrl !== undefined,
-        )
+        const pending: {
+            readonly shardId: number
+            readonly sessionId: string
+            readonly sequence: number
+            readonly resumeUrl: string
+        }[] = []
+        for (const shard of this.#shards.values()) {
+            if (!live.has(shard.shardId) || shard.gatewayUrl === undefined) continue
+            const resumable = resumableSession(shard.session)
+            if (resumable === undefined) continue
+            pending.push({
+                shardId: shard.shardId,
+                sessionId: resumable.id,
+                sequence: resumable.sequence,
+                resumeUrl: shard.gatewayUrl,
+            })
+        }
         return Effect.forEach(
-            shards,
-            (shard) => {
+            pending,
+            (entry) => {
                 const snapshot: SessionSnapshot = Object.freeze({
-                    sessionId: shard.session.id!,
-                    sequence: shard.session.sequence!,
-                    resumeUrl: shard.gatewayUrl!,
+                    sessionId: entry.sessionId,
+                    sequence: entry.sequence,
+                    resumeUrl: entry.resumeUrl,
                     savedAt: Date.now(),
                     totalShards: plan.totalShards,
                 })
                 // @effect-diagnostics-next-line unknownInEffectCatch:off
                 return Effect.tryPromise({
-                    try: () => Promise.resolve(store.save(shard.shardId, snapshot)),
+                    try: () => Promise.resolve(store.save(entry.shardId, snapshot)),
                     catch: (error) => error,
                 }).pipe(
                     Effect.timeoutOrElse({
@@ -2153,8 +2251,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                                     level: "debug",
                                     category: "lifecycle",
                                     code: "lifecycle.sessionSaved",
-                                    message: `Saved shard ${shard.shardId}'s session, so the next start can resume it`,
-                                    shardId: shard.shardId,
+                                    message: `Saved shard ${entry.shardId}'s session, so the next start can resume it`,
+                                    shardId: entry.shardId,
                                 }),
                             ),
                         onFailure: (error) =>
@@ -2163,8 +2261,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                                     level: "error",
                                     category: "lifecycle",
                                     code: "lifecycle.sessionSaveFailed",
-                                    message: `Shard ${shard.shardId}'s session could not be saved, so the next start begins a new session`,
-                                    shardId: shard.shardId,
+                                    message: `Shard ${entry.shardId}'s session could not be saved, so the next start begins a new session`,
+                                    shardId: entry.shardId,
                                     error,
                                     origin: "application",
                                 }),
@@ -2180,12 +2278,12 @@ export class ClientOwner<M extends MessageCore = Message> {
         const owner = this
         return Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
-                if (owner.#state === "Closing" || owner.#state === "Closed")
-                    return yield* Effect.fail(new ClientClosedError())
-                if (owner.#state === "Connected") return
-                if (owner.#state !== "Disconnected") return yield* Effect.fail(new ClientBusyError())
-                const configuration = owner.#configuration!
-                owner.#everStarted = true
+                const lifecycle = owner.#lifecycle
+                if (lifecycle.kind !== "open") return yield* Effect.fail(new ClientClosedError())
+                if (lifecycle.state === "Connected") return
+                if (lifecycle.state !== "Disconnected") return yield* Effect.fail(new ClientBusyError())
+                const { configuration } = lifecycle
+                lifecycle.everStarted = true
                 const creator = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
                 owner.logging.banners(creator.context)
                 const plan = owner.#plan
@@ -2210,40 +2308,39 @@ export class ClientOwner<M extends MessageCore = Message> {
                 )
                 const startup = Deferred.makeUnsafe<void, ConnectError>()
                 let becameReady = false
-                owner.#workerExit = undefined
-                owner.#groupReady = false
+                const run: WorkerRun = {
+                    groupReady: false,
+                    reshardShard: undefined,
+                    exit: undefined,
+                    cleanup: undefined,
+                }
                 for (const shard of owner.#shards.values()) {
                     shard.state = "Connecting"
                     shard.recovery = null
                 }
-                owner.#setState("Connecting")
+                owner.#setLiveState("Connecting")
                 const trackReady = owner.subscribe((state) => {
                     if (state === "Connected") becameReady = true
                 })
-                owner.#worker = yield* Effect.forkIn(
-                    owner.#supervise(configuration, startup).pipe(
+                const fiber = yield* Effect.forkIn(
+                    owner.#supervise(configuration, startup, run).pipe(
                         Effect.provideService(Clock.Clock, owner.logical.clock),
                         Effect.onExit((exit) =>
                             Effect.gen(function* () {
                                 trackReady()
-                                owner.#workerExit = exit
-                                const closing = owner.#state === "Closing" || owner.#state === "Closed"
+                                run.exit = exit
+                                const closing = owner.#closingOrClosed()
                                 const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
                                 const defect = Exit.isFailure(exit) && Cause.hasDies(exit.cause)
                                 if (closing && !defect)
                                     Deferred.doneUnsafe(startup, Effect.fail(new ClientClosedError()))
                                 else Deferred.doneUnsafe(startup, exit)
                                 if (becameReady || defect) {
-                                    const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
+                                    const current = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
                                     const startedAt = Date.now()
                                     if (!closing)
-                                        logShutdownStart(
-                                            owner.logging,
-                                            fiber.context,
-                                            owner.#everStarted,
-                                            "the connection ended",
-                                        )
-                                    owner.#setState("Closing")
+                                        logShutdownStart(owner.logging, current.context, true, "the connection ended")
+                                    owner.#enterClosing()
                                     // An explicit shutdown lands here once the sockets are closed
                                     if (closing) yield* owner.#saveSessions()
                                     const services = yield* Effect.exit(owner.#closeServices())
@@ -2254,7 +2351,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                                         const dies = Exit.isFailure(exit)
                                             ? exit.cause.reasons.filter((reason) => reason._tag === "Die")
                                             : []
-                                        owner.#workerCleanup =
+                                        run.cleanup =
                                             dies.length > 0
                                                 ? Exit.failCause(
                                                       Cause.combine(
@@ -2272,11 +2369,11 @@ export class ClientOwner<M extends MessageCore = Message> {
                                               ),
                                           )
                                         : exit
-                                    owner.#workerExit = outcome
+                                    run.exit = outcome
                                     owner.#finish()
                                     if (!closing)
-                                        logShutdownEnd(owner.logging, fiber.context, {
-                                            everStarted: owner.#everStarted,
+                                        logShutdownEnd(owner.logging, current.context, {
+                                            everStarted: true,
                                             startedAt,
                                             services,
                                         })
@@ -2285,7 +2382,8 @@ export class ClientOwner<M extends MessageCore = Message> {
                                         interrupted && !Exit.isFailure(services) ? Effect.void : outcome,
                                     )
                                 } else if (!closing) {
-                                    owner.#setState("Disconnected")
+                                    owner.#worker = undefined
+                                    owner.#setLiveState("Disconnected")
                                 }
                             }),
                         ),
@@ -2294,16 +2392,16 @@ export class ClientOwner<M extends MessageCore = Message> {
                     ),
                     owner.scope,
                 )
-                const worker = owner.#worker
+                owner.#worker = { fiber, run }
                 // A shutdown can interrupt the worker before it runs, and then its exit handler above never runs.
                 // Startup still ends, with the same ClientClosedError a closing client gives, instead of waiting forever
-                worker.addObserver(() => Deferred.doneUnsafe(startup, Effect.fail(new ClientClosedError())))
+                fiber.addObserver(() => Deferred.doneUnsafe(startup, Effect.fail(new ClientClosedError())))
                 return yield* restore(Deferred.await(startup)).pipe(
                     Effect.tap(() => Effect.sync(() => owner.#logConnected(creator.context))),
                     Effect.onInterrupt(() =>
                         Effect.gen(function* () {
-                            yield* Fiber.interrupt(worker)
-                            const exit = owner.#workerExit
+                            yield* Fiber.interrupt(fiber)
+                            const exit = run.exit
                             if (exit && Exit.isFailure(exit) && Cause.hasDies(exit.cause))
                                 return yield* Effect.failCause(exit.cause)
                         }),
@@ -2316,9 +2414,8 @@ export class ClientOwner<M extends MessageCore = Message> {
     connect(): Effect.Effect<void, ConnectError> {
         return Effect.suspend(() => {
             // A draining shutdown keeps the state until the drain ends, but the client never connects again
-            if (this.#shutdownStarted || this.#state === "Closing" || this.#state === "Closed")
-                return Effect.fail(new ClientClosedError())
-            return this.#managed ? Effect.fail(new ClientBusyError()) : this.#start()
+            if (this.#lifecycle.kind !== "open") return Effect.fail(new ClientClosedError())
+            return this.#lifecycle.managed ? Effect.fail(new ClientBusyError()) : this.#start()
         })
     }
 
@@ -2350,9 +2447,24 @@ export class ClientOwner<M extends MessageCore = Message> {
         const owner = this
         return Effect.uninterruptible(
             Effect.suspend(() => {
-                if (owner.#shutdownStarted) return Deferred.await(owner.#shutdown)
-                if (owner.#state === "Closed") return Effect.void
-                owner.#shutdownStarted = true
+                const lifecycle = owner.#lifecycle
+                if (lifecycle.kind === "draining") return Deferred.await(lifecycle.done)
+                if (lifecycle.kind === "closed")
+                    return lifecycle.explicitShutdown ? Deferred.await(lifecycle.explicitShutdown) : Effect.void
+                if (lifecycle.kind === "closing" && lifecycle.explicitShutdown !== undefined)
+                    return Deferred.await(lifecycle.explicitShutdown)
+                const done = Deferred.makeUnsafe<void>()
+                if (lifecycle.kind === "open") {
+                    owner.#lifecycle = {
+                        kind: "draining",
+                        state: lifecycle.state,
+                        configuration: lifecycle.configuration,
+                        everStarted: lifecycle.everStarted,
+                        done,
+                    }
+                } else {
+                    lifecycle.explicitShutdown = done
+                }
                 const drain =
                     drainMs > 0
                         ? Effect.withFiber((fiber) =>
@@ -2368,7 +2480,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                         : Effect.void
                 return drain.pipe(
                     Effect.andThen(owner.#closeAfterDrain()),
-                    Effect.onExit((exit) => Deferred.done(owner.#shutdown, exit)),
+                    Effect.onExit((exit) => Deferred.done(done, exit)),
                 )
             }),
         )
@@ -2378,28 +2490,34 @@ export class ClientOwner<M extends MessageCore = Message> {
     #closeAfterDrain(): Effect.Effect<void> {
         const owner = this
         return Effect.suspend(() => {
-            if (owner.#state === "Closed") return Effect.void
+            const lifecycle = owner.#lifecycle
+            if (lifecycle.kind === "closed") return Effect.void
+            const everStarted = lifecycle.everStarted
             // Only sessions that are live now are worth resuming later
-            owner.#saveOnClose = new Set(
-                [...owner.#shards.values()]
-                    .filter((shard) => shard.state === "Connected")
-                    .map((shard) => shard.shardId),
-            )
-            owner.#setState("Closing")
+            const saveOnClose =
+                lifecycle.kind === "closing"
+                    ? undefined
+                    : new Set(
+                          [...owner.#shards.values()]
+                              .filter((shard) => shard.state === "Connected")
+                              .map((shard) => shard.shardId),
+                      )
+            owner.#enterClosing(saveOnClose)
             owner.events.stop()
             owner.rest.stop()
             owner.tasks.stop()
+            const worker = owner.#worker
             return Effect.gen(function* () {
                 const fiber = yield* Effect.withFiber((fiber) => Effect.succeed(fiber))
                 const startedAt = Date.now()
-                logShutdownStart(owner.logging, fiber.context, owner.#everStarted, undefined)
-                if (owner.#worker) yield* Fiber.interrupt(owner.#worker)
+                logShutdownStart(owner.logging, fiber.context, everStarted, undefined)
+                if (worker) yield* Fiber.interrupt(worker.fiber)
                 // Every shard's socket is closed now, so a saved session cannot receive further dispatches
                 yield* owner.#saveSessions()
                 const services = yield* Effect.exit(owner.#closeServices())
-                const exit = owner.#workerExit
+                const exit = worker?.run.exit
                 // An interrupted worker already closed its sockets and ran the service cleanup, so its failures are logged here
-                const earlier = owner.#workerCleanup
+                const earlier = worker?.run.cleanup
                 const cleaned =
                     earlier && Exit.isFailure(earlier)
                         ? Exit.failCause(
@@ -2408,7 +2526,7 @@ export class ClientOwner<M extends MessageCore = Message> {
                         : services
                 owner.#finish()
                 logShutdownEnd(owner.logging, fiber.context, {
-                    everStarted: owner.#everStarted,
+                    everStarted,
                     startedAt,
                     services: cleaned,
                 })
@@ -2431,10 +2549,10 @@ export class ClientOwner<M extends MessageCore = Message> {
         const owner = this
         return Effect.uninterruptibleMask((restore) =>
             Effect.suspend(() => {
-                if (owner.#shutdownStarted || owner.#state === "Closed" || owner.#state === "Closing")
-                    return Effect.fail(new ClientClosedError())
-                if (owner.#managed || owner.#state !== "Disconnected") return Effect.fail(new ClientBusyError())
-                owner.#managed = true
+                if (owner.#lifecycle.kind !== "open") return Effect.fail(new ClientClosedError())
+                if (owner.#lifecycle.managed || owner.#lifecycle.state !== "Disconnected")
+                    return Effect.fail(new ClientBusyError())
+                owner.#lifecycle.managed = true
                 return restore(owner.#start().pipe(Effect.andThen(owner.waitForClose()))).pipe(
                     Effect.ensuring(owner.shutdown()),
                 )

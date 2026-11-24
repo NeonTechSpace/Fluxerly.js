@@ -1,17 +1,19 @@
 // @ts-check
-// Runs the workspace checks side by side: node scripts/check.mjs [sdk|web|release|contributions ...]
+// Runs the workspace checks side by side: node scripts/check.mjs [--changed] [sdk|web|release|contributions ...]
 // Each step starts as soon as the steps it reads from have passed, so independent checks share the machine instead of
 // waiting in line. Without a name it runs every group except public, which checks the deployed site instead of the local
 // one. A named group skips steps of other groups, so the web and public groups expect a built SDK, as their package
-// checks always have. With CHECK_RESULTS_FILE set, the run also writes each check's result, time and first error line as
-// JSON for the job summary action
-import { spawn } from "node:child_process"
+// checks always have. With --changed, only the fast affected checks for uncommitted and branch changes run. With
+// CHECK_RESULTS_FILE set, the run also writes each check's result, time and first error line as JSON for the job summary
+// action
+import { execFileSync, spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
 import { availableParallelism } from "node:os"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const workspace = fileURLToPath(new URL("../", import.meta.url))
+const repoRoot = fileURLToPath(new URL("../../", import.meta.url))
 
 /** @typedef {{ name: string, group: string, folder: string, script: string, after?: string[], alone?: boolean }} Step */
 
@@ -20,25 +22,27 @@ const steps = [
     { name: "contributions", group: "contributions", folder: ".", script: "check:contributions" },
     // The workspace scripts, this runner among them, which no other group lints
     { name: "scripts lint", group: "contributions", folder: ".", script: "lint:scripts" },
+    { name: "docs links", group: "contributions", folder: ".", script: "lint:docs-links" },
     { name: "release", group: "release", folder: "release", script: "test" },
 
+    // Start sdk build first on the critical path so downstream SDK and website steps never stall behind exclusive test suites
+    { name: "sdk build", group: "sdk", folder: "sdk", script: "build" },
     { name: "sdk format", group: "sdk", folder: "sdk", script: "format:check" },
-    ...["code", "discards", "mapping", "dashes", "tests", "effect", "unused", "spelling"].map((lint) => ({
+    ...["code", "discards", "mapping", "dashes", "test-invariants", "effect", "unused", "spelling"].map((lint) => ({
         name: `sdk lint ${lint}`,
         group: "sdk",
         folder: "sdk",
         script: `lint:${lint}`,
     })),
-    // The unit tests use fixtures, not the build. The process tests run the built SDK. Both start a worker per thread and
-    // hold timing-bounded tests, so each runs alone rather than beside other steps on a small machine such as CI's
-    { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit", alone: true },
-    { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"], alone: true },
-    { name: "sdk build", group: "sdk", folder: "sdk", script: "build" },
     { name: "sdk examples", group: "sdk", folder: "sdk", script: "test:examples", after: ["sdk build"] },
     { name: "sdk public contract", group: "sdk", folder: "sdk", script: "test:public-contract", after: ["sdk build"] },
     { name: "sdk types", group: "sdk", folder: "sdk", script: "test:types", after: ["sdk build"] },
     { name: "sdk packaging", group: "sdk", folder: "sdk", script: "test:packaging", after: ["sdk build"] },
     { name: "sdk package", group: "sdk", folder: "sdk", script: "test:package", after: ["sdk build"] },
+    // The unit tests use fixtures, not the build. The process tests run the built SDK. Both start a worker per thread and
+    // hold timing-bounded tests, so each runs alone rather than beside other steps on a small machine such as CI's
+    { name: "sdk unit tests", group: "sdk", folder: "sdk", script: "test:unit", alone: true },
+    { name: "sdk process tests", group: "sdk", folder: "sdk", script: "test:processes", after: ["sdk build"], alone: true },
 
     { name: "web lint", group: "web", folder: "web", script: "lint" },
     // The site reads the SDK's declarations and examples, and its tests and search check read the built site
@@ -112,15 +116,18 @@ async function check(groups) {
     const skipped = []
     /** @type {Map<string, { name: string, result: string, ms: number, command: string, error?: string, blockedBy?: string }>} */
     const report = new Map()
-    // Heavy steps start their own workers, so more steps than threads would only slow each other down
-    // A step that runs alone takes every slot. Waiting steps start in order, so one waiting to run alone is not starved
+    // Heavy steps start their own workers, so more steps than threads would only slow each other down.
+    // Non-exclusive steps fill free slots ahead of waiting exclusive steps so critical-path builds and lints never
+    // stall behind a full-machine test suite, while exclusive steps still run in FIFO order once all slots are free
     const total = Math.max(2, availableParallelism())
     let free = total
     /** @type {{ need: number, go: () => void }[]} */
     const queue = []
     const pump = () => {
-        while (queue.length > 0 && queue[0].need <= free) {
-            const next = /** @type {{ need: number, go: () => void }} */ (queue.shift())
+        while (queue.length > 0) {
+            const index = queue.findIndex((item) => item.need <= free && (item.need < total || free === total))
+            if (index === -1) break
+            const [next] = queue.splice(index, 1)
             free -= next.need
             next.go()
         }
@@ -170,6 +177,48 @@ async function check(groups) {
     return failed.length === 0 && skipped.length === 0
 }
 
+/** Lists changed repository paths relative to HEAD and untracked files */
+function changedFiles() {
+    const read = (/** @type {string[]} */ args) =>
+        execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" })
+            .split("\0")
+            .filter(Boolean)
+    const names = new Set([
+        ...read(["diff", "--name-only", "-z", "HEAD"]),
+        ...read(["ls-files", "--others", "--exclude-standard", "-z"]),
+    ])
+    return [...names]
+}
+
+/** Picks the check groups affected by changed files for fast local iteration */
+function changedGroups() {
+    const files = changedFiles()
+    if (files.length === 0) return []
+    const groups = new Set()
+    for (const file of files) {
+        if (file.startsWith(".github/") || file.startsWith("docs/") || file.startsWith("projects/scripts/") || /^(?:AGENTS|REVIEW)\.md$/.test(file))
+            groups.add("contributions")
+        if (file.startsWith("projects/release/")) groups.add("release")
+        if (file.startsWith("projects/sdk/") || /^projects\/(?:\.oxlintrc\.json|cspell|knip\.jsonc|package\.json|pnpm-)/.test(file))
+            groups.add("sdk")
+        if (file.startsWith("projects/web/")) groups.add("web")
+    }
+    if (groups.size === 0) groups.add("contributions")
+    return [...groups]
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    process.exitCode = (await check(process.argv.slice(2))) ? 0 : 1
+    const args = process.argv.slice(2)
+    const changed = args.includes("--changed")
+    const requested = args.filter((arg) => arg !== "--changed")
+    if (changed && requested.length > 0)
+        throw new Error("Use --changed without explicit group names")
+    const groups = changed ? changedGroups() : requested
+    if (changed && groups.length === 0) {
+        console.log("No changed files to check")
+        process.exitCode = 0
+    } else {
+        if (changed) console.log(`Changed groups: ${groups.join(", ")}`)
+        process.exitCode = (await check(groups)) ? 0 : 1
+    }
 }

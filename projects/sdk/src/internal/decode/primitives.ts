@@ -12,6 +12,13 @@ const int32Maximum = 2_147_483_647
 export const record = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
 
+/** A string or null, for required nullable provider fields */
+export const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
+
+/** A string, null or undefined, for optional nullable provider fields */
+export const optionalNullableText = (value: unknown): value is string | null | undefined =>
+    value === undefined || value === null || typeof value === "string"
+
 /** A decimal snowflake string without leading zeros in provider data. "0" is accepted. Caller input uses inputId */
 export const identifier = (value: unknown): value is string =>
     typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)
@@ -40,7 +47,7 @@ export function inputId(value: unknown): string | undefined {
 
 /**
  * The ID to send in a gateway command, or undefined when Fluxer refuses it. The gateway does not trim and refuses 0
- * (fluxer_gateway/src/utils/snowflake_id.erl:38-47, 121-160 at 0098958f). The SDK still trims, as inputId does, so
+ * (fluxer_gateway/src/fluxer_gateway/core/id.gleam:35-54, 74-79 at 66cede64). The SDK still trims, as inputId does, so
  * a caller ID means the same in every request and the gateway only receives canonical IDs
  */
 export function inputGatewayId(value: unknown): string | undefined {

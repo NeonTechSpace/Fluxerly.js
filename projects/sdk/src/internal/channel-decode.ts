@@ -18,13 +18,19 @@ import {
     type ThreadMember,
     type ThreadMembership,
 } from "#sdk/channels"
-import { count as nonNegativeInt32, identifier, int32, record } from "./decode/primitives.js"
+import {
+    count as nonNegativeInt32,
+    identifier,
+    int32,
+    nullableText,
+    optionalNullableText,
+    record,
+} from "./decode/primitives.js"
 import { timestamp } from "./decode/timestamp.js"
 import { decodeMember } from "./guilds.js"
 
 const maxUnsignedPermission = 18_446_744_073_709_551_615n
 
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
 const unsignedPermission = (value: unknown): value is bigint =>
     typeof value === "bigint" && value >= 0n && value <= maxUnsignedPermission
@@ -102,7 +108,7 @@ function decodeCommonFields(value: Record<string, unknown>): Record<string, unkn
         !identifier(value.guild_id) ||
         !nonNegativeInt32(value.type) ||
         (value.name !== undefined && typeof value.name !== "string") ||
-        (value.topic !== undefined && !nullableText(value.topic)) ||
+        !optionalNullableText(value.topic) ||
         (value.url !== undefined && value.url !== null && !url(value.url)) ||
         (value.position !== undefined && !int32(value.position)) ||
         (value.parent_id !== undefined && !nullableIdentifier(value.parent_id)) ||
@@ -111,7 +117,7 @@ function decodeCommonFields(value: Record<string, unknown>): Record<string, unkn
         (value.voice_connection_limit !== undefined &&
             value.voice_connection_limit !== null &&
             !int32(value.voice_connection_limit)) ||
-        (value.rtc_region !== undefined && !nullableText(value.rtc_region)) ||
+        !optionalNullableText(value.rtc_region) ||
         (value.last_message_id !== undefined && !nullableIdentifier(value.last_message_id)) ||
         (value.last_pin_timestamp !== undefined &&
             value.last_pin_timestamp !== null &&

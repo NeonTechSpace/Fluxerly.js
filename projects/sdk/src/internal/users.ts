@@ -22,6 +22,8 @@ import {
     clearsImage,
     identifier,
     inputId,
+    nullableText,
+    optionalNullableText,
     record,
     safeInteger as integer,
 } from "./decode/primitives.js"
@@ -53,7 +55,6 @@ export interface UserRequest<A> {
 
 type UserValidationResult<A> = UserRequest<A> | InputValidationFailure
 
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const text = (value: unknown, min: number, max: number): value is string =>
     // oxlint-disable-next-line typescript/no-misused-spread -- length limits count Unicode code points
     typeof value === "string" && [...value].length >= min && [...value].length <= max
@@ -118,8 +119,8 @@ export function decodeDirectMessage(value: unknown): DirectMessageChannel | unde
         (value.type !== 1 && value.type !== 3) ||
         (value.guild_id !== undefined && value.guild_id !== null) ||
         (!(value.type === 3 && value.recipients === undefined) && !Array.isArray(value.recipients)) ||
-        (value.name !== undefined && !nullableText(value.name)) ||
-        (value.icon !== undefined && !nullableText(value.icon)) ||
+        !optionalNullableText(value.name) ||
+        !optionalNullableText(value.icon) ||
         (value.owner_id !== undefined && value.owner_id !== null && !identifier(value.owner_id)) ||
         (value.last_message_id !== undefined && value.last_message_id !== null && !identifier(value.last_message_id)) ||
         (value.last_pin_timestamp !== undefined &&
@@ -269,8 +270,8 @@ function decodeProfileBadge(value: unknown): ProfileBadge | undefined {
     if (typeof key !== "string" || !nullableText(assetUrl)) return undefined
     if (value.small_asset !== undefined && typeof value.small_asset !== "string") return undefined
     if (value.count !== undefined && value.count !== null && !integer(value.count)) return undefined
-    if (value.accessible_label !== undefined && !nullableText(value.accessible_label)) return undefined
-    if (value.quote !== undefined && !nullableText(value.quote)) return undefined
+    if (!optionalNullableText(value.accessible_label)) return undefined
+    if (!optionalNullableText(value.quote)) return undefined
     let details: ProfileBadge["details"]
     if (value.details !== undefined && value.details !== null) {
         const { title, lines } = record(value.details) ? value.details : {}

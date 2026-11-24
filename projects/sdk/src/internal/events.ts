@@ -46,7 +46,7 @@ import type { MessageReference } from "#sdk/messages"
 import type { MessageReaction, MessageReactionBatch } from "#sdk/reactions"
 import { inputDefect, readInput } from "./defects.js"
 import { withDeadline } from "./effect-failures.js"
-import { nowMs } from "./clock.js"
+import { maximumTimerMs, nowMs } from "./clock.js"
 import { record } from "./decode/primitives.js"
 import { discardInvalidCallbackReturn } from "./invalid-callback-return.js"
 import type { ClientLogger } from "./logging.js"
@@ -310,8 +310,6 @@ type EventWaitSettings<K extends EventName, M extends MessageCore = Message> = {
     readonly filter: ((event: EventMap<M>[K]) => boolean) | undefined
     readonly timeoutMs: number
 }
-
-const maximumTimerMs = 2_147_483_647
 
 function eventWaitSettings<K extends EventName, M extends MessageCore = Message>(
     options: EventWaitOptions<K, M> | undefined,

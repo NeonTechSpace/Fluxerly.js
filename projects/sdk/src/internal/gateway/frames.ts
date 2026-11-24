@@ -8,6 +8,7 @@
  * never transient network failures replayed through automatic recovery. Public limits and failure behavior are documented on the
  * default and native Client and on ConnectionError. Implements [SDK contracts: Connection and recovery](/docs/SDK-CONTRACTS.md#connection-and-recovery)
  */
+import { maximumTimerMs } from "../clock.js"
 import { Opcode } from "../protocol/gateway.js"
 import type { SocketData } from "../transport/index.js"
 
@@ -15,9 +16,6 @@ import type { SocketData } from "../transport/index.js"
  * Fluxer's outbound-command and replay-retention limits do not bound live inbound messages
  */
 export const maxGatewayMessageBytes = 100 * 1024 * 1024
-
-/** Largest heartbeat interval a timer can represent */
-const maximumHeartbeatIntervalMs = 2_147_483_647
 
 /** Safe facts about a rejected frame, recorded in ConnectionError details */
 export interface FrameRejection {
@@ -88,7 +86,7 @@ export function readHello(body: unknown, receivedHello: boolean): number | Frame
         typeof body.heartbeat_interval !== "number" ||
         !Number.isSafeInteger(body.heartbeat_interval) ||
         body.heartbeat_interval <= 0 ||
-        body.heartbeat_interval > maximumHeartbeatIntervalMs
+        body.heartbeat_interval > maximumTimerMs
     )
         return rejection({
             detail: receivedHello ? "received a second HELLO" : "received an invalid HELLO",

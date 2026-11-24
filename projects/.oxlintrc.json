@@ -26,6 +26,9 @@
             // The "effect" barrel loads every Effect module at startup, so source imports each module from its own subpath
             "files": ["sdk/src/**"],
             "rules": {
+                "typescript/no-explicit-any": "error",
+                "typescript/no-unnecessary-boolean-literal-compare": "error",
+                "typescript/no-redundant-type-constituents": "error",
                 "no-restricted-imports": [
                     "error",
                     {

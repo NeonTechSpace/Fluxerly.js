@@ -11,7 +11,15 @@ import {
     type MemberSearchQuery,
 } from "#sdk/member-search"
 import type { GuildRequest } from "./guilds.js"
-import { identifier, inputId, inputIds, nonNegativeInteger, record, snapshotArray } from "./decode/primitives.js"
+import {
+    identifier,
+    inputId,
+    inputIds,
+    nonNegativeInteger,
+    nullableText,
+    record,
+    snapshotArray,
+} from "./decode/primitives.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import {
     booleanField,
@@ -37,7 +45,6 @@ interface EncodedMemberSearchQuery {
 const joinSourceType = (value: unknown): value is GuildMemberJoinSourceType =>
     typeof value === "number" && joinSourceTypeValues.has(value)
 
-const nullableText = (value: unknown): value is string | null => value === null || typeof value === "string"
 const nullableIdentifier = (value: unknown): value is string | null => value === null || identifier(value)
 
 function identifiers(value: unknown, maximum: number): readonly string[] | undefined {

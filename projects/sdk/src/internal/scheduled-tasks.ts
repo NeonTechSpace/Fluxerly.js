@@ -13,6 +13,7 @@ import * as Exit from "effect/Exit"
 import * as Fiber from "effect/Fiber"
 import { ClientClosedError, ConfigurationError } from "#sdk/errors"
 import { ownCleanup } from "./cleanup-owner.js"
+import { maximumTimerMs } from "./clock.js"
 import { record } from "./decode/primitives.js"
 import type { FailureReporter } from "./failures.js"
 import type { LogicalScheduler } from "./logical-scheduler.js"
@@ -20,8 +21,6 @@ import type { ClientLogger } from "./logging.js"
 import { CallbackRuns } from "./rejection-scope.js"
 import { unsupportedKeyHint } from "./suggest.js"
 
-/** Longest delay or interval, the longest single timer delay */
-const maximumMs = 2_147_483_647
 const optionKeys = ["delayMs", "intervalMs", "name"]
 /** Longest task name, in UTF-16 code units */
 const maximumNameLength = 100
@@ -34,7 +33,7 @@ export interface ScheduleTiming {
 }
 
 function milliseconds(value: unknown, minimum: number): boolean {
-    return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximumMs
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximumTimerMs
 }
 
 /**

@@ -40,7 +40,7 @@ const opcodeNames = new Map<number, string>([
     [Opcode.memberSubscriptions, "MEMBER_SUBSCRIPTIONS"],
     [Opcode.requestGuildCounts, "REQUEST_GUILD_COUNTS"],
     [Opcode.requestChannelMemberCounts, "REQUEST_CHANNEL_MEMBER_COUNTS"],
-    // Fluxer's gateway names opcode 28 request_forum_unreads (fluxer_gateway/src/utils/constants.erl:52, :73). Only the log name
+    // Fluxer's gateway names opcode 28 RequestForumUnreads (fluxer_gateway/src/fluxer_gateway/gateway/opcode.gleam:68 at 66cede64). Only the log name
     // is known here, so the opcode stays out of Opcode and the commands the SDK sends
     [28, "REQUEST_FORUM_UNREADS"],
 ])
@@ -89,14 +89,14 @@ export const maxIgnoredEvents = 256
 /**
  * How long Fluxer retains a disconnected session for Resume, in milliseconds.
  * A client close with 1000 or 1001 destroys the session. Other client close codes or an abrupt socket end retain it
- * (gateway_handler.erl and session_monitor.erl at fluxerapp/fluxer commit cdcaba3)
+ * (fluxer_gateway/src/fluxer_gateway/gateway/limits.gleam and session/server.gleam at 66cede64)
  */
 export const sessionRetentionMs = 60_000
 
 /**
- * Most guilds one bot shard may serve, MAX_GUILDS_PER_SHARD in fluxer_gateway/src/gateway/gateway_sharding.erl at
- * fluxerapp/fluxer commit 841fb7af4174fc8fc025307776e87e7dba51a669. Identify for a shard resolving to more guilds
- * closes with 4011
+ * Most guilds one bot shard may serve, max_guilds_per_shard in
+ * fluxer_gateway/src/fluxer_gateway/session/seed.gleam:114, 148-151 at 66cede64. Identify for a shard resolving to
+ * more guilds closes with 4011
  */
 export const maxGuildsPerShard = 2_500
 

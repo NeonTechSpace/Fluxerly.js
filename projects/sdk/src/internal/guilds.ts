@@ -38,6 +38,7 @@ import {
     clearsImage,
     int32,
     nonNegativeInteger,
+    optionalNullableText,
     record,
 } from "./decode/primitives.js"
 import { rejectCheck } from "./decode/trace.js"
@@ -77,7 +78,6 @@ export interface GuildRequest<A> {
 
 type GuildValidationResult<A> = GuildRequest<A> | InputValidationFailure
 
-const nullableText = (value: unknown) => value === undefined || value === null || typeof value === "string"
 /** The trimmed positive ID for a caller ID, or undefined when it is refused or 0 */
 const positiveId = (value: unknown): string | undefined => {
     const id = inputId(value)
@@ -285,10 +285,10 @@ export function decodeGuild(value: unknown): Guild | undefined {
         typeof value.name !== "string" ||
         !Array.isArray(value.features) ||
         !value.features.every((item) => typeof item === "string") ||
-        !nullableText(value.icon) ||
-        !nullableText(value.banner) ||
-        !nullableText(value.splash) ||
-        !nullableText(value.embed_splash) ||
+        !optionalNullableText(value.icon) ||
+        !optionalNullableText(value.banner) ||
+        !optionalNullableText(value.splash) ||
+        !optionalNullableText(value.embed_splash) ||
         (value.splash_card_alignment !== undefined && !guildSplashCardAlignment(value.splash_card_alignment)) ||
         (value.system_channel_id !== undefined &&
             value.system_channel_id !== null &&
@@ -297,7 +297,7 @@ export function decodeGuild(value: unknown): Guild | undefined {
         (value.rules_channel_id !== undefined &&
             value.rules_channel_id !== null &&
             !identifier(value.rules_channel_id)) ||
-        !nullableText(value.vanity_url_code) ||
+        !optionalNullableText(value.vanity_url_code) ||
         (value.nsfw_level !== undefined && !guildNsfwLevel(value.nsfw_level)) ||
         (value.badge_ids !== undefined && !identifierList(value.badge_ids)) ||
         (value.afk_channel_id !== undefined && value.afk_channel_id !== null && !identifier(value.afk_channel_id)) ||
@@ -310,7 +310,7 @@ export function decodeGuild(value: unknown): Guild | undefined {
         (value.mfa_level !== undefined && !guildMfaLevel(value.mfa_level)) ||
         (value.nsfw !== undefined && typeof value.nsfw !== "boolean") ||
         (value.content_warning_level !== undefined && !guildContentWarningLevel(value.content_warning_level)) ||
-        !nullableText(value.content_warning_text) ||
+        !optionalNullableText(value.content_warning_text) ||
         (value.explicit_content_filter !== undefined && !guildExplicitContentFilter(value.explicit_content_filter)) ||
         (value.message_history_cutoff !== undefined &&
             value.message_history_cutoff !== null &&
@@ -395,9 +395,9 @@ export function decodeMember(value: unknown, guildId: string): GuildMember | und
         !value.roles.every(identifier) ||
         new Set(value.roles).size !== value.roles.length ||
         !timestamp(value.joined_at) ||
-        !nullableText(value.nick) ||
-        !nullableText(value.avatar) ||
-        !nullableText(value.banner) ||
+        !optionalNullableText(value.nick) ||
+        !optionalNullableText(value.avatar) ||
+        !optionalNullableText(value.banner) ||
         (value.accent_color !== undefined && value.accent_color !== null && !color(value.accent_color)) ||
         (value.profile_flags !== undefined && value.profile_flags !== null && !nonNegativeInt32(value.profile_flags)) ||
         (value.mute !== undefined && typeof value.mute !== "boolean") ||
@@ -619,12 +619,14 @@ export function memberEditSelf(rawGuildId: string, input: MemberProfileEdit): Gu
         return inputValidationFailure("avatar", "format", base64ImageExplanation("Avatar", input.avatar))
     if (input.banner !== undefined && !clearsImage(input.banner) && !base64Image(input.banner))
         return inputValidationFailure("banner", "format", base64ImageExplanation("Banner", input.banner))
-    // Fluxer reads an empty bio or pronouns as null, which clears it (fluxer_api/src/api/Validator.ts:59-63 at 0098958f)
-    if (input.bio !== undefined && input.bio !== null && input.bio !== "" && !text(input.bio, 1, 320))
+    // Fluxer reads an empty bio or pronouns as null, which clears it (fluxer_api/src/api/Validator.ts:59-63 at 0098958f).
+    // Fluxer's schema ceiling is MAX_BIO_LENGTH_CEILING (1,000), while instances default to 320
+    // (packages/schema/src/domains/guild/GuildRequestSchemas.ts:145-147 at 66cede64)
+    if (input.bio !== undefined && input.bio !== null && input.bio !== "" && !text(input.bio, 1, 1000))
         return inputValidationFailure(
             "bio",
             "length",
-            "Bio must be empty to clear it or contain 1 through 320 UTF-16 code units after Fluxer's normalization",
+            "Bio must be empty to clear it or contain 1 through 1,000 UTF-16 code units after Fluxer's normalization",
         )
     if (
         input.pronouns !== undefined &&
@@ -867,8 +869,8 @@ function decodeRole(value: unknown, guildId: string): GuildRole | undefined {
         typeof value.hoist !== "boolean" ||
         typeof value.mentionable !== "boolean" ||
         (value.hoist_position !== undefined && value.hoist_position !== null && !int32(value.hoist_position)) ||
-        !nullableText(value.icon) ||
-        !nullableText(value.unicode_emoji)
+        !optionalNullableText(value.icon) ||
+        !optionalNullableText(value.unicode_emoji)
     )
         return undefined
     return Object.freeze({
