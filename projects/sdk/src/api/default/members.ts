@@ -423,6 +423,16 @@ export interface Members {
         options?: AuditedRequestOptions,
     ): ResultAsync<void, GuildOperationFailure | CancelledError | ConfigurationError>
     /**
+     * Fetch one user's active ban record in a community with BanMembers permission.
+     * Pass decimal guildId and userId.
+     * When the user is not banned, the call fails with reason notFound, HTTP 404 and apiError.code unknownBan (Fluxer code UNKNOWN_BAN).
+     * Results are frozen, there is no ban cache, and shared guild deadlines and read retries apply
+     */
+    fetchBan(
+        target: MemberReference,
+        options?: RequestOptions,
+    ): ResultAsync<GuildBan, GuildOperationFailure | CancelledError | ConfigurationError>
+    /**
      * Fetch a community's current full ban list with BanMembers permission.
      * Results are frozen.
      * There is no ban cache, pagination or guaranteed order.

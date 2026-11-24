@@ -1,12 +1,13 @@
 /** A card for a message's `embeds` array, with optional text, images and named sections.
  * Message operations reject unknown keys and null values locally
  *
- * Sends, replies, channel message edits and webhook sends check an empty string like any other value. A webhook
- * message edit differs, because Fluxer treats an empty string there as absent everywhere except in fields, so the SDK
- * sends it as given. There an author with an empty name, a footer with empty text, or an image or thumbnail with an
- * empty url is dropped together with its other values, which the SDK then sends unchecked, and an embed whose values
- * are all empty text fails locally with reason input and path embeds[], since Fluxer refuses it. A color or a fields
- * list, even an empty one, keeps such an embed
+ * On all message routes, an author with an empty name, a footer with empty text, or an image or thumbnail with an
+ * empty url is dropped by Fluxer together with its other values, which the SDK sends unchecked, and an empty
+ * description is omitted. Other empty strings on sends, replies, channel message edits and webhook sends are checked
+ * like any other value. A webhook message edit differs, because Fluxer treats an empty string there as absent
+ * everywhere except in fields, so the SDK sends it as given, and an embed whose values are all empty text fails locally
+ * with reason input and path embeds[], since Fluxer refuses it. A color or a fields list, even an empty one, keeps
+ * such an embed
  *
  * Text length limits count UTF-16 code units, the units used by JavaScript string length. For validation, the SDK removes
  * U+000C and U+202E and trims surrounding whitespace. It sends the original text unchanged
@@ -19,7 +20,10 @@
  * URLs may use attachment://filename instead, where the prefix and filename are read after that normalization.
  * The filename must exactly and case-sensitively equal the name Fluxer stores for a new upload in the same send, reply or
  * edit. When several uploads share that stored name, Fluxer puts the last of them into the embed. Fluxer stores an upload under a cleaned name: Spaces become underscores, a slash becomes an underscore,
- * runs of dots become one dot, and characters outside letters, marks, numbers, underscores, dots and hyphens are dropped.
+ * runs of dots become one dot, and characters outside letters, marks, numbers, underscores, dots, hyphens and the URI
+ * punctuation `! $ & ' ( ) + , ; = @ [ ] ~` are dropped. Fluxer's attachment:// parser still accepts only letters,
+ * marks, numbers, underscores, dots and hyphens, so an upload whose stored name keeps one of those extra punctuation
+ * characters cannot be referenced through attachment://.
  * So an upload named "my photo.png" is referenced as attachment://my_photo.png. A Windows device name such as CON before
  * the first dot gets a leading underscore. The stored extension must map to an image or video MIME type in Fluxer's
  * filename lookup, such as PNG, AVIF, MP4 or WebM
@@ -91,8 +95,8 @@ export interface EmbedInput {
  * @category Messages
  */
 export interface EmbedAuthorInput {
-    /** Required author name, 1–256 normalized UTF-16 code units. In a webhook message edit, an empty string makes
-     * Fluxer drop the whole author, including url and iconUrl
+    /** Required author name, 1–256 normalized UTF-16 code units. An empty string makes Fluxer drop the whole author,
+     * including url and iconUrl
      */
     readonly name: string
     /** Destination for the author label. In a webhook message edit, an empty string counts as absent */
@@ -109,8 +113,8 @@ export interface EmbedAuthorInput {
  * @category Messages
  */
 export interface EmbedFooterInput {
-    /** Required footer text, 1–2,048 normalized UTF-16 code units. In a webhook message edit, an empty string makes
-     * Fluxer drop the whole footer, including iconUrl
+    /** Required footer text, 1–2,048 normalized UTF-16 code units. An empty string makes Fluxer drop the whole footer,
+     * including iconUrl
      */
     readonly text: string
     /** HTTP(S) icon URL without credentials, 1 through 2048 characters after normalization. Attachment URLs are not accepted here. In a webhook message edit, an
@@ -126,7 +130,7 @@ export interface EmbedFooterInput {
  */
 export interface EmbedMediaInput {
     /** Required HTTP(S) image URL or attachment://filename naming an uploaded image or video for image and thumbnail fields.
-     * In a webhook message edit, an empty string makes Fluxer drop the whole image or thumbnail, including description
+     * An empty string makes Fluxer drop the whole image or thumbnail, including description
      */
     readonly url: string
     /** Optional description for readers who cannot see the media, 1–4,096 normalized UTF-16 code units. In a webhook

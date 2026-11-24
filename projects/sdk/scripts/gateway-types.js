@@ -73,8 +73,8 @@ const pascal = (/** @type {string} */ text) =>
 /** A field's documented meaning as a comment, or nothing when the documents give none */
 const comment = (/** @type {string | undefined} */ text) => (text ? `/** ${text.replaceAll("*/", "* /")} */\n` : "")
 
-// A correction cites Fluxer source files at the pin by line, such as fluxer_gateway/src/session/session_ready_dispatch.erl:195-197
-const citation = /^[\w./@-]+\.(?:ts|erl|rs):\d+(-\d+)?$/
+// A correction cites Fluxer source files at the pin by line, such as fluxer_gateway/src/fluxer_gateway/session/ready.gleam:64-93
+const citation = /^[\w./@-]+\.(?:ts|erl|rs|gleam):\d+(-\d+)?$/
 
 /** @param {{ reason?: unknown, evidence?: unknown }} correction @param {string} label */
 function checkEvidence(correction, label) {

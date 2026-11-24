@@ -231,6 +231,9 @@ async function fixture(
         | "connectionsStall"
         | "connectionsEmptyStrings"
         | "connectionsOutOfRange"
+        | "connectionsOAuth"
+        | "connectionsInvalidProviderId"
+        | "connectionsInvalidUrl"
         | "introspectionMalformed"
         | "introspectionNoSubject"
         | "introspectionInactive"
@@ -427,6 +430,61 @@ async function fixture(
         }
         if (request.url === "/users/@me/connections" && mode === "connectionsMalformed")
             return response.end(JSON.stringify([{ id: "connection" }]))
+        if (request.url === "/users/@me/connections" && mode === "connectionsOAuth")
+            return response.end(
+                JSON.stringify([
+                    {
+                        id: "oauth-conn-1",
+                        type: "oauth",
+                        name: "octocat",
+                        verified: true,
+                        visibility_flags: 1,
+                        sort_order: 0,
+                        provider_id: "github",
+                        url: "https://github.com/octocat",
+                    },
+                    {
+                        id: "bsky-conn-2",
+                        type: "bsky",
+                        name: "handle.bsky.social",
+                        verified: true,
+                        visibility_flags: 0,
+                        sort_order: 1,
+                        provider_id: null,
+                        url: null,
+                    },
+                ]),
+            )
+        if (request.url === "/users/@me/connections" && mode === "connectionsInvalidProviderId")
+            return response.end(
+                JSON.stringify([
+                    {
+                        id: "oauth-conn-1",
+                        type: "oauth",
+                        name: "octocat",
+                        verified: true,
+                        visibility_flags: 1,
+                        sort_order: 0,
+                        provider_id: 123,
+                        url: null,
+                    },
+                ]),
+            )
+        if (request.url === "/users/@me/connections" && mode === "connectionsInvalidUrl")
+            return response.end(
+                JSON.stringify([
+                    {
+                        id: "oauth-conn-1",
+                        type: "oauth",
+                        name: "octocat",
+                        verified: true,
+                        visibility_flags: 1,
+                        sort_order: 0,
+                        provider_id: "github",
+                        url: 456,
+                    },
+                ]),
+            )
         if (request.url === "/users/@me/connections")
             return response.end(
                 JSON.stringify([
@@ -838,10 +896,15 @@ describe("oauth", () => {
             // The account-wide name uses the same field as User, so the display helper reads it
             expect(display.name(identity)).toBe("Display")
             expect((await settle(client.fetchGuilds("access")))[0]?.id).toBe("2")
-            expect((await settle(client.fetchConnections("access")))[0]).toMatchObject({
+            expect((await settle(client.fetchConnections("access")))[0]).toEqual({
                 id: "connection",
                 type: "domain",
+                name: "example.test",
+                verified: true,
                 visibilityFlags: 1,
+                sortOrder: 0,
+                providerId: null,
+                url: null,
             })
             expect(await settle(client.introspect("access"))).toMatchObject({
                 active: true,
@@ -949,6 +1012,53 @@ describe("oauth", () => {
             })
             expect(Object.isFrozen(tokens)).toBe(true)
             expect(Object.isFrozen(tokens.scopes)).toBe(true)
+        },
+    )
+
+    test.each(modes)(
+        "%s projects oauth connections with providerId and url and rejects non-string values",
+        async (mode) => {
+            const oauthFixture = await fixture("connectionsOAuth")
+            const client = await oauthClient(mode, oauthFixture.base)
+            const list = await settle(client.fetchConnections("access"))
+            expect(list).toEqual([
+                {
+                    id: "oauth-conn-1",
+                    type: "oauth",
+                    name: "octocat",
+                    verified: true,
+                    visibilityFlags: 1,
+                    sortOrder: 0,
+                    providerId: "github",
+                    url: "https://github.com/octocat",
+                },
+                {
+                    id: "bsky-conn-2",
+                    type: "bsky",
+                    name: "handle.bsky.social",
+                    verified: true,
+                    visibilityFlags: 0,
+                    sortOrder: 1,
+                    providerId: null,
+                    url: null,
+                },
+            ])
+            expect(Object.isFrozen(list) && Object.isFrozen(list[0])).toBe(true)
+            const stop = async () => {
+                await close?.()
+                close = undefined
+            }
+            await stop()
+            for (const bad of ["connectionsInvalidProviderId", "connectionsInvalidUrl"] as const) {
+                const invalid = await fixture(bad)
+                const invalidClient = await oauthClient(mode, invalid.base)
+                await expect(settle(invalidClient.fetchConnections("access"))).rejects.toMatchObject({
+                    operation: "oauth.fetchConnections",
+                    reason: "response",
+                    status: 200,
+                })
+                await stop()
+            }
         },
     )
 

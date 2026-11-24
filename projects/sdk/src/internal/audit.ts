@@ -1,7 +1,7 @@
 /**
  * Audit-reason option shared by audited operations.
  * Invariant: A reason is well-formed Unicode text without control characters or line separators, trimmed, with 1 through 512
- * UTF-16 code units after Fluxer's normalization (which also removes U+202E), and sent only as the X-Audit-Log-Reason header, whose value carries its UTF-8 bytes.
+ * UTF-16 code units after Fluxer's normalization (which also removes U+202E), and sent only as the X-Audit-Log-Reason header, percent-encoded in UTF-8.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import { InputValidationFailure, inputValidationFailure } from "#sdk/input-validation"
@@ -40,9 +40,10 @@ export function auditSettings(options?: unknown): AuditSettings | InputValidatio
     return { auditReason: reason.trim() }
 }
 
-/** The X-Audit-Log-Reason header value for a validated reason: Its UTF-8 bytes, one character per byte, which Fluxer
- * decodes back to the reason. An ASCII reason is unchanged
+/** The X-Audit-Log-Reason header value for a validated reason: Percent-encoded UTF-8 bytes, matching Fluxer's
+ * decodePercentEncoding(decodeHeaderUtf8(header)) in fluxer_api/src/api/middleware/AuditLogMiddleware.ts at 66cede64
+ * so non-ASCII text and literal percent sequences such as %20 and %25 round-trip losslessly
  */
 export function auditHeader(reason: string): string {
-    return String.fromCharCode(...new TextEncoder().encode(reason))
+    return encodeURIComponent(reason)
 }

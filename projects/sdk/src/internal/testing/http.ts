@@ -127,7 +127,7 @@ function methodPattern(method: unknown): ((request: TestRequest) => boolean) | u
 }
 
 function compileMatcher(matcher: TestRequestMatcher): (request: TestRequest) => boolean {
-    if (typeof matcher === "function") return (request) => matcher(request) === true
+    if (typeof matcher === "function") return (request) => (matcher(request) as unknown) === true
     if (matcher instanceof RegExp) return (request) => new RegExp(matcher.source, matcher.flags).test(request.path)
     let method: unknown
     let path: unknown

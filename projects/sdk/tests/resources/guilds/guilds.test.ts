@@ -74,17 +74,17 @@ test.each(modes)("%s sends audit reasons only on supported role and member mutat
     await api.role(false, "50", options)
 
     expect(calls).toEqual([
-        { method: "POST", path: "/api/v1/guilds/20/roles", reason: "routine audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/roles/50", reason: "routine audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/roles", reason: "routine audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
-        { method: "DELETE", path: "/api/v1/guilds/20/roles/hoist-positions", reason: "routine audit" },
-        { method: "DELETE", path: "/api/v1/guilds/20/roles/50", reason: "routine audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/members/30", reason: "routine audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/members/@me", reason: "routine audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/members/30", reason: "routine audit" },
-        { method: "PUT", path: "/api/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
-        { method: "DELETE", path: "/api/v1/guilds/20/members/30/roles/50", reason: "routine audit" },
+        { method: "POST", path: "/api/v1/guilds/20/roles", reason: "routine%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/roles/50", reason: "routine%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/roles", reason: "routine%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/roles/hoist-positions", reason: "routine%20audit" },
+        { method: "DELETE", path: "/api/v1/guilds/20/roles/hoist-positions", reason: "routine%20audit" },
+        { method: "DELETE", path: "/api/v1/guilds/20/roles/50", reason: "routine%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/members/30", reason: "routine%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/members/@me", reason: "routine%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/members/30", reason: "routine%20audit" },
+        { method: "PUT", path: "/api/v1/guilds/20/members/30/roles/50", reason: "routine%20audit" },
+        { method: "DELETE", path: "/api/v1/guilds/20/members/30/roles/50", reason: "routine%20audit" },
     ])
 
     const readOptions = { auditReason: "not applicable" } as RequestOptions
@@ -127,7 +127,7 @@ test.each(modes)("%s moderates with explicit defaults, reasons and timeout obser
     expect(calls.at(-1)).toMatchObject({
         method: "PATCH",
         path: "/api/v1/guilds/20/members/30",
-        reason: "repeated spam",
+        reason: "repeated%20spam",
     })
     expect((await api.clearTimeout()).communicationDisabledUntil).toBeNull()
     expect(calls.at(-1)?.body).toEqual({ communication_disabled_until: null })
@@ -293,6 +293,115 @@ test.each(modes)("%s keeps moderator ID 0 on a ban placed by Fluxer staff", asyn
     const api = await setup(mode, { members: true })
     expect((await api.bans())[0]).toMatchObject({ userId: "30", moderatorId: "0" })
 })
+
+test.each(modes)(
+    "%s fetches a single guild ban, maps UNKNOWN_BAN and permission denials, and checks target identity",
+    async (mode) => {
+        const requests: { method: string; path: string }[] = []
+        let status = 200
+        let payload: unknown = {
+            user: {
+                id: "30",
+                username: "banned-user",
+                discriminator: "0042",
+                global_name: "Banned",
+                avatar: null,
+                avatar_color: null,
+                flags: 0,
+            },
+            reason: "spam",
+            moderator_id: "31",
+            banned_at: "2026-09-09T00:00:00Z",
+            expires_at: "2026-09-10T00:00:00Z",
+        }
+        rest(async (url, init) => {
+            requests.push({ method: init.method!, path: new URL(url).pathname })
+            return Response.json(payload, { status })
+        })
+        const api = await setup(mode)
+        const fetchBan = (ref: MemberReference = target, options?: RequestOptions) =>
+            api.defaultApi
+                ? (async () => unwrap(await api.defaultApi!.members.fetchBan(ref, options)))()
+                : run(api.native!.members.fetchBan(ref, options))
+
+        const fetched = await fetchBan()
+        expect(requests).toEqual([{ method: "GET", path: "/api/v1/guilds/20/bans/30" }])
+        expect(fetched).toEqual({
+            guildId: "20",
+            userId: "30",
+            username: "banned-user",
+            isBot: false,
+            user: {
+                id: "30",
+                username: "banned-user",
+                discriminator: "0042",
+                displayName: "Banned",
+                avatar: null,
+                avatarColor: null,
+                flags: 0,
+                isBot: false,
+                isSystem: false,
+            },
+            reason: "spam",
+            moderatorId: "31",
+            bannedAt: "2026-09-09T00:00:00Z",
+            expiresAt: "2026-09-10T00:00:00Z",
+        })
+        expect(Object.isFrozen(fetched) && Object.isFrozen(fetched.user)).toBe(true)
+
+        status = 404
+        payload = { code: "UNKNOWN_BAN", message: "Unknown ban" }
+        await expect(fetchBan()).rejects.toMatchObject({
+            _tag: "GuildOperationError",
+            operation: "members.fetchBan",
+            reason: "notFound",
+            outcome: "rejected",
+            status: 404,
+            apiError: { code: "unknownBan", providerCode: "UNKNOWN_BAN" },
+        })
+
+        status = 403
+        payload = { code: "MISSING_PERMISSIONS", message: "Missing permissions" }
+        await expect(fetchBan()).rejects.toMatchObject({
+            _tag: "GuildOperationError",
+            operation: "members.fetchBan",
+            reason: "rejected",
+            status: 403,
+            details: { requiredPermissions: ["BanMembers"] },
+        })
+
+        // A response naming a different user than requested fails as a malformed response
+        status = 200
+        payload = {
+            user: { id: "99", username: "other" },
+            reason: null,
+            moderator_id: "31",
+            banned_at: "2026-09-09T00:00:00Z",
+            expires_at: null,
+        }
+        await expect(fetchBan()).rejects.toMatchObject({
+            _tag: "GuildOperationError",
+            operation: "members.fetchBan",
+            reason: "response",
+            status: 200,
+        })
+
+        // Invalid IDs and unsupported auditReason reject before dispatch
+        const before = requests.length
+        for (const bad of [
+            () => fetchBan({ guildId: "bad", userId: "30" }),
+            () => fetchBan({ guildId: "20", userId: "bad" }),
+            () => fetchBan(target, { auditReason: "read" } as RequestOptions),
+        ])
+            await expect(bad()).rejects.toMatchObject({
+                _tag: "GuildOperationError",
+                operation: "members.fetchBan",
+                reason: "input",
+                outcome: "notDispatched",
+            })
+        expect(requests).toHaveLength(before)
+    },
+)
 
 test.each(modes)("%s dispatched moderation rejection blocks delayed cache restoration without replay", async (mode) => {
     const api = await setup(mode, { members: true })

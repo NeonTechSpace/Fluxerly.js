@@ -226,7 +226,7 @@ export interface OAuthAuthorization {
 export interface OAuthConnection {
     /** Provider connection identifier, which may be empty and is not necessarily a decimal account ID */
     readonly id: string
-    /** Connection kind accepted by this SDK's response parser, currently bsky or domain */
+    /** Connection kind accepted by this SDK's response parser, currently bsky, domain or oauth */
     readonly type: string
     /** Provider connection name, which may be empty */
     readonly name: string
@@ -236,6 +236,10 @@ export interface OAuthConnection {
     readonly visibilityFlags: number
     /** Provider sort-order value, preserved without reordering the returned list */
     readonly sortOrder: number
+    /** For oauth connections, the instance connection provider ID, or null while that provider is unavailable or for other connection types. Fluxer names it provider_id */
+    readonly providerId: string | null
+    /** Link to the connected account or domain, or null when there is none */
+    readonly url: string | null
 }
 
 /** Token-check result when Fluxer does not report the credential as active for this application.

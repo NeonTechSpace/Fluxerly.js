@@ -45,8 +45,10 @@ export interface Attachments {
      * Pass maxBytes explicitly, a positive safe integer. The SDK sets no upper limit, since Fluxer decides how large an attachment may be.
      * The limit caps the returned bytes, not total memory, because response chunks can coexist with the packed result
      *
-     * The URL must match this instance's discovered media /attachments/ path.
-     * The GET sends no Authorization header, follows no redirects, stores no cached copy and never falls back to proxyUrl.
+     * The URL must match either this instance's discovered media /attachments/ path or its API attachment path under
+     * endpoints.apiPublic (/channels/{channelId}/attachments/{attachmentId}/{filename}, with or without a version prefix).
+     * The GET attaches the bot Authorization header only to verified API attachment URLs under endpoints.apiPublic,
+     * sends no Authorization header to media URLs, follows no redirects, stores no cached copy and never falls back to proxyUrl.
      * The timeoutMs option defaults to the client's rest.defaultTimeoutMs, 30,000 unless configured, for endpoint discovery, waiting for a media slot and downloading.
      * By default four media downloads can run at once (rest.mediaConcurrency), separately from REST and uploads, without waiting for bot API rate limits.
      * Cancellation waits for response-reader cleanup, but cannot undo bytes already received
@@ -68,8 +70,10 @@ export interface Attachments {
      * Later pulls read at most one response chunk.
      * No byte packing, spooling, automatic retry or durable storage is added
      *
-     * The URL must match this instance's media /attachments/ path.
-     * The GET sends no Authorization header, follows no redirects, caches nothing and never uses proxyUrl.
+     * The URL must match either this instance's discovered media /attachments/ path or its API attachment path under
+     * endpoints.apiPublic (/channels/{channelId}/attachments/{attachmentId}/{filename}, with or without a version prefix).
+     * The GET attaches the bot Authorization header only to verified API attachment URLs under endpoints.apiPublic,
+     * sends no Authorization header to media URLs, follows no redirects, caches nothing and never uses proxyUrl.
      * A Content-Length above maxBytes fails before any chunk, but actual byte counting is still enforced
      *
      * The result can be consumed only once, and a second use fails with reason input.

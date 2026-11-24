@@ -1,9 +1,9 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "0098958f94ba4cd80c0dac25129d568be7759bd3",
+        "commit": "66cede641bd77335ec25c60bb5bc670c98ff537e",
         "path": "fluxer_docs/src/content/docs/gateway",
-        "sha256": "d7ccd93c4e4db0eb8ccc33c9ecd9e15b40392f8b55350d2125d8852b750dd167"
+        "sha256": "df2e47b1529668ab723e2bcf3e6ca19552cf52e7a7a16df3bdd00152dcb09e76"
     },
     "events": {
         "AUTH_SESSION_CHANGE": {
@@ -1553,7 +1553,7 @@
                     "name": "rtc_regions",
                     "optional": false,
                     "type": "array[RTC region object]",
-                    "description": "Voice regions, nearest first",
+                    "description": "Voice regions you can pick, nearest first, without hidden regions",
                     "shape": { "kind": "array", "item": { "kind": "ref", "object": "rtc-region-object" } }
                 },
                 {
@@ -6373,10 +6373,17 @@
                     }
                 },
                 {
-                    "name": "age_verified_adult",
+                    "name": "mature_content_unlocked",
                     "optional": true,
                     "type": "boolean",
-                    "description": "Whether adult age verification is done, omitted when false",
+                    "description": "Whether the account can see mature content in places where a date of birth typed in is not enough",
+                    "shape": { "kind": "boolean" }
+                },
+                {
+                    "name": "has_age_range",
+                    "optional": true,
+                    "type": "boolean",
+                    "description": "Whether Fluxer keeps an age range for the account. The range itself is not included",
                     "shape": { "kind": "boolean" }
                 },
                 {
@@ -6475,6 +6482,13 @@
                     "type": "string",
                     "description": "The interface locale",
                     "shape": { "kind": "string" }
+                },
+                {
+                    "name": "regional_format",
+                    "optional": false,
+                    "type": "?string",
+                    "description": "The regional format for dates, times and numbers, or null to follow `locale`",
+                    "shape": { "kind": "string", "nullable": true }
                 },
                 {
                     "name": "restricted_guilds",
@@ -6626,6 +6640,13 @@
                     "optional": false,
                     "type": "integer",
                     "description": "Time format setting",
+                    "shape": { "kind": "integer" }
+                },
+                {
+                    "name": "timestamp_format",
+                    "optional": false,
+                    "type": "integer",
+                    "description": "Timestamp format setting",
                     "shape": { "kind": "integer" }
                 },
                 {

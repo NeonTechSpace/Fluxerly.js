@@ -135,7 +135,12 @@ export const apiErrorMappings = {
     INVALID_FORM_BODY: { code: "invalidFormBody", explanation: "Fluxer rejected one or more request fields" },
     VALIDATION_ERROR: { code: "invalidFormBody", explanation: "Fluxer rejected one or more request fields" },
     UNKNOWN_APPLICATION: { code: "unknownResource", explanation: "The requested application was not found" },
+    UNKNOWN_BAN: { code: "unknownBan", explanation: "The requested user is not banned in this community" },
     UNKNOWN_CHANNEL: { code: "unknownResource", explanation: "The requested channel was not found" },
+    UNKNOWN_CONNECTION_PROVIDER: {
+        code: "unknownConnectionProvider",
+        explanation: "The requested connection provider was not found",
+    },
     UNKNOWN_EMOJI: { code: "unknownResource", explanation: "The requested emoji was not found" },
     UNKNOWN_FORUM_TAG: { code: "unknownResource", explanation: "The requested forum tag was not found" },
     UNKNOWN_GUILD: { code: "unknownResource", explanation: "The requested community was not found" },
@@ -160,6 +165,10 @@ export const apiErrorMappings = {
     DIRECT_MESSAGES_DISABLED: {
         code: "directMessagesDisabled",
         explanation: "Direct messages are turned off on this Fluxer instance",
+    },
+    COMMUNITY_MEMBER_DMS_DISABLED: {
+        code: "communityMemberDmsDisabled",
+        explanation: "This community has direct messages between members turned off",
     },
     EXPLICIT_CONTENT_CANNOT_BE_SENT: {
         code: "explicitContentCannotBeSent",
@@ -366,11 +375,14 @@ export type ApiErrorCode =
     | "captchaRequired"
     | "invalidCaptcha"
     | "invalidFormBody"
+    | "unknownBan"
+    | "unknownConnectionProvider"
     | "unknownResource"
     | "missingOAuthScope"
     | "cannotEditOtherUserMessage"
     | "cannotSendMessagesInNonTextChannel"
     | "contentBlocked"
+    | "communityMemberDmsDisabled"
     | "directMessagesDisabled"
     | "explicitContentCannotBeSent"
     | "fileSizeTooLarge"
@@ -447,7 +459,9 @@ export type ApiProviderCode =
     | "INVALID_FORM_BODY"
     | "VALIDATION_ERROR"
     | "UNKNOWN_APPLICATION"
+    | "UNKNOWN_BAN"
     | "UNKNOWN_CHANNEL"
+    | "UNKNOWN_CONNECTION_PROVIDER"
     | "UNKNOWN_EMOJI"
     | "UNKNOWN_FORUM_TAG"
     | "UNKNOWN_GUILD"
@@ -463,6 +477,7 @@ export type ApiProviderCode =
     | "CANNOT_EDIT_OTHER_USER_MESSAGE"
     | "CANNOT_SEND_MESSAGES_IN_NON_TEXT_CHANNEL"
     | "CONTENT_BLOCKED"
+    | "COMMUNITY_MEMBER_DMS_DISABLED"
     | "DIRECT_MESSAGES_DISABLED"
     | "EXPLICIT_CONTENT_CANNOT_BE_SENT"
     | "FILE_SIZE_TOO_LARGE"
@@ -694,14 +709,22 @@ export function unrecognizedProviderCode(body: unknown): string | null {
 const apiErrorHints: Readonly<Partial<Record<ApiErrorCode, string>>> = {
     missingPermissions:
         "Grant the bot's role the permission this operation needs in the community settings or the channel's permission overrides",
-    missingAccess: `Give the bot's role ${label("ViewChannel")} for this channel or its category, and check that the bot is still in the community. For a private thread, ask a thread member to add the bot, or grant ${label("ManageThreads")} in the parent channel`,
-    unknownResource: "Check the ID. The resource may be deleted or not visible to this bot",
-    notFound: "Check the ID. The resource may be deleted or not visible to this bot",
+    missingAccess: `Give the bot's role ${label("ViewChannel")} for this channel or its category, and check that the bot is still in the community. For a private thread, ask a thread member to add the bot, or grant ${label("ManageThreads")} in the parent channel. Hidden community channels can also return UNKNOWN_CHANNEL (HTTP 404) instead`,
+    unknownBan:
+        "The user has no active ban in this community. Check the user ID, or list active bans with members.fetchBans",
+    unknownConnectionProvider:
+        "Check the connection provider ID. The provider may be removed or turned off on this instance",
+    unknownResource:
+        "Check the ID. The resource may be deleted or hidden from this bot, because Fluxer returns UNKNOWN_CHANNEL (HTTP 404) for a channel the bot cannot view",
+    notFound:
+        "Check the ID. The resource may be deleted or hidden from this bot, because Fluxer returns UNKNOWN_CHANNEL (HTTP 404) for a channel the bot cannot view",
     unauthorized:
-        "Check the configured credential. A valid bot token can also be rejected when the application owner's account is closed or disabled. For OAuth, check whether the authorizing user's account is closed or temporarily banned. A new token does not fix an account-standing rejection. The rejection alone does not identify the cause",
+        "Check the configured credential. A valid bot token can also be rejected when the application owner's account is closed, disabled or limited (ACCOUNT_LIMITED). For OAuth, check whether the authorizing user's account is closed or temporarily banned. A new token does not fix an account-standing rejection. The rejection alone does not identify the cause",
     invalidFormBody:
         "Correct the fields named in the message. The error's apiError.validationErrors lists them as data",
     cannotSendMessagesToUser: "The user does not accept direct messages from this bot, so retrying does not help",
+    communityMemberDmsDisabled:
+        "This community has MEMBER_DMS_DISABLED enabled, so retrying does not help unless a community administrator turns it off or the recipient already accepts direct messages",
     directMessagesDisabled:
         "This Fluxer instance has turned off direct messages, so retrying does not help. Ask its administrator if bots should be able to send them",
     communicationDisabled:
@@ -902,7 +925,7 @@ const reasonExplanations: Readonly<Record<string, string>> = {
     response: "Fluxer's answer did not have the expected format",
     timeout: "The operation did not finish within its timeout",
     tooLarge: "The response is larger than the maxBytes limit",
-    untrustedUrl: "The attachment URL is not on this Fluxer instance's media host",
+    untrustedUrl: "The attachment URL is not on this Fluxer instance's media or API attachment path",
     notConnected: "The client is not connected to the gateway for this community",
     connectionLost: "The gateway connection was lost before Fluxer answered",
     overflow: "Unread member batches exceeded the maxPendingBytes limit",

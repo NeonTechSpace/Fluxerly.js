@@ -412,12 +412,16 @@ test.each(modes)("%s webhook message edits send empty embed text, which Fluxer r
             outcome: "notDispatched",
             inputValidation: { path: "embeds[]", constraint: "required" },
         })
-    // Webhook sends parse the raw body, so an empty author name still fails there
-    await expect(settle(webhook.send({ embeds: [{ title: "Kept", author: { name: "" } }] }))).rejects.toMatchObject({
+    // Fluxer's MessageEmbedAuthorSchema omits author when name is "" on webhook sends too, while empty optional URLs on
+    // a kept author still fail on sends (MessageRequestSchemas.ts:39-89 at 66cede64)
+    await settle(webhook.send({ embeds: [{ title: "Kept", author: { name: "" } }] }))
+    await expect(
+        settle(webhook.send({ embeds: [{ title: "Kept", author: { name: "Author", url: "" } }] })),
+    ).rejects.toMatchObject({
         reason: "input",
-        inputValidation: { path: "embeds[].author.name" },
+        inputValidation: { path: "embeds[].author.url" },
     })
-    expect(bodies).toHaveLength(kept.length)
+    expect(bodies).toHaveLength(kept.length + 1)
 })
 
 // Fluxer reads the mention settings of a webhook send with content, and never those of a webhook message edit

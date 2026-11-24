@@ -1,79 +1,117 @@
 // @ts-check
 
 // Comparison of upstream Fluxer protocol documents with a reviewed pin or a previous observation
-import { createHash } from "node:crypto"
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
-import { join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { createHash } from "node:crypto";
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const manifestPath = fileURLToPath(new URL("./upstream/manifest.json", import.meta.url))
+const manifestPath = fileURLToPath(
+  new URL("./upstream/manifest.json", import.meta.url),
+);
 // The CLI, the SDK's fixture generators and its guild feature check keep a copy of each upstream file here (gitignored),
 // named by its Git object ID
-export const copiesPath = fileURLToPath(new URL("./.cache/upstream/", import.meta.url))
-const commitPattern = /^[a-f0-9]{40}$/
-const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
-const maximumBytes = 32 * 1024 * 1024
-const listLimit = 30
+export const copiesPath = fileURLToPath(
+  new URL("./.cache/upstream/", import.meta.url),
+);
+const commitPattern = /^[a-f0-9]{40}$/;
+const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const maximumBytes = 32 * 1024 * 1024;
+const listLimit = 30;
 // GitHub refuses an issue comment over 65,536 characters
-const commentLimit = 60_000
-const subjectLimit = 200
+const commentLimit = 60_000;
+const subjectLimit = 200;
 // A regenerated upstream document can change hundreds of schemas, so details stop here to keep the job summary readable
-const detailedLimit = 40
-const detailLimit = 6
-const methods = ["get", "put", "post", "patch", "delete", "options", "head", "trace"]
-const schemaPrefix = "#/components/schemas/"
+const detailedLimit = 40;
+const detailLimit = 6;
+const methods = [
+  "get",
+  "put",
+  "post",
+  "patch",
+  "delete",
+  "options",
+  "head",
+  "trace",
+];
+const schemaPrefix = "#/components/schemas/";
 // Security schemes a bot or OAuth2 application can hold. This reads OpenAPI metadata, and a route can check other credentials at runtime
-const applicationSchemes = new Set(["botToken", "oauth2Token", "bearerToken"])
-const wordingKeys = new Set(["description", "summary", "example", "examples", "title", "x-enumDescriptions"])
+const applicationSchemes = new Set(["botToken", "oauth2Token", "bearerToken"]);
+const wordingKeys = new Set([
+  "description",
+  "summary",
+  "example",
+  "examples",
+  "title",
+  "x-enumDescriptions",
+]);
 // Fluxer lists enum names and descriptions in step with enum values, so these lists are keyed by the value they describe
-const enumLists = ["x-enumNames", "x-enumDescriptions"]
-const experimentKey = "x-fluxer-experiment"
-const documentSuffixes = [".md", ".mdx"]
+const enumLists = ["x-enumNames", "x-enumDescriptions"];
+const experimentKey = "x-fluxer-experiment";
+const documentSuffixes = [".md", ".mdx"];
 // The Fluxer docs files the website's endpoint map reads (projects/web/scripts/docs/fluxer-source.mjs): the docs site's
 // config, whose sidebar orders the pages, and every page under the HTTP API folder. Each is pinned by hash, so the build
 // checks every file it uses, downloaded or cached, against this repository
-export const endpointDocsConfig = "fluxer_docs/astro.config.ts"
-export const endpointDocsDirectory = "fluxer_docs/src/content/docs/http-api"
+export const endpointDocsConfig = "fluxer_docs/astro.config.ts";
+export const endpointDocsDirectory = "fluxer_docs/src/content/docs/http-api";
 // Fluxer paths whose changes can reach a bot, listed for review. A commit touching one is not proof of bot impact
 const watchedPaths = [
-    "fluxer_api/src/api",
-    // Rate limit headers and retry_after, the search matching that message search forwards to, the filename media
-    // type lookup that decides which attachment:// files can be embed media, and signed attachment URLs
-    "fluxer_api/pkgs/rate_limit",
-    "fluxer_api/pkgs/elasticsearch_search/src",
-    "fluxer_api/pkgs/mime_utils/src",
-    "fluxer_api/pkgs/media_proxy_utils/src",
-    // The message, user and shared services that build message, history, embed and partial user JSON
-    "fluxer_messages/src",
-    "fluxer_users/src",
-    "fluxer_common/src",
-    "fluxer_gateway/src",
-    "fluxer_gateway/rebar.config",
-    "packages/schema",
-    "packages/constants",
-    // Default and trait limits, such as bot attachment sizes and attachment counts
-    "packages/limits/src",
-    "packages/errors",
-    "packages/instance_bootstrap",
-    "fluxer_media_proxy/src",
-    "fluxer_unfurl/src",
-    "fluxer_docs/src/content/docs/gateway",
-    "fluxer_docs/src/content/docs/http-api",
-    // Fluxer's upload and rate limit guides
-    "fluxer_docs/src/content/docs/topics",
-    "pnpm-workspace.yaml",
-]
+  "fluxer_api/src/api",
+  // Rate limit headers and retry_after, the search matching that message search forwards to, the filename media
+  // type lookup that decides which attachment:// files can be embed media, and signed attachment URLs
+  "fluxer_api/pkgs/rate_limit",
+  "fluxer_api/pkgs/elasticsearch_search/src",
+  "fluxer_api/pkgs/mime_utils/src",
+  "fluxer_api/pkgs/media_proxy_utils/src",
+  // The message, user and shared services that build message, history, embed and partial user JSON
+  "fluxer_messages/src",
+  "fluxer_users/src",
+  "fluxer_common/src",
+  "fluxer_gateway/src",
+  "fluxer_gateway/gleam.toml",
+  "fluxer_gateway/manifest.toml",
+  "fluxer_gateway/rust",
+  "packages/schema",
+  "packages/constants",
+  // Default and trait limits, such as bot attachment sizes and attachment counts
+  "packages/limits/src",
+  "packages/errors",
+  "packages/instance_bootstrap",
+  "fluxer_media_proxy/src",
+  "fluxer_unfurl/src",
+  "fluxer_docs/src/content/docs/gateway",
+  "fluxer_docs/src/content/docs/http-api",
+  // Fluxer's upload and rate limit guides
+  "fluxer_docs/src/content/docs/topics",
+  "pnpm-workspace.yaml",
+];
 // Folders whose subfolders are compared with the baseline's: the repository root and Fluxer's package folders. A new
 // subfolder whose name matches voiceNames may hold Fluxer's new voice system, which no watched path can name before it
 // exists. A missing folder here is skipped, since it only narrows the comparison
-const folderParents = ["", "packages", "fluxer_app/pkgs", "fluxer_api/pkgs"]
-const voiceNames = /voice|rtc|media|webtransport|quic|dave|livekit|sfu/i
+const folderParents = ["", "packages", "fluxer_app/pkgs", "fluxer_api/pkgs"];
+const voiceNames = /voice|rtc|media|webtransport|quic|dave|livekit|sfu/i;
 // Keys under these maps are field names, so a field named description is structure, not wording
-const nameMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "parameters", "x-enumNames", "x-bitflagValues"])
+const nameMaps = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "parameters",
+  "x-enumNames",
+  "x-bitflagValues",
+]);
 // Values under these keys are data, so a title inside a default value is structure, not wording
-const literalKeys = new Set(["default", "const", "enum"])
+const literalKeys = new Set(["default", "const", "enum"]);
 // Order carries no meaning in these lists, so they compare as sets. Other lists, such as a default value, compare by position
-const setKeys = new Set(["enum", "required", "type", "tokens"])
+const setKeys = new Set(["enum", "required", "type", "tokens"]);
 
 /**
  * @typedef {{ path: string, sha256: string }} PinnedFile
@@ -90,13 +128,15 @@ const setKeys = new Set(["enum", "required", "type", "tokens"])
  * @typedef {{ manifest: Manifest, kind: "previous-run" | "repository-pin", reason?: string }} Baseline
  */
 
-const sha256 = (/** @type {Buffer} */ bytes) => createHash("sha256").update(bytes).digest("hex")
-const compare = (/** @type {string} */ a, /** @type {string} */ b) => (a < b ? -1 : a > b ? 1 : 0)
+const sha256 = (/** @type {Buffer} */ bytes) =>
+  createHash("sha256").update(bytes).digest("hex");
+const compare = (/** @type {string} */ a, /** @type {string} */ b) =>
+  a < b ? -1 : a > b ? 1 : 0;
 const pinnedPath = (/** @type {any} */ file) =>
-    typeof file?.path === "string" &&
-    !file.path.startsWith("/") &&
-    !file.path.split("/").includes("..") &&
-    /^[a-f0-9]{64}$/.test(file.sha256 ?? "")
+  typeof file?.path === "string" &&
+  !file.path.startsWith("/") &&
+  !file.path.split("/").includes("..") &&
+  /^[a-f0-9]{64}$/.test(file.sha256 ?? "");
 
 /**
  * The endpoint map's docs files: the config and pages under the HTTP API folder, each once. Only the repository pin has
@@ -104,16 +144,20 @@ const pinnedPath = (/** @type {any} */ file) =>
  * @param {any} files
  */
 const endpointDocsValid = (files) =>
-    files === undefined ||
-    (Array.isArray(files) &&
-        files.every(pinnedPath) &&
-        files.some((/** @type {PinnedFile} */ file) => file.path === endpointDocsConfig) &&
-        files.every(
-            (/** @type {PinnedFile} */ { path }) =>
-                path === endpointDocsConfig ||
-                (path.startsWith(`${endpointDocsDirectory}/`) && documentSuffixes.some((suffix) => path.endsWith(suffix))),
-        ) &&
-        new Set(files.map((/** @type {PinnedFile} */ file) => file.path)).size === files.length)
+  files === undefined ||
+  (Array.isArray(files) &&
+    files.every(pinnedPath) &&
+    files.some(
+      (/** @type {PinnedFile} */ file) => file.path === endpointDocsConfig,
+    ) &&
+    files.every(
+      (/** @type {PinnedFile} */ { path }) =>
+        path === endpointDocsConfig ||
+        (path.startsWith(`${endpointDocsDirectory}/`) &&
+          documentSuffixes.some((suffix) => path.endsWith(suffix))),
+    ) &&
+    new Set(files.map((/** @type {PinnedFile} */ file) => file.path)).size ===
+      files.length);
 
 /**
  * Fluxer source files whose rules the SDK copies, such as request limits in its schemas, which the OpenAPI document leaves
@@ -121,46 +165,51 @@ const endpointDocsValid = (files) =>
  * @param {any} files
  */
 const sourceFactsValid = (files) =>
-    files === undefined ||
-    (Array.isArray(files) &&
-        files.every(pinnedPath) &&
-        new Set(files.map((/** @type {PinnedFile} */ file) => file.path)).size === files.length)
+  files === undefined ||
+  (Array.isArray(files) &&
+    files.every(pinnedPath) &&
+    new Set(files.map((/** @type {PinnedFile} */ file) => file.path)).size ===
+      files.length);
 
 /**
  * The subfolder paths found in folderParents, each once
  * @param {any} folders
  */
 const foldersValid = (folders) =>
-    folders === undefined ||
-    (Array.isArray(folders) &&
-        folders.every(
-            (/** @type {any} */ path) =>
-                typeof path === "string" && path !== "" && !path.startsWith("/") && !path.split("/").includes("..") && !path.split("/").includes(""),
-        ) &&
-        new Set(folders).size === folders.length)
+  folders === undefined ||
+  (Array.isArray(folders) &&
+    folders.every(
+      (/** @type {any} */ path) =>
+        typeof path === "string" &&
+        path !== "" &&
+        !path.startsWith("/") &&
+        !path.split("/").includes("..") &&
+        !path.split("/").includes(""),
+    ) &&
+    new Set(folders).size === folders.length);
 
 /** @param {any} manifest @returns {Manifest} */
 export function validateManifest(manifest) {
-    const files = manifest?.files
-    if (
-        !repositoryPattern.test(manifest?.repository ?? "") ||
-        typeof manifest.branch !== "string" ||
-        !commitPattern.test(manifest.commit ?? "") ||
-        // An observation records the repository pin it ran under, which decides whether the next run may compare with it
-        (manifest.pin !== undefined && !commitPattern.test(manifest.pin)) ||
-        !files ||
-        Object.keys(files).sort().join(",") !== "openapi" ||
-        !Object.values(files).every(pinnedPath) ||
-        !pinnedPath(manifest.gatewayDocs) ||
-        !pinnedPath(manifest.rateLimits) ||
-        !endpointDocsValid(manifest.endpointDocs) ||
-        !sourceFactsValid(manifest.sourceFacts) ||
-        // Fluxer's voice docs and code, each a file or folder hashed with everything under it, each path once
-        !sourceFactsValid(manifest.voice) ||
-        !foldersValid(manifest.folders)
-    )
-        throw new Error("Upstream manifest is invalid")
-    return manifest
+  const files = manifest?.files;
+  if (
+    !repositoryPattern.test(manifest?.repository ?? "") ||
+    typeof manifest.branch !== "string" ||
+    !commitPattern.test(manifest.commit ?? "") ||
+    // An observation records the repository pin it ran under, which decides whether the next run may compare with it
+    (manifest.pin !== undefined && !commitPattern.test(manifest.pin)) ||
+    !files ||
+    Object.keys(files).sort().join(",") !== "openapi" ||
+    !Object.values(files).every(pinnedPath) ||
+    !pinnedPath(manifest.gatewayDocs) ||
+    !pinnedPath(manifest.rateLimits) ||
+    !endpointDocsValid(manifest.endpointDocs) ||
+    !sourceFactsValid(manifest.sourceFacts) ||
+    // Fluxer's voice docs and code, each a file or folder hashed with everything under it, each path once
+    !sourceFactsValid(manifest.voice) ||
+    !foldersValid(manifest.folders)
+  )
+    throw new Error("Upstream manifest is invalid");
+  return manifest;
 }
 
 /**
@@ -173,41 +222,69 @@ export function validateManifest(manifest) {
  * @param {string} [key]
  */
 function differences(before, after, path, out, key) {
-    if (JSON.stringify(before) === JSON.stringify(after)) return out
-    const plain = (/** @type {unknown} */ item) => item === null || typeof item !== "object"
-    if (
-        key !== undefined &&
-        setKeys.has(key) &&
-        Array.isArray(before) &&
-        Array.isArray(after) &&
-        before.every(plain) &&
-        after.every(plain)
-    ) {
-        const member = (/** @type {unknown} */ item) => (typeof item === "string" ? item : show(item))
-        const added = after.filter((item) => !before.includes(item)).map((item) => `+ ${member(item)}`)
-        const removed = before.filter((item) => !after.includes(item)).map((item) => `- ${member(item)}`)
-        if (added.length || removed.length) out.push(`${path}: ${[...added, ...removed].join(", ")}`)
-        return out
+  if (JSON.stringify(before) === JSON.stringify(after)) return out;
+  const plain = (/** @type {unknown} */ item) =>
+    item === null || typeof item !== "object";
+  if (
+    key !== undefined &&
+    setKeys.has(key) &&
+    Array.isArray(before) &&
+    Array.isArray(after) &&
+    before.every(plain) &&
+    after.every(plain)
+  ) {
+    const member = (/** @type {unknown} */ item) =>
+      typeof item === "string" ? item : show(item);
+    const added = after
+      .filter((item) => !before.includes(item))
+      .map((item) => `+ ${member(item)}`);
+    const removed = before
+      .filter((item) => !after.includes(item))
+      .map((item) => `- ${member(item)}`);
+    if (added.length || removed.length)
+      out.push(`${path}: ${[...added, ...removed].join(", ")}`);
+    return out;
+  }
+  const container = (/** @type {unknown} */ value) =>
+    value !== null && typeof value === "object";
+  if (
+    container(before) &&
+    container(after) &&
+    Array.isArray(before) === Array.isArray(after)
+  ) {
+    for (const key of new Set([
+      ...Object.keys(before),
+      ...Object.keys(after),
+    ])) {
+      const next = Array.isArray(before)
+        ? `${path}[${key}]`
+        : path
+          ? `${path}.${key}`
+          : key;
+      if (!(key in before)) out.push(`+ ${next}`);
+      else if (!(key in after)) out.push(`- ${next}`);
+      else
+        differences(
+          before[key],
+          after[key],
+          next,
+          out,
+          Array.isArray(before) ? undefined : key,
+        );
     }
-    const container = (/** @type {unknown} */ value) => value !== null && typeof value === "object"
-    if (container(before) && container(after) && Array.isArray(before) === Array.isArray(after)) {
-        for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-            const next = Array.isArray(before) ? `${path}[${key}]` : path ? `${path}.${key}` : key
-            if (!(key in before)) out.push(`+ ${next}`)
-            else if (!(key in after)) out.push(`- ${next}`)
-            else differences(before[key], after[key], next, out, Array.isArray(before) ? undefined : key)
-        }
-        return out
-    }
-    out.push(`${path || "value"}: ${show(before)} -> ${show(after)}`)
-    return out
+    return out;
+  }
+  out.push(`${path || "value"}: ${show(before)} -> ${show(after)}`);
+  return out;
 }
 
 /** @param {unknown} value */
 function show(value) {
-    const text =
-        typeof value === "string" && value.startsWith(schemaPrefix) ? value.slice(schemaPrefix.length) : JSON.stringify(value)
-    return text.length > 80 ? `${text.slice(0, 77)}...` : text
+  const text =
+    typeof value === "string" && value.startsWith(schemaPrefix)
+      ? value.slice(schemaPrefix.length)
+      : JSON.stringify(value);
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
 /**
@@ -216,14 +293,19 @@ function show(value) {
  * @returns {any}
  */
 function withoutWording(value, parent) {
-    if (Array.isArray(value)) return value.map((item) => withoutWording(item))
-    if (value === null || typeof value !== "object") return value
-    const names = parent !== undefined && nameMaps.has(parent)
-    return Object.fromEntries(
-        Object.entries(value)
-            .filter(([key]) => names || !wordingKeys.has(key))
-            .map(([key, item]) => [key, !names && literalKeys.has(key) ? item : withoutWording(item, names ? undefined : key)]),
-    )
+  if (Array.isArray(value)) return value.map((item) => withoutWording(item));
+  if (value === null || typeof value !== "object") return value;
+  const names = parent !== undefined && nameMaps.has(parent);
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => names || !wordingKeys.has(key))
+      .map(([key, item]) => [
+        key,
+        !names && literalKeys.has(key)
+          ? item
+          : withoutWording(item, names ? undefined : key),
+      ]),
+  );
 }
 
 /**
@@ -233,26 +315,45 @@ function withoutWording(value, parent) {
  * @returns {any}
  */
 function keyedLists(value) {
-    if (Array.isArray(value)) return value.map(keyedLists)
-    if (value === null || typeof value !== "object") return value
-    const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, keyedLists(item)]))
-    const values = Array.isArray(value.enum) ? value.enum.map(String) : undefined
-    const unique = (/** @type {string[]} */ keys) => new Set(keys).size === keys.length
-    if (values && unique(values))
-        for (const key of enumLists)
-            if (Array.isArray(value[key]) && value[key].length === values.length)
-                result[key] = Object.fromEntries(values.map((item, index) => [item, value[key][index]]))
-    const flags = value["x-bitflagValues"]
-    if (Array.isArray(flags) && flags.every((flag) => ["string", "number"].includes(typeof flag?.value))) {
-        const keys = flags.map((flag) => String(flag.value))
-        if (unique(keys)) result["x-bitflagValues"] = Object.fromEntries(keys.map((key, index) => [key, keyedLists(flags[index])]))
-    }
-    const parameters = value.parameters
-    if (Array.isArray(parameters) && parameters.every((item) => typeof item?.name === "string" && typeof item.in === "string")) {
-        const keys = parameters.map((item) => `${item.name} (${item.in})`)
-        if (unique(keys)) result.parameters = Object.fromEntries(keys.map((key, index) => [key, keyedLists(parameters[index])]))
-    }
-    return result
+  if (Array.isArray(value)) return value.map(keyedLists);
+  if (value === null || typeof value !== "object") return value;
+  const result = Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, keyedLists(item)]),
+  );
+  const values = Array.isArray(value.enum) ? value.enum.map(String) : undefined;
+  const unique = (/** @type {string[]} */ keys) =>
+    new Set(keys).size === keys.length;
+  if (values && unique(values))
+    for (const key of enumLists)
+      if (Array.isArray(value[key]) && value[key].length === values.length)
+        result[key] = Object.fromEntries(
+          values.map((item, index) => [item, value[key][index]]),
+        );
+  const flags = value["x-bitflagValues"];
+  if (
+    Array.isArray(flags) &&
+    flags.every((flag) => ["string", "number"].includes(typeof flag?.value))
+  ) {
+    const keys = flags.map((flag) => String(flag.value));
+    if (unique(keys))
+      result["x-bitflagValues"] = Object.fromEntries(
+        keys.map((key, index) => [key, keyedLists(flags[index])]),
+      );
+  }
+  const parameters = value.parameters;
+  if (
+    Array.isArray(parameters) &&
+    parameters.every(
+      (item) => typeof item?.name === "string" && typeof item.in === "string",
+    )
+  ) {
+    const keys = parameters.map((item) => `${item.name} (${item.in})`);
+    if (unique(keys))
+      result.parameters = Object.fromEntries(
+        keys.map((key, index) => [key, keyedLists(parameters[index])]),
+      );
+  }
+  return result;
 }
 
 /**
@@ -260,13 +361,13 @@ function keyedLists(value) {
  * @param {unknown} value
  */
 function experiments(value) {
-    /** @type {Set<string>} */
-    const found = new Set()
-    JSON.stringify(value, (key, item) => {
-        if (key === experimentKey && typeof item === "string") found.add(item)
-        return item
-    })
-    return found
+  /** @type {Set<string>} */
+  const found = new Set();
+  JSON.stringify(value, (key, item) => {
+    if (key === experimentKey && typeof item === "string") found.add(item);
+    return item;
+  });
+  return found;
 }
 
 /**
@@ -277,9 +378,11 @@ function experiments(value) {
  * @param {unknown} after
  */
 function withExperiments(name, before, after) {
-    const previous = experiments(before)
-    const added = [...experiments(after)].filter((experiment) => !previous.has(experiment)).sort(compare)
-    return added.length ? `${name} [experiment: ${added.join(", ")}]` : name
+  const previous = experiments(before);
+  const added = [...experiments(after)]
+    .filter((experiment) => !previous.has(experiment))
+    .sort(compare);
+  return added.length ? `${name} [experiment: ${added.join(", ")}]` : name;
 }
 
 /**
@@ -290,48 +393,83 @@ function withExperiments(name, before, after) {
  * @returns {SurfaceChanges}
  */
 function compareEntries(previous, current, reachable) {
-    const group = () => /** @type {ChangeGroup} */ ({ added: [], removed: [], changed: [], wordingOnly: [] })
-    const result = { application: group(), userOnly: group() }
-    for (const name of [...new Set([...previous.keys(), ...current.keys()])].sort(compare)) {
-        const before = previous.get(name)
-        const after = current.get(name)
-        if (JSON.stringify(before) === JSON.stringify(after)) continue
-        const target = reachable(name) ? result.application : result.userOnly
-        if (before === undefined) target.added.push(withExperiments(name, before, after))
-        else if (after === undefined) target.removed.push(name)
-        else {
-            const details = differences(withoutWording(keyedLists(before)), withoutWording(keyedLists(after)), "", [])
-            if (details.length) target.changed.push({ name: withExperiments(name, before, after), details })
-            else target.wordingOnly.push(name)
-        }
+  const group = () =>
+    /** @type {ChangeGroup} */ ({
+      added: [],
+      removed: [],
+      changed: [],
+      wordingOnly: [],
+    });
+  const result = { application: group(), userOnly: group() };
+  for (const name of [...new Set([...previous.keys(), ...current.keys()])].sort(
+    compare,
+  )) {
+    const before = previous.get(name);
+    const after = current.get(name);
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    const target = reachable(name) ? result.application : result.userOnly;
+    if (before === undefined)
+      target.added.push(withExperiments(name, before, after));
+    else if (after === undefined) target.removed.push(name);
+    else {
+      const details = differences(
+        withoutWording(keyedLists(before)),
+        withoutWording(keyedLists(after)),
+        "",
+        [],
+      );
+      if (details.length)
+        target.changed.push({
+          name: withExperiments(name, before, after),
+          details,
+        });
+      else target.wordingOnly.push(name);
     }
-    return result
+  }
+  return result;
 }
 
 /** @param {any} spec */
 function operations(spec) {
-    /** @type {Map<string, { tokens: string[], requirements: string[], operation: any }>} */
-    const found = new Map()
-    for (const [path, item] of Object.entries(spec?.paths ?? {}))
-        for (const method of methods) {
-            const operation = item?.[method]
-            if (!operation) continue
-            const { security = spec.security ?? [], ...rest } = operation
-            const tokens = [...new Set(security.flatMap((/** @type {object} */ requirement) => Object.keys(requirement)))]
-            // Each alternative a caller can satisfy, with its required scopes, so a changed scope counts as a change
-            const requirements = security.map((/** @type {Record<string, string[]>} */ requirement) =>
-                Object.entries(requirement)
-                    .map(([scheme, scopes]) => (scopes?.length ? `${scheme} (${[...scopes].sort(compare).join(", ")})` : scheme))
-                    .sort(compare)
-                    .join(" + ") || "no token",
+  /** @type {Map<string, { tokens: string[], requirements: string[], operation: any }>} */
+  const found = new Map();
+  for (const [path, item] of Object.entries(spec?.paths ?? {}))
+    for (const method of methods) {
+      const operation = item?.[method];
+      if (!operation) continue;
+      const { security = spec.security ?? [], ...rest } = operation;
+      const tokens = [
+        ...new Set(
+          security.flatMap((/** @type {object} */ requirement) =>
+            Object.keys(requirement),
+          ),
+        ),
+      ];
+      // Each alternative a caller can satisfy, with its required scopes, so a changed scope counts as a change
+      const requirements = security.map(
+        (/** @type {Record<string, string[]>} */ requirement) =>
+          Object.entries(requirement)
+            .map(([scheme, scopes]) =>
+              scopes?.length
+                ? `${scheme} (${[...scopes].sort(compare).join(", ")})`
+                : scheme,
             )
-            found.set(`${method.toUpperCase()} ${path}`, { tokens, requirements, operation: rest })
-        }
-    return found
+            .sort(compare)
+            .join(" + ") || "no token",
+      );
+      found.set(`${method.toUpperCase()} ${path}`, {
+        tokens,
+        requirements,
+        operation: rest,
+      });
+    }
+  return found;
 }
 
 const reachableBy = (/** @type {string[] | undefined} */ tokens) =>
-    tokens !== undefined && (tokens.length === 0 || tokens.some((token) => applicationSchemes.has(token)))
+  tokens !== undefined &&
+  (tokens.length === 0 ||
+    tokens.some((token) => applicationSchemes.has(token)));
 
 /**
  * Names every component schema reachable through $ref from an operation whose OpenAPI security lists a bot or OAuth2 scheme or no requirement
@@ -339,24 +477,29 @@ const reachableBy = (/** @type {string[] | undefined} */ tokens) =>
  * @param {ReturnType<typeof operations>} found
  */
 function reachableSchemas(spec, found) {
-    const schemas = spec?.components?.schemas ?? {}
-    /** @type {string[]} */
-    const pending = []
-    const collect = (/** @type {unknown} */ value) =>
-        JSON.stringify(value, (key, item) => {
-            if (key === "$ref" && typeof item === "string" && item.startsWith(schemaPrefix))
-                pending.push(item.slice(schemaPrefix.length))
-            return item
-        })
-    for (const { tokens, operation } of found.values()) if (reachableBy(tokens)) collect(operation)
-    const seen = new Set()
-    while (pending.length) {
-        const name = /** @type {string} */ (pending.pop())
-        if (seen.has(name) || !Object.hasOwn(schemas, name)) continue
-        seen.add(name)
-        collect(schemas[name])
-    }
-    return seen
+  const schemas = spec?.components?.schemas ?? {};
+  /** @type {string[]} */
+  const pending = [];
+  const collect = (/** @type {unknown} */ value) =>
+    JSON.stringify(value, (key, item) => {
+      if (
+        key === "$ref" &&
+        typeof item === "string" &&
+        item.startsWith(schemaPrefix)
+      )
+        pending.push(item.slice(schemaPrefix.length));
+      return item;
+    });
+  for (const { tokens, operation } of found.values())
+    if (reachableBy(tokens)) collect(operation);
+  const seen = new Set();
+  while (pending.length) {
+    const name = /** @type {string} */ (pending.pop());
+    if (seen.has(name) || !Object.hasOwn(schemas, name)) continue;
+    seen.add(name);
+    collect(schemas[name]);
+  }
+  return seen;
 }
 
 /**
@@ -365,33 +508,46 @@ function reachableSchemas(spec, found) {
  * @param {any} after
  */
 export function openapiChanges(before, after) {
-    const previous = operations(before)
-    const current = operations(after)
-    const reachable = new Set([...reachableSchemas(before, previous), ...reachableSchemas(after, current)])
-    const described = (/** @type {ReturnType<typeof operations>} */ found) =>
-        new Map([...found].map(([name, { requirements, operation }]) => [name, { tokens: requirements, ...operation }]))
-    const other = [
-        ...Object.keys({ ...before, ...after }).filter((key) => !["paths", "components"].includes(key)),
-        ...Object.keys({ ...before?.components, ...after?.components })
-            .filter((key) => key !== "schemas")
-            .map((key) => `components.${key}`),
-    ].filter((key) => {
-        const read = (/** @type {any} */ spec) => key.split(".").reduce((value, part) => value?.[part], spec)
-        return JSON.stringify(read(before)) !== JSON.stringify(read(after))
-    })
-    return {
-        endpoints: compareEntries(
-            described(previous),
-            described(current),
-            (name) => reachableBy(previous.get(name)?.tokens) || reachableBy(current.get(name)?.tokens),
-        ),
-        schemas: compareEntries(
-            new Map(Object.entries(before?.components?.schemas ?? {})),
-            new Map(Object.entries(after?.components?.schemas ?? {})),
-            (name) => reachable.has(name),
-        ),
-        other: other.sort(compare),
-    }
+  const previous = operations(before);
+  const current = operations(after);
+  const reachable = new Set([
+    ...reachableSchemas(before, previous),
+    ...reachableSchemas(after, current),
+  ]);
+  const described = (/** @type {ReturnType<typeof operations>} */ found) =>
+    new Map(
+      [...found].map(([name, { requirements, operation }]) => [
+        name,
+        { tokens: requirements, ...operation },
+      ]),
+    );
+  const other = [
+    ...Object.keys({ ...before, ...after }).filter(
+      (key) => !["paths", "components"].includes(key),
+    ),
+    ...Object.keys({ ...before?.components, ...after?.components })
+      .filter((key) => key !== "schemas")
+      .map((key) => `components.${key}`),
+  ].filter((key) => {
+    const read = (/** @type {any} */ spec) =>
+      key.split(".").reduce((value, part) => value?.[part], spec);
+    return JSON.stringify(read(before)) !== JSON.stringify(read(after));
+  });
+  return {
+    endpoints: compareEntries(
+      described(previous),
+      described(current),
+      (name) =>
+        reachableBy(previous.get(name)?.tokens) ||
+        reachableBy(current.get(name)?.tokens),
+    ),
+    schemas: compareEntries(
+      new Map(Object.entries(before?.components?.schemas ?? {})),
+      new Map(Object.entries(after?.components?.schemas ?? {})),
+      (name) => reachable.has(name),
+    ),
+    other: other.sort(compare),
+  };
 }
 
 /**
@@ -400,17 +556,18 @@ export function openapiChanges(before, after) {
  * @param {string} markdown
  */
 export function eventSections(markdown) {
-    /** @type {Map<string, string[]>} */
-    const sections = new Map()
-    /** @type {string[] | undefined} */
-    let lines
-    for (const line of markdown.split(/\r?\n/)) {
-        const match = /^###\s+(?:<span[^>]*><\/span>\s*)?([A-Z][A-Z0-9_]*)\s*$/.exec(line)
-        if (match) sections.set(match[1], (lines = []))
-        else if (/^#{1,3}\s/.test(line)) lines = undefined
-        else lines?.push(line)
-    }
-    return sections
+  /** @type {Map<string, string[]>} */
+  const sections = new Map();
+  /** @type {string[] | undefined} */
+  let lines;
+  for (const line of markdown.split(/\r?\n/)) {
+    const match =
+      /^###\s+(?:<span[^>]*><\/span>\s*)?([A-Z][A-Z0-9_]*)\s*$/.exec(line);
+    if (match) sections.set(match[1], (lines = []));
+    else if (/^#{1,3}\s/.test(line)) lines = undefined;
+    else lines?.push(line);
+  }
+  return sections;
 }
 
 /**
@@ -418,25 +575,27 @@ export function eventSections(markdown) {
  * @param {string[]} lines
  */
 function tableRows(lines) {
-    /** @type {Map<string, string>} */
-    const rows = new Map()
-    let table = ""
-    let header = true
-    for (const line of lines) {
-        const heading = /^####\s+(.+?)\s*$/.exec(line)
-        if (heading) table = `${heading[1]} > `
-        if (!line.startsWith("|")) {
-            header = true
-            continue
-        }
-        if (header || /^\|\s*:?-{3,}/.test(line)) {
-            header = false
-            continue
-        }
-        const field = (line.split("|")[1] ?? "").replace(/<sup>.*?<\/sup>/g, "").trim()
-        rows.set(`${table}${field}`, line.trim())
+  /** @type {Map<string, string>} */
+  const rows = new Map();
+  let table = "";
+  let header = true;
+  for (const line of lines) {
+    const heading = /^####\s+(.+?)\s*$/.exec(line);
+    if (heading) table = `${heading[1]} > `;
+    if (!line.startsWith("|")) {
+      header = true;
+      continue;
     }
-    return rows
+    if (header || /^\|\s*:?-{3,}/.test(line)) {
+      header = false;
+      continue;
+    }
+    const field = (line.split("|")[1] ?? "")
+      .replace(/<sup>.*?<\/sup>/g, "")
+      .trim();
+    rows.set(`${table}${field}`, line.trim());
+  }
+  return rows;
 }
 
 /**
@@ -445,27 +604,34 @@ function tableRows(lines) {
  * @param {string} after
  */
 export function eventChanges(before, after) {
-    const previous = eventSections(before)
-    const current = eventSections(after)
-    const result = {
-        ...listChanges([...previous.keys()], [...current.keys()]),
-        /** @type {{ name: string, details: string[] }[]} */
-        fields: [],
-        /** @type {string[]} */
-        textOnly: [],
-    }
-    for (const [name, lines] of [...current].sort(([a], [b]) => compare(a, b))) {
-        const old = previous.get(name)
-        if (!old || old.join("\n") === lines.join("\n")) continue
-        const oldRows = tableRows(old)
-        const rows = tableRows(lines)
-        const details = [...new Set([...oldRows.keys(), ...rows.keys()])].flatMap((key) =>
-            !oldRows.has(key) ? [`+ ${key}`] : !rows.has(key) ? [`- ${key}`] : oldRows.get(key) !== rows.get(key) ? [`~ ${key}`] : [],
-        )
-        if (details.length) result.fields.push({ name, details })
-        else result.textOnly.push(name)
-    }
-    return result
+  const previous = eventSections(before);
+  const current = eventSections(after);
+  const result = {
+    ...listChanges([...previous.keys()], [...current.keys()]),
+    /** @type {{ name: string, details: string[] }[]} */
+    fields: [],
+    /** @type {string[]} */
+    textOnly: [],
+  };
+  for (const [name, lines] of [...current].sort(([a], [b]) => compare(a, b))) {
+    const old = previous.get(name);
+    if (!old || old.join("\n") === lines.join("\n")) continue;
+    const oldRows = tableRows(old);
+    const rows = tableRows(lines);
+    const details = [...new Set([...oldRows.keys(), ...rows.keys()])].flatMap(
+      (key) =>
+        !oldRows.has(key)
+          ? [`+ ${key}`]
+          : !rows.has(key)
+            ? [`- ${key}`]
+            : oldRows.get(key) !== rows.get(key)
+              ? [`~ ${key}`]
+              : [],
+    );
+    if (details.length) result.fields.push({ name, details });
+    else result.textOnly.push(name);
+  }
+  return result;
 }
 
 /**
@@ -474,10 +640,13 @@ export function eventChanges(before, after) {
  * @param {string[]} sources
  */
 export function rateLimitBuckets(sources) {
-    const buckets = new Set()
-    for (const source of sources)
-        for (const match of source.matchAll(/\bbucket:\s*(['"`])([^'"`\n]*::[^'"`\n]*)\1/g)) buckets.add(match[2])
-    return [...buckets].sort(compare)
+  const buckets = new Set();
+  for (const source of sources)
+    for (const match of source.matchAll(
+      /\bbucket:\s*(['"`])([^'"`\n]*::[^'"`\n]*)\1/g,
+    ))
+      buckets.add(match[2]);
+  return [...buckets].sort(compare);
 }
 
 /**
@@ -487,18 +656,41 @@ export function rateLimitBuckets(sources) {
  * @param {string} commit
  * @param {{ directory: string, label: string, suffixes: string[] }} target
  */
-async function readDirectory(manifest, source, commit, { directory, label, suffixes }) {
-    const entries = await source.listDirectory(manifest.repository, commit, directory)
-    if (entries.some(({ path }) => !path.startsWith(`${directory}/`) || path.split("/").includes("..")))
-        throw new Error(`Upstream ${label} listing is outside its directory`)
-    // Only the top level is read, so a nested entry fails the check instead of hiding its contents
-    if (entries.some(({ type }) => type !== "file"))
-        throw new Error(`Upstream ${label} directory contains a subdirectory or other non-file entry. Extend the check to read it`)
-    const paths = entries.map(({ path }) => path).filter((path) => suffixes.some((suffix) => path.endsWith(suffix)))
-    const documents = []
-    for (const path of paths.sort(compare))
-        documents.push({ path, text: (await source.fetchFile(manifest.repository, commit, path)).toString("utf8") })
-    return documents
+async function readDirectory(
+  manifest,
+  source,
+  commit,
+  { directory, label, suffixes },
+) {
+  const entries = await source.listDirectory(
+    manifest.repository,
+    commit,
+    directory,
+  );
+  if (
+    entries.some(
+      ({ path }) =>
+        !path.startsWith(`${directory}/`) || path.split("/").includes(".."),
+    )
+  )
+    throw new Error(`Upstream ${label} listing is outside its directory`);
+  // Only the top level is read, so a nested entry fails the check instead of hiding its contents
+  if (entries.some(({ type }) => type !== "file"))
+    throw new Error(
+      `Upstream ${label} directory contains a subdirectory or other non-file entry. Extend the check to read it`,
+    );
+  const paths = entries
+    .map(({ path }) => path)
+    .filter((path) => suffixes.some((suffix) => path.endsWith(suffix)));
+  const documents = [];
+  for (const path of paths.sort(compare))
+    documents.push({
+      path,
+      text: (
+        await source.fetchFile(manifest.repository, commit, path)
+      ).toString("utf8"),
+    });
+  return documents;
 }
 
 /**
@@ -507,12 +699,12 @@ async function readDirectory(manifest, source, commit, { directory, label, suffi
  * @param {string} commit
  */
 async function readBuckets(manifest, source, commit) {
-    const documents = await readDirectory(manifest, source, commit, {
-        directory: manifest.rateLimits.path,
-        label: "rate-limit",
-        suffixes: [".ts"],
-    })
-    return rateLimitBuckets(documents.map(({ text }) => text))
+  const documents = await readDirectory(manifest, source, commit, {
+    directory: manifest.rateLimits.path,
+    label: "rate-limit",
+    suffixes: [".ts"],
+  });
+  return rateLimitBuckets(documents.map(({ text }) => text));
 }
 
 /**
@@ -523,11 +715,25 @@ async function readBuckets(manifest, source, commit) {
  * @param {string} directory
  */
 async function listFolder(manifest, source, commit, directory) {
-    const entries = await source.listDirectory(manifest.repository, commit, directory)
-    const prefix = directory ? `${directory}/` : ""
-    if (entries.some(({ path }) => !path.startsWith(prefix) || path.length === prefix.length || path.slice(prefix.length).includes("/") || path.split("/").includes("..")))
-        throw new Error(`Upstream listing of ${directory || "the repository root"} is outside it`)
-    return entries
+  const entries = await source.listDirectory(
+    manifest.repository,
+    commit,
+    directory,
+  );
+  const prefix = directory ? `${directory}/` : "";
+  if (
+    entries.some(
+      ({ path }) =>
+        !path.startsWith(prefix) ||
+        path.length === prefix.length ||
+        path.slice(prefix.length).includes("/") ||
+        path.split("/").includes(".."),
+    )
+  )
+    throw new Error(
+      `Upstream listing of ${directory || "the repository root"} is outside it`,
+    );
+  return entries;
 }
 
 /**
@@ -538,7 +744,14 @@ async function listFolder(manifest, source, commit, directory) {
  * @param {string} path
  */
 const findEntry = async (manifest, source, commit, path) =>
-    (await listFolder(manifest, source, commit, path.split("/").slice(0, -1).join("/"))).find((entry) => entry.path === path)
+  (
+    await listFolder(
+      manifest,
+      source,
+      commit,
+      path.split("/").slice(0, -1).join("/"),
+    )
+  ).find((entry) => entry.path === path);
 
 /**
  * Every file under a watched voice path, which may be a file or a folder, by its Git object ID. The listings name each
@@ -550,20 +763,43 @@ const findEntry = async (manifest, source, commit, path) =>
  * @param {string} path
  */
 async function readVoiceFiles(manifest, source, commit, path) {
-    /** @type {Map<string, string>} */
-    const ids = new Map()
-    const add = async (/** @type {{ path: string, type: string, sha?: string }} */ entry) => {
-        if (entry.type === "dir") for (const child of await listFolder(manifest, source, commit, entry.path)) await add(child)
-        else if (entry.type === "file") ids.set(entry.path, entry.sha ?? gitObjectId(await source.fetchFile(manifest.repository, commit, entry.path)))
-        else ids.set(entry.path, `${entry.type} ${entry.sha ?? ""}`)
-    }
-    const entry = await findEntry(manifest, source, commit, path)
-    if (entry) await add(entry)
-    return ids
+  /** @type {Map<string, string>} */
+  const ids = new Map();
+  const add = async (
+    /** @type {{ path: string, type: string, sha?: string }} */ entry,
+  ) => {
+    if (entry.type === "dir")
+      for (const child of await listFolder(
+        manifest,
+        source,
+        commit,
+        entry.path,
+      ))
+        await add(child);
+    else if (entry.type === "file")
+      ids.set(
+        entry.path,
+        entry.sha ??
+          gitObjectId(
+            await source.fetchFile(manifest.repository, commit, entry.path),
+          ),
+      );
+    else ids.set(entry.path, `${entry.type} ${entry.sha ?? ""}`);
+  };
+  const entry = await findEntry(manifest, source, commit, path);
+  if (entry) await add(entry);
+  return ids;
 }
 
 const voiceHash = (/** @type {Map<string, string>} */ ids) =>
-    sha256(Buffer.from([...ids].map(([path, id]) => `${path} ${id}`).sort(compare).join("\n")))
+  sha256(
+    Buffer.from(
+      [...ids]
+        .map(([path, id]) => `${path} ${id}`)
+        .sort(compare)
+        .join("\n"),
+    ),
+  );
 
 /**
  * The subfolders of each folder in folderParents at a commit, in path order
@@ -572,12 +808,22 @@ const voiceHash = (/** @type {Map<string, string>} */ ids) =>
  * @param {string} commit
  */
 async function readFolders(manifest, source, commit) {
-    const folders = []
-    for (const parent of folderParents) {
-        if (parent && (await findEntry(manifest, source, commit, parent))?.type !== "dir") continue
-        for (const { path, type } of await listFolder(manifest, source, commit, parent)) if (type === "dir") folders.push(path)
-    }
-    return folders.sort(compare)
+  const folders = [];
+  for (const parent of folderParents) {
+    if (
+      parent &&
+      (await findEntry(manifest, source, commit, parent))?.type !== "dir"
+    )
+      continue;
+    for (const { path, type } of await listFolder(
+      manifest,
+      source,
+      commit,
+      parent,
+    ))
+      if (type === "dir") folders.push(path);
+  }
+  return folders.sort(compare);
 }
 
 /**
@@ -586,11 +832,11 @@ async function readFolders(manifest, source, commit) {
  * @param {string} commit
  */
 export const readGatewayDocs = (manifest, source, commit) =>
-    readDirectory(manifest, source, commit, {
-        directory: manifest.gatewayDocs.path,
-        label: "gateway documentation",
-        suffixes: documentSuffixes,
-    })
+  readDirectory(manifest, source, commit, {
+    directory: manifest.gatewayDocs.path,
+    label: "gateway documentation",
+    suffixes: documentSuffixes,
+  });
 
 /**
  * The endpoint map's docs files at a commit with their hashes: the config, then every Markdown page under the HTTP API
@@ -601,22 +847,40 @@ export const readGatewayDocs = (manifest, source, commit) =>
  * @returns {Promise<PinnedFile[]>}
  */
 export async function readEndpointDocs(manifest, source, commit) {
-    const list = async (/** @type {string} */ directory) => {
-        const entries = await source.listDirectory(manifest.repository, commit, directory)
-        /** @type {string[]} */
-        const paths = []
-        for (const { path, type } of entries) {
-            if (!path.startsWith(`${directory}/`) || path.split("/").includes("..")) throw new Error("Upstream endpoint docs listing is outside its directory")
-            if (type === "dir") paths.push(...(await list(path)))
-            else if (type !== "file") throw new Error(`Upstream endpoint docs folder contains ${path}, which is neither a file nor a folder`)
-            else if (documentSuffixes.some((suffix) => path.endsWith(suffix))) paths.push(path)
-        }
-        return paths
+  const list = async (/** @type {string} */ directory) => {
+    const entries = await source.listDirectory(
+      manifest.repository,
+      commit,
+      directory,
+    );
+    /** @type {string[]} */
+    const paths = [];
+    for (const { path, type } of entries) {
+      if (!path.startsWith(`${directory}/`) || path.split("/").includes(".."))
+        throw new Error(
+          "Upstream endpoint docs listing is outside its directory",
+        );
+      if (type === "dir") paths.push(...(await list(path)));
+      else if (type !== "file")
+        throw new Error(
+          `Upstream endpoint docs folder contains ${path}, which is neither a file nor a folder`,
+        );
+      else if (documentSuffixes.some((suffix) => path.endsWith(suffix)))
+        paths.push(path);
     }
-    const paths = [endpointDocsConfig, ...(await list(endpointDocsDirectory)).sort(compare)]
-    const files = []
-    for (const path of paths) files.push({ path, sha256: sha256(await source.fetchFile(manifest.repository, commit, path)) })
-    return files
+    return paths;
+  };
+  const paths = [
+    endpointDocsConfig,
+    ...(await list(endpointDocsDirectory)).sort(compare),
+  ];
+  const files = [];
+  for (const path of paths)
+    files.push({
+      path,
+      sha256: sha256(await source.fetchFile(manifest.repository, commit, path)),
+    });
+  return files;
 }
 
 /**
@@ -624,8 +888,10 @@ export async function readEndpointDocs(manifest, source, commit) {
  * @param {{ path: string, text: string }[]} documents
  */
 export function documentsHash(documents) {
-    const lines = documents.map(({ path, text }) => `${path} ${sha256(Buffer.from(text))}`).sort(compare)
-    return sha256(Buffer.from(lines.join("\n")))
+  const lines = documents
+    .map(({ path, text }) => `${path} ${sha256(Buffer.from(text))}`)
+    .sort(compare);
+  return sha256(Buffer.from(lines.join("\n")));
 }
 
 /**
@@ -634,11 +900,15 @@ export function documentsHash(documents) {
  * @param {{ path: string, text: string }[]} after
  */
 export function gatewayChanges(before, after) {
-    const names = (/** @type {{ path: string }[]} */ documents) => documents.map(({ path }) => path.split("/").at(-1) ?? path)
-    // A level one heading between files ends the previous file's last section
-    const joined = (/** @type {{ path: string, text: string }[]} */ documents) =>
-        documents.map(({ path, text }) => `# ${path}\n${text}`).join("\n")
-    return { files: listChanges(names(before), names(after)), ...eventChanges(joined(before), joined(after)) }
+  const names = (/** @type {{ path: string }[]} */ documents) =>
+    documents.map(({ path }) => path.split("/").at(-1) ?? path);
+  // A level one heading between files ends the previous file's last section
+  const joined = (/** @type {{ path: string, text: string }[]} */ documents) =>
+    documents.map(({ path, text }) => `# ${path}\n${text}`).join("\n");
+  return {
+    files: listChanges(names(before), names(after)),
+    ...eventChanges(joined(before), joined(after)),
+  };
 }
 
 /**
@@ -646,7 +916,10 @@ export function gatewayChanges(before, after) {
  * @param {string[]} after
  */
 function listChanges(before, after) {
-    return { added: after.filter((name) => !before.includes(name)), removed: before.filter((name) => !after.includes(name)) }
+  return {
+    added: after.filter((name) => !before.includes(name)),
+    removed: before.filter((name) => !after.includes(name)),
+  };
 }
 
 /**
@@ -656,95 +929,175 @@ function listChanges(before, after) {
  * @param {Source} source
  */
 export async function checkUpstream(manifest, source) {
-    validateManifest(manifest)
-    const commit = await source.resolveCommit(manifest.repository, manifest.branch)
-    if (!commitPattern.test(commit)) throw new Error("Upstream branch did not resolve to a commit")
-    /** @type {Record<string, { path: string, pinned: string, current: string, changed: boolean, bytes: Buffer }>} */
-    const files = {}
-    for (const [key, file] of Object.entries(manifest.files)) {
-        const bytes = await source.fetchFile(manifest.repository, commit, file.path)
-        const current = sha256(bytes)
-        files[key] = { path: file.path, pinned: file.sha256, current, changed: current !== file.sha256, bytes }
+  validateManifest(manifest);
+  const commit = await source.resolveCommit(
+    manifest.repository,
+    manifest.branch,
+  );
+  if (!commitPattern.test(commit))
+    throw new Error("Upstream branch did not resolve to a commit");
+  /** @type {Record<string, { path: string, pinned: string, current: string, changed: boolean, bytes: Buffer }>} */
+  const files = {};
+  for (const [key, file] of Object.entries(manifest.files)) {
+    const bytes = await source.fetchFile(
+      manifest.repository,
+      commit,
+      file.path,
+    );
+    const current = sha256(bytes);
+    files[key] = {
+      path: file.path,
+      pinned: file.sha256,
+      current,
+      changed: current !== file.sha256,
+      bytes,
+    };
+  }
+  const gatewayDocuments = await readGatewayDocs(manifest, source, commit);
+  const gatewayHash = documentsHash(gatewayDocuments);
+  const gatewayDocs = {
+    path: manifest.gatewayDocs.path,
+    pinned: manifest.gatewayDocs.sha256,
+    current: gatewayHash,
+    changed: gatewayHash !== manifest.gatewayDocs.sha256,
+  };
+  // A rule the SDK copies from Fluxer's source changed. The file's own history shows what to review
+  const sourceFacts = [];
+  /** @type {{ path: string, error: Error }[]} */
+  const missingFacts = [];
+  for (const fact of manifest.sourceFacts ?? []) {
+    try {
+      const hash = sha256(
+        await source.fetchFile(manifest.repository, commit, fact.path),
+      );
+      sourceFacts.push({
+        path: fact.path,
+        pinned: fact.sha256,
+        current: hash,
+        changed: hash !== fact.sha256,
+      });
+    } catch (error) {
+      missingFacts.push({
+        path: fact.path,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
     }
-    const gatewayDocuments = await readGatewayDocs(manifest, source, commit)
-    const gatewayHash = documentsHash(gatewayDocuments)
-    const gatewayDocs = {
-        path: manifest.gatewayDocs.path,
-        pinned: manifest.gatewayDocs.sha256,
-        current: gatewayHash,
-        changed: gatewayHash !== manifest.gatewayDocs.sha256,
-    }
-    // A rule the SDK copies from Fluxer's source changed. The file's own history shows what to review
-    const sourceFacts = []
-    for (const fact of manifest.sourceFacts ?? []) {
-        const hash = sha256(await source.fetchFile(manifest.repository, commit, fact.path))
-        sourceFacts.push({ path: fact.path, pinned: fact.sha256, current: hash, changed: hash !== fact.sha256 })
-    }
-    /** @type {{ path: string, pinned: string, current: string, changed: boolean, found: boolean, files?: { added: string[], removed: string[], changed: string[] } }[]} */
-    const voice = []
-    for (const watched of manifest.voice ?? []) {
-        const ids = await readVoiceFiles(manifest, source, commit, watched.path)
-        const hash = voiceHash(ids)
-        const entry = { path: watched.path, pinned: watched.sha256, current: hash, changed: hash !== watched.sha256, found: ids.size > 0 }
-        if (entry.changed) {
-            // Only a changed path reads the baseline's listings, to name the files that differ
-            const before = await readVoiceFiles(manifest, source, manifest.commit, watched.path)
-            const after = [...ids.keys()]
-            voice.push({
-                ...entry,
-                files: {
-                    added: after.filter((path) => !before.has(path)),
-                    removed: [...before.keys()].filter((path) => !ids.has(path)),
-                    changed: after.filter((path) => before.has(path) && before.get(path) !== ids.get(path)),
-                },
-            })
-        } else voice.push(entry)
-    }
-    // A new folder is reported for review, not counted as drift, since no watched document changed
-    const folders = manifest.folders && (await readFolders(manifest, source, commit))
-    const newVoiceFolders = (folders ?? []).filter(
-        (path) => !manifest.folders?.includes(path) && voiceNames.test(path.split("/").at(-1) ?? ""),
-    )
-    const buckets = await readBuckets(manifest, source, commit)
-    const bucketHash = sha256(Buffer.from(buckets.join("\n")))
-    const rateLimits = {
-        path: manifest.rateLimits.path,
-        pinned: manifest.rateLimits.sha256,
-        current: bucketHash,
-        changed: bucketHash !== manifest.rateLimits.sha256,
-    }
-    const pinned = async (/** @type {PinnedFile} */ file) =>
-        (await source.fetchFile(manifest.repository, manifest.commit, file.path)).toString("utf8")
-    /** @type {{ openapi?: ReturnType<typeof openapiChanges>, gateway?: ReturnType<typeof gatewayChanges>, buckets?: ReturnType<typeof listChanges> }} */
-    const details = {}
-    if (files.openapi.changed)
-        details.openapi = openapiChanges(
-            JSON.parse(await pinned(manifest.files.openapi)),
-            JSON.parse(files.openapi.bytes.toString("utf8")),
-        )
-    if (gatewayDocs.changed) details.gateway = gatewayChanges(await readGatewayDocs(manifest, source, manifest.commit), gatewayDocuments)
-    if (rateLimits.changed) details.buckets = listChanges(await readBuckets(manifest, source, manifest.commit), buckets)
-    return {
-        repository: manifest.repository,
-        pinnedCommit: manifest.commit,
-        commit,
-        drift:
-            gatewayDocs.changed ||
-            rateLimits.changed ||
-            Object.values(files).some((file) => file.changed) ||
-            sourceFacts.some((fact) => fact.changed) ||
-            voice.some((entry) => entry.changed),
-        files: Object.fromEntries(
-            Object.entries(files).map(([key, { path, pinned, current, changed }]) => [key, { path, pinned, current, changed }]),
+  }
+  if (missingFacts.length === 1) {
+    const [{ path, error }] = missingFacts;
+    throw new Error(
+      `Cannot read watched source file ${path}: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (missingFacts.length > 1) {
+    const list = missingFacts
+      .map(({ path, error }) => `${path} (${error.message})`)
+      .join(", ");
+    throw new Error(
+      `Cannot read ${missingFacts.length} watched source files: ${list}`,
+      {
+        cause: new AggregateError(
+          missingFacts.map(({ error }) => error),
+          "Unreadable watched source files",
         ),
-        gatewayDocs,
-        rateLimits,
-        sourceFacts,
-        voice,
-        ...(folders ? { folders } : {}),
-        newVoiceFolders,
-        ...details,
-    }
+      },
+    );
+  }
+  /** @type {{ path: string, pinned: string, current: string, changed: boolean, found: boolean, files?: { added: string[], removed: string[], changed: string[] } }[]} */
+  const voice = [];
+  for (const watched of manifest.voice ?? []) {
+    const ids = await readVoiceFiles(manifest, source, commit, watched.path);
+    const hash = voiceHash(ids);
+    const entry = {
+      path: watched.path,
+      pinned: watched.sha256,
+      current: hash,
+      changed: hash !== watched.sha256,
+      found: ids.size > 0,
+    };
+    if (entry.changed) {
+      // Only a changed path reads the baseline's listings, to name the files that differ
+      const before = await readVoiceFiles(
+        manifest,
+        source,
+        manifest.commit,
+        watched.path,
+      );
+      const after = [...ids.keys()];
+      voice.push({
+        ...entry,
+        files: {
+          added: after.filter((path) => !before.has(path)),
+          removed: [...before.keys()].filter((path) => !ids.has(path)),
+          changed: after.filter(
+            (path) => before.has(path) && before.get(path) !== ids.get(path),
+          ),
+        },
+      });
+    } else voice.push(entry);
+  }
+  // A new folder is reported for review, not counted as drift, since no watched document changed
+  const folders =
+    manifest.folders && (await readFolders(manifest, source, commit));
+  const newVoiceFolders = (folders ?? []).filter(
+    (path) =>
+      !manifest.folders?.includes(path) &&
+      voiceNames.test(path.split("/").at(-1) ?? ""),
+  );
+  const buckets = await readBuckets(manifest, source, commit);
+  const bucketHash = sha256(Buffer.from(buckets.join("\n")));
+  const rateLimits = {
+    path: manifest.rateLimits.path,
+    pinned: manifest.rateLimits.sha256,
+    current: bucketHash,
+    changed: bucketHash !== manifest.rateLimits.sha256,
+  };
+  const pinned = async (/** @type {PinnedFile} */ file) =>
+    (
+      await source.fetchFile(manifest.repository, manifest.commit, file.path)
+    ).toString("utf8");
+  /** @type {{ openapi?: ReturnType<typeof openapiChanges>, gateway?: ReturnType<typeof gatewayChanges>, buckets?: ReturnType<typeof listChanges> }} */
+  const details = {};
+  if (files.openapi.changed)
+    details.openapi = openapiChanges(
+      JSON.parse(await pinned(manifest.files.openapi)),
+      JSON.parse(files.openapi.bytes.toString("utf8")),
+    );
+  if (gatewayDocs.changed)
+    details.gateway = gatewayChanges(
+      await readGatewayDocs(manifest, source, manifest.commit),
+      gatewayDocuments,
+    );
+  if (rateLimits.changed)
+    details.buckets = listChanges(
+      await readBuckets(manifest, source, manifest.commit),
+      buckets,
+    );
+  return {
+    repository: manifest.repository,
+    pinnedCommit: manifest.commit,
+    commit,
+    drift:
+      gatewayDocs.changed ||
+      rateLimits.changed ||
+      Object.values(files).some((file) => file.changed) ||
+      sourceFacts.some((fact) => fact.changed) ||
+      voice.some((entry) => entry.changed),
+    files: Object.fromEntries(
+      Object.entries(files).map(([key, { path, pinned, current, changed }]) => [
+        key,
+        { path, pinned, current, changed },
+      ]),
+    ),
+    gatewayDocs,
+    rateLimits,
+    sourceFacts,
+    voice,
+    ...(folders ? { folders } : {}),
+    newVoiceFolders,
+    ...details,
+  };
 }
 
 /**
@@ -754,11 +1107,19 @@ export async function checkUpstream(manifest, source) {
  * @param {string} value
  */
 function escape(value) {
-    return value
-        // oxlint-disable-next-line no-control-regex -- Control characters are replaced so upstream text cannot break the summary
-        .replace(/[\u0000-\u001f\u007f]/g, " ")
-        .replace(/(?<=[@#]|:(?=\/\/)|\/(?=\d)|\bwww(?=\.)|\bgh(?=-\d))/gi, "\u200b")
-        .replace(/[&<>|`*_[\]\\]/g, (character) => `&#${character.charCodeAt(0)};`)
+  return (
+    value
+      // oxlint-disable-next-line no-control-regex -- Control characters are replaced so upstream text cannot break the summary
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(
+        /(?<=[@#]|:(?=\/\/)|\/(?=\d)|\bwww(?=\.)|\bgh(?=-\d))/gi,
+        "\u200b",
+      )
+      .replace(
+        /[&<>|`*_[\]\\]/g,
+        (character) => `&#${character.charCodeAt(0)};`,
+      )
+  );
 }
 
 /**
@@ -767,9 +1128,11 @@ function escape(value) {
  * @param {string} [indent]
  */
 function nameList(label, names, indent = "") {
-    if (!names.length) return []
-    const shown = names.slice(0, listLimit).map(escape).join(", ")
-    return [`${indent}- ${label} (${names.length}): ${shown}${names.length > listLimit ? `, and ${names.length - listLimit} more` : ""}`]
+  if (!names.length) return [];
+  const shown = names.slice(0, listLimit).map(escape).join(", ");
+  return [
+    `${indent}- ${label} (${names.length}): ${shown}${names.length > listLimit ? `, and ${names.length - listLimit} more` : ""}`,
+  ];
 }
 
 /**
@@ -777,20 +1140,25 @@ function nameList(label, names, indent = "") {
  * @param {{ name: string, details: string[] }[]} entries
  */
 function detailedList(label, entries) {
-    if (!entries.length) return []
-    const lines = [`- ${label} (${entries.length}):`]
-    for (const { name, details } of entries.slice(0, detailedLimit)) {
-        const more = details.length > detailLimit ? `, plus ${details.length - detailLimit} more` : ""
-        lines.push(`  - ${escape(name)}: ${details.slice(0, detailLimit).map(escape).join(", ")}${more}`)
-    }
+  if (!entries.length) return [];
+  const lines = [`- ${label} (${entries.length}):`];
+  for (const { name, details } of entries.slice(0, detailedLimit)) {
+    const more =
+      details.length > detailLimit
+        ? `, plus ${details.length - detailLimit} more`
+        : "";
     lines.push(
-        ...nameList(
-            "Not detailed",
-            entries.slice(detailedLimit).map(({ name }) => name),
-            "  ",
-        ),
-    )
-    return lines
+      `  - ${escape(name)}: ${details.slice(0, detailLimit).map(escape).join(", ")}${more}`,
+    );
+  }
+  lines.push(
+    ...nameList(
+      "Not detailed",
+      entries.slice(detailedLimit).map(({ name }) => name),
+      "  ",
+    ),
+  );
+  return lines;
 }
 
 /**
@@ -798,28 +1166,37 @@ function detailedList(label, entries) {
  * @param {SurfaceChanges} changes
  */
 function surfaceReport(title, { application, userOnly }) {
-    const reachable = [
-        ...nameList("Added", application.added),
-        ...nameList("Removed", application.removed),
-        ...detailedList("Changed", application.changed),
-        ...nameList("Wording only", application.wordingOnly),
-    ]
-    const other = [
-        ...nameList("Added", userOnly.added),
-        ...nameList("Removed", userOnly.removed),
-        ...nameList(
-            "Changed",
-            userOnly.changed.map(({ name }) => name),
-        ),
-        ...nameList("Wording only", userOnly.wordingOnly),
-    ]
-    if (!reachable.length && !other.length) return []
-    return [
-        `### ${title}`,
-        "",
-        ...(reachable.length ? ["OpenAPI lists bot, OAuth2 or no security requirement:", "", ...reachable, ""] : []),
-        ...(other.length ? ["Other operations and schemas:", "", ...other, ""] : []),
-    ]
+  const reachable = [
+    ...nameList("Added", application.added),
+    ...nameList("Removed", application.removed),
+    ...detailedList("Changed", application.changed),
+    ...nameList("Wording only", application.wordingOnly),
+  ];
+  const other = [
+    ...nameList("Added", userOnly.added),
+    ...nameList("Removed", userOnly.removed),
+    ...nameList(
+      "Changed",
+      userOnly.changed.map(({ name }) => name),
+    ),
+    ...nameList("Wording only", userOnly.wordingOnly),
+  ];
+  if (!reachable.length && !other.length) return [];
+  return [
+    `### ${title}`,
+    "",
+    ...(reachable.length
+      ? [
+          "OpenAPI lists bot, OAuth2 or no security requirement:",
+          "",
+          ...reachable,
+          "",
+        ]
+      : []),
+    ...(other.length
+      ? ["Other operations and schemas:", "", ...other, ""]
+      : []),
+  ];
 }
 
 /**
@@ -827,29 +1204,38 @@ function surfaceReport(title, { application, userOnly }) {
  * @param {Pick<Baseline, "kind" | "reason">} [baseline]
  * @param {Awaited<ReturnType<typeof checkUpstream>>} [sincePin] Comparison of the same upstream commit with the repository pin
  */
-export function renderReport(result, baseline = { kind: "repository-pin" }, sincePin) {
-    const kind = baseline.kind === "previous-run" ? "Previous run" : "Repository pin"
-    const lines = [
-        "## Upstream Fluxer drift",
-        "",
-        result.drift ? "Watched documents changed since the comparison baseline" : "Watched documents match the comparison baseline",
-        "",
-        `Baseline: ${kind} at ${escape(result.pinnedCommit.slice(0, 10))}, upstream now at ${escape(result.commit.slice(0, 10))}`,
-        "",
-        ...(baseline.reason ? [`Why this baseline: ${escape(baseline.reason)}`, ""] : []),
-        ...changeReport(result),
-    ]
-    if (sincePin)
-        lines.push(
-            "## Since the repository pin",
-            "",
-            sincePin.drift
-                ? "Watched documents differ from the repository pin"
-                : "Watched documents match the repository pin",
-            "",
-            ...changeReport(sincePin),
-        )
-    return lines.join("\n")
+export function renderReport(
+  result,
+  baseline = { kind: "repository-pin" },
+  sincePin,
+) {
+  const kind =
+    baseline.kind === "previous-run" ? "Previous run" : "Repository pin";
+  const lines = [
+    "## Upstream Fluxer drift",
+    "",
+    result.drift
+      ? "Watched documents changed since the comparison baseline"
+      : "Watched documents match the comparison baseline",
+    "",
+    `Baseline: ${kind} at ${escape(result.pinnedCommit.slice(0, 10))}, upstream now at ${escape(result.commit.slice(0, 10))}`,
+    "",
+    ...(baseline.reason
+      ? [`Why this baseline: ${escape(baseline.reason)}`, ""]
+      : []),
+    ...changeReport(result),
+  ];
+  if (sincePin)
+    lines.push(
+      "## Since the repository pin",
+      "",
+      sincePin.drift
+        ? "Watched documents differ from the repository pin"
+        : "Watched documents match the repository pin",
+      "",
+      ...changeReport(sincePin),
+    );
+  return lines.join("\n");
 }
 
 /**
@@ -857,93 +1243,124 @@ export function renderReport(result, baseline = { kind: "repository-pin" }, sinc
  * @param {Awaited<ReturnType<typeof checkUpstream>>} result
  */
 function changeReport(result) {
-    // Changed documents come first, so the rows to review are not buried among the unchanged ones
-    const documents = [
-        ...Object.values(result.files).map((file) => [escape(file.path), file.changed, ""]),
-        [`Gateway documents in ${escape(result.gatewayDocs.path)}`, result.gatewayDocs.changed, ""],
-        [`Rate-limit buckets in ${escape(result.rateLimits.path)}`, result.rateLimits.changed, ""],
-        ...result.sourceFacts.map((fact) => [escape(fact.path), fact.changed, ""]),
-        ...result.voice.map((entry) => [`Voice files in ${escape(entry.path)}`, entry.changed, entry.found ? "" : ", not found"]),
-    ]
-    const changed = documents.filter(([, hasChanged]) => hasChanged)
-    const lines = [
-        `${changed.length} of ${documents.length} watched documents changed ([commit range](https://github.com/${result.repository}/compare/${result.pinnedCommit}...${result.commit}))`,
+  // Changed documents come first, so the rows to review are not buried among the unchanged ones
+  const documents = [
+    ...Object.values(result.files).map((file) => [
+      escape(file.path),
+      file.changed,
+      "",
+    ]),
+    [
+      `Gateway documents in ${escape(result.gatewayDocs.path)}`,
+      result.gatewayDocs.changed,
+      "",
+    ],
+    [
+      `Rate-limit buckets in ${escape(result.rateLimits.path)}`,
+      result.rateLimits.changed,
+      "",
+    ],
+    ...result.sourceFacts.map((fact) => [escape(fact.path), fact.changed, ""]),
+    ...result.voice.map((entry) => [
+      `Voice files in ${escape(entry.path)}`,
+      entry.changed,
+      entry.found ? "" : ", not found",
+    ]),
+  ];
+  const changed = documents.filter(([, hasChanged]) => hasChanged);
+  const lines = [
+    `${changed.length} of ${documents.length} watched documents changed ([commit range](https://github.com/${result.repository}/compare/${result.pinnedCommit}...${result.commit}))`,
+    "",
+    "| Document | Result |",
+    "| --- | --- |",
+    ...[...changed, ...documents.filter(([, hasChanged]) => !hasChanged)].map(
+      ([name, hasChanged, note]) =>
+        `| ${name} | ${hasChanged ? "changed" : "unchanged"}${note} |`,
+    ),
+    "",
+  ];
+  const facts = result.sourceFacts
+    .filter((fact) => fact.changed)
+    .map((fact) => fact.path);
+  if (facts.length)
+    lines.push(
+      "### Fluxer source files the SDK copies rules from",
+      "",
+      "Review the SDK limits and checks that cite each changed file",
+      "",
+      ...nameList("Changed", facts),
+      "",
+    );
+  const voice = result.voice.filter((entry) => entry.files);
+  if (voice.length)
+    lines.push(
+      "### Fluxer voice docs and code",
+      "",
+      "Review whether bot voice, its transport or its contract changed",
+      "",
+      ...voice.flatMap(({ path, files }) => [
+        ...nameList(`Files added in ${escape(path)}`, files?.added ?? []),
+        ...nameList(`Files removed from ${escape(path)}`, files?.removed ?? []),
+        ...nameList(`Files changed in ${escape(path)}`, files?.changed ?? []),
+      ]),
+      "",
+    );
+  if (result.newVoiceFolders.length)
+    lines.push(
+      "### New folders that may hold voice work",
+      "",
+      "Their names mention voice, RTC, media, WebTransport, QUIC, DAVE, LiveKit or an SFU. Consider watching them",
+      "",
+      ...nameList("Added", result.newVoiceFolders),
+      "",
+    );
+  if (result.openapi) {
+    const endpoints = surfaceReport("REST endpoints", result.openapi.endpoints);
+    const schemas = surfaceReport("Component schemas", result.openapi.schemas);
+    if (endpoints.length || schemas.length)
+      lines.push(
+        "Access groups follow OpenAPI metadata. Runtime credentials and permissions may differ",
         "",
-        "| Document | Result |",
-        "| --- | --- |",
-        ...[...changed, ...documents.filter(([, hasChanged]) => !hasChanged)].map(
-            ([name, hasChanged, note]) => `| ${name} | ${hasChanged ? "changed" : "unchanged"}${note} |`,
-        ),
+      );
+    lines.push(...endpoints, ...schemas);
+    if (result.openapi.other.length)
+      lines.push(
+        "### Other OpenAPI sections",
         "",
-    ]
-    const facts = result.sourceFacts.filter((fact) => fact.changed).map((fact) => fact.path)
-    if (facts.length)
-        lines.push(
-            "### Fluxer source files the SDK copies rules from",
-            "",
-            "Review the SDK limits and checks that cite each changed file",
-            "",
-            ...nameList("Changed", facts),
-            "",
-        )
-    const voice = result.voice.filter((entry) => entry.files)
-    if (voice.length)
-        lines.push(
-            "### Fluxer voice docs and code",
-            "",
-            "Review whether bot voice, its transport or its contract changed",
-            "",
-            ...voice.flatMap(({ path, files }) => [
-                ...nameList(`Files added in ${escape(path)}`, files?.added ?? []),
-                ...nameList(`Files removed from ${escape(path)}`, files?.removed ?? []),
-                ...nameList(`Files changed in ${escape(path)}`, files?.changed ?? []),
-            ]),
-            "",
-        )
-    if (result.newVoiceFolders.length)
-        lines.push(
-            "### New folders that may hold voice work",
-            "",
-            "Their names mention voice, RTC, media, WebTransport, QUIC, DAVE, LiveKit or an SFU. Consider watching them",
-            "",
-            ...nameList("Added", result.newVoiceFolders),
-            "",
-        )
-    if (result.openapi) {
-        const endpoints = surfaceReport("REST endpoints", result.openapi.endpoints)
-        const schemas = surfaceReport("Component schemas", result.openapi.schemas)
-        if (endpoints.length || schemas.length) lines.push("Access groups follow OpenAPI metadata. Runtime credentials and permissions may differ", "")
-        lines.push(...endpoints, ...schemas)
-        if (result.openapi.other.length) lines.push("### Other OpenAPI sections", "", ...nameList("Changed", result.openapi.other), "")
-        if (!endpoints.length && !schemas.length && !result.openapi.other.length)
-            lines.push("### OpenAPI", "", "- Only formatting changed", "")
-    }
-    if (result.gateway) {
-        const details = [
-            ...nameList("Files added", result.gateway.files.added),
-            ...nameList("Files removed", result.gateway.files.removed),
-            ...nameList("Sections added", result.gateway.added),
-            ...nameList("Sections removed", result.gateway.removed),
-            ...detailedList("Field tables changed", result.gateway.fields),
-            ...nameList("Text only", result.gateway.textOnly),
-        ]
-        lines.push(
-            "### Gateway events and other named sections",
-            "",
-            ...(details.length ? details : ["- Only text outside named sections changed"]),
-            "",
-        )
-    }
-    if (result.buckets) {
-        lines.push(
-            "### Rate-limit buckets with resource parameters",
-            "",
-            ...nameList("Added", result.buckets.added),
-            ...nameList("Removed", result.buckets.removed),
-            "",
-        )
-    }
-    return lines
+        ...nameList("Changed", result.openapi.other),
+        "",
+      );
+    if (!endpoints.length && !schemas.length && !result.openapi.other.length)
+      lines.push("### OpenAPI", "", "- Only formatting changed", "");
+  }
+  if (result.gateway) {
+    const details = [
+      ...nameList("Files added", result.gateway.files.added),
+      ...nameList("Files removed", result.gateway.files.removed),
+      ...nameList("Sections added", result.gateway.added),
+      ...nameList("Sections removed", result.gateway.removed),
+      ...detailedList("Field tables changed", result.gateway.fields),
+      ...nameList("Text only", result.gateway.textOnly),
+    ];
+    lines.push(
+      "### Gateway events and other named sections",
+      "",
+      ...(details.length
+        ? details
+        : ["- Only text outside named sections changed"]),
+      "",
+    );
+  }
+  if (result.buckets) {
+    lines.push(
+      "### Rate-limit buckets with resource parameters",
+      "",
+      ...nameList("Added", result.buckets.added),
+      ...nameList("Removed", result.buckets.removed),
+      "",
+    );
+  }
+  return lines;
 }
 
 /**
@@ -954,28 +1371,60 @@ function changeReport(result) {
  * @param {string} head
  */
 async function watchedCommits({ repository, commit: last }, source, head) {
+  /** @type {{ path: string, error: Error }[]} */
+  const unreadable = [];
+  for (const path of watchedPaths)
+    await source
+      .checkPath(repository, head, path)
+      .catch((/** @type {Error} */ error) => {
+        unreadable.push({ path, error });
+      });
+  if (unreadable.length === 1) {
+    const [{ path, error }] = unreadable;
+    throw new Error(
+      `Cannot read watched upstream path ${path}: ${error.message}`,
+      { cause: error },
+    );
+  }
+  if (unreadable.length > 1) {
+    const list = unreadable
+      .map(({ path, error }) => `${path} (${error.message})`)
+      .join(", ");
+    throw new Error(
+      `Cannot read ${unreadable.length} watched upstream paths: ${list}`,
+      {
+        cause: new AggregateError(
+          unreadable.map(({ error }) => error),
+          "Unreadable watched upstream paths",
+        ),
+      },
+    );
+  }
+  const range = [];
+  for (let page = 1; last !== head; page++) {
+    const commits = await source.listCommits(repository, head, { page });
+    if (!commits.length)
+      throw new Error(
+        `Baseline commit ${last} is not in the upstream branch history`,
+      );
+    const end = commits.findIndex(({ sha }) => sha === last);
+    range.push(...(end === -1 ? commits : commits.slice(0, end)));
+    if (end !== -1) break;
+  }
+  const inRange = new Set(range.map(({ sha }) => sha));
+  const touched = new Set();
+  if (range.length)
     for (const path of watchedPaths)
-        await source.checkPath(repository, head, path).catch((/** @type {Error} */ error) => {
-            throw new Error(`Cannot read watched upstream path ${path}: ${error.message}`, { cause: error })
-        })
-    const range = []
-    for (let page = 1; last !== head; page++) {
-        const commits = await source.listCommits(repository, head, { page })
-        if (!commits.length) throw new Error(`Baseline commit ${last} is not in the upstream branch history`)
-        const end = commits.findIndex(({ sha }) => sha === last)
-        range.push(...(end === -1 ? commits : commits.slice(0, end)))
-        if (end !== -1) break
-    }
-    const inRange = new Set(range.map(({ sha }) => sha))
-    const touched = new Set()
-    if (range.length)
-        for (const path of watchedPaths)
-            for (let page = 1; ; page++) {
-                const commits = await source.listCommits(repository, head, { path, page })
-                for (const { sha } of commits) if (inRange.has(sha)) touched.add(sha)
-                if (!commits.length || !commits.every(({ sha }) => inRange.has(sha))) break
-            }
-    return range.filter(({ sha }) => touched.has(sha)).reverse()
+      for (let page = 1; ; page++) {
+        const commits = await source.listCommits(repository, head, {
+          path,
+          page,
+        });
+        for (const { sha } of commits) if (inRange.has(sha)) touched.add(sha);
+        if (!commits.length || !commits.every(({ sha }) => inRange.has(sha)))
+          break;
+      }
+  return range.filter(({ sha }) => touched.has(sha)).reverse();
 }
 
 /**
@@ -983,17 +1432,22 @@ async function watchedCommits({ repository, commit: last }, source, head) {
  * @param {{ sha: string, subject: string }[]} commits
  */
 function sourceReport(repository, commits) {
-    if (!commits.length) return ["## Source changes to review", "", "No commit touched a watched path"]
+  if (!commits.length)
     return [
-        "## Source changes to review",
-        "",
-        "Bot impact has not been checked",
-        "",
-        ...commits.map(
-            ({ sha, subject }) =>
-                `- [${sha.slice(0, 10)}](https://github.com/${repository}/commit/${sha}) ${escape(subject.slice(0, subjectLimit))}`,
-        ),
-    ]
+      "## Source changes to review",
+      "",
+      "No commit touched a watched path",
+    ];
+  return [
+    "## Source changes to review",
+    "",
+    "Bot impact has not been checked",
+    "",
+    ...commits.map(
+      ({ sha, subject }) =>
+        `- [${sha.slice(0, 10)}](https://github.com/${repository}/commit/${sha}) ${escape(subject.slice(0, subjectLimit))}`,
+    ),
+  ];
 }
 
 /**
@@ -1001,8 +1455,8 @@ function sourceReport(repository, commits) {
  * @param {string} text
  */
 function limitComment(text) {
-    if (text.length <= commentLimit) return text
-    return `${text.slice(0, text.lastIndexOf("\n", commentLimit))}\n\nThis report is too long for one comment. The run's job summary has all of it`
+  if (text.length <= commentLimit) return text;
+  return `${text.slice(0, text.lastIndexOf("\n", commentLimit))}\n\nThis report is too long for one comment. The run's job summary has all of it`;
 }
 
 /**
@@ -1010,63 +1464,115 @@ function limitComment(text) {
  * @param {Record<string, string>} headers
  */
 async function download(url, headers) {
-    const response = await fetch(url, { headers, redirect: "error", signal: AbortSignal.timeout(30_000) })
-    if (!response.ok) {
-        await response.body?.cancel()
-        throw new Error(`Upstream request returned HTTP ${response.status}`)
-    }
-    const bytes = Buffer.from(await response.arrayBuffer())
-    if (bytes.length > maximumBytes) throw new Error("Upstream document exceeds the byte limit")
-    return bytes
+  const response = await fetch(url, {
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Upstream request returned HTTP ${response.status}`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > maximumBytes)
+    throw new Error("Upstream document exceeds the byte limit");
+  return bytes;
 }
 
 /** @param {string} accept */
 function githubHeaders(accept) {
-    /** @type {Record<string, string>} */
-    const headers = { accept, "x-github-api-version": "2022-11-28" }
-    if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`
-    return headers
+  /** @type {Record<string, string>} */
+  const headers = { accept, "x-github-api-version": "2022-11-28" };
+  if (process.env.GITHUB_TOKEN)
+    headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return headers;
 }
 
-const encodePath = (/** @type {string} */ path) => path.split("/").map(encodeURIComponent).join("/")
+const encodePath = (/** @type {string} */ path) =>
+  path.split("/").map(encodeURIComponent).join("/");
 
 /**
  * Reads upstream files through GitHub, also used by the SDK's OpenAPI example generator
  * @type {Source}
  */
 export const githubSource = {
-    async resolveCommit(repository, branch) {
-        const url = `https://api.github.com/repos/${repository}/commits/${encodeURIComponent(branch)}`
-        return (await download(url, githubHeaders("application/vnd.github.sha"))).toString("utf8").trim()
-    },
-    fetchFile(repository, commit, path) {
-        if (!commitPattern.test(commit)) throw new Error("Upstream files are read only at exact commits")
-        return download(`https://raw.githubusercontent.com/${repository}/${commit}/${encodePath(path)}`, {})
-    },
-    async listDirectory(repository, commit, directory) {
-        if (!commitPattern.test(commit)) throw new Error("Upstream files are read only at exact commits")
-        const url = `https://api.github.com/repos/${repository}/contents/${encodePath(directory)}?ref=${commit}`
-        const entries = JSON.parse((await download(url, githubHeaders("application/vnd.github+json"))).toString("utf8"))
-        if (!Array.isArray(entries)) throw new Error("Upstream directory listing is invalid")
-        if (entries.some((entry) => typeof entry?.path !== "string" || typeof entry.type !== "string"))
-            throw new Error("Upstream directory listing is invalid")
-        // A file's sha is its Git object ID, which names its exact bytes
-        return entries.map(({ path, type, sha }) => ({ path, type, ...(commitPattern.test(sha ?? "") ? { sha } : {}) }))
-    },
-    async listCommits(repository, head, { path, page }) {
-        if (!commitPattern.test(head)) throw new Error("Upstream files are read only at exact commits")
-        const query = new URLSearchParams({ sha: head, per_page: "100", page: String(page), ...(path ? { path } : {}) })
-        const url = `https://api.github.com/repos/${repository}/commits?${query.toString()}`
-        const commits = JSON.parse((await download(url, githubHeaders("application/vnd.github+json"))).toString("utf8"))
-        if (!Array.isArray(commits) || commits.some((item) => !commitPattern.test(item?.sha ?? "") || typeof item.commit?.message !== "string"))
-            throw new Error("Upstream commit listing is invalid")
-        return commits.map(({ sha, commit }) => ({ sha, subject: commit.message.split("\n", 1)[0] }))
-    },
-    async checkPath(repository, commit, path) {
-        if (!commitPattern.test(commit)) throw new Error("Upstream files are read only at exact commits")
-        await download(`https://api.github.com/repos/${repository}/contents/${encodePath(path)}?ref=${commit}`, githubHeaders("application/vnd.github+json"))
-    },
-}
+  async resolveCommit(repository, branch) {
+    const url = `https://api.github.com/repos/${repository}/commits/${encodeURIComponent(branch)}`;
+    return (await download(url, githubHeaders("application/vnd.github.sha")))
+      .toString("utf8")
+      .trim();
+  },
+  fetchFile(repository, commit, path) {
+    if (!commitPattern.test(commit))
+      throw new Error("Upstream files are read only at exact commits");
+    return download(
+      `https://raw.githubusercontent.com/${repository}/${commit}/${encodePath(path)}`,
+      {},
+    );
+  },
+  async listDirectory(repository, commit, directory) {
+    if (!commitPattern.test(commit))
+      throw new Error("Upstream files are read only at exact commits");
+    const url = `https://api.github.com/repos/${repository}/contents/${encodePath(directory)}?ref=${commit}`;
+    const entries = JSON.parse(
+      (
+        await download(url, githubHeaders("application/vnd.github+json"))
+      ).toString("utf8"),
+    );
+    if (!Array.isArray(entries))
+      throw new Error("Upstream directory listing is invalid");
+    if (
+      entries.some(
+        (entry) =>
+          typeof entry?.path !== "string" || typeof entry.type !== "string",
+      )
+    )
+      throw new Error("Upstream directory listing is invalid");
+    // A file's sha is its Git object ID, which names its exact bytes
+    return entries.map(({ path, type, sha }) => ({
+      path,
+      type,
+      ...(commitPattern.test(sha ?? "") ? { sha } : {}),
+    }));
+  },
+  async listCommits(repository, head, { path, page }) {
+    if (!commitPattern.test(head))
+      throw new Error("Upstream files are read only at exact commits");
+    const query = new URLSearchParams({
+      sha: head,
+      per_page: "100",
+      page: String(page),
+      ...(path ? { path } : {}),
+    });
+    const url = `https://api.github.com/repos/${repository}/commits?${query.toString()}`;
+    const commits = JSON.parse(
+      (
+        await download(url, githubHeaders("application/vnd.github+json"))
+      ).toString("utf8"),
+    );
+    if (
+      !Array.isArray(commits) ||
+      commits.some(
+        (item) =>
+          !commitPattern.test(item?.sha ?? "") ||
+          typeof item.commit?.message !== "string",
+      )
+    )
+      throw new Error("Upstream commit listing is invalid");
+    return commits.map(({ sha, commit }) => ({
+      sha,
+      subject: commit.message.split("\n", 1)[0],
+    }));
+  },
+  async checkPath(repository, commit, path) {
+    if (!commitPattern.test(commit))
+      throw new Error("Upstream files are read only at exact commits");
+    await download(
+      `https://api.github.com/repos/${repository}/contents/${encodePath(path)}?ref=${commit}`,
+      githubHeaders("application/vnd.github+json"),
+    );
+  },
+};
 
 /**
  * Reads each file and listing at an exact commit once per run. A comparison with the previous run and with the pin reads
@@ -1075,23 +1581,34 @@ export const githubSource = {
  * @returns {Source}
  */
 function remembering(source) {
-    /** @type {Map<string, Promise<any>>} */
-    const reads = new Map()
-    const once = (/** @type {string} */ key, /** @type {() => Promise<any>} */ read) => {
-        if (!reads.has(key)) reads.set(key, read())
-        return /** @type {Promise<any>} */ (reads.get(key))
-    }
-    return {
-        ...source,
-        fetchFile: (repository, commit, path) => once(`file ${repository} ${commit} ${path}`, () => source.fetchFile(repository, commit, path)),
-        listDirectory: (repository, commit, directory) =>
-            once(`list ${repository} ${commit} ${directory}`, () => source.listDirectory(repository, commit, directory)),
-    }
+  /** @type {Map<string, Promise<any>>} */
+  const reads = new Map();
+  const once = (
+    /** @type {string} */ key,
+    /** @type {() => Promise<any>} */ read,
+  ) => {
+    if (!reads.has(key)) reads.set(key, read());
+    return /** @type {Promise<any>} */ (reads.get(key));
+  };
+  return {
+    ...source,
+    fetchFile: (repository, commit, path) =>
+      once(`file ${repository} ${commit} ${path}`, () =>
+        source.fetchFile(repository, commit, path),
+      ),
+    listDirectory: (repository, commit, directory) =>
+      once(`list ${repository} ${commit} ${directory}`, () =>
+        source.listDirectory(repository, commit, directory),
+      ),
+  };
 }
 
 /** The Git object ID of a file's bytes, the sha a folder listing names it by */
 const gitObjectId = (/** @type {Buffer} */ bytes) =>
-    createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")
+  createHash("sha1")
+    .update(`blob ${bytes.length}\0`)
+    .update(bytes)
+    .digest("hex");
 
 /**
  * Keeps a copy of each upstream file in a folder, named by its Git object ID, so a run downloads only the files that
@@ -1103,42 +1620,52 @@ const gitObjectId = (/** @type {Buffer} */ bytes) =>
  * @returns {Source & { prune(): Promise<void> }}
  */
 export function keepingCopies(source, folder) {
-    /** @type {Map<string, string>} */
-    const ids = new Map()
-    /** @type {Set<string>} */
-    const read = new Set()
-    /** @type {Source["listDirectory"]} */
-    const listDirectory = async (repository, commit, directory) => {
-        const entries = await source.listDirectory(repository, commit, directory)
-        for (const { path, sha } of entries) if (sha) ids.set(`${repository} ${commit} ${path}`, sha)
-        return entries
-    }
-    return {
-        ...source,
-        listDirectory,
-        async fetchFile(repository, commit, path) {
-            const key = `${repository} ${commit} ${path}`
-            if (!ids.has(key)) await listDirectory(repository, commit, path.split("/").slice(0, -1).join("/"))
-            const id = ids.get(key)
-            if (!id) return source.fetchFile(repository, commit, path)
-            read.add(id)
-            const copy = join(folder, id)
-            const kept = await readFile(copy).catch(() => undefined)
-            if (kept && gitObjectId(kept) === id) return kept
-            const bytes = await source.fetchFile(repository, commit, path)
-            if (gitObjectId(bytes) !== id) throw new Error(`Upstream ${path} at ${commit} does not match the Git object its folder lists`)
-            // Written beside its place and renamed, so a stopped run leaves no partial copy under the ID
-            await mkdir(folder, { recursive: true })
-            const partial = `${copy}.${process.pid}.partial`
-            await writeFile(partial, bytes)
-            await rename(partial, copy)
-            return bytes
-        },
-        async prune() {
-            for (const name of await readdir(folder).catch(() => []))
-                if (commitPattern.test(name) && !read.has(name)) await rm(join(folder, name), { force: true })
-        },
-    }
+  /** @type {Map<string, string>} */
+  const ids = new Map();
+  /** @type {Set<string>} */
+  const read = new Set();
+  /** @type {Source["listDirectory"]} */
+  const listDirectory = async (repository, commit, directory) => {
+    const entries = await source.listDirectory(repository, commit, directory);
+    for (const { path, sha } of entries)
+      if (sha) ids.set(`${repository} ${commit} ${path}`, sha);
+    return entries;
+  };
+  return {
+    ...source,
+    listDirectory,
+    async fetchFile(repository, commit, path) {
+      const key = `${repository} ${commit} ${path}`;
+      if (!ids.has(key))
+        await listDirectory(
+          repository,
+          commit,
+          path.split("/").slice(0, -1).join("/"),
+        );
+      const id = ids.get(key);
+      if (!id) return source.fetchFile(repository, commit, path);
+      read.add(id);
+      const copy = join(folder, id);
+      const kept = await readFile(copy).catch(() => undefined);
+      if (kept && gitObjectId(kept) === id) return kept;
+      const bytes = await source.fetchFile(repository, commit, path);
+      if (gitObjectId(bytes) !== id)
+        throw new Error(
+          `Upstream ${path} at ${commit} does not match the Git object its folder lists`,
+        );
+      // Written beside its place and renamed, so a stopped run leaves no partial copy under the ID
+      await mkdir(folder, { recursive: true });
+      const partial = `${copy}.${process.pid}.partial`;
+      await writeFile(partial, bytes);
+      await rename(partial, copy);
+      return bytes;
+    },
+    async prune() {
+      for (const name of await readdir(folder).catch(() => []))
+        if (commitPattern.test(name) && !read.has(name))
+          await rm(join(folder, name), { force: true });
+    },
+  };
 }
 
 /**
@@ -1147,27 +1674,42 @@ export function keepingCopies(source, folder) {
  * @param {string} commit
  * @returns {Source}
  */
-const atCommit = (source, commit) => ({ ...source, resolveCommit: async () => commit })
+const atCommit = (source, commit) => ({
+  ...source,
+  resolveCommit: async () => commit,
+});
 
 /** @param {string[]} args */
 function parseArguments(args) {
-    /** @type {{ update?: string, baseline?: string, record?: string, comment?: string }} */
-    const options = {}
-    for (let index = 0; index < args.length; index++) {
-        const arg = args[index]
-        if (arg === "--update" && options.update === undefined) {
-            const commit = args[++index]
-            if (!commit || !commitPattern.test(commit)) throw new Error("--update requires the full 40-character commit that was reviewed")
-            options.update = commit
-        } else if ((arg === "--baseline" || arg === "--record" || arg === "--comment") && options[arg.slice(2)] === undefined) {
-            const path = args[++index]
-            if (!path || path.startsWith("--")) throw new Error(`${arg} requires a file path`)
-            options[arg.slice(2)] = path
-        } else throw new Error("Use --update <commit> or --baseline <file>, --record <file> and --comment <file>, with each argument at most once")
-    }
-    if (options.update && (options.baseline || options.record || options.comment))
-        throw new Error("Use --update separately from --baseline, --record and --comment")
-    return options
+  /** @type {{ update?: string, baseline?: string, record?: string, comment?: string }} */
+  const options = {};
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--update" && options.update === undefined) {
+      const commit = args[++index];
+      if (!commit || !commitPattern.test(commit))
+        throw new Error(
+          "--update requires the full 40-character commit that was reviewed",
+        );
+      options.update = commit;
+    } else if (
+      (arg === "--baseline" || arg === "--record" || arg === "--comment") &&
+      options[arg.slice(2)] === undefined
+    ) {
+      const path = args[++index];
+      if (!path || path.startsWith("--"))
+        throw new Error(`${arg} requires a file path`);
+      options[arg.slice(2)] = path;
+    } else
+      throw new Error(
+        "Use --update <commit> or --baseline <file>, --record <file> and --comment <file>, with each argument at most once",
+      );
+  }
+  if (options.update && (options.baseline || options.record || options.comment))
+    throw new Error(
+      "Use --update separately from --baseline, --record and --comment",
+    );
+  return options;
 }
 
 /**
@@ -1179,54 +1721,80 @@ function parseArguments(args) {
  * @returns {Promise<Baseline>}
  */
 async function readBaseline(manifest, path) {
-    if (!path) return { manifest, kind: "repository-pin" }
-    let text
-    try {
-        text = await readFile(path, "utf8")
-    } catch {
-        return { manifest, kind: "repository-pin", reason: "Previous-run baseline file is missing or unreadable" }
-    }
-    let value
-    try {
-        value = JSON.parse(text)
-    } catch {
-        return { manifest, kind: "repository-pin", reason: "Previous-run baseline file is not valid JSON" }
-    }
-    try {
-        const previous = validateManifest(value)
-        if (
-            previous.repository !== manifest.repository ||
-            previous.branch !== manifest.branch ||
-            previous.files.openapi.path !== manifest.files.openapi.path ||
-            previous.gatewayDocs.path !== manifest.gatewayDocs.path ||
-            previous.rateLimits.path !== manifest.rateLimits.path
-        ) throw new Error("Baseline target differs from the repository manifest")
-        if (previous.pin === undefined)
-            return {
-                manifest,
-                kind: "repository-pin",
-                reason: "The previous run's observation does not record the repository pin it ran under, so the pin may have moved since and is used",
-            }
-        if (previous.pin !== manifest.commit)
-            return {
-                manifest,
-                kind: "repository-pin",
-                reason: `The repository pin moved from ${previous.pin.slice(0, 10)} to ${manifest.commit.slice(0, 10)} since the previous run, so the pin is used`,
-            }
-        // A source file the repository pin watches but the previous run did not, such as one added since, compares with
-        // its pinned hash until a run records it
-        const sourceFacts = manifest.sourceFacts?.map((fact) => previous.sourceFacts?.find(({ path }) => path === fact.path) ?? fact)
-        // The same goes for a watched voice path, and for the folder list when the previous run recorded none
-        const voice = manifest.voice?.map((entry) => previous.voice?.find(({ path }) => path === entry.path) ?? entry)
-        const folders = manifest.folders && (previous.folders ?? manifest.folders)
-        return {
-            manifest: { ...previous, ...(sourceFacts ? { sourceFacts } : {}), ...(voice ? { voice } : {}), ...(folders ? { folders } : {}) },
-            kind: "previous-run",
-            reason: `The repository pin is still ${manifest.commit.slice(0, 10)}, as in the previous run, so that run's observation is used`,
-        }
-    } catch {
-        return { manifest, kind: "repository-pin", reason: "Previous-run baseline is invalid or targets different upstream documents" }
-    }
+  if (!path) return { manifest, kind: "repository-pin" };
+  let text;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return {
+      manifest,
+      kind: "repository-pin",
+      reason: "Previous-run baseline file is missing or unreadable",
+    };
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {
+      manifest,
+      kind: "repository-pin",
+      reason: "Previous-run baseline file is not valid JSON",
+    };
+  }
+  try {
+    const previous = validateManifest(value);
+    if (
+      previous.repository !== manifest.repository ||
+      previous.branch !== manifest.branch ||
+      previous.files.openapi.path !== manifest.files.openapi.path ||
+      previous.gatewayDocs.path !== manifest.gatewayDocs.path ||
+      previous.rateLimits.path !== manifest.rateLimits.path
+    )
+      throw new Error("Baseline target differs from the repository manifest");
+    if (previous.pin === undefined)
+      return {
+        manifest,
+        kind: "repository-pin",
+        reason:
+          "The previous run's observation does not record the repository pin it ran under, so the pin may have moved since and is used",
+      };
+    if (previous.pin !== manifest.commit)
+      return {
+        manifest,
+        kind: "repository-pin",
+        reason: `The repository pin moved from ${previous.pin.slice(0, 10)} to ${manifest.commit.slice(0, 10)} since the previous run, so the pin is used`,
+      };
+    // A source file the repository pin watches but the previous run did not, such as one added since, compares with
+    // its pinned hash until a run records it
+    const sourceFacts = manifest.sourceFacts?.map(
+      (fact) =>
+        previous.sourceFacts?.find(({ path }) => path === fact.path) ?? fact,
+    );
+    // The same goes for a watched voice path, and for the folder list when the previous run recorded none
+    const voice = manifest.voice?.map(
+      (entry) =>
+        previous.voice?.find(({ path }) => path === entry.path) ?? entry,
+    );
+    const folders = manifest.folders && (previous.folders ?? manifest.folders);
+    return {
+      manifest: {
+        ...previous,
+        ...(sourceFacts ? { sourceFacts } : {}),
+        ...(voice ? { voice } : {}),
+        ...(folders ? { folders } : {}),
+      },
+      kind: "previous-run",
+      reason: `The repository pin is still ${manifest.commit.slice(0, 10)}, as in the previous run, so that run's observation is used`,
+    };
+  } catch {
+    return {
+      manifest,
+      kind: "repository-pin",
+      reason:
+        "Previous-run baseline is invalid or targets different upstream documents",
+    };
+  }
 }
 
 /**
@@ -1236,19 +1804,42 @@ async function readBaseline(manifest, path) {
  * @returns {Manifest}
  */
 function observation(manifest, result, pin) {
-    const file = (/** @type {string} */ key) => ({ path: result.files[key].path, sha256: result.files[key].current })
-    return {
-        repository: manifest.repository,
-        branch: manifest.branch,
-        commit: result.commit,
-        ...(pin ? { pin } : {}),
-        files: { openapi: file("openapi") },
-        gatewayDocs: { path: result.gatewayDocs.path, sha256: result.gatewayDocs.current },
-        rateLimits: { path: result.rateLimits.path, sha256: result.rateLimits.current },
-        ...(manifest.sourceFacts ? { sourceFacts: result.sourceFacts.map(({ path, current }) => ({ path, sha256: current })) } : {}),
-        ...(manifest.voice ? { voice: result.voice.map(({ path, current }) => ({ path, sha256: current })) } : {}),
-        ...(result.folders ? { folders: result.folders } : {}),
-    }
+  const file = (/** @type {string} */ key) => ({
+    path: result.files[key].path,
+    sha256: result.files[key].current,
+  });
+  return {
+    repository: manifest.repository,
+    branch: manifest.branch,
+    commit: result.commit,
+    ...(pin ? { pin } : {}),
+    files: { openapi: file("openapi") },
+    gatewayDocs: {
+      path: result.gatewayDocs.path,
+      sha256: result.gatewayDocs.current,
+    },
+    rateLimits: {
+      path: result.rateLimits.path,
+      sha256: result.rateLimits.current,
+    },
+    ...(manifest.sourceFacts
+      ? {
+          sourceFacts: result.sourceFacts.map(({ path, current }) => ({
+            path,
+            sha256: current,
+          })),
+        }
+      : {}),
+    ...(manifest.voice
+      ? {
+          voice: result.voice.map(({ path, current }) => ({
+            path,
+            sha256: current,
+          })),
+        }
+      : {}),
+    ...(result.folders ? { folders: result.folders } : {}),
+  };
 }
 
 /**
@@ -1258,72 +1849,124 @@ function observation(manifest, result, pin) {
  * @param {{ source?: Source, manifestFile?: string, summaryFile?: string, copiesFolder?: string }} [dependencies] With
  * copiesFolder, each upstream file is read from a kept copy when it is unchanged, and only this run's copies stay
  */
-export async function runUpstream(args, {
+export async function runUpstream(
+  args,
+  {
     source: upstreamSource = githubSource,
     manifestFile = manifestPath,
     summaryFile = process.env.GITHUB_STEP_SUMMARY,
     copiesFolder,
-} = {}) {
-    const options = parseArguments(args)
-    const copies = copiesFolder ? keepingCopies(upstreamSource, copiesFolder) : undefined
-    const source = remembering(copies ?? upstreamSource)
-    const manifest = validateManifest(JSON.parse(await readFile(manifestFile, "utf8")))
-    const baseline = await readBaseline(manifest, options.baseline)
-    // An update records the commit that was reviewed, which is not the branch head once upstream has moved
-    const result = await checkUpstream(baseline.manifest, options.update ? atCommit(source, options.update) : source)
-    // A moved pin is the reviewed commit itself, so only a recorded observation names the pin it ran under
-    const observed = observation(baseline.manifest, result, options.update ? undefined : manifest.commit)
-    if (options.update) {
-        // Moving the pin also pins the docs files the website's endpoint map reads at that commit
-        const { files, gatewayDocs, rateLimits, sourceFacts, voice, folders, ...identity } = observed
-        const endpointDocs = await readEndpointDocs(manifest, source, result.commit)
-        const pin = {
-            ...identity,
-            files,
-            endpointDocs,
-            gatewayDocs,
-            rateLimits,
-            ...(sourceFacts ? { sourceFacts } : {}),
-            ...(voice ? { voice } : {}),
-            ...(folders ? { folders } : {}),
-        }
-        await writeFile(manifestFile, JSON.stringify(pin, null, 4) + "\n")
-        await copies?.prune()
-        return { report: `Pinned ${manifest.repository} at ${result.commit}`, result, baseline }
-    }
-    if (options.record) await writeFile(options.record, JSON.stringify(observed, null, 4) + "\n")
-    // A change since the pin stays visible after the run that signalled it, at the commit the previous-run comparison read
-    const sincePin =
-        baseline.kind === "previous-run"
-            ? await checkUpstream(manifest, atCommit(source, result.commit))
-            : undefined
-    const commits = options.comment ? await watchedCommits(baseline.manifest, source, result.commit) : undefined
-    const sources = commits ? ["", ...sourceReport(baseline.manifest.repository, commits)] : []
-    const report = [renderReport(result, baseline, sincePin), ...sources].join("\n")
-    if (summaryFile) await appendFile(summaryFile, report + "\n")
-    // The comment holds only what changed since the last report. Nothing new means no comment
-    if (options.comment && (result.drift || result.newVoiceFolders.length || commits?.length))
-        await writeFile(options.comment, limitComment([renderReport(result, baseline), ...sources].join("\n")) + "\n")
-    await copies?.prune()
-    return { report, result, baseline, sincePin, commits }
+  } = {},
+) {
+  const options = parseArguments(args);
+  const copies = copiesFolder
+    ? keepingCopies(upstreamSource, copiesFolder)
+    : undefined;
+  const source = remembering(copies ?? upstreamSource);
+  const manifest = validateManifest(
+    JSON.parse(await readFile(manifestFile, "utf8")),
+  );
+  const baseline = await readBaseline(manifest, options.baseline);
+  // An update records the commit that was reviewed, which is not the branch head once upstream has moved
+  const result = await checkUpstream(
+    baseline.manifest,
+    options.update ? atCommit(source, options.update) : source,
+  );
+  // A moved pin is the reviewed commit itself, so only a recorded observation names the pin it ran under
+  const observed = observation(
+    baseline.manifest,
+    result,
+    options.update ? undefined : manifest.commit,
+  );
+  if (options.update) {
+    // Moving the pin also pins the docs files the website's endpoint map reads at that commit
+    const {
+      files,
+      gatewayDocs,
+      rateLimits,
+      sourceFacts,
+      voice,
+      folders,
+      ...identity
+    } = observed;
+    const endpointDocs = await readEndpointDocs(
+      manifest,
+      source,
+      result.commit,
+    );
+    const pin = {
+      ...identity,
+      files,
+      endpointDocs,
+      gatewayDocs,
+      rateLimits,
+      ...(sourceFacts ? { sourceFacts } : {}),
+      ...(voice ? { voice } : {}),
+      ...(folders ? { folders } : {}),
+    };
+    await writeFile(manifestFile, JSON.stringify(pin, null, 4) + "\n");
+    await copies?.prune();
+    return {
+      report: `Pinned ${manifest.repository} at ${result.commit}`,
+      result,
+      baseline,
+    };
+  }
+  if (options.record)
+    await writeFile(options.record, JSON.stringify(observed, null, 4) + "\n");
+  // A change since the pin stays visible after the run that signalled it, at the commit the previous-run comparison read
+  const sincePin =
+    baseline.kind === "previous-run"
+      ? await checkUpstream(manifest, atCommit(source, result.commit))
+      : undefined;
+  const commits = options.comment
+    ? await watchedCommits(baseline.manifest, source, result.commit)
+    : undefined;
+  const sources = commits
+    ? ["", ...sourceReport(baseline.manifest.repository, commits)]
+    : [];
+  const report = [renderReport(result, baseline, sincePin), ...sources].join(
+    "\n",
+  );
+  if (summaryFile) await appendFile(summaryFile, report + "\n");
+  // The comment holds only what changed since the last report. Nothing new means no comment
+  if (
+    options.comment &&
+    (result.drift || result.newVoiceFolders.length || commits?.length)
+  )
+    await writeFile(
+      options.comment,
+      limitComment([renderReport(result, baseline), ...sources].join("\n")) +
+        "\n",
+    );
+  await copies?.prune();
+  return { report, result, baseline, sincePin, commits };
 }
 
 async function main() {
-    const args = process.argv.slice(2)
-    const { report } = await runUpstream(args, { copiesFolder: copiesPath })
-    console.log(report)
-    // Moving the pin regenerates the route types client.rest.call checks, from the newly pinned files. The OpenAPI
-    // example and gateway docs fixtures remain separate steps, which docs/REPOSITORY.md lists
-    if (args.includes("--update")) {
-        const generator = new URL("../sdk/scripts/rest-routes.js", import.meta.url).href
-        const { writeRestRoutes } = await import(generator)
-        const { routes } = await writeRestRoutes()
-        console.log(`Regenerated the types of ${routes} REST routes in sdk/src/rest-routes.ts`)
-    }
+  const args = process.argv.slice(2);
+  const { report } = await runUpstream(args, { copiesFolder: copiesPath });
+  console.log(report);
+  // Moving the pin regenerates the route types client.rest.call checks, from the newly pinned files. The OpenAPI
+  // example and gateway docs fixtures remain separate steps, which docs/REPOSITORY.md lists
+  if (args.includes("--update")) {
+    const generator = new URL("../sdk/scripts/rest-routes.js", import.meta.url)
+      .href;
+    const { writeRestRoutes } = await import(generator);
+    const { routes } = await writeRestRoutes();
+    console.log(
+      `Regenerated the types of ${routes} REST routes in sdk/src/rest-routes.ts`,
+    );
+  }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-    main().catch((error) => {
-        console.error(error instanceof Error ? error.message : "Upstream drift check failed")
-        process.exitCode = 1
-    })
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+)
+  main().catch((error) => {
+    console.error(
+      error instanceof Error ? error.message : "Upstream drift check failed",
+    );
+    process.exitCode = 1;
+  });

@@ -1,18 +1,23 @@
 /**
- * Attachment downloads: Buffered downloads and one-shot streamed readers over the selected instance's media URLs.
- * Invariant: Downloads accept only the selected instance's media attachment URLs, enforce the caller's output limit and
- * deadline, send no credential or cookie, and hold one media slot until end of stream, cancellation or release.
+ * Attachment downloads: Buffered downloads and one-shot streamed readers over the selected instance's media and
+ * API-proxied attachment URLs.
+ * Invariant: Downloads accept only the selected instance's media attachment URLs or its API attachment URLs under
+ * apiPublic, enforce the caller's output limit and deadline, attach the bot Authorization header only to verified
+ * apiPublic attachment URLs (never to media URLs, external URLs or redirects), reject redirects, and hold one media
+ * slot until end of stream, cancellation or release.
  * Implements [SDK contracts: Delivery, requests and caches](/docs/SDK-CONTRACTS.md#delivery-requests-and-caches)
  */
 import * as Cause from "effect/Cause"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
+import * as Redacted from "effect/Redacted"
 import type { Attachment, AttachmentDownloadFailure, AttachmentDownloadOptions } from "#sdk/attachments"
 import { AttachmentDownloadError } from "#sdk/attachments"
 import { ClientClosedError, ConnectionError } from "#sdk/errors"
 import type { MessageCore } from "#sdk/messages"
 import { inputValidationFailure, unsupportedKeyFailure, type InputValidationConstraint } from "#sdk/input-validation"
+import { maximumTimerMs } from "../clock.js"
 import { record } from "../decode/primitives.js"
 import { readCaller, suspendMarked, thrownCause } from "../defects.js"
 import { mapFailureCause, TransportError, withDeadline } from "../effect-failures.js"
@@ -22,8 +27,6 @@ import { completeCleanup } from "../transfer-source.js"
 import { discoveryFailures, RestFailure, restFailures } from "./classify.js"
 import type { RestRuntime } from "./owner.js"
 
-/** Longest single timer delay */
-const maximumTimerMs = 2_147_483_647
 /** Longest accepted attachment URL */
 const maximumUrlLength = 8192
 
@@ -127,9 +130,14 @@ export class AttachmentDownloadSource {
         )
     }
 
-    open(url: string): Promise<Response> {
+    open(url: string, headers?: Readonly<Record<string, string>>): Promise<Response> {
         this.#opening = this.options
-            .http(url, { method: "GET", redirect: "error", signal: this.options.controller.signal })
+            .http(url, {
+                method: "GET",
+                ...(headers ? { headers } : {}),
+                redirect: "error",
+                signal: this.options.controller.signal,
+            })
             .then((response) => {
                 this.#response = response
                 return response
@@ -373,27 +381,81 @@ function downloadInput(
     return { maxBytes, timeout, attachmentUrl }
 }
 
-function attachmentDownloadUrl(value: unknown, instance: InstanceEndpointContext): string | undefined {
+/** Fluxer's API-proxied attachment route shape, matching AttachmentPublicUrl.ts at 66cede64 */
+const apiVersionPrefix = /^\/v[0-9]+(?=\/)/u
+const apiAttachmentPath = /^\/channels\/([0-9]{1,20})\/attachments\/([0-9]{1,20})\/([^/]+)$/u
+const encodedSeparator = /%(?:2e|2f|5c)/iu
+
+interface TrustedDownloadTarget {
+    readonly url: string
+    /** True only when the URL matches apiPublic's attachment route and should receive the bot token */
+    readonly authenticated: boolean
+}
+
+function sameTrustedBase(url: URL, base: URL, allowInsecure: boolean): boolean {
+    return (
+        (base.protocol === "https:" || (allowInsecure && base.protocol === "http:")) &&
+        base.username === "" &&
+        base.password === "" &&
+        url.protocol === base.protocol &&
+        url.origin === base.origin &&
+        url.username === "" &&
+        url.password === "" &&
+        url.hash === ""
+    )
+}
+
+function safeApiAttachmentFilename(raw: string): boolean {
+    if (encodedSeparator.test(raw)) return false
+    try {
+        const decoded = decodeURIComponent(raw)
+        return (
+            decoded.length > 0 &&
+            decoded !== "." &&
+            decoded !== ".." &&
+            !decoded.includes("/") &&
+            !decoded.includes("\\") &&
+            !decoded.includes("\0")
+        )
+    } catch {
+        // allow-silent: Malformed percent-encoding in an attachment filename is rejected as untrusted
+        return false
+    }
+}
+
+function attachmentDownloadTarget(
+    value: unknown,
+    instance: InstanceEndpointContext,
+): TrustedDownloadTarget | undefined {
     if (typeof value !== "string" || value.length < 1 || value.length > maximumUrlLength) return undefined
     try {
-        const base = new URL(instance.media)
         const url = new URL(value)
-        const path = `${base.pathname === "/" ? "" : base.pathname.replace(/\/$/, "")}/attachments/`
-        return (base.protocol === "https:" || (instance.allowInsecure && base.protocol === "http:")) &&
-            base.username === "" &&
-            base.password === "" &&
-            url.protocol === base.protocol &&
-            url.origin === base.origin &&
-            url.username === "" &&
-            url.password === "" &&
-            url.hash === "" &&
-            url.pathname.startsWith(path)
-            ? url.toString()
-            : undefined
+        const mediaBase = new URL(instance.media)
+        const mediaPrefix = `${mediaBase.pathname === "/" ? "" : mediaBase.pathname.replace(/\/$/, "")}/attachments/`
+        if (sameTrustedBase(url, mediaBase, instance.allowInsecure) && url.pathname.startsWith(mediaPrefix)) {
+            return { url: url.toString(), authenticated: false }
+        }
+        const apiBase = new URL(instance.apiPublic)
+        const apiBasePath = apiBase.pathname === "/" ? "" : apiBase.pathname.replace(/\/$/, "")
+        if (sameTrustedBase(url, apiBase, instance.allowInsecure) && url.pathname.startsWith(`${apiBasePath}/`)) {
+            const remainder = url.pathname.slice(apiBasePath.length).replace(apiVersionPrefix, "")
+            const match = apiAttachmentPath.exec(remainder)
+            if (match && safeApiAttachmentFilename(match[3]!)) {
+                return { url: url.toString(), authenticated: true }
+            }
+        }
+        return undefined
     } catch {
         // allow-silent: An unparsable URL is not an instance attachment URL
         return undefined
     }
+}
+
+function downloadHeaders(
+    target: TrustedDownloadTarget,
+    token: Redacted.Redacted<string>,
+): Readonly<Record<string, string>> | undefined {
+    return target.authenticated ? { Authorization: `Bot ${Redacted.value(token)}` } : undefined
 }
 
 /** The owner's resolved instance, discovering it through a media slot on first use */
@@ -452,6 +514,7 @@ function mediaSlot<M extends MessageCore>(runtime: RestRuntime<M>) {
 /** Open a streamed download that holds its media slot until the reader ends, fails or is released */
 export function openAttachmentStream<M extends MessageCore>(
     runtime: RestRuntime<M>,
+    token: Redacted.Redacted<string>,
     attachment: Attachment,
     options?: AttachmentDownloadOptions,
 ): Effect.Effect<AttachmentDownloadSource, AttachmentDownloadFailure> {
@@ -471,8 +534,8 @@ export function openAttachmentStream<M extends MessageCore>(
         const deadline = Date.now() + timeout
         return Effect.gen(function* () {
             const instance = yield* mediaInstance(runtime)
-            const url = attachmentDownloadUrl(attachmentUrl, instance)
-            if (!url) return yield* Effect.fail(new AttachmentDownloadError({ reason: "untrustedUrl" }))
+            const target = attachmentDownloadTarget(attachmentUrl, instance)
+            if (!target) return yield* Effect.fail(new AttachmentDownloadError({ reason: "untrustedUrl" }))
             const release = yield* mediaSlot(runtime)
             const controller = new AbortController()
             runtime.controllers.add(controller)
@@ -492,7 +555,7 @@ export function openAttachmentStream<M extends MessageCore>(
             })
             runtime.downloads.add(source)
             const response = yield* Effect.tryPromise({
-                try: () => source!.open(url),
+                try: () => source!.open(target.url, downloadHeaders(target, token)),
                 // Shutdown fails the source with ClientClosedError, which open rethrows
                 catch: (error) =>
                     error instanceof AttachmentDownloadError || error instanceof ClientClosedError
@@ -524,6 +587,7 @@ export function openAttachmentStream<M extends MessageCore>(
 /** Download a whole attachment into memory within its byte limit and deadline */
 export function downloadAttachment<M extends MessageCore>(
     runtime: RestRuntime<M>,
+    token: Redacted.Redacted<string>,
     attachment: Attachment,
     options?: AttachmentDownloadOptions,
 ): Effect.Effect<Uint8Array, AttachmentDownloadFailure> {
@@ -564,16 +628,18 @@ export function downloadAttachment<M extends MessageCore>(
         }
         return Effect.gen(function* () {
             const instance = yield* mediaInstance(runtime)
-            const url = attachmentDownloadUrl(attachmentUrl, instance)
-            if (!url) return yield* Effect.fail(new AttachmentDownloadError({ reason: "untrustedUrl" }))
+            const target = attachmentDownloadTarget(attachmentUrl, instance)
+            if (!target) return yield* Effect.fail(new AttachmentDownloadError({ reason: "untrustedUrl" }))
             release = yield* mediaSlot(runtime)
             controller = new AbortController()
             runtime.controllers.add(controller)
+            const headers = downloadHeaders(target, token)
             return yield* Effect.tryPromise({
                 try: () => {
                     const work = (async () => {
-                        response = await runtime.http(url, {
+                        response = await runtime.http(target.url, {
                             method: "GET",
+                            ...(headers ? { headers } : {}),
                             redirect: "error",
                             signal: controller!.signal,
                         })

@@ -326,7 +326,7 @@ test.each(modes)("%s manages one forum tag through its own routes and returns th
     expect(replaced.requests()[0]!.body).toEqual({ name: "bug" })
     expect(deleted.requests()).toMatchObject([{ path: `/channels/${forum.id}/tags/71`, body: undefined }])
     for (const route of [created, replaced, deleted])
-        expect(route.requests().map((request) => request.headers["x-audit-log-reason"])).toEqual(["tag cleanup"])
+        expect(route.requests().map((request) => request.headers["x-audit-log-reason"])).toEqual(["tag%20cleanup"])
     expect(afterCreate).toMatchObject({ id: forum.id, type: ChannelType.Forum })
     expect(afterCreate.availableTags?.map((tag) => tag.name)).toEqual(["bug", "staff"])
     expect(afterEdit.type).toBe(ChannelType.Media)

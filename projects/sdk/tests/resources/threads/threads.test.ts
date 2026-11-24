@@ -51,7 +51,7 @@ test.each(modes)("%s creates threads from Fluxer's 201 answers through their rou
     expect(Object.isFrozen(thread)).toBe(true)
     expect(create.requests()[0]).toMatchObject({
         body: { name: "Planning", type: 12, auto_archive_duration: 1440, rate_limit_per_user: 5, invitable: false },
-        headers: { "x-audit-log-reason": "Release work" },
+        headers: { "x-audit-log-reason": "Release%20work" },
     })
     // Fluxer requires a type, so an omitted one is sent as a public thread
     await settle(api.client.threads.create(parent, { name: "Open" }))
@@ -146,7 +146,7 @@ test.each(modes)("%s edits a thread and sends pinned as the thread's flags", asy
     expect(edited).toMatchObject({ id: thread.id, flags: 2, appliedTagIds: ["7"] })
     expect(edit.requests()[0]).toMatchObject({
         body: { archived: false, locked: true, flags: 2, applied_tags: ["7"] },
-        headers: { "x-audit-log-reason": "Pin the guide" },
+        headers: { "x-audit-log-reason": "Pin%20the%20guide" },
     })
     await settle(api.client.threads.edit(thread.id, { pinned: false }))
     expect(edit.requests()[1]!.body).toEqual({ flags: 0 })

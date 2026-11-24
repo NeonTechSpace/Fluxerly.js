@@ -1,9 +1,9 @@
 {
     "source": {
         "repository": "fluxerapp/fluxer",
-        "commit": "0098958f94ba4cd80c0dac25129d568be7759bd3",
+        "commit": "66cede641bd77335ec25c60bb5bc670c98ff537e",
         "path": "fluxer_api/src/api/openapi/openapi.json",
-        "sha256": "3906f9bfb698b0889998ae2acba5c10fab16bd83baa2902c6b189c514192e8dd"
+        "sha256": "b21f19e2319b7094152aa8e8e9acc27facf1f0eca0dc3c2a90004d940119a202"
     },
     "factsSha256": "5bf75bdd8f429eca8e6a8e8c43440e0b0afbab72e1f0f8d899b038be6a7444bd",
     "schemas": {
@@ -6302,6 +6302,66 @@
                 }
             }
         ],
+        "GuildBanResponse": [
+            {
+                "name": "minimal",
+                "value": {
+                    "user": {
+                        "id": "744805132688845628",
+                        "username": "username",
+                        "discriminator": "discriminator",
+                        "global_name": "global_name",
+                        "avatar": "avatar",
+                        "avatar_color": 0,
+                        "flags": 0
+                    },
+                    "moderator_id": "164525513696075503",
+                    "banned_at": "2026-01-01T00:00:00.000Z"
+                }
+            },
+            {
+                "name": "full",
+                "value": {
+                    "user": {
+                        "id": "744805132688845628",
+                        "username": "username",
+                        "discriminator": "discriminator",
+                        "global_name": "global_name",
+                        "avatar": "avatar",
+                        "avatar_color": 2147483647,
+                        "bot": true,
+                        "system": true,
+                        "flags": 2147483647,
+                        "mention_flags": 2
+                    },
+                    "reason": "reason",
+                    "moderator_id": "164525513696075503",
+                    "banned_at": "2026-01-01T00:00:00.000Z",
+                    "expires_at": "2026-01-01T00:00:00.000Z"
+                }
+            },
+            {
+                "name": "nulls",
+                "value": {
+                    "user": {
+                        "id": "744805132688845628",
+                        "username": "username",
+                        "discriminator": "discriminator",
+                        "global_name": null,
+                        "avatar": null,
+                        "avatar_color": null,
+                        "bot": true,
+                        "system": true,
+                        "flags": 2147483647,
+                        "mention_flags": 2
+                    },
+                    "reason": null,
+                    "moderator_id": "164525513696075503",
+                    "banned_at": "2026-01-01T00:00:00.000Z",
+                    "expires_at": null
+                }
+            }
+        ],
         "GuildBanListResponse": [
             { "name": "minimal", "value": [] },
             {
@@ -6597,7 +6657,7 @@
                         "channel_count": 2147483647,
                         "message_count": 2147483647
                     },
-                    "age_verified_adult": true,
+                    "mature_content_unlocked": true,
                     "terms_agreed_at": "2026-01-01T00:00:00.000Z",
                     "privacy_agreed_at": "2026-01-01T00:00:00.000Z",
                     "claimed": true,
@@ -6605,6 +6665,7 @@
                     "verification_need": "password",
                     "has_password": true,
                     "date_of_birth_required": true,
+                    "has_age_range": true,
                     "profile_restricted": true
                 }
             },
@@ -6667,7 +6728,7 @@
                     "has_unread_gift_inventory": true,
                     "unread_gift_inventory_count": 2147483647,
                     "pending_bulk_message_deletion": null,
-                    "age_verified_adult": true,
+                    "mature_content_unlocked": true,
                     "terms_agreed_at": null,
                     "privacy_agreed_at": null,
                     "claimed": true,
@@ -6675,6 +6736,7 @@
                     "verification_need": null,
                     "has_password": true,
                     "date_of_birth_required": true,
+                    "has_age_range": true,
                     "profile_restricted": true
                 }
             }

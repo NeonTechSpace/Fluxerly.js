@@ -281,7 +281,7 @@ test("rejects malformed member-profile requests and profile response fields", ()
         { avatar: "data:image/png;base64,AB==" },
         { banner: "not-a-data-uri" },
         { bio: " " },
-        { bio: "x".repeat(321) },
+        { bio: "x".repeat(1001) },
         { pronouns: " " },
         { pronouns: "x".repeat(41) },
         { accentColor: -1 },
@@ -295,6 +295,9 @@ test("rejects malformed member-profile requests and profile response fields", ()
         expect(memberEditSelf("20", input as never)).toBeInstanceOf(InputValidationFailure)
 
     expect(memberEditSelf("invalid", {})).toBeInstanceOf(InputValidationFailure)
+    expect(JSON.parse(validRequest(memberEditSelf("20", { bio: "x".repeat(1000) })).json!)).toEqual({
+        bio: "x".repeat(1000),
+    })
     expect(JSON.parse(validRequest(memberEditSelf("20", { profileFlags: 4 })).json!)).toEqual({ profile_flags: 4 })
     for (const extra of [{ banner: 1 }, { accent_color: -1 }, { profile_flags: -1 }])
         expect(decodeMember(wireMember(extra), "20")).toBeUndefined()

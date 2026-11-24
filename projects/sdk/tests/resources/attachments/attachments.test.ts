@@ -2363,6 +2363,97 @@ test.each(modes)("%s bounds trusted attachment downloads without proxy fallback 
     })
 })
 
+test.each(modes)(
+    "%s sends bot authorization only to trusted API-proxied attachment URLs and never to media or redirects",
+    async (mode) => {
+        const seen: { url: string; authorization: string | null; redirect: RequestRedirect | undefined }[] = []
+        vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+            if (url === "https://community.example/.well-known/fluxer")
+                return Response.json({
+                    api_code_version: 1,
+                    endpoints: {
+                        api_public: "https://api.community.example/root",
+                        gateway: "wss://gateway.community.example",
+                        media: "https://media.community.example",
+                        static_cdn: "https://static.community.example",
+                        webapp: "https://app.community.example",
+                        invite: "https://join.community.example",
+                    },
+                    features: { presigned_attachment_uploads: false, proxy_attachments_through_api: true },
+                })
+            seen.push({
+                url,
+                authorization: new Headers(init.headers).get("authorization"),
+                redirect: init.redirect,
+            })
+            if (url.endsWith("/redirect.bin")) return Promise.reject(new TypeError("redirected"))
+            return new Response(new Uint8Array([7, 8, 9]), { status: 200 })
+        })
+        const api = await driver(mode, { instance: { url: "https://community.example" } })
+        const make = (url: string): Attachment => ({ id: "40", filename: "fixture.bin", size: 3, flags: 0, url })
+        const apiVersioned = make("https://api.community.example/root/v1/channels/20/attachments/40/fixture.bin")
+        const apiUnversioned = make("https://api.community.example/root/channels/20/attachments/40/fixture.bin")
+        const media = make("https://media.community.example/attachments/20/40/fixture.bin")
+
+        expect(await api.download(apiVersioned, 10)).toEqual(new Uint8Array([7, 8, 9]))
+        expect(await api.download(apiUnversioned, 10)).toEqual(new Uint8Array([7, 8, 9]))
+        expect(await api.download(media, 10)).toEqual(new Uint8Array([7, 8, 9]))
+        if (mode === "default") {
+            const first = await api.stream(apiVersioned, { maxBytes: 10 })[Symbol.asyncIterator]().next()
+            expect(first).toMatchObject({ done: false, value: { value: new Uint8Array([7, 8, 9]) } })
+        } else {
+            const first = await Effect.runPromise(
+                Stream.runHead(api.native!.attachments.stream(apiVersioned, { maxBytes: 10 })),
+            )
+            expect(first).toMatchObject({ _tag: "Some", value: new Uint8Array([7, 8, 9]) })
+        }
+
+        expect(seen).toEqual([
+            {
+                url: apiVersioned.url,
+                authorization: "Bot fixture-only-not-a-credential",
+                redirect: "error",
+            },
+            {
+                url: apiUnversioned.url,
+                authorization: "Bot fixture-only-not-a-credential",
+                redirect: "error",
+            },
+            {
+                url: media.url,
+                authorization: null,
+                redirect: "error",
+            },
+            {
+                url: apiVersioned.url,
+                authorization: "Bot fixture-only-not-a-credential",
+                redirect: "error",
+            },
+        ])
+
+        // A redirect fails without ever following or leaking authorization to a redirect target
+        await expect(
+            api.download(make("https://api.community.example/root/v1/channels/20/attachments/40/redirect.bin"), 10),
+        ).rejects.toMatchObject({ _tag: "AttachmentDownloadError", reason: "network" })
+        const beforeUntrusted = seen.length
+        for (const badUrl of [
+            "https://api.community.example/root/v1/channels/20/messages",
+            "https://api.community.example/v1/channels/20/attachments/40/fixture.bin",
+            "https://api.community.example/root/v1/channels/20/attachments/40/a/b",
+            "https://api.community.example/root/v1/channels/20/attachments/40/..",
+            "https://api.community.example/root/v1/channels/20/attachments/40/%2e%2e",
+            "https://api.community.example/root/v1/channels/20/attachments/40/a%2fb",
+            "https://api.community.example/root/v1/channels/bad/attachments/40/fixture.bin",
+            "https://other.example/root/v1/channels/20/attachments/40/fixture.bin",
+        ])
+            await expect(api.download(make(badUrl), 10)).rejects.toMatchObject({
+                _tag: "AttachmentDownloadError",
+                reason: "untrustedUrl",
+            })
+        expect(seen).toHaveLength(beforeUntrusted)
+    },
+)
+
 const usedStream = {
     _tag: "AttachmentDownloadError",
     reason: "input",

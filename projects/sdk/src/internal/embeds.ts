@@ -56,7 +56,11 @@ const attachmentMediaExtensions: ReadonlySet<string> = Object.freeze(
 export type EmbedAttachmentFiles = readonly string[] | "existing" | undefined
 
 /** Fluxer stores an upload under this name, which an attachment:// reference must equal
- * (packages/schema/src/primitives/FileValidators.ts:12-14, 50-66 at 0098958f)
+ * (packages/schema/src/primitives/FileValidators.ts:12-14, 50-66 at 66cede64).
+ * Note: FileValidators.ts retains URI sub-delimiters and brackets (! $ & ' ( ) + , ; = @ [ ] ~) in stored upload
+ * filenames, whereas packages/schema/src/primitives/UrlValidators.ts:9 still restricts attachment:// URLs to
+ * /^[\p{L}\p{N}\p{M}_.-]+$/u. Keeping both rules exact here ensures the SDK does not fabricate an attachment:// match
+ * for a filename whose stored name Fluxer's attachment:// parser rejects
  */
 const reservedNames = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)/i
 function uploadedFilename(value: string): string {
@@ -67,7 +71,7 @@ function uploadedFilename(value: string): string {
     normalized = normalized.replace(/[<>:"|?*]/g, "")
     if (reservedNames.test(normalized)) normalized = `_${normalized}`
     normalized = normalized.replace(/\s+/g, "_")
-    normalized = normalized.replace(/[^\p{L}\p{N}\p{M}_.-]/gu, "")
+    normalized = normalized.replace(/[^\p{L}\p{N}\p{M}_.\-!$&'()+,;=@[\]~]/gu, "")
     normalized = normalized.replace(/\.\./g, "_")
     if (!normalized || /^[._]+$/.test(normalized)) normalized = "unnamed"
     return normalized
@@ -127,20 +131,20 @@ const subjects: Readonly<Record<string, string>> = {
     "embeds[].fields[]": "Each embed field",
 }
 
-/** With emptyIsAbsent, an empty string counts as absent, as on Fluxer's webhook message edit route, the only message
- * route whose body passes through Validator('json') (fluxer_api/src/api/webhook/WebhookController.ts:462 at 0098958f).
- * There Fluxer reads an empty string as absent everywhere in an embed except its fields, and drops an author, footer
- * or media object whose required text is then absent, without reading its other values
- * (fluxer_api/src/api/Validator.ts:59-80 and packages/schema/src/domains/message/MessageRequestSchemas.ts:34-43, 50-98).
- * So such an empty string is sent as given, and the other strings of a dropped object are sent unchecked. Message
- * sends, channel message edits and webhook sends parse the raw body (MessageRequestParser.ts:383-402,
- * WebhookController.ts:72-82), so there an empty string is checked like any other value
+/** On all message routes, Fluxer drops an embed author, footer or media object whose required field is an empty string
+ * without reading its other values (omitEmbedObjectWithoutRequiredField in
+ * packages/schema/src/domains/message/MessageRequestSchemas.ts:39-89 at 66cede64), so omitWhenRequiredEmpty sends that
+ * object's string fields unchecked. With emptyIsAbsent, an empty string counts as absent everywhere in an embed except
+ * its fields, as on Fluxer's webhook message edit route, the only message route whose body passes through
+ * Validator('json') (fluxer_api/src/api/webhook/WebhookController.ts and fluxer_api/src/api/Validator.ts). On other
+ * message routes, an empty string in non-omitted fields such as url or timestamp is still checked like any other value
  */
 function projectInput(
     value: unknown,
     shape: Shape,
     path: string,
     emptyIsAbsent = false,
+    omitWhenRequiredEmpty = false,
 ): Record<string, unknown> | InputValidationFailure {
     const subject = subjects[path] ?? "Embed input"
     if (!object(value)) return inputValidationFailure(path, "type", `${subject} must be an object`)
@@ -153,7 +157,9 @@ function projectInput(
     if (unsupported) return unsupported
     // Each property is read once, so the value validated is the value sent
     const items = Object.entries(shape).map(([key, property]) => [key, property, value[key]] as const)
-    const dropped = emptyIsAbsent && items.some(([, [, , required], item]) => required === true && item === "")
+    const dropped =
+        (omitWhenRequiredEmpty || emptyIsAbsent) &&
+        items.some(([, [, , required], item]) => required === true && item === "")
     const result: Record<string, unknown> = {}
     for (const [key, [wire, read, required, validation], item] of items) {
         if ((emptyIsAbsent && item === "") || (dropped && typeof item === "string")) {
@@ -341,12 +347,15 @@ const inputEmbed = (uploadedFilenames: EmbedAttachmentFiles, emptyIsAbsent: bool
         false,
         ["format", "Embed timestamp must be an ISO 8601 timestamp with timezone"],
     ],
-    author: ["author", (value) => projectInput(value, inputAuthor, "embeds[].author", emptyIsAbsent)],
-    footer: ["footer", (value) => projectInput(value, inputFooter, "embeds[].footer", emptyIsAbsent)],
-    image: ["image", (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].image", emptyIsAbsent)],
+    author: ["author", (value) => projectInput(value, inputAuthor, "embeds[].author", emptyIsAbsent, true)],
+    footer: ["footer", (value) => projectInput(value, inputFooter, "embeds[].footer", emptyIsAbsent, true)],
+    image: [
+        "image",
+        (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].image", emptyIsAbsent, true),
+    ],
     thumbnail: [
         "thumbnail",
-        (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].thumbnail", emptyIsAbsent),
+        (value) => projectInput(value, inputMedia(uploadedFilenames), "embeds[].thumbnail", emptyIsAbsent, true),
     ],
     fields: [
         "fields",

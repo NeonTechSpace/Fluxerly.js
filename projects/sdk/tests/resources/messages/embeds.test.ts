@@ -212,6 +212,32 @@ test.each(modes)("%s sends an embed without values, which message sends and edit
     expect(server.requests.map((request) => request.body.embeds)).toEqual([[{}], [{}, { title: "" }]])
 })
 
+test.each(modes)(
+    "%s accepts embed sub-objects whose required field is empty on sends, replies and edits",
+    async (mode) => {
+        const server = await fixture()
+        const api = await driver(mode)
+        // Fluxer's MessageEmbed*Schema transforms empty required author, footer, image and thumbnail fields to undefined
+        // (packages/schema/src/domains/message/MessageRequestSchemas.ts:39-89 at 66cede64)
+        const embed = {
+            title: "Kept",
+            author: { name: "", url: "not a URL", iconUrl: "javascript:void 0" },
+            footer: { text: "", iconUrl: "not a URL" },
+            image: { url: "", description: "Unchecked" },
+            thumbnail: { url: "", description: "Unchecked" },
+        }
+        await api.send({ embeds: [embed] })
+        await api.reply({ embeds: [embed] })
+        await api.edit({ embeds: [embed] })
+        expect(server.requests).toHaveLength(3)
+        // Whitespace-only values are not empty strings and remain rejected locally
+        await rejectsInput(api.send({ embeds: [{ title: "Kept", author: { name: " " } }] }))
+        await rejectsInput(api.send({ embeds: [{ title: "Kept", footer: { text: " " } }] }))
+        await rejectsInput(api.send({ embeds: [{ title: "Kept", image: { url: " " } }] }))
+        expect(server.requests).toHaveLength(3)
+    },
+)
+
 test.each(modes)("%s rejects invalid input before dispatch without exposing private embed contents", async (mode) => {
     const server = await fixture()
     const api = await driver(mode)
@@ -226,11 +252,8 @@ test.each(modes)("%s rejects invalid input before dispatch without exposing priv
         { timestamp: "2025-02-29T00:00:00.000Z" },
         { url: "javascript:alert(1)" },
         { image: { url: "attachment://file.png" } },
-        // Message sends and channel edits take an empty string literally, so these fail Fluxer's own checks
-        { author: { name: "" } },
+        // Message sends and channel edits keep empty optional fields on non-empty sub-objects and top-level fields literal
         { author: { name: "Author", url: "" } },
-        { footer: { text: "" } },
-        { image: { url: "" } },
         { image: { url: "https://example.com/a.png", description: "" } },
         { url: "" },
         { timestamp: "" },

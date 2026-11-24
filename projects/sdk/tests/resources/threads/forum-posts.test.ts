@@ -52,7 +52,7 @@ test.each(modes)("%s creates a forum post with a file in one multipart request",
     // The test transport has presigned uploads off, so every request it records is the post itself
     expect(api.requests()).toHaveLength(1)
     const request = route.requests()[0]!
-    expect(request.headers["x-audit-log-reason"]).toBe("Bug report")
+    expect(request.headers["x-audit-log-reason"]).toBe("Bug%20report")
     expect(request.files).toEqual([{ field: "files[0]", filename: "log.txt", contentType: "text/plain", size: 3 }])
     expect(request.body).toMatchObject({
         name: "Crash on start",

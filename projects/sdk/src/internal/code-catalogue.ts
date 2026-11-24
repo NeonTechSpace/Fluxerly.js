@@ -216,7 +216,7 @@ export const errorCodes = {
         error: "AttachmentDownloadError",
         values: ["input", "untrustedUrl", "busy", "network", "response", "tooLarge", "timeout"],
         meaning:
-            "An attachment download failed. The reason untrustedUrl means the URL is not on this instance's media host, and tooLarge means the attachment is larger than maxBytes. The reason response with a non-2xx status means the media server refused the download",
+            "An attachment download failed. The reason untrustedUrl means the URL is not on this instance's media or API attachment path, and tooLarge means the attachment is larger than maxBytes. The reason response with a non-2xx status means the media or API server refused the download",
         action: "Pass attachments received from this client, and raise maxBytes for tooLarge",
     },
     "oauth.<reason>": {

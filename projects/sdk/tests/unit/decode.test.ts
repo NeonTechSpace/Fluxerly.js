@@ -61,10 +61,20 @@ describe("timestamp boundaries share the grammar and preserve accepted values", 
             const request = guildEdit("20", { messageHistoryCutoff: value })
             expect(request, value).not.toBeInstanceOf(InputValidationFailure)
             const json = (request as Exclude<typeof request, InputValidationFailure>).json
-            // Fluxer accepts only Z and hours 00 to 23, so other forms are sent as the same instant in UTC
-            expect(JSON.parse(json!).message_history_cutoff).toBe(utcTimestamp(value))
+            // Fluxer accepts Z and ±hh:mm offsets for hours 00 to 23, preserving them as given
+            expect(JSON.parse(json!).message_history_cutoff).toBe(value)
+            expect(utcTimestamp(value)).toBe(value)
+        }
+        // Midnight-end T24:00:00 forms still normalize to the equivalent UTC instant preserving fractional digits
+        for (const [value, expected] of [
+            ["2024-04-30T24:00:00Z", "2024-05-01T00:00:00Z"],
+            ["2024-04-30T24:00:00.000+01:00", "2024-04-30T23:00:00.000Z"],
+        ] as const) {
+            const request = guildEdit("20", { messageHistoryCutoff: value })
+            expect(request, value).not.toBeInstanceOf(InputValidationFailure)
+            const json = (request as Exclude<typeof request, InputValidationFailure>).json
+            expect(JSON.parse(json!).message_history_cutoff).toBe(expected)
             expect(Date.parse(JSON.parse(json!).message_history_cutoff)).toBe(Date.parse(value))
-            expect(JSON.parse(json!).message_history_cutoff).toMatch(/T(?:[01]\d|2[0-3]):.*Z$/)
         }
         for (const value of rejected)
             expect(guildEdit("20", { messageHistoryCutoff: value }), value).toBeInstanceOf(InputValidationFailure)

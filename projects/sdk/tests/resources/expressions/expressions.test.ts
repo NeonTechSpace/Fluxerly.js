@@ -55,7 +55,7 @@ test.each(modes)("%s manages expressions, projects allowlisted metadata and pres
         const metadata = await settle(api.fetchMetadata("100"))
         expect(metadata).toEqual({ guildId: "200", id: "100", name: "Fixture", animated: false, allowCloning: true })
         await settle(api.create("200", { name: "Fixture", image }, { auditReason: "Created for test" }))
-        expect(requests.at(-1)?.audit).toBe("Created for test")
+        expect(requests.at(-1)?.audit).toBe("Created%20for%20test")
         await settle(api.clone("200", "101"))
         expect(requests.at(-1)?.body).toEqual({ [kind === "emojis" ? "source_emoji_id" : "source_sticker_id"]: "101" })
         const batch = await settle(

@@ -115,7 +115,7 @@ describeBothApis("rest.request", (mode) => {
         expect(response).toEqual({ status: 204, headers: {}, body: undefined })
         expect(calls[0]!.url).toBe(`${api}/guilds/20/members/30`)
         expect(calls[0]!.headers["Content-Type"]).toBe("application/json")
-        expect(calls[0]!.headers["X-Audit-Log-Reason"]).toBe("fixture reason")
+        expect(calls[0]!.headers["X-Audit-Log-Reason"]).toBe("fixture%20reason")
         expect(JSON.parse(calls[0]!.body!)).toEqual({ nick: "fixture" })
     })
 

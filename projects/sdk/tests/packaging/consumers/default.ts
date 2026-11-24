@@ -291,7 +291,9 @@ export async function oauthCompletion(client: OAuthClient) {
     const introspection = await client.introspect("candidate-token")
     if (connections.isOk()) {
         const connection: OAuthConnection | undefined = connections.value[0]
-        void connection
+        const providerId: string | null | undefined = connection?.providerId
+        const url: string | null | undefined = connection?.url
+        void [connection, providerId, url]
     }
     if (introspection.isOk()) {
         const status: OAuthIntrospection = introspection.value
@@ -374,9 +376,10 @@ export async function resolveSelectedInstance(client: Client) {
     const result = await client.instance.resolve()
     if (result.isErr()) return result
     const resolved: ResolvedInstance = result.value
+    const proxied: boolean = resolved.proxyAttachmentsThroughApi
     const link = resolved.links.channel({ id: "20" })
     const asset = resolved.assets.defaultAvatar("20")
-    return { resolved, link, asset, created }
+    return { resolved, proxied, link, asset, created }
 }
 export function shardingTypes(client: Client) {
     const plan: ShardingOptions = { totalShards: 2, shardIds: [0, 1] }
@@ -535,6 +538,11 @@ export async function useChannels(client: Client, guildId: string, channelId: st
     })
     await client.channels.removePermissionOverwrite(created.value.id, guildId)
     await client.channels.delete(created.value.id)
+    await client.channels.create(guildId, { type: ChannelType.Link, name: "docs", url: "https://example.test/docs" })
+    // @ts-expect-error Link channels require a URL on creation
+    client.channels.create(guildId, { type: ChannelType.Link, name: "docs" })
+    // @ts-expect-error Channel edits cannot clear a link channel URL with null
+    client.channels.edit(created.value.id, { url: null })
     // @ts-expect-error Permission masks must be bigint
     client.channels.setPermissionOverwrite(channelId, { id: guildId, type: "role", allow: "0", deny: 0n })
     // @ts-expect-error Received channels are immutable
@@ -904,6 +912,10 @@ export function moderationOperations(client: Client, target: import("@neontechsp
     const kick = client.members.kick(target, options)
     const create = client.members.ban(target, ban, options)
     const remove = client.members.unban(target, options)
+    const single = client.members.fetchBan(target).map((entry) => {
+        const found: import("@neontechspace/fluxerly").GuildBan = entry
+        return found.userId
+    })
     const list = client.members.fetchBans(target.guildId).map((bans) => {
         const first: import("@neontechspace/fluxerly").GuildBan | undefined = bans[0]
         // @ts-expect-error Ban observations are readonly
@@ -916,7 +928,9 @@ export function moderationOperations(client: Client, target: import("@neontechsp
     })
     // @ts-expect-error A string cannot be passed as a numeric timeout duration
     client.members.timeout(target, "60")
-    return [clear, kick, create, remove, list, subscription]
+    // @ts-expect-error Single-ban reads do not accept an audit reason
+    client.members.fetchBan(target, { auditReason: "Read" })
+    return [clear, kick, create, remove, single, list, subscription]
 }
 
 /** Packed declarations expose non-media guild voice moderation and observations */

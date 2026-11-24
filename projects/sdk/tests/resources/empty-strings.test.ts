@@ -2,7 +2,7 @@ import { Effect, Exit, Scope } from "effect"
 import { afterEach, expect, onTestFinished, test, vi } from "vitest"
 import { createTestClient as createDefaultTestClient } from "../../src/testing.js"
 import { createTestClient as createNativeTestClient } from "../../src/effect-testing.js"
-import { createWebhookClient, MessageFlags } from "../../src/index.js"
+import { ChannelType, createWebhookClient, MessageFlags } from "../../src/index.js"
 import { createWebhookClient as createNativeWebhook } from "../../src/effect.js"
 import { modes, type Mode } from "../support/both-apis.js"
 import { stubFetchWithHostedDiscovery } from "../support/hosted-discovery.js"
@@ -132,11 +132,16 @@ test.each(modes)("%s sends empty channel settings as given", async (mode) => {
 
     const sent = create.requests().length
     expect(await expectErr(api.client.channels.create("200", { type: 0, name: "" }))).toMatchObject(notDispatched)
+    expect(
+        await expectErr(api.client.channels.create("200", { type: ChannelType.Link, name: "docs", url: "" })),
+    ).toMatchObject(notDispatched)
     expect(create.requests()).toHaveLength(sent)
 
     const edit = api.rest.respond("PATCH /channels/300", { body: channel })
-    await settle(api.client.channels.edit("300", { name: "", topic: "", url: "", rtcRegion: "" }))
-    expect(body(edit)).toMatchObject({ name: "", topic: "", url: "", rtc_region: "" })
+    await settle(api.client.channels.edit("300", { name: "", topic: "", rtcRegion: "" }))
+    expect(body(edit)).toMatchObject({ name: "", topic: "", rtc_region: "" })
+    expect(await expectErr(api.client.channels.edit("300", { url: "" }))).toMatchObject(notDispatched)
+    expect(await expectErr(api.client.channels.edit("300", { url: null as never }))).toMatchObject(notDispatched)
     // Fluxer reads a default reaction whose values are all empty as null for the whole field, which clears it
     await settle(api.client.channels.edit("300", { defaultReactionEmoji: { emojiId: "", emojiName: "" } }))
     expect(body(edit, 1)).toEqual({ default_reaction_emoji: { emoji_id: "", emoji_name: "" } })

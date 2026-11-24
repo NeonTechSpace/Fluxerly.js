@@ -242,7 +242,7 @@ test.each(modes)("%s sends audit reasons only as headers on the four audited mes
         ["DELETE", "/v1/channels/20/pins/10"],
     ])
     for (const request of server.requests) {
-        expect(request.headers["x-audit-log-reason"]).toBe("Moderation fixture %20")
+        expect(request.headers["x-audit-log-reason"]).toBe("Moderation%20fixture%20%2520")
         expect(request.query.has("auditReason")).toBe(false)
         expect(request.query.has("audit_reason")).toBe(false)
         expect(request.text).not.toContain("Moderation fixture")

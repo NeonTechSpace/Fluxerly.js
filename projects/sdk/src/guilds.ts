@@ -321,6 +321,8 @@ export const GuildFeatureToggles: Readonly<{
     HideOwnerCrown: "HIDE_OWNER_CROWN"
     /** Let people visit the community without joining it. Fluxer enables this for new communities */
     VisitsEnabled: "VISITS_ENABLED"
+    /** Disable direct messages between community members who do not already have a direct message or friendship */
+    MemberDmsDisabled: "MEMBER_DMS_DISABLED"
 }> = Object.freeze({
     InvitesDisabled: "INVITES_DISABLED",
     TextChannelFlexibleNames: "TEXT_CHANNEL_FLEXIBLE_NAMES",
@@ -329,6 +331,7 @@ export const GuildFeatureToggles: Readonly<{
     CloneStickerEnabled: "CLONE_STICKER_ENABLED",
     HideOwnerCrown: "HIDE_OWNER_CROWN",
     VisitsEnabled: "VISITS_ENABLED",
+    MemberDmsDisabled: "MEMBER_DMS_DISABLED",
 })
 
 /**
@@ -460,9 +463,9 @@ export interface GuildEdit {
     /**
      * ISO 8601 cutoff for members without Read Message History, or null or an empty string to disable their historical
      * access, as Fluxer reads an empty string as null here.
-     * The value needs seconds and a Z or ±hh:mm offset and may have any fraction. Fluxer accepts only a Z suffix and
-     * hours 00 to 23, so a value with an offset such as `+01:00`, or an end-of-day `24:00:00`, is sent as the same
-     * instant in UTC with a Z suffix, keeping its fraction digits. Any other Z value is sent unchanged.
+     * The value needs seconds and a Z or ±hh:mm offset and may have any fraction. Fluxer accepts Z and ±hh:mm offsets
+     * with hours 00 to 23 directly, so only an end-of-day `24:00:00` value is converted to the same instant in UTC with
+     * a Z suffix, keeping its fraction digits. Any other Z or ±hh:mm value is sent unchanged.
      * Other forms and impossible calendar dates are rejected before dispatch.
      * Fluxer rejects timestamps before community creation or in the future
      */
@@ -645,10 +648,11 @@ export interface MemberProfileEdit {
      * silently ignore it
      */
     readonly banner?: string | null
-    /** Community-profile biography, 1–320 normalized UTF-16 code units, or null or an empty string to clear it, as
-     * Fluxer reads an empty string as null here. The response does not return it.
-     * Validation removes U+000C and U+202E and trims surrounding whitespace, so a blank bio fails, as Fluxer refuses it.
-     * The original string is sent unchanged
+    /** Community-profile biography, 1–1,000 normalized UTF-16 code units, or null or an empty string to clear it, as
+     * Fluxer reads an empty string as null here. Fluxer's default instance limit is 320 code units and instances can
+     * raise max_bio_length up to 1,000, so values above the instance's setting fail remotely. The response does not
+     * return it. Validation removes U+000C and U+202E and trims surrounding whitespace, so a blank bio fails, as Fluxer
+     * refuses it. The original string is sent unchanged
      */
     readonly bio?: string | null
     /** Community-profile pronouns, 1–40 normalized UTF-16 code units, or null or an empty string to clear them, as
@@ -779,7 +783,7 @@ export interface BanInput {
      * for a provider-managed temporary ban. A value with a millisecond part is rejected as input naming input.durationMs.
      * A `duration` command argument with `wholeSeconds: true`, `min: 60_000` and `max: 63_072_000_000` can be passed unchanged.
      * Expiry does not rejoin the user. No SDK timer or automatic unban request is created.
-     * Provider database TTL expiry need not emit guildBanRemove. Reconcile with members.fetchBans rather than waiting for that event
+     * Provider database TTL expiry need not emit guildBanRemove. Reconcile with members.fetchBan or members.fetchBans rather than waiting for that event
      */
     readonly durationMs?: number
     /** How far back to delete the user's recent messages, in milliseconds and whole seconds, 0–604,800,000 (seven days), default 0.
@@ -788,7 +792,7 @@ export interface BanInput {
     readonly deleteMessagesMs?: number
 }
 
-/** Recorded ban details returned by members.fetchBans, including available reason, moderator and expiry.
+/** Recorded ban details returned by members.fetchBan and members.fetchBans, including available reason, moderator and expiry.
  * This frozen observation does not establish that the ban is still active at a later time
  *
  * @category Guilds and members
@@ -1121,6 +1125,7 @@ export type GuildOperation =
     | "guilds.deleteOwnMessages"
     | "members.ban"
     | "members.unban"
+    | "members.fetchBan"
     | "members.fetchBans"
     | "members.timeout"
     | "members.clearTimeout"

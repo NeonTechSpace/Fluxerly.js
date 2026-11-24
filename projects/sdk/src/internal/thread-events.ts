@@ -2,8 +2,8 @@
  * Thread gateway events: Decoders for the THREAD_* dispatches a bot receives and for the threads of a community snapshot.
  * Invariant: A thread event decodes whole or not at all, like every dispatch. Only a community snapshot's thread list is
  * decoded entry by entry, so one malformed thread costs only itself and the caller logs each skipped entry.
- * Payload shapes follow gateway/threads.md and fluxer_gateway guild_thread_dispatch.erl, guild_thread_view.erl and
- * fluxer_api ThreadDispatch.ts at fluxerapp/fluxer commit 4749eb7f866ceba0c9622014a9824900d5be8172.
+ * Payload shapes follow gateway/threads.md and fluxer_gateway/src/fluxer_gateway/threads/dispatch.gleam,
+ * fluxer_gateway/src/fluxer_gateway/threads/payload.gleam and fluxer_api ThreadDispatch.ts at 66cede64.
  * Implements [SDK contracts: Validation requirements](/docs/SDK-CONTRACTS.md#validation-requirements)
  */
 import { ChannelType, type GuildThreadChannel, type ThreadMember } from "#sdk/channels"

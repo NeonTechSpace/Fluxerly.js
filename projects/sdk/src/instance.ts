@@ -62,6 +62,11 @@ export interface ResolvedInstance {
     readonly endpoints: InstanceEndpoints
     /** Whether this instance advertises temporary upload URLs for attachment transfers */
     readonly presignedAttachmentUploads: boolean
+    /** Whether this instance serves attachment downloads through its authenticated API endpoint instead of public media URLs.
+     * False when discovery omits the flag, as Fluxer documents. A present value that is not a boolean makes the discovery document invalid.
+     * The value is a snapshot from when the client resolved the instance, so an operator's later change appears only in a new client
+     */
+    readonly proxyAttachmentsThroughApi: boolean
     /** Whether this instance has community directory discovery switched on.
      * True when discovery omits the flag, as Fluxer documents. A present value that is not a boolean makes the discovery document invalid.
      * When false, the discovery namespace's search, apply, edit and withdraw operations fail with reason rejected, HTTP 400 and apiError.code discoveryDisabled (Fluxer code DISCOVERY_DISABLED), while fetchStatus and fetchCategories still answer.

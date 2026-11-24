@@ -83,7 +83,7 @@ test.each(modes)("%s reads remote vanity state and edits without fetching counts
     }
     expect(requests.map((request) => request.method)).toEqual(["GET", "PATCH", "PATCH", "PATCH", "PATCH"])
     expect(requests.every((request) => request.url === "https://fluxer.com/api/v1/guilds/200/vanity-url")).toBe(true)
-    expect(requests.map((request) => request.reason)).toEqual([null, ...Array(4).fill("Fixture change")])
+    expect(requests.map((request) => request.reason)).toEqual([null, ...Array(4).fill("Fixture%20change")])
     code = "remote-change"
     const read = await settle(client.guilds.fetchVanityUrl("200"))
     expect(read).toEqual({ code, url: `https://fluxer.gg/${code}`, uses: 3 })

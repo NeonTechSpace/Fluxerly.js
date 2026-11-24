@@ -271,7 +271,7 @@ export interface GuildCategoryChannel extends GuildChannelBase {
 export interface GuildLinkChannel extends GuildChannelBase {
     /** Always ChannelType.Link */
     readonly type: typeof ChannelType.Link
-    /** Link URL, with null clearing it and omission meaning unavailable */
+    /** Link URL, with null when unset on older data and omission meaning unavailable */
     readonly url?: string | null
 }
 
@@ -688,6 +688,13 @@ export interface CategoryChannelCreate extends ChannelCreateBase {
 export interface LinkChannelCreate extends ChannelCreateBase {
     /** Link channel type */
     readonly type: typeof ChannelType.Link
+    /** Required destination URL for the link channel. After Fluxer's normalization it must hold 1–2,048 UTF-16 code
+     * units, start with http:// or https:// and carry no credentials, and its host must be an IP address or a domain
+     * name with a top-level domain, such as example.com, not localhost, as hosted Fluxer requires. A client for a custom
+     * instance skips only the top-level domain rule locally and leaves it to that server. The original string is sent
+     * unchanged. The SDK does not open or fetch the URL
+     */
+    readonly url: string
 }
 
 /** Settings of one tag that posts in a forum or media channel can carry.
@@ -829,13 +836,14 @@ export interface ChannelEdit {
      * The original string is sent unchanged
      */
     readonly topic?: string | null
-    /** Link-channel URL, or null or an empty string to clear it. After Fluxer's normalization it must hold 1–2,048
-     * UTF-16 code units, start with http:// or https:// and carry no credentials, and its host must be an IP address or a
-     * domain name with a top-level domain, such as example.com, not localhost, as hosted Fluxer requires. A client for a
-     * custom instance skips only the top-level domain rule locally and leaves it to that server. The original string is
-     * sent unchanged. No URL is fetched by this request
+    /** Replacement URL for a link channel. Null and an empty string are rejected before dispatch, because Fluxer
+     * requires a link channel to keep a URL. After Fluxer's normalization it must hold 1–2,048 UTF-16 code units,
+     * start with http:// or https:// and carry no credentials, and its host must be an IP address or a domain name
+     * with a top-level domain, such as example.com, not localhost, as hosted Fluxer requires. A client for a custom
+     * instance skips only the top-level domain rule locally and leaves it to that server. The original string is sent
+     * unchanged. No URL is fetched by this request
      */
-    readonly url?: string | null
+    readonly url?: string
     /** Voice bitrate in bits per second, integer 8,000–384,000, or null.
      * Fluxer clamps the requested value to the community's enabled bitrate tier. Read the returned channel for the applied value
      */

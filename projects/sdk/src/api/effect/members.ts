@@ -401,6 +401,13 @@ export interface Members {
      */
     unban(target: MemberReference, options?: AuditedRequestOptions): Effect.Effect<void, GuildOperationFailure>
     /**
+     * Fetch one user's active ban record in a community with BanMembers permission.
+     * Pass decimal guildId and userId.
+     * When the user is not banned, the call fails with reason notFound, HTTP 404 and apiError.code unknownBan (Fluxer code UNKNOWN_BAN).
+     * Results are frozen, there is no ban cache, and shared guild deadlines and read retries apply
+     */
+    fetchBan(target: MemberReference, options?: RequestOptions): Effect.Effect<GuildBan, GuildOperationFailure>
+    /**
      * Fetch a community's current full ban list with BanMembers permission.
      * Results are frozen.
      * There is no ban cache, pagination or guaranteed order.

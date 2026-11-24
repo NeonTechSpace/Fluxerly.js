@@ -64,6 +64,8 @@ export interface InstanceEndpointContext {
     readonly invite: string
     /** Whether discovery permits presigned attachment-upload plans */
     readonly presignedAttachmentUploads: boolean
+    /** Whether discovery advertises API-proxied attachment downloads */
+    readonly proxyAttachmentsThroughApi: boolean
     /** Whether this explicitly selected instance may use HTTP and WS endpoints */
     readonly allowInsecure: boolean
 }
@@ -233,6 +235,10 @@ function parseDocument(value: unknown, allowInsecure: boolean): ResolvedContext 
     const advertisedDiscovery = value.features.discovery_enabled
     if (advertisedDiscovery !== undefined && typeof advertisedDiscovery !== "boolean") return undefined
     const discoveryEnabled = advertisedDiscovery ?? true
+    // Fluxer documents a missing proxy_attachments_through_api as false, while a present non-boolean is an invalid document
+    const advertisedProxyAttachments = value.features.proxy_attachments_through_api
+    if (advertisedProxyAttachments !== undefined && typeof advertisedProxyAttachments !== "boolean") return undefined
+    const proxyAttachmentsThroughApi = advertisedProxyAttachments ?? false
     const context: InstanceEndpointContext = Object.freeze({
         apiPublic,
         gateway,
@@ -241,6 +247,7 @@ function parseDocument(value: unknown, allowInsecure: boolean): ResolvedContext 
         webapp,
         invite,
         presignedAttachmentUploads: value.features.presigned_attachment_uploads,
+        proxyAttachmentsThroughApi,
         allowInsecure,
     })
     const endpoints = Object.freeze({ apiPublic, gateway, media, staticCdn, webapp, invite })
@@ -250,6 +257,7 @@ function parseDocument(value: unknown, allowInsecure: boolean): ResolvedContext 
             apiCodeVersion,
             endpoints,
             presignedAttachmentUploads: context.presignedAttachmentUploads,
+            proxyAttachmentsThroughApi,
             discoveryEnabled,
             assets: createInstanceAssets(media, staticCdn),
             links: createInstanceLinks(webapp),

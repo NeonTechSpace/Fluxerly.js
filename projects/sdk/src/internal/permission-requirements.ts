@@ -42,21 +42,13 @@ const memberHierarchy =
 // Fluxer's grant rule, utils/PermissionUtils.ts:55-64 at 597116a: A change grants the bits it newly allows and the bits
 // it stops denying, and Fluxer refuses it with MISSING_PERMISSIONS when the bot lacks any of them in the channel it
 // checks. The community owner and Administrator have every bit, because the gateway returns all of them without
-// applying channel overwrites (fluxer_gateway/src/guild/guild_permissions.erl:79-80, 85-88 and 169-170 at 597116a)
+// applying channel overwrites (fluxer_gateway/src/fluxer_gateway/perms.gleam and fluxer_gateway/rust/perms at 66cede64)
 const ownPermissions = "it can allow, or stop denying, only permissions it has in the channel"
 const refusedGrantsHint = "The permissionBits.refusedGrants helper shows which bits Fluxer would refuse"
 // Threads take their permissions from the parent channel, where Send Messages is replaced by Send Messages in Threads
 // (packages/constants/src/ThreadPermissionUtils.ts:83-88 at 5f3fc0b1)
 /** @internal The thread replacement for Send Messages, shared by operation errors and the rest.rejected hint */
 export const threadSend = `In a thread, ${label("SendMessagesInThreads")} in the parent channel replaces ${label("SendMessages")}`
-// Fluxer refuses a sticker, or a new reaction's custom emoji, from an age-restricted community outside that community
-// with MISSING_PERMISSIONS, whatever the bot's permissions. A community is age-restricted when it is marked NSFW or has
-// the age-restricted level (utils/EmojiUtils.ts:113-122, channel/services/message/MessageStickerService.ts:41-43 and
-// 62-64, channel/services/interaction/MessageReactionService.ts:212-235 and 409-412 at 0098958f)
-const ageRestrictedSticker =
-    "A sticker from an age-restricted community is refused outside that community, whatever the bot's permissions"
-const ageRestrictedEmoji =
-    "A new reaction with a custom emoji from an age-restricted community is refused outside that community, whatever the bot's permissions"
 
 /** A permission label followed by the different title that a channel's permission screen shows for it, if any */
 const withChannelTitle = (name: PermissionName): string => {
@@ -195,7 +187,9 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     "members.ban": requires("guild", ["BanMembers"], memberHierarchy),
     // guild/services/GuildModerationService.ts:184
     "members.unban": requires("guild", ["BanMembers"]),
-    // guild/services/GuildModerationService.ts:170
+    // guild/services/GuildModerationService.ts:241 at 66cede64
+    "members.fetchBan": requires("guild", ["BanMembers"]),
+    // guild/services/GuildModerationService.ts:229 at 66cede64
     "members.fetchBans": requires("guild", ["BanMembers"]),
     // guild/services/member/GuildMemberOperationsService.ts:577-586
     "members.timeout": requires(
@@ -268,7 +262,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     send: requires(
         "channel",
         ["ViewChannel", "SendMessages"],
-        `Embeds also need ${label("EmbedLinks")}, files need ${label("AttachFiles")}, and a forward needs ${label("ViewChannel")} in its source channel. ${threadSend}. ${ageRestrictedSticker}`,
+        `Embeds also need ${label("EmbedLinks")}, files need ${label("AttachFiles")}, and a forward needs ${label("ViewChannel")} in its source channel. ${threadSend}`,
     ),
     // channel/services/MessageInteractionService.ts:75-76
     typing: requires("channel", ["ViewChannel", "SendMessages"], threadSend),
@@ -316,7 +310,7 @@ export const permissionRequirements: Readonly<Partial<Record<Operation, Permissi
     addReaction: requires(
         "channel",
         ["ViewChannel", "AddReactions"],
-        `Adding to an existing reaction needs no ${label("AddReactions")}, and a new reaction with a custom emoji from another community also needs ${label("UseExternalEmojis")}. ${ageRestrictedEmoji}`,
+        `Adding to an existing reaction needs no ${label("AddReactions")}, and a new reaction with a custom emoji from another community also needs ${label("UseExternalEmojis")}`,
     ),
     // channel/services/MessageInteractionService.ts:227, channel/services/interaction/MessageReactionService.ts:276-278
     removeReaction: requires("channel", ["ViewChannel"]),

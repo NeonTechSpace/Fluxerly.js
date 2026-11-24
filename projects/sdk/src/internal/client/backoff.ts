@@ -8,6 +8,7 @@
  */
 import type * as Schedule from "effect/Schedule"
 import type { ConnectionFailure } from "#sdk/errors"
+import { maximumTimerMs } from "../clock.js"
 
 /** Validated recovery timing for established sessions */
 export interface RecoveryConfiguration {
@@ -28,15 +29,15 @@ export interface RecoveryConfiguration {
 /** Default budget for discovery, the socket, HELLO, Resume and READY in one connection attempt */
 export const defaultConnectionAttemptMs = 30_000
 
-/** Fluxer may hold an Identify in its queue for 60 seconds and gives a session start 135 seconds before it gives up
- * (fluxer_gateway/src/session/session_manager_shard_lifecycle.erl:24-25, session_manager.erl:30 and :120-122, armed
- * on Identify at gateway_handler_identify.erl:308, at 0098958f). A Resume has no such wait. When the caller leaves a
- * connection deadline at its default, sending Identify adds this wait to it. After such a failure Fluxer holds the
- * Identify and retries it every one to two seconds while the socket stays open, with no limit
- * (fluxer_gateway/src/gateway/gateway_handler_identify.erl:19-20, :373-384 and :447-477), so no finite deadline follows
- * it exactly
+/** Fluxer may hold an Identify in its shard permit queue for 5 seconds and gives a session start 20 seconds before it
+ * gives up (shard_permit_wait_ms and manager_start_timeout in fluxer_gateway/src/fluxer_gateway/config/settings.gleam
+ * and gateway/socket.gleam at 66cede64). A Resume has no such wait. When the caller leaves a connection deadline at its
+ * default, sending Identify adds this 25-second ceiling to it. After such a failure Fluxer holds the Identify and
+ * retries it every one to two seconds while the socket stays open, with no limit
+ * (gateway/socket.gleam pending_identify_retry_base_ms / pending_identify_retry_jitter_ms), so no finite deadline
+ * follows it exactly
  */
-export const defaultIdentifyWaitMs = 135_000
+export const defaultIdentifyWaitMs = 25_000
 
 /** Documented connection.recovery defaults */
 export const defaultRecovery: RecoveryConfiguration = Object.freeze({
@@ -55,8 +56,6 @@ const startupBackoff = Object.freeze({ minDelayMs: 1_000, maxDelayMs: 30_000 })
 const maximumBackoffDoublings = 31
 /** Minimum spacing between Identify sends across this client's shards, unless an identify coordinator paces them */
 export const identifySpacingMs = 1_000
-/** Longest delay host timers accept */
-const maximumTimerMs = 2_147_483_647
 
 /**
  * Startup budget for one shard group: The configured deadline plus the Identify spacing the SDK itself adds between

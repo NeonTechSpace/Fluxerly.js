@@ -149,7 +149,11 @@ const textBoundaryCases: readonly BoundaryCase[] = [
             ({ client }) => client.members.setNickname(member, nickname!),
         ],
     ]),
-    ["members.editSelf over-limit bio", "bio", ({ client }) => client.members.editSelf("20", { bio: astralOver(320) })],
+    [
+        "members.editSelf over-limit bio",
+        "bio",
+        ({ client }) => client.members.editSelf("20", { bio: astralOver(1000) }),
+    ],
     ["members.editSelf bidi-control bio", "bio", ({ client }) => client.members.editSelf("20", { bio: "‮" })],
     [
         "members.editSelf over-limit pronouns",
@@ -345,7 +349,7 @@ test.each(modes)("%s preserves valid member-profile and nickname wire values", a
     })
     const { defaultApi, native } = await clients(mode)
     const nickname = paddedMaximum(32)
-    const bio = paddedMaximum(320)
+    const bio = paddedMaximum(1000)
     const pronouns = ` \f\u202e${astralAt(40)} `
 
     const edited = await settle(
@@ -604,3 +608,45 @@ test.each(modes)("%s preserves embed and retained-attachment metadata distinctio
         attachments: [{ id: "70", title: null, description: attachmentDescription }],
     })
 })
+
+// Fluxer keeps inner ZWJ and ZWNJ in channel names while stripping stray boundary, whitespace-adjacent and consecutive
+// join controls (packages/schema/src/primitives/SchemaPrimitives.ts:195 and 226-237 at 66cede64)
+test.each(modes)(
+    "%s preserves inner ZWJ and ZWNJ in channel names while stripping stray join controls",
+    async (mode) => {
+        const bodies: Record<string, unknown>[] = []
+        stubFetchWithHostedDiscovery(async (_url, init) => {
+            bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+            return new Response(null, { status: 403 })
+        })
+        const { defaultApi, native } = await clients(mode)
+        const create = (name: string) =>
+            defaultApi
+                ? defaultApi.channels.create("20", { type: ChannelType.Text, name })
+                : native!.channels.create("20", { type: ChannelType.Text, name })
+
+        for (const admitted of [
+            "👨‍👩‍👧",
+            "a\u200db",
+            "a\u200cb",
+            "\u200dgeneral\u200c",
+            "a \u200d b",
+            // Inner joiners count toward the 100-code-unit limit: 49 + 1 + 50 = 100 passes
+            `${"a".repeat(49)}\u200d${"b".repeat(50)}`,
+            // Consecutive joiners are both stray and stripped, so 50 + 50 = 100 passes
+            `${"a".repeat(50)}\u200d\u200d${"b".repeat(50)}`,
+        ])
+            await rejected(create(admitted))
+        expect(bodies).toHaveLength(7)
+
+        for (const refused of [
+            "\u200d\u200c",
+            " \u200d \u200c ",
+            // 50 + inner ZWJ + 50 = 101 UTF-16 code units, rejected locally
+            `${"a".repeat(50)}\u200d${"b".repeat(50)}`,
+            `${"a".repeat(50)}\u200c${"b".repeat(50)}`,
+        ])
+            await inputFailure(create(refused), "name")
+        expect(bodies).toHaveLength(7)
+    },
+)

@@ -11,21 +11,31 @@ afterEach(() => {
     vi.restoreAllMocks()
 })
 
-/** Fluxer's header decoding: A value of only Latin-1 characters with a high byte is read as UTF-8 bytes, otherwise kept
- * (AuditLogMiddleware.ts:11-30 at 5f3fc0b1)
+/** Fluxer's header decoding: A value of only Latin-1 characters with a high byte is read as UTF-8 bytes, then
+ * percent-decoded with decodeURIComponent (AuditLogMiddleware.ts:11-40 at 66cede64)
  */
 function fluxerDecode(value: string): string {
+    let text = value
     let high = false
     for (let index = 0; index < value.length; index++) {
         const code = value.charCodeAt(index)
-        if (code > 0xff) return value
+        if (code > 0xff) {
+            high = false
+            break
+        }
         if (code >= 0x80) high = true
     }
-    if (!high) return value
+    if (high) {
+        try {
+            text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(value, "latin1"))
+        } catch {
+            text = value
+        }
+    }
     try {
-        return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(value, "latin1"))
+        return decodeURIComponent(text)
     } catch {
-        return value
+        return text
     }
 }
 
@@ -37,26 +47,33 @@ async function loopback() {
     return () => rest.requests.map((request) => request.headers["x-audit-log-reason"])
 }
 
-test.each(modes)("%s sends a Unicode audit reason as UTF-8 bytes that Fluxer decodes back", async (mode) => {
-    const received = await loopback()
-    const api = await setup(mode)
-    const unicode = "Belästigung 日本 😀"
-    const longest = "😀".repeat(256)
-    await settle(api.members.kick({ guildId: "20", userId: "30" }, { auditReason: `  ${unicode}  ` }))
-    await settle(api.webhooks.delete("100", { auditReason: longest }))
-    await settle(api.rest.request({ method: "DELETE", path: "/guilds/20/bans/30", auditReason: unicode }))
-    await settle(api.members.kick({ guildId: "20", userId: "30" }, { auditReason: "  routine ASCII reason  " }))
+test.each(modes)(
+    "%s percent-encodes audit reasons as ASCII UTF-8 bytes that Fluxer decodes back losslessly",
+    async (mode) => {
+        const received = await loopback()
+        const api = await setup(mode)
+        const unicode = "Belästigung 日本 😀"
+        const longest = "😀".repeat(256)
+        const withPercents = "100% done %20 %25 literal"
+        await settle(api.members.kick({ guildId: "20", userId: "30" }, { auditReason: `  ${unicode}  ` }))
+        await settle(api.webhooks.delete("100", { auditReason: longest }))
+        await settle(api.rest.request({ method: "DELETE", path: "/guilds/20/bans/30", auditReason: unicode }))
+        await settle(api.members.kick({ guildId: "20", userId: "30" }, { auditReason: "  routine ASCII reason  " }))
+        await settle(api.members.kick({ guildId: "20", userId: "30" }, { auditReason: withPercents }))
 
-    const headers = received()
-    expect(headers.map((value) => fluxerDecode(String(value)))).toEqual([
-        unicode,
-        longest,
-        unicode,
-        "routine ASCII reason",
-    ])
-    // An ASCII reason stays byte-identical on the wire
-    expect(headers[3]).toBe("routine ASCII reason")
-})
+        const headers = received()
+        expect(headers.map((value) => fluxerDecode(String(value)))).toEqual([
+            unicode,
+            longest,
+            unicode,
+            "routine ASCII reason",
+            withPercents,
+        ])
+        expect(headers[0]).toBe(encodeURIComponent(unicode))
+        expect(headers[3]).toBe("routine%20ASCII%20reason")
+        expect(headers[4]).toBe("100%25%20done%20%2520%20%2525%20literal")
+    },
+)
 
 test.each(modes)("%s rejects audit reasons Fluxer cannot store before dispatch", async (mode) => {
     const received = await loopback()

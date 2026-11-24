@@ -34,13 +34,16 @@ export function memberNickname(value: unknown): value is string {
 
 export function channelName(value: unknown): value is string {
     if (typeof value !== "string" || value.length > 10_000) return false
-    // GeneralChannelNameType removes these invisible ranges, but retains variation selectors and lone surrogates
+    // GeneralChannelNameType removes these invisible ranges, strips stray leading, trailing and whitespace-adjacent
+    // zero-width joiners and non-joiners while keeping inner join controls, and retains variation selectors and lone surrogates
+    // (packages/schema/src/primitives/ChannelValidators.ts:64 and packages/schema/src/primitives/SchemaPrimitives.ts:193-237 at 66cede64)
     const normalized = normalizeText(value)
         .replace(
-            // oxlint-disable-next-line no-control-regex, no-misleading-character-class -- removes each provider-listed code point, including the zero-width joiner, individually
-            /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200c\u200d\u2060\ufeff\u200e\u200f\u202a-\u202e\u2066-\u2069\u00ad\u180e\ufffe\uffff\u{e0000}-\u{e007f}]/gu,
+            // oxlint-disable-next-line no-control-regex -- removes each provider-listed code point individually
+            /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2060\ufeff\u200e\u200f\u202a-\u202e\u2066-\u2069\u00ad\u180e\ufffe\uffff\u{e0000}-\u{e007f}]/gu,
             "",
         )
+        .replace(/(?<![^\s\u200c\u200d])[\u200c\u200d]|[\u200c\u200d](?![^\s\u200c\u200d])/gu, "")
         .replace(/[\s\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/g, " ")
         .trim()
     return normalized.length >= 1 && normalized.length <= 100

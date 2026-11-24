@@ -68,6 +68,7 @@ const decodedSchemas = [
     { name: "GuildMemberResponse" },
     { name: "GuildMemberListResponse" },
     { name: "GuildMemberSearchResponse" },
+    { name: "GuildBanResponse" },
     { name: "GuildBanListResponse" },
     { name: "GuildRoleResponse" },
     { name: "GuildRoleListResponse" },

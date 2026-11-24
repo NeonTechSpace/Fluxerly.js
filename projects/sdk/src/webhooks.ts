@@ -275,7 +275,7 @@ export type WebhookMessageOptions = {
  * Settings for starting a new post in a forum or media channel through a webhook.
  * The webhook must belong to that forum or media channel, and Fluxer rejects threadName for any other channel.
  * Set them only on a new message, not on a reply or forward.
- * While the first send is cached, repeating threadName with the same nonce fails with a not found error instead of returning the original post. Save the returned channel ID and message ID after a successful send
+ * While the first send is cached, repeating threadName with the same nonce returns the original post's first message instead of creating a duplicate post
  *
  * @category Invites and webhooks
  */

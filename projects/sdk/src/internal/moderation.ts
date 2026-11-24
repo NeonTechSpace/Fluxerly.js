@@ -12,6 +12,7 @@ import type {
     VoiceConnectionReference,
 } from "#sdk/guilds"
 import { identifier, inputId, integerInRange as integer, record } from "./decode/primitives.js"
+import { rejectCheck } from "./decode/trace.js"
 import { decodeMember, memberFetch, memberIds, type GuildRequest } from "./guilds.js"
 import { InputValidationFailure, inputValidationFailure, unsupportedKeyFailure } from "#sdk/input-validation"
 import { timestamp } from "./decode/timestamp.js"
@@ -253,6 +254,50 @@ export function guildUnban(
     return { ...request, bucket: "guild:bans", path: `/guilds/${guildId}/bans/${userId}` }
 }
 
+function decodeGuildBan(item: unknown, guildId: string): GuildBan | undefined {
+    if (
+        !record(item) ||
+        !record(item.user) ||
+        !identifier(item.user.id) ||
+        typeof item.user.username !== "string" ||
+        (item.user.bot !== undefined && typeof item.user.bot !== "boolean") ||
+        !identifier(item.moderator_id) ||
+        !timestamp(item.banned_at) ||
+        (item.expires_at !== undefined && item.expires_at !== null && !timestamp(item.expires_at)) ||
+        (item.reason !== undefined && item.reason !== null && typeof item.reason !== "string")
+    )
+        return undefined
+    const user = decodeUser(item.user)
+    return Object.freeze({
+        guildId,
+        userId: item.user.id,
+        username: item.user.username,
+        isBot: item.user.bot === true,
+        ...(user ? { user } : {}),
+        moderatorId: item.moderator_id,
+        bannedAt: item.banned_at,
+        ...(item.reason === undefined ? {} : { reason: item.reason as string | null }),
+        ...(item.expires_at === undefined ? {} : { expiresAt: item.expires_at as string | null }),
+    })
+}
+
+export function guildBanFetch(target: MemberReference): GuildRequest<GuildBan> | InputValidationFailure {
+    const ids = memberIds(target)
+    if (ids instanceof InputValidationFailure) return ids
+    const { guildId, userId } = ids
+    return {
+        guildId,
+        bucket: "guild:bans",
+        path: `/guilds/${guildId}/bans/${userId}`,
+        method: "GET",
+        status: 200,
+        decode: (value) => {
+            const ban = decodeGuildBan(value, guildId)
+            return ban === undefined || ban.userId === userId ? ban : rejectCheck("targetMismatch")
+        },
+    }
+}
+
 export function guildBans(rawGuildId: string): GuildRequest<readonly GuildBan[]> | InputValidationFailure {
     const guildId = inputId(rawGuildId)
     if (guildId === undefined)
@@ -272,34 +317,10 @@ export function guildBans(rawGuildId: string): GuildRequest<readonly GuildBan[]>
             const ids = new Set<string>()
             const bans: GuildBan[] = []
             for (const item of value) {
-                if (
-                    !record(item) ||
-                    !record(item.user) ||
-                    !identifier(item.user.id) ||
-                    ids.has(item.user.id) ||
-                    typeof item.user.username !== "string" ||
-                    (item.user.bot !== undefined && typeof item.user.bot !== "boolean") ||
-                    !identifier(item.moderator_id) ||
-                    !timestamp(item.banned_at) ||
-                    (item.expires_at !== undefined && item.expires_at !== null && !timestamp(item.expires_at)) ||
-                    (item.reason !== undefined && item.reason !== null && typeof item.reason !== "string")
-                )
-                    return undefined
-                ids.add(item.user.id)
-                const user = decodeUser(item.user)
-                bans.push(
-                    Object.freeze({
-                        guildId,
-                        userId: item.user.id,
-                        username: item.user.username,
-                        isBot: item.user.bot === true,
-                        ...(user ? { user } : {}),
-                        moderatorId: item.moderator_id,
-                        bannedAt: item.banned_at,
-                        ...(item.reason === undefined ? {} : { reason: item.reason as string | null }),
-                        ...(item.expires_at === undefined ? {} : { expiresAt: item.expires_at as string | null }),
-                    }),
-                )
+                const ban = decodeGuildBan(item, guildId)
+                if (ban === undefined || ids.has(ban.userId)) return undefined
+                ids.add(ban.userId)
+                bans.push(ban)
             }
             return Object.freeze(bans)
         },

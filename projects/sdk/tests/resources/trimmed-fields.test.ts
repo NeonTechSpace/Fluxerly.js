@@ -108,7 +108,7 @@ test.each(modes)(
 test.each(modes)("%s measures the audit reason on Fluxer's normalized value", async (mode) => {
     const api = await setup(mode)
     const requests = stubRest(() => new Response(null, { status: 204 }))
-    const decode = (header: string | null) => Buffer.from(header ?? "", "latin1").toString("utf8")
+    const decode = (header: string | null) => decodeURIComponent(header ?? "")
 
     // Fails on the old code: A reason of only U+202E is not blank to trim, but Fluxer reduces it to nothing and drops it
     for (const auditReason of [rlo, `  ${rlo}${rlo} `, `${rlo} `])
@@ -221,14 +221,13 @@ test.each(modes)("%s applies Fluxer's URL rules to a link channel URL", async (m
         )
         expect(await expectErr(api.client.channels.edit("300", { url }))).toMatchObject(notDispatched)
     }
-    // Blank text is not the exact empty string, so it is refused, while the exact empty string still clears the URL
-    expect(await expectErr(api.client.channels.edit("300", { url: "   " }))).toMatchObject(notDispatched)
-    await settle(api.client.channels.edit("300", { url: "" }))
-    expect(body(edit, 1)).toBe("")
+    // Blank, empty and null URLs are refused on channel edit (ChannelUpdateLinkRequest.url is non-nullable URLType)
+    for (const url of ["   ", "", null])
+        expect(await expectErr(api.client.channels.edit("300", { url: url as never }))).toMatchObject(notDispatched)
     // The longest allowed URL, padded with whitespace that Fluxer trims
     const longest = `https://example.com/${"a".repeat(2028)}`
     await settle(api.client.channels.edit("300", { url: `  ${longest}  ` }))
-    expect(body(edit, 2)).toBe(`  ${longest}  `)
+    expect(body(edit, 1)).toBe(`  ${longest}  `)
     expect(create.requests()).toHaveLength(1)
-    expect(edit.requests()).toHaveLength(3)
+    expect(edit.requests()).toHaveLength(2)
 })

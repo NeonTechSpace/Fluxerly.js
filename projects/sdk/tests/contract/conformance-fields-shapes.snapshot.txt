@@ -84,6 +84,7 @@ operation|default|Members.clearTimeout|(target: MemberReference, options?: Timeo
 operation|default|Members.disconnect|(target: VoiceConnectionReference, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.editSelf|(guildId: string, input: MemberProfileEdit, options?: AuditedRequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.fetch|(member: MemberReference, options?: RequestOptions | undefined) => ResultAsync<GuildMember, CancelledError | ConfigurationError | GuildOperationFailure>
+operation|default|Members.fetchBan|(target: MemberReference, options?: RequestOptions | undefined) => ResultAsync<GuildBan, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.fetchBans|(guildId: string, options?: RequestOptions | undefined) => ResultAsync<readonly GuildBan[], CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.fetchCanManage|(target: MemberReference, options?: CanManageOptions | undefined) => ResultAsync<boolean, CancelledError | ConfigurationError | GuildOperationFailure>
 operation|default|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: RequestOptions | undefined) => ResultAsync<readonly GuildMember[], CancelledError | ConfigurationError | GuildOperationFailure>
@@ -295,6 +296,7 @@ operation|native|Members.clearTimeout|(target: MemberReference, options?: Timeou
 operation|native|Members.disconnect|(target: VoiceConnectionReference, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.editSelf|(guildId: string, input: MemberProfileEdit, options?: AuditedRequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
 operation|native|Members.fetch|(member: MemberReference, options?: RequestOptions | undefined) => Effect<GuildMember, GuildOperationFailure, never>
+operation|native|Members.fetchBan|(target: MemberReference, options?: RequestOptions | undefined) => Effect<GuildBan, GuildOperationFailure, never>
 operation|native|Members.fetchBans|(guildId: string, options?: RequestOptions | undefined) => Effect<readonly GuildBan[], GuildOperationFailure, never>
 operation|native|Members.fetchCanManage|(target: MemberReference, options?: CanManageOptions | undefined) => Effect<boolean, GuildOperationFailure, never>
 operation|native|Members.fetchPage|(guildId: string, query?: MemberQuery | undefined, options?: RequestOptions | undefined) => Effect<readonly GuildMember[], GuildOperationFailure, never>
@@ -978,7 +980,7 @@ field|shared|ChannelEdit.rateLimitPerUser|null | number | undefined|optional=tru
 field|shared|ChannelEdit.rtcRegion|null | string | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.topic|null | string | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.type|0 | 5 | undefined|optional=true|nullable=false
-field|shared|ChannelEdit.url|null | string | undefined|optional=true|nullable=true
+field|shared|ChannelEdit.url|string | undefined|optional=true|nullable=false
 field|shared|ChannelEdit.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelEdit.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|shared|ChannelFollowInput.targetChannelId|string|optional=false|nullable=false
@@ -2310,7 +2312,7 @@ field|shared|LinkChannelCreate.permissionOverwrites|readonly PermissionOverwrite
 field|shared|LinkChannelCreate.rateLimitPerUser|null | number | undefined|optional=true|nullable=true
 field|shared|LinkChannelCreate.topic|null | string | undefined|optional=true|nullable=true
 field|shared|LinkChannelCreate.type|998|optional=false|nullable=false
-field|shared|LinkChannelCreate.url|null | string | undefined|optional=true|nullable=true
+field|shared|LinkChannelCreate.url|string|optional=false|nullable=false
 field|shared|LinkChannelCreate.userLimit|null | number | undefined|optional=true|nullable=true
 field|shared|LinkChannelCreate.voiceConnectionLimit|null | number | undefined|optional=true|nullable=true
 field|shared|LogLevelSettings.categories|Readonly<Partial<Record<LogCategory, LogThreshold>>> | undefined|optional=true|nullable=false
@@ -2692,8 +2694,10 @@ field|shared|OAuthCodeExchangeInput.codeVerifier|string|optional=false|nullable=
 field|shared|OAuthCodeExchangeInput.redirectUri|string|optional=false|nullable=false
 field|shared|OAuthConnection.id|string|optional=false|nullable=false
 field|shared|OAuthConnection.name|string|optional=false|nullable=false
+field|shared|OAuthConnection.providerId|null | string|optional=false|nullable=true
 field|shared|OAuthConnection.sortOrder|number|optional=false|nullable=false
 field|shared|OAuthConnection.type|string|optional=false|nullable=false
+field|shared|OAuthConnection.url|null | string|optional=false|nullable=true
 field|shared|OAuthConnection.verified|boolean|optional=false|nullable=false
 field|shared|OAuthConnection.visibilityFlags|number|optional=false|nullable=false
 field|shared|OAuthIdentity.avatar|null | string|optional=false|nullable=true
@@ -2958,6 +2962,7 @@ field|shared|ResolvedInstance.domainMigration|InstanceDomainMigration | null|opt
 field|shared|ResolvedInstance.endpoints|InstanceEndpoints|optional=false|nullable=false
 field|shared|ResolvedInstance.links|Readonly<{ channel(target: ChannelLinkTarget): string; message(message: MessageReference, channel: ChannelLinkTarget): string; installation(applicationId: string, options?: InstallationLinkOptions | undefined): string; }>|optional=false|nullable=false
 field|shared|ResolvedInstance.presignedAttachmentUploads|boolean|optional=false|nullable=false
+field|shared|ResolvedInstance.proxyAttachmentsThroughApi|boolean|optional=false|nullable=false
 field|shared|RestCallInput.auditReason|string | undefined|optional=true|nullable=false
 field|default|RestCallInput.signal|OperationSignal | undefined|optional=true|nullable=false
 field|shared|RestCallInput.timeoutMs|number | undefined|optional=true|nullable=false
@@ -3056,6 +3061,7 @@ field|shared|RestRoutes.GET /gateway/bot|Route<{}, GatewayBotResponse>|optional=
 field|shared|RestRoutes.GET /guilds/{guild_id}|Route<PathParameters<GuildIdPath>, GuildResponse>|optional=false|nullable=false
 field|shared|RestRoutes.GET /guilds/{guild_id}/audit-logs|Route<PathParameters<GuildIdPath> & QueryParameters<{ readonly limit?: number | undefined; readonly before?: SnowflakeType | undefined; readonly after?: SnowflakeType | undefined; readonly user_id?: SnowflakeType | undefined; readonly action_type?: AuditLogActionTypeInput | undefined; }>, GuildAuditLogListResponse>|optional=false|nullable=false
 field|shared|RestRoutes.GET /guilds/{guild_id}/bans|Route<PathParameters<GuildIdPath>, GuildBanListResponse>|optional=false|nullable=false
+field|shared|RestRoutes.GET /guilds/{guild_id}/bans/{user_id}|Route<PathParameters<GuildIdUserIdPath>, GuildBanResponse>|optional=false|nullable=false
 field|shared|RestRoutes.GET /guilds/{guild_id}/channels|Route<PathParameters<GuildIdPath>, ChannelListResponse>|optional=false|nullable=false
 field|shared|RestRoutes.GET /guilds/{guild_id}/discovery|Route<PathParameters<GuildIdPath>, DiscoveryStatusResponse>|optional=false|nullable=false
 field|shared|RestRoutes.GET /guilds/{guild_id}/emojis|Route<PathParameters<GuildIdPath>, GuildEmojiWithUserListResponse>|optional=false|nullable=false

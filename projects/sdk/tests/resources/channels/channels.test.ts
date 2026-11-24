@@ -56,12 +56,12 @@ test.each(modes)("%s sends audit reasons only on supported channel mutations", a
     await api.removePermissionOverwrite("10", "50", options)
 
     expect(calls).toEqual([
-        { method: "POST", path: "/api/v1/guilds/20/channels", reason: "channel audit" },
-        { method: "PATCH", path: "/api/v1/channels/10", reason: "channel audit" },
-        { method: "DELETE", path: "/api/v1/channels/10", reason: "channel audit" },
-        { method: "PATCH", path: "/api/v1/guilds/20/channels", reason: "channel audit" },
-        { method: "PUT", path: "/api/v1/channels/10/permissions/50", reason: "channel audit" },
-        { method: "DELETE", path: "/api/v1/channels/10/permissions/50", reason: "channel audit" },
+        { method: "POST", path: "/api/v1/guilds/20/channels", reason: "channel%20audit" },
+        { method: "PATCH", path: "/api/v1/channels/10", reason: "channel%20audit" },
+        { method: "DELETE", path: "/api/v1/channels/10", reason: "channel%20audit" },
+        { method: "PATCH", path: "/api/v1/guilds/20/channels", reason: "channel%20audit" },
+        { method: "PUT", path: "/api/v1/channels/10/permissions/50", reason: "channel%20audit" },
+        { method: "DELETE", path: "/api/v1/channels/10/permissions/50", reason: "channel%20audit" },
     ])
 
     const readOptions = { auditReason: "not applicable" } as RequestOptions
@@ -196,6 +196,18 @@ test.each(modes)("%s manages guild channels through exact routes with frozen, lo
         path: "/api/v1/channels/10",
         method: "PATCH",
         body: { name: "edited", topic: "current", rate_limit_per_user: 15 },
+    })
+    await api.create("20", { type: ChannelType.Link, name: "docs", url: "https://example.test/docs" })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/api/v1/guilds/20/channels",
+        method: "POST",
+        body: { type: ChannelType.Link, name: "docs", url: "https://example.test/docs" },
+    })
+    await api.edit("10", { url: "https://example.test/next" })
+    expect(calls.at(-1)).toMatchObject({
+        path: "/api/v1/channels/10",
+        method: "PATCH",
+        body: { url: "https://example.test/next" },
     })
     await api.reorder("20", [
         {
@@ -439,6 +451,9 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
     for (const input of [
         { type: ChannelType.Text, name: "" },
         { type: ChannelType.Text, name: "  " },
+        { type: ChannelType.Link, name: "docs" },
+        { type: ChannelType.Link, name: "docs", url: null },
+        { type: ChannelType.Link, name: "docs", url: "" },
         { type: -1, name: "valid" },
         { type: ChannelType.Text, name: "valid", topic: " " },
         { type: ChannelType.Text, name: "valid", rateLimitPerUser: 21_601 },
@@ -474,6 +489,8 @@ test.each(modes)("%s rejects invalid writes before dispatch and whole malformed 
         { rateLimitPerUser: -1 },
         { bitrate: 7_999 },
         { bitrate: 384_001 },
+        { url: null },
+        { url: "" },
         { extra: true },
         { permissionOverwrites: [{ id: "50", type: "role", allow: 1n << 63n, deny: 0n }] },
         { permissionOverwrites: [{ id: "50", type: "role", allow: 0n, deny: 1n << 63n }] },

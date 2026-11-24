@@ -128,6 +128,7 @@ test.each(modes)(
                 invite: "https://join.community.example",
             },
             presignedAttachmentUploads: false,
+            proxyAttachmentsThroughApi: false,
         })
         expect(Object.isFrozen(resolved) && Object.isFrozen(resolved.endpoints)).toBe(true)
         expect(resolved.assets.defaultAvatar("0")).toBe("https://static.community.example/avatars/0.png")
@@ -828,5 +829,52 @@ test.each([undefined, null, { enabled: "yes" }, []])(
         const value = await client("default")
         const resolved = await settle(value.instance.resolve())
         expect(resolved.domainMigration).toBeNull()
+    },
+)
+
+const proxyAttachmentFeatures = [
+    ["true", { presigned_attachment_uploads: false, proxy_attachments_through_api: true }, true],
+    ["false", { presigned_attachment_uploads: false, proxy_attachments_through_api: false }, false],
+    ["absent", { presigned_attachment_uploads: false }, false],
+] as const
+
+for (const [name, features, expected] of proxyAttachmentFeatures)
+    test.each(modes)(
+        `%s exposes a ${name} proxy_attachments_through_api flag as proxyAttachmentsThroughApi ${expected}`,
+        async (mode) => {
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () => Response.json(document({ features }))),
+            )
+            const value = await client(mode)
+            const resolved = await settle(value.instance.resolve())
+            expect(resolved.proxyAttachmentsThroughApi).toBe(expected)
+        },
+    )
+
+test.each(modes)(
+    "%s rejects a discovery document whose proxy_attachments_through_api is not a boolean",
+    async (mode) => {
+        for (const proxyAttachmentsThroughApi of ["true", 1, null, {}]) {
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () =>
+                    Response.json(
+                        document({
+                            features: {
+                                presigned_attachment_uploads: false,
+                                proxy_attachments_through_api: proxyAttachmentsThroughApi,
+                            },
+                        }),
+                    ),
+                ),
+            )
+            const value = await client(mode)
+            await expect(settle(value.instance.resolve())).rejects.toMatchObject({
+                _tag: "ConnectionError",
+                reason: "protocol",
+            })
+            vi.unstubAllGlobals()
+        }
     },
 )

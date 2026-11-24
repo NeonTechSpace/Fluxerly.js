@@ -415,8 +415,8 @@ export class AttachmentDownloadError extends FluxerlyError {
     readonly _tag = "AttachmentDownloadError"
     /** SDK-owned local input detail, or null for non-input and unattributable failures */
     readonly inputValidation: InputValidationDetail | null
-    /** Local validation, untrusted attachment URL, local scheduler saturation, transport, a refused or malformed media
-     * response, output limit or deadline. The reason response with a non-2xx status means the media server refused the download
+    /** Local validation, untrusted attachment URL, local scheduler saturation, transport, a refused or malformed download
+     * response, output limit or deadline. The reason response with a non-2xx status means the media or API server refused the download
      */
     readonly reason: "input" | "untrustedUrl" | "busy" | "network" | "response" | "tooLarge" | "timeout"
     /** HTTP status when a response was received, otherwise null */

@@ -119,6 +119,10 @@ const decoders: Record<string, Decoder> = {
         consistent: (page) => ({ ...page, page_result_count: page.members.length }),
         run: (api, page) => api.client.members.search(page.guild_id),
     },
+    GuildBanResponse: {
+        route: (ban) => `GET /guilds/${guildId}/bans/${ban.user.id}`,
+        run: (api, ban) => api.client.members.fetchBan({ guildId, userId: ban.user.id }),
+    },
     GuildBanListResponse: {
         route: () => `GET /guilds/${guildId}/bans`,
         run: (api) => api.client.members.fetchBans(guildId),

@@ -149,9 +149,24 @@ const flags = (settable: number, explanation: string) =>
     field((value) => nonNegativeInt32(value) && (value & ~settable) === 0, "allowedValue", explanation)
 const nsfwExplanation = "Channel nsfw must be boolean, or null when editing"
 
+const requiredLinkUrl = field(
+    linkUrl,
+    "format",
+    "Channel URL must be an http or https URL of 1 through 2,048 UTF-16 code units after Fluxer's normalization, without credentials, whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer",
+)
+const optionalLinkUrl = nullOrEmpty(
+    field(
+        linkUrl,
+        "format",
+        "Channel URL must be null, empty or an http or https URL of 1 through 2,048 UTF-16 code units after Fluxer's normalization, without credentials, whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer",
+    ),
+)
+
 /**
  * Rules for the optional fields of a channel edit, in the order Fluxerly checks them. An edit cannot tell the type of
- * the channel, so it accepts the longer forum topic and the flags of either forum type, and Fluxer checks them
+ * the channel, so it accepts the longer forum topic and the flags of either forum type, and Fluxer checks them.
+ * Link channels are the only channel type that uses url, and Fluxer's ChannelUpdateLinkRequest rejects null and empty
+ * strings (packages/schema/src/domains/channel/ChannelRequestSchemas.ts:251-256 at 66cede64)
  */
 const editRules: FieldRules = {
     // Fluxer reads an empty name in an edit as null and then leaves the name unchanged
@@ -163,13 +178,7 @@ const editRules: FieldRules = {
             "Channel name must be empty, which Fluxer ignores, or contain 1 through 100 UTF-16 code units after Fluxer's normalization, and at most 10,000 before it",
     },
     topic: topic(forumTopicMaxLength),
-    url: nullOrEmpty(
-        field(
-            linkUrl,
-            "format",
-            "Channel URL must be null, empty or an http or https URL of 1 through 2,048 UTF-16 code units after Fluxer's normalization, without credentials, whose host is an IP address or a domain name, with a top-level domain on hosted Fluxer",
-        ),
-    ),
+    url: requiredLinkUrl,
     parentId: nullOrEmpty(
         idField(
             "Channel parentId must be null, empty or a decimal string, because JavaScript numbers cannot hold Fluxer IDs exactly",
@@ -235,9 +244,16 @@ const editRules: FieldRules = {
 /** A created channel cannot set nsfw to null and needs a name. A created media channel keeps the longer topic and both
  * flag bits
  */
-const mediaCreateRules: FieldRules = { ...editRules, name: createName, nsfw: booleanField(nsfwExplanation) }
+const mediaCreateRules: FieldRules = {
+    ...editRules,
+    name: createName,
+    url: optionalLinkUrl,
+    nsfw: booleanField(nsfwExplanation),
+}
 /** Other created channels have the shorter text topic */
 const createRules: FieldRules = { ...mediaCreateRules, topic: topic(textTopicMaxLength) }
+/** A created link channel requires a non-null, non-empty URL (ChannelCreateLinkRequest at 66cede64) */
+const linkCreateRules: FieldRules = { ...createRules, url: requiredLinkUrl }
 /** A created forum channel can set only the flag bits of its own type */
 const forumCreateRules: FieldRules = {
     ...mediaCreateRules,
@@ -335,12 +351,16 @@ function validateOptionalFields(
         )
     if (create && input.name === undefined)
         return inputValidationFailure("name", "required", "Channel name is required")
+    if (create && type === ChannelType.Link && input.url === undefined)
+        return inputValidationFailure("url", "required", "Link channel URL is required")
     const rules = create
         ? type === ChannelType.Forum
             ? forumCreateRules
             : forumParent
               ? mediaCreateRules
-              : createRules
+              : type === ChannelType.Link
+                ? linkCreateRules
+                : createRules
         : editRules
     const checked = checkFields(input, rules, "")
     return checked

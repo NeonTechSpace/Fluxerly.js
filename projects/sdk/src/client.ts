@@ -269,7 +269,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
          * deadline of the same length before the shards start.
          * Expiry stops startup work, while completion still waits for the SDK's owned-resource cleanup.
          * When this option is left out, the deadline is 30,000 ms, and the first Identify the shards send extends it once
-         * by the 135 seconds Fluxer may take to start a session while its Identify queue is busy, such as during a
+         * by the 25 seconds Fluxer may take to start a session while its Identify queue is busy, such as during a
          * gateway rollout. Discovery, the handshake and a Resume never get that extension, so a startup that stalls
          * before Identify fails after 30 seconds. A set value is one fixed deadline that Identify does not extend. Under
          * heavier load Fluxer holds an Identify it cannot start yet and retries it every one to two seconds while the
@@ -302,7 +302,7 @@ export interface ClientOptions<F extends MessageFields | undefined = undefined> 
      * client. The SDK counts the bot's communities by paging GET /users/@me/guilds within startupTimeoutMs and uses one
      * shard per 2,000 communities, from 1 through 16,384 shards. It never uses the shard count from GET /gateway/bot, which
      * Fluxer fixes at 1. Fluxer rejects a new session with close code 4011 (sharding required) when that one shard holds
-     * more than 2,500 communities (MAX_GUILDS_PER_SHARD in fluxer_gateway/src/gateway/gateway_sharding.erl). Community IDs do not
+     * more than 2,500 communities (max_guilds_per_shard in fluxer_gateway/src/fluxer_gateway/session/seed.gleam). Community IDs do not
      * split evenly across shards, so the lower target keeps every shard below that ceiling and leaves room to grow.
      * Until that count completes, client.shards and diagnostics().shards are empty and community routing treats every community
      * as unowned. A failed count fails startup like a connection failure: A rejected token with AuthenticationError, an
@@ -415,8 +415,8 @@ export interface ConnectionRecoveryOptions {
     readonly maxDelayMs?: number
     /** Time allowed for one recovery attempt in milliseconds, covering discovery, the handshake and Identify or Resume,
      * an integer from 1,000 through 2,147,483,647. An attempt that runs out fails and is retried. When this option is
-     * left out, an attempt gets 30,000 ms, and sending Identify extends it by the 135 seconds Fluxer may take to start a
-     * session while its Identify queue is busy, so an Identify attempt may take up to 165 seconds. Discovery, the
+     * left out, an attempt gets 30,000 ms, and sending Identify extends it by the 25 seconds Fluxer may take to start a
+     * session while its Identify queue is busy, so an Identify attempt may take up to 55 seconds. Discovery, the
      * handshake and a Resume never get that extension. A set value is one fixed deadline that Identify does not extend,
      * so a short value gives up on a queued Identify sooner
      * @defaultValue 30000
@@ -743,7 +743,7 @@ export interface RequestOptions {
 export interface AuditedRequestOptions extends RequestOptions {
     /** Optional audit-log reason, 1–512 UTF-16 code units after U+000C and U+202E removal and trimming, in any language.
      * Fluxer silently drops a reason outside that range, so the SDK fails it locally. The trimmed reason is sent.
-     * Sent only as the X-Audit-Log-Reason header carrying the reason's UTF-8 bytes, which Fluxer decodes, without URL escaping.
+     * Sent only as the X-Audit-Log-Reason header, percent-encoded in UTF-8, which Fluxer decodes back to the reason.
      * Control characters, line separators and lone surrogates fail before dispatch. Omission sends no header. Never included in SDK errors or diagnostics.
      * Header delivery does not guarantee that Fluxer stores the reason in an audit entry. Methods name the known paths that do not
      */

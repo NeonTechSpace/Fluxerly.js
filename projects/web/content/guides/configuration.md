@@ -145,7 +145,7 @@ A lost connection clears the message, user and direct-message entries it could h
 
 The defaults suit most bots: Startup may take 30 seconds with up to 3 attempts per [shard](/docs/glossary/#shard). A process with several shards starts them one second apart and adds that second to the deadline for each shard after the first. When Fluxer rate-limits instance discovery with a wait, startup waits at least that long and tries again without using up an attempt, until the startup deadline. Discovery sends no further request during the wait
 
-The first Identify extends the startup deadline once by 135 seconds, because Fluxer may take that long to start a session while its Identify queue is busy. A reconnection attempt gets 30 seconds, plus 135 when it sends Identify instead of resuming. Setting `startupTimeoutMs` or `recovery.attemptTimeoutMs` makes that value one fixed deadline that Identify does not extend
+The first Identify extends the startup deadline once by 25 seconds, because Fluxer may take that long to start a session while its Identify queue is busy. A reconnection attempt gets 30 seconds, plus 25 when it sends Identify instead of resuming. Setting `startupTimeoutMs` or `recovery.attemptTimeoutMs` makes that value one fixed deadline that Identify does not extend
 
 After that, a lost connection is retried with a growing random delay, capped at 30 seconds unless Fluxer asks for a longer wait, and transient failures never make the bot give up. The `connection` option changes those values
 

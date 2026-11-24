@@ -36,7 +36,7 @@ test.each(modes)("%s follows into a text channel with an audit reason and can un
         method: "POST",
         path: "/channels/10/followers",
         body: { webhook_channel_id: "20" },
-        headers: { "x-audit-log-reason": "Release feed" },
+        headers: { "x-audit-log-reason": "Release%20feed" },
     })
     expect(await settle(api.client.webhooks.delete(result.webhookId))).toBeUndefined()
     expect(unfollow.requests()).toHaveLength(1)

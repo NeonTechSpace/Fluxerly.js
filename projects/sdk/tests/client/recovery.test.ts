@@ -509,9 +509,9 @@ async function expectAttemptBudget(clock: SdkClock, budgetMs: number) {
     expect(wsTarget.sockets[1]!.readyState).toBe(WebSocket.CLOSED)
 }
 
-// Fluxer arms its 135-second session start wait only on Identify
-// (fluxer_gateway/src/gateway/gateway_handler_identify.erl:308 and session/session_manager.erl:30 at 0098958f), and a
-// Resume has none, so only a recovery Identify gets the longer default
+// Fluxer arms its 25-second session start and permit wait only on Identify
+// (manager_start_timeout and shard_permit_wait_ms in fluxer_gateway/src/fluxer_gateway/config/settings.gleam at
+// 66cede64), and a Resume has none, so only a recovery Identify gets the longer default
 test.each(modes)("%s bounds a recovery Resume to thirty seconds by default", async (mode) => {
     const clock = sdkClock()
     const server = await fixture(clock)
@@ -523,13 +523,13 @@ test.each(modes)("%s bounds a recovery Resume to thirty seconds by default", asy
     released(clock)
 })
 
-test.each(modes)("%s allows a recovery Identify Fluxer's 135-second session start by default", async (mode) => {
+test.each(modes)("%s allows a recovery Identify Fluxer's 25-second session start by default", async (mode) => {
     const clock = sdkClock()
     const server = await fixture(clock)
     const api = await driver(mode)
     expect(await api.start("connect").done).toBe("Success")
     await stallNextHandshake(clock, server, "invalidSession", GatewayOpcode.identify)
-    await expectAttemptBudget(clock, 165_000)
+    await expectAttemptBudget(clock, 55_000)
     await api.shutdown()
     released(clock)
 })
@@ -571,11 +571,11 @@ test.each(modes)("%s extends startup by Fluxer's session start wait once Identif
         () => expect(server.commands.some((command) => command.op === GatewayOpcode.identify)).toBe(true),
         { interval: 5 },
     )
-    await clock.advance(164_999)
+    await clock.advance(54_999)
     expect(api.client.state).toBe("Connecting")
     await clock.advance(1)
     expect(await startup.done).toBe("ConnectionTimeoutError")
-    expect(await startup.failure).toMatchObject({ timeoutMs: 165_000 })
+    expect(await startup.failure).toMatchObject({ timeoutMs: 55_000 })
     released(clock)
 })
 

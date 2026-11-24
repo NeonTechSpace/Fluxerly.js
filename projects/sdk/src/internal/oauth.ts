@@ -224,7 +224,7 @@ function connections(value: unknown): readonly OAuthConnection[] | undefined {
         if (
             !record(item) ||
             typeof item.id !== "string" ||
-            (item.type !== "bsky" && item.type !== "domain") ||
+            (item.type !== "bsky" && item.type !== "domain" && item.type !== "oauth") ||
             typeof item.name !== "string" ||
             typeof item.verified !== "boolean" ||
             typeof item.visibility_flags !== "number" ||
@@ -234,7 +234,9 @@ function connections(value: unknown): readonly OAuthConnection[] | undefined {
             typeof item.sort_order !== "number" ||
             !Number.isSafeInteger(item.sort_order) ||
             item.sort_order < 0 ||
-            item.sort_order > maximumInt32
+            item.sort_order > maximumInt32 ||
+            (item.provider_id !== undefined && item.provider_id !== null && typeof item.provider_id !== "string") ||
+            (item.url !== undefined && item.url !== null && typeof item.url !== "string")
         )
             return undefined
         result.push(
@@ -245,6 +247,8 @@ function connections(value: unknown): readonly OAuthConnection[] | undefined {
                 verified: item.verified,
                 visibilityFlags: item.visibility_flags,
                 sortOrder: item.sort_order,
+                providerId: item.provider_id ?? null,
+                url: item.url ?? null,
             }),
         )
     }

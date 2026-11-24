@@ -20,17 +20,11 @@ test("every permission requirement belongs to a client operation and names known
     }
 })
 
-// Fluxer refuses age-restricted expressions outside their community whatever the bot's permissions, so the hints say so
-// instead of only suggesting permissions (MessageStickerService.ts:41-43 and 62-64, MessageReactionService.ts:409-412 at
-// 0098958f)
-test("missing-permission hints for sends and reactions name the age-restricted refusal", () => {
+test("missing-permission hints reflect current Fluxer rules for sends, reactions and single-ban reads", () => {
     const send = requiredPermissionsHint(permissionRequirement("send")!)
-    expect(send).toContain(
-        "A sticker from an age-restricted community is refused outside that community, whatever the bot's permissions",
-    )
+    expect(send).not.toContain("age-restricted")
     const reaction = requiredPermissionsHint(permissionRequirement("addReaction")!)
-    expect(reaction).toContain(
-        "A new reaction with a custom emoji from an age-restricted community is refused outside that community, whatever the bot's permissions",
-    )
+    expect(reaction).not.toContain("age-restricted")
     expect(reaction).toContain("Adding to an existing reaction needs no")
+    expect(permissionRequirement("members.fetchBan")).toEqual({ scope: "guild", permissions: ["BanMembers"] })
 })

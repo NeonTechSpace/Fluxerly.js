@@ -132,7 +132,7 @@ export interface RestRequest extends OperationOptions {
      */
     readonly files?: readonly AttachmentInput[]
     /** Audit-log reason sent as the X-Audit-Log-Reason header, 1 through 512 UTF-16 code units after
-     * U+000C and U+202E removal and trimming, which Fluxer otherwise drops silently. Any language works, because the header carries its UTF-8 bytes. Control characters, line separators and lone
+     * U+000C and U+202E removal and trimming, which Fluxer otherwise drops silently. Any language works, because the header is percent-encoded in UTF-8. Control characters, line separators and lone
      * surrogates fail before dispatch. Omission sends no header. Never included in errors, logs or diagnostics
      */
     readonly auditReason?: string

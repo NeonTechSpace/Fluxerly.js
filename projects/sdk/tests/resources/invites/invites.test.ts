@@ -38,7 +38,7 @@ test.each(modes)("%s creates separate one-day invites and supports explicit prov
         method: "POST",
         path: "/api/v1/channels/100/invites",
         body: { max_age: 86400, max_uses: 0, unique: true, temporary: false },
-        audit: "One day",
+        audit: "One%20day",
     })
     expect(created).toMatchObject({
         code: "FixtureCode",

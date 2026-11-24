@@ -87,5 +87,9 @@ test.each(modes)("%s matches attachment references to the filename Fluxer stores
     expect(payload(server.messages()[1]!).embeds[0].image.url).toBe("attachment://my_photo.png")
     await expect(send("attachment://my photo.png", "my photo.png")).rejects.toMatchObject(rejected)
     await expect(send("attachment://", "a.png")).rejects.toMatchObject(rejected)
+    // Fluxer preserves URI sub-delimiters in uploaded filenames (FileValidators.ts:14) while attachment:// references
+    // still accept only letters, digits, marks, underscore, dot and hyphen (UrlValidators.ts:9 at 66cede64)
+    await expect(send("attachment://report1.png", "report(1).png")).rejects.toMatchObject(rejected)
+    await expect(send("attachment://report(1).png", "report(1).png")).rejects.toMatchObject(rejected)
     expect(server.messages()).toHaveLength(2)
 })

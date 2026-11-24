@@ -176,6 +176,7 @@ import {
 import { searchMemberPagination, searchMembers } from "#sdk/internal/member-search-workflow"
 import {
     guildBan,
+    guildBanFetch,
     guildBans,
     guildUnban,
     memberKick,
@@ -709,6 +710,9 @@ function defineOperations<M extends MessageCore>() {
             ),
             unban: op(1, (owner: Owner, target: MemberReference, options?: AuditedRequestOptions) =>
                 owner.guild("members.unban", () => guildUnban(target, options), options),
+            ),
+            fetchBan: op(1, (owner: Owner, target: MemberReference, options?: RequestOptions) =>
+                owner.guild("members.fetchBan", () => guildBanFetch(target), options),
             ),
             fetchBans: op(1, (owner: Owner, guildId: string, options?: RequestOptions) =>
                 owner.guild("members.fetchBans", () => guildBans(guildId), options),

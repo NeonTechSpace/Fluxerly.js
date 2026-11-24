@@ -101,7 +101,7 @@ test.each(modes)(
                     features: ["HIDE_OWNER_CROWN"],
                     message_history_cutoff: "2026-09-09T00:00:00Z",
                 },
-                reason: "settings migration",
+                reason: "settings%20migration",
             },
         ])
         expect(previous.name).toBe("fixture")
@@ -134,7 +134,7 @@ test.each(modes)(
 )
 
 test.each(modes)("%s enables, preserves and disables source-guild cloning opt-ins", async (mode) => {
-    // Fluxer 4e38842557d7231fe0a11338812141583fe88b69, GuildOperationsService.computeUpdatedFeatures
+    // Fluxer 66cede64, GuildOperationsService.computeUpdatedFeatures
     // Keep this wire-contract fixture independent of the SDK constants; the opt-in upstream check detects later drift
     const toggleable = new Set([
         "INVITES_DISABLED",
@@ -144,6 +144,7 @@ test.each(modes)("%s enables, preserves and disables source-guild cloning opt-in
         "CLONE_STICKER_ENABLED",
         "HIDE_OWNER_CROWN",
         "VISITS_ENABLED",
+        "MEMBER_DMS_DISABLED",
     ])
     const preserved = ["BANNER", "FUTURE_FEATURE", "CLONE_EMOJI_DISABLED", "CLONE_STICKER_DISABLED"]
     let features = [...preserved]
@@ -164,8 +165,8 @@ test.each(modes)("%s enables, preserves and disables source-guild cloning opt-in
     expect(enabled.features).toEqual([...preserved, "CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED"])
     expect(await api.get()).toEqual(enabled)
     expect((await api.edit({ name: "Renamed without changing features" })).features).toEqual(enabled.features)
-    const kept = await api.edit({ featureToggles: [...cloning, toggles.HideOwnerCrown] })
-    expect(kept.features).toEqual([...enabled.features!, "HIDE_OWNER_CROWN"])
+    const kept = await api.edit({ featureToggles: [...cloning, toggles.HideOwnerCrown, toggles.MemberDmsDisabled] })
+    expect(kept.features).toEqual([...enabled.features!, "HIDE_OWNER_CROWN", "MEMBER_DMS_DISABLED"])
     const emojiDisabled = await api.edit({ featureToggles: [toggles.CloneStickerEnabled, toggles.HideOwnerCrown] })
     expect(emojiDisabled.features).toEqual([...preserved, "CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN"])
     const disabled = await api.edit({ featureToggles: [] })
@@ -174,7 +175,7 @@ test.each(modes)("%s enables, preserves and disables source-guild cloning opt-in
     expect(bodies).toEqual([
         { features: ["CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED"] },
         { name: "Renamed without changing features" },
-        { features: ["CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN"] },
+        { features: ["CLONE_EMOJI_ENABLED", "CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN", "MEMBER_DMS_DISABLED"] },
         { features: ["CLONE_STICKER_ENABLED", "HIDE_OWNER_CROWN"] },
         { features: [] },
     ])
@@ -266,11 +267,12 @@ test.each(modes)("%s preserves valid UTC calendar cutoffs in requests and respon
         expect((await api.edit({ messageHistoryCutoff: value })).messageHistoryCutoff).toBe(value)
         expect(bodies.at(-1)).toEqual({ message_history_cutoff: value })
     }
-    // Fluxer's z.iso.datetime() accepts only Z and hours 00 to 23, so other valid forms are sent as the same UTC instant
+    // Fluxer's z.iso.datetime({ offset: true }) accepts Z and ±hh:mm offsets for hours 00 to 23, so offsets are sent as
+    // given while T24:00:00 forms normalize to the equivalent UTC instant
     for (const [value, sent] of [
-        ["2026-01-01T00:30:00+01:00", "2025-12-31T23:30:00Z"],
-        ["2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00Z"],
-        ["2024-02-28T22:15:30.123456-02:30", "2024-02-29T00:45:30.123456Z"],
+        ["2026-01-01T00:30:00+01:00", "2026-01-01T00:30:00+01:00"],
+        ["2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"],
+        ["2024-02-28T22:15:30.123456-02:30", "2024-02-28T22:15:30.123456-02:30"],
         ["2024-04-30T24:00:00Z", "2024-05-01T00:00:00Z"],
         ["2024-12-31T24:00:00.000-01:00", "2025-01-01T01:00:00.000Z"],
     ] as [string, string][]) {

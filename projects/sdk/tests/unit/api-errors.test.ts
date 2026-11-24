@@ -201,6 +201,24 @@ const botReachableRejections = [
         status: 400,
         topic: /administrator/,
     },
+    {
+        providerCode: "UNKNOWN_BAN",
+        code: "unknownBan",
+        status: 404,
+        topic: /ban/,
+    },
+    {
+        providerCode: "COMMUNITY_MEMBER_DMS_DISABLED",
+        code: "communityMemberDmsDisabled",
+        status: 403,
+        topic: /direct messages/,
+    },
+    {
+        providerCode: "UNKNOWN_CONNECTION_PROVIDER",
+        code: "unknownConnectionProvider",
+        status: 404,
+        topic: /connection provider/,
+    },
 ] as const
 
 test.each(modes)("%s describes the Fluxer codes a bot can reach instead of calling them unknown", async (mode) => {
@@ -394,6 +412,10 @@ test("instance-wide DM refusals and system-message refusals name what Fluxer che
 test("the missing-access hint covers private threads the bot was not added to", () => {
     expect(hintOf("MISSING_ACCESS", 403)).toMatch(/private thread/)
     expect(hintOf("MISSING_ACCESS", 403)).toContain("Manage threads")
+    expect(hintOf("MISSING_ACCESS", 403)).toContain("UNKNOWN_CHANNEL")
+    expect(hintOf("UNKNOWN_CHANNEL", 404)).toMatch(/UNKNOWN_CHANNEL.*cannot view/)
+    expect(apiErrorHint(null, 404)).toMatch(/UNKNOWN_CHANNEL.*cannot view/)
+    expect(apiErrorHint(null, 401)).toContain("ACCOUNT_LIMITED")
 })
 
 // Fluxer answers a wrong or deleted webhook token with UNKNOWN_WEBHOOK and HTTP 404

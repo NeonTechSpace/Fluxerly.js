@@ -150,14 +150,15 @@ describe("recovery option validation", () => {
         return exit.value.recovery
     }
 
-    // Fluxer gives a session start 135 seconds after Identify (fluxer_gateway/src/session/session_manager.erl:30 at
-    // 0098958f), which the defaults add only once Identify is sent. A set deadline stays one flat deadline
+    // Fluxer gives a session start 20 seconds and its permit wait 5 seconds after Identify
+    // (fluxer_gateway/src/fluxer_gateway/config/settings.gleam:832, 848 at 66cede64), which the defaults add only once
+    // Identify is sent. A set deadline stays one flat deadline
     test("startup defaults to 30,000 ms, three attempts and Fluxer's Identify wait", () => {
         const exit = Effect.runSyncExit(validateConfiguration({ token }, false))
         if (Exit.isFailure(exit)) throw Cause.squash(exit.cause)
         expect(exit.value).toMatchObject({
             startupTimeoutMs: 30_000,
-            startupIdentifyWaitMs: 135_000,
+            startupIdentifyWaitMs: 25_000,
             maxStartupAttempts: 3,
         })
         const set = Effect.runSyncExit(
@@ -173,9 +174,9 @@ describe("recovery option validation", () => {
             maxDelayMs: 30_000,
             attemptTimeoutMs: 30_000,
             healthyResetMs: 60_000,
-            identifyWaitMs: 135_000,
+            identifyWaitMs: 25_000,
         })
-        expect(accepted({ minDelayMs: 2_000 })).toMatchObject({ attemptTimeoutMs: 30_000, identifyWaitMs: 135_000 })
+        expect(accepted({ minDelayMs: 2_000 })).toMatchObject({ attemptTimeoutMs: 30_000, identifyWaitMs: 25_000 })
         expect(accepted({ attemptTimeoutMs: 30_000 })).toMatchObject({ attemptTimeoutMs: 30_000, identifyWaitMs: 0 })
         expect(accepted({ minDelayMs: 45_000 })).toMatchObject({ minDelayMs: 45_000, maxDelayMs: 45_000 })
     })

@@ -206,6 +206,7 @@ const cases: readonly Case[] = [
         api.members.ban(member, { deleteMessageMs: 0 }),
     ),
     option("members.unban", (api, o) => api.members.unban(member, o)),
+    option("members.fetchBan", (api, o) => api.members.fetchBan(member, o)),
     option("members.fetchBans", (api, o) => api.members.fetchBans(guildId, o)),
     option("members.iterate", (api, o) => api.members.iterate(guildId, { maxItems: 5 }, o)),
     input("members.iterate", "query", "aftr", "after", (api) =>

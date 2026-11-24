@@ -108,13 +108,13 @@ const wireNames: Readonly<Record<string, string>> = {
     messageHistoryCutoff: "message_history_cutoff",
 }
 
-/** Fluxer reads the cutoff with z.iso.datetime(), which accepts only a Z suffix and hours 00 to 23
- * (packages/schema/src/domains/guild/GuildRequestSchemas.ts:120-124 at 0098958f, Zod 4.6.7). A validated ±hh:mm value,
- * or an end-of-day 24:00:00, becomes the same instant in UTC, keeping its fraction digits unchanged. Any other Z value
- * is sent as given
+/** Fluxer reads the cutoff with z.iso.datetime({ offset: true }), which accepts Z and ±hh:mm offsets and hours 00 to 23
+ * (packages/schema/src/domains/guild/GuildRequestSchemas.ts:121-123 at 66cede64). An end-of-day 24:00:00 value becomes
+ * the same instant in UTC with a Z suffix, keeping its fraction digits unchanged. Any other Z or ±hh:mm value is sent
+ * as given
  */
 export function utcTimestamp(value: string): string {
-    if (value.endsWith("Z") && !value.includes("T24:")) return value
+    if (!value.includes("T24:")) return value
     const match = /^(.*T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(value)
     if (match === null) return value
     const whole = new Date(Date.parse(`${match[1]}${match[3]}`)).toISOString()

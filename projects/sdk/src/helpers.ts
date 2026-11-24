@@ -625,8 +625,7 @@ export type FormatHelpers = Readonly<{
      * Create `<:name:id>` text, or `<a:name:id>` when animated is true.
      * A GuildEmoji can be passed directly.
      * Throws HelperError for invalid names, IDs or animation values.
-     * This does not upload or look up an emoji.
-     * Outside the emoji's own community, Fluxer replaces an emoji from an age-restricted community with plain `:name:` text when it saves the message
+     * This does not upload or look up an emoji
      */
     customEmoji(input: CustomEmojiMarkup): string
     /**
