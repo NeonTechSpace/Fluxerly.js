@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { after, test } from "node:test"
+import { stripVTControlCharacters } from "node:util"
 import { clientApp, starterSamples } from "../src/islands/samples.ts"
 
 const web = resolve(import.meta.dirname, "..")
@@ -44,7 +45,8 @@ function run(folder: string, args: string[]) {
 // A file with no test in it still reports as one passing test, under its own name, so only named tests count
 const runTests = (files: Record<string, string>) => {
     const result = run(project(files), ["--test", "--test-reporter=spec", "--test-timeout=30000", "--test-force-exit", "bot.test.ts"])
-    return { ...result, count: [...result.output.matchAll(/^✔ (.+) \(\d/gm)].filter((match) => match[1] !== "bot.test.ts").length }
+    const clean = stripVTControlCharacters(result.output)
+    return { ...result, count: [...clean.matchAll(/^✔ (.+) \(\d/gm)].filter((match) => match[1] !== "bot.test.ts").length }
 }
 
 // The snippets a page shows as a whole test, with the files beside them that a reader writes first

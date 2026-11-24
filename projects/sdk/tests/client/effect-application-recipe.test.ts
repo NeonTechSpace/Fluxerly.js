@@ -25,7 +25,7 @@ async function loadGuideBlock<T>(index: number, modules: Record<string, Record<s
             .filter((name) => name !== "" && !name.startsWith("type "))
         return `const { ${values.join(", ")} } = globalThis.${key}[${JSON.stringify(from)}]`
     })
-    const compiled = stripTypeScriptTypes(injected, { mode: "transform" })
+    const compiled = stripTypeScriptTypes(injected)
     try {
         const url = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}#${crypto.randomUUID()}`
         return (await import(url)) as T

@@ -15,6 +15,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
+import { stripVTControlCharacters } from "node:util"
 import { format } from "prettier"
 import { stageRelease } from "../../scripts/packages.js"
 import { authoredGuides } from "../../../web/scripts/docs/guide-files.mjs"
@@ -611,7 +612,7 @@ try {
                     ).compilerOptions
                 }
                 // node --test passes when it finds no test file, so the report must show the generated test passing
-                assert.match(packageManager(["test"], starter), /^(?:#|ℹ) pass 1$/m)
+                assert.match(stripVTControlCharacters(packageManager(["test"], starter)), /^(?:#|ℹ) pass 1$/m)
 
                 // A first test must explain a broken command and must end on a stuck one. Each case swaps the starter's
                 // command body, and the stuck case also shortens the generated timeout

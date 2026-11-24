@@ -22,7 +22,7 @@ async function loadRecipe(createClient: () => unknown) {
         /^import[\s\S]*?from "@neontechspace\/fluxerly";?$/m,
         `const createClient = globalThis.${fixtureKey}`,
     )
-    const compiled = stripTypeScriptTypes(injected, { mode: "transform" })
+    const compiled = stripTypeScriptTypes(injected)
     Object.assign(globalThis, { [fixtureKey]: createClient })
     const url = `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}#${crypto.randomUUID()}`
     return (await import(url)) as {
